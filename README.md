@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/images/home.png" alt="Mango Code: a new conversation, with the local model Qwen3.6-35B-A3B and the project invoice-tool" width="100%">
+  <img src="docs/images/banner.png" alt="mango code: a coding agent on your own computer" width="100%">
 </p>
 
 <p align="center">
@@ -11,8 +11,7 @@
 </p>
 
 <p align="center">
-  <b>A coding agent that runs on your own computer, with open models on your own hardware.</b><br>
-  Your code, your prompts and the model's answers stay on your machine.
+  <b>Local models that fit your PC, an agent you can see into, and a desktop app that sets it all up.</b>
 </p>
 
 <p align="center">
@@ -31,9 +30,9 @@ Mango Code is a desktop app for Windows, a terminal command and an HTTP interfac
 and on two engines of our own derived from it. The app is in English and Italian.
 
 <p align="center">
-  <img src="docs/images/chat.png" alt="Mango Code fixing a bug with Qwen3.6 running locally: the conversation on the left, the change on the right" width="100%">
+  <img src="docs/images/home.png" alt="Mango Code: a new conversation, with the local model Qwen3.6-35B-A3B and the project invoice-tool" width="100%">
   <br>
-  <sub>Qwen3.6-35B-A3B, on the PC's own graphics cards, finds a bug, fixes it and runs the tests.</sub>
+  <sub>A new conversation: the local model, the Team switch and the project.</sub>
 </p>
 
 ## Features
@@ -78,12 +77,8 @@ and on two engines of our own derived from it. The app is in English and Italian
 |---|---|
 | ![The agent writes a page and checks it in the built-in browser](docs/images/browser.png) | ![What the model reads: the token cost of every tool, switchable per folder](docs/images/prompt.png) |
 | The agent writes a page and checks it in the built-in browser. | What the model reads: the token cost of every tool, on or off per folder. |
-
-<p align="center">
-  <img src="docs/images/team.png" alt="Team mode: a cloud manager and cloud agents through OpenRouter" width="60%">
-  <br>
-  <sub>Team mode: a cloud manager and up to four cloud agents, through OpenRouter.</sub>
-</p>
+| ![Mango Code fixing a bug with Qwen3.6 running locally](docs/images/chat.png) | ![Team mode: a cloud manager and cloud agents through OpenRouter](docs/images/team.png) |
+| Qwen3.6-35B-A3B, on the PC's own graphics cards, finds a bug, fixes it and runs the tests. | Team mode: a cloud manager and up to four cloud agents, through OpenRouter. |
 
 ## Speed
 

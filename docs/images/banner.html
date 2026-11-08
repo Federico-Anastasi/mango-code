@@ -1,0 +1,59 @@
+<!-- The README banner (docs/images/banner.png): open this page in a browser at 1600x560 and save a screenshot of .card. -->
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+<style>
+  html, body { margin: 0; background: transparent; }
+  .card {
+    width: 1600px; height: 560px; box-sizing: border-box; border-radius: 28px; overflow: hidden; position: relative;
+    background: #13151c; border: 1px solid #262a35; font-family: Inter, sans-serif;
+  }
+  .glow {
+    position: absolute; right: -60px; top: -40px; width: 720px; height: 640px;
+    background: radial-gradient(closest-side, rgba(255, 166, 31, 0.30), rgba(240, 83, 43, 0.10) 55%, rgba(19, 21, 28, 0) 100%);
+  }
+  .big { position: absolute; right: 150px; top: 95px; width: 380px; height: 380px; }
+  .left { position: absolute; left: 112px; top: 112px; }
+  .mark { display: flex; align-items: center; gap: 26px; }
+  .mark svg { width: 150px; height: 150px; margin-left: -14px; }
+  .name { font-weight: 600; font-size: 132px; letter-spacing: -4px; line-height: 1; color: #f4f5f8; }
+  .name span { color: #FFA61F; }
+  h1 { margin: 38px 0 0; font-size: 46px; font-weight: 600; color: #f4f5f8; letter-spacing: -0.5px; }
+  p { margin: 18px 0 0; font-size: 28px; line-height: 1.5; color: #9aa0b2; font-weight: 400; }
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="glow"></div>
+  <svg class="big" viewBox="10 26 180 180" xmlns="http://www.w3.org/2000/svg"><use href="#mango"/></svg>
+  <div class="left">
+    <div class="mark">
+      <svg viewBox="10 26 180 180" xmlns="http://www.w3.org/2000/svg"><use href="#mango"/></svg>
+      <div class="name">mango <span>code</span></div>
+    </div>
+    <h1>A coding agent on your own computer.</h1>
+    <p>Open models on your own hardware, set up for your PC.<br>With local models, your code and your prompts stay on your machine.</p>
+  </div>
+</div>
+<svg width="0" height="0" style="position:absolute">
+  <defs>
+    <linearGradient id="skin" gradientUnits="userSpaceOnUse" x1="47" y1="59" x2="155" y2="178">
+      <stop offset="0" stop-color="#FFD84A"/><stop offset="0.5" stop-color="#FFA61F"/><stop offset="1" stop-color="#F0532B"/>
+    </linearGradient>
+    <clipPath id="body"><path d="M 96 52 C 142 40 182 78 176 126 C 171 166 134 190 94 184 C 66 180 44 172 24 150 C 34 150 42 144 44 132 C 46 92 62 60 96 52 Z"/></clipPath>
+    <g id="mango" clip-path="url(#body)" fill="url(#skin)"></g>
+  </defs>
+</svg>
+<script>
+  const ends = [150, 182, 128, 170, 182, 112, 160, 182, 140, 120, 182, 150];
+  const g = document.getElementById("mango");
+  ends.forEach((end, i) => {
+    const r = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+    Object.entries({ x: 0, y: 44 + i * 13, width: end, height: 9, rx: 4.5 }).forEach(([k, v]) => r.setAttribute(k, v));
+    g.appendChild(r);
+  });
+</script>
+</body>
+</html>
