@@ -92,6 +92,9 @@ pub struct Recommendation {
     /// A model for small graphics cards: recommended only when no other one fits on the cards.
     #[serde(default)]
     pub fallback: bool,
+    /// Only on request: in the list, never the one proposed.
+    #[serde(default)]
+    pub on_request: bool,
 }
 
 /// The computer and the disk, seen from outside: the part that the tests replace.
@@ -132,6 +135,8 @@ pub struct Model {
     pub recommended: bool,
     /// See `Recommendation::fallback`.
     pub fallback: bool,
+    /// See `Recommendation::on_request`.
+    pub on_request: bool,
 }
 
 impl Model {
@@ -192,12 +197,15 @@ pub fn assess(s: &dyn System) -> Result<Assessment> {
             user: c.user,
             recommended: false,
             fallback: c.fallback,
+            on_request: c.on_request,
         });
     }
     // The first one to download that fits on the GPUs; on the CPU only if none fits on the GPUs. A model for small
     // cards only if no other one fits on the cards, downloaded or not.
-    let others_on_cards = models.iter().any(|m| !m.user && !m.fallback && m.placement == Some(Placement::Gpu));
-    let candidate = |m: &Model| !m.user && m.placement.is_some() && !m.ready() && !(m.fallback && others_on_cards);
+    let others_on_cards =
+        models.iter().any(|m| !m.user && !m.on_request && !m.fallback && m.placement == Some(Placement::Gpu));
+    let candidate =
+        |m: &Model| !m.user && !m.on_request && m.placement.is_some() && !m.ready() && !(m.fallback && others_on_cards);
     let chosen = models
         .iter()
         .position(|m| candidate(m) && m.placement == Some(Placement::Gpu))
@@ -379,7 +387,7 @@ mod tests {
 
     fn advice(key: &str, fits: bool) -> Recommendation {
         let (placement, reason) = if fits { (Some(Placement::Gpu), String::new()) } else { (None, "too big".into()) };
-        Recommendation { model: key.into(), placement, context: 32768, reason, bytes: 1000, user: false, fastest: false, fallback: false }
+        Recommendation { model: key.into(), placement, context: 32768, reason, bytes: 1000, user: false, fastest: false, fallback: false, on_request: false }
     }
 
     /// Three models (a, b, c): c does not fit. Nothing on disk, general engine to download.
@@ -527,6 +535,16 @@ mod tests {
 
         p.recommendations[0].placement = Some(Placement::Cpu);
         assert_eq!(recommended_keys(&assess(&p).unwrap()), ["b"]);
+    }
+
+    /// A model only on request (a) stays in the list but is never the one proposed, even when it is the first that fits.
+    #[test]
+    fn a_model_on_request_is_never_proposed() {
+        let mut p = empty();
+        p.recommendations[0].on_request = true;
+        let v = assess(&p).unwrap();
+        assert!(v.models.iter().any(|m| m.key == "a"), "it stays in the list");
+        assert_eq!(recommended_keys(&v), ["b"]);
     }
 
     #[test]

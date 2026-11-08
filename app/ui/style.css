@@ -63,7 +63,7 @@ h1 {
 }
 
 section { width: 100%; max-width: 420px; text-align: center; }
-section[hidden], .steps li[hidden] { display: none; }
+section[hidden], .steps li[hidden], label[hidden] { display: none; }
 
 .logo {
   width: 104px;
@@ -73,7 +73,7 @@ section[hidden], .steps li[hidden] { display: none; }
 }
 
 .subtitle { margin: 0 0 22px; color: var(--text-2); font-size: 16px; }
-#errore .subtitle { color: var(--text); font-weight: 600; font-size: 17px; margin-bottom: 8px; }
+#error .subtitle { color: var(--text); font-weight: 600; font-size: 17px; margin-bottom: 8px; }
 
 /* --- Startup steps --- */
 .steps {
@@ -200,15 +200,15 @@ button:disabled { opacity: .55; cursor: default; }
 @keyframes float { 50% { transform: translateY(-5px); } }
 
 /* --- Model choice and download: wider pages, with the small logo --- */
-main[data-view="scelta"], main[data-view="scarico"] { justify-content: flex-start; padding-top: 28px; }
-main[data-view="scelta"] section, main[data-view="scarico"] section { max-width: 640px; }
-main[data-view="scelta"] .logo, main[data-view="scarico"] .logo { width: 56px; height: 56px; animation: none; filter: none; }
-main[data-view="scelta"] h1, main[data-view="scarico"] h1 { font-size: 22px; margin-top: 6px; }
+main[data-view="choice"], main[data-view="download"] { justify-content: flex-start; padding-top: 28px; }
+main[data-view="choice"] section, main[data-view="download"] section { max-width: 640px; }
+main[data-view="choice"] .logo, main[data-view="download"] .logo { width: 56px; height: 56px; animation: none; filter: none; }
+main[data-view="choice"] h1, main[data-view="download"] h1 { font-size: 22px; margin-top: 6px; }
 
-#scelta { text-align: left; }
-#scelta .subtitle { text-align: center; margin-bottom: 8px; }
-#scelta .explanation { text-align: center; margin-bottom: 20px; }
-#scelta h2 { margin: 18px 0 8px; font-size: 13px; font-weight: 650; text-transform: uppercase; letter-spacing: .06em; color: var(--text-2); }
+#choice { text-align: left; }
+#choice .subtitle { text-align: center; margin-bottom: 8px; }
+#choice .explanation { text-align: center; margin-bottom: 20px; }
+#choice h2 { margin: 18px 0 8px; font-size: 13px; font-weight: 650; text-transform: uppercase; letter-spacing: .06em; color: var(--text-2); }
 
 .computer {
   margin: 0;
@@ -238,9 +238,9 @@ main[data-view="scelta"] h1, main[data-view="scarico"] h1 { font-size: 22px; mar
 .model .name { font-weight: 600; }
 .model .meta, .model .why { display: block; font-size: 13px; color: var(--text-2); }
 .model .why { margin-top: 2px; }
-.model .dove { display: block; font-size: 14px; margin-top: 2px; }
+.model .where { display: block; font-size: 14px; margin-top: 2px; }
 /* On the processor the model is much slower: it is read before choosing it. */
-.model .dove.processore { color: var(--accent); font-weight: 600; }
+.model .where.cpu { color: var(--accent); font-weight: 600; }
 .badge.fastest { color: var(--ok); border-color: var(--ok); }
 #optimize code { font-family: var(--mono); font-size: 12px; word-break: break-all; }
 #error-sentence { color: var(--text); }
@@ -259,7 +259,7 @@ main[data-view="scelta"] h1, main[data-view="scarico"] h1 { font-size: 22px; mar
 .badge.ok { color: var(--ok); border-color: var(--ok); }
 
 /* --- Other models --- */
-#scelta .explanation#other-intro { text-align: left; margin-bottom: 12px; }
+#choice .explanation#other-intro { text-align: left; margin-bottom: 12px; }
 .search { display: flex; gap: 8px; }
 .search input {
   flex: 1;
@@ -274,7 +274,7 @@ main[data-view="scelta"] h1, main[data-view="scarico"] h1 { font-size: 22px; mar
   cursor: text;
 }
 .search input:focus-visible { outline: 2px solid var(--accent-2); outline-offset: 1px; }
-#scelta .status#other-status, #scelta .status#token-status { text-align: left; }
+#choice .status#other-status, #choice .status#token-status { text-align: left; }
 #other-results:empty, .warnings:empty { display: none; }
 #other-results { margin-top: 8px; }
 .result { display: block; width: 100%; padding: 10px 16px; text-align: left; font-weight: 400; color: var(--text); background: none; border: 0; border-radius: 14px; }
@@ -291,13 +291,14 @@ main[data-view="scelta"] h1, main[data-view="scarico"] h1 { font-size: 22px; mar
 .model .remove { position: absolute; top: 10px; right: 14px; }
 .model { position: relative; }
 .images { display: block; margin: 0 0 12px; font-size: 14px; }
+.screenshot { display: block; margin: 12px 0 0; text-align: center; color: var(--text-2); font-size: 13px; }
 #other-token { margin: 14px 0 0; }
 #other-token .note { margin: 8px 0 10px; text-align: left; }
 
 /* The summary and the buttons stay in view at the bottom of the window even with many models. */
 .controls { position: sticky; bottom: 0; margin-top: 12px; padding: 12px 0 14px; background: var(--background); border-top: 1px solid var(--border); }
 .summary { margin: 0 0 12px; min-height: 1.5em; text-align: center; color: var(--text-2); font-size: 14px; }
-#scelta .status { margin-top: 8px; min-height: 0; text-align: center; }
+#choice .status { margin-top: 8px; min-height: 0; text-align: center; }
 
 /* Download: bar that fills up (the current startup step has the indeterminate one). */
 .download li.active::after { display: none; }

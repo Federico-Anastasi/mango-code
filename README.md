@@ -1,32 +1,66 @@
-# Mango Code
+<p align="center">
+  <img src="docs/images/home.png" alt="Mango Code: a new conversation, with the local model Qwen3.6-35B-A3B and the project invoice-tool" width="100%">
+</p>
 
-A coding agent that runs on your own computer, with open models on your own hardware. Your code, your prompts and the
-model's answers stay on your machine.
+<p align="center">
+  <a href="LICENSE"><img alt="License: AGPL-3.0-or-later" src="https://img.shields.io/badge/license-AGPL--3.0--or--later-blue"></a>
+  <a href="https://github.com/Federico-Anastasi/mango-code/releases"><img alt="Latest release" src="https://img.shields.io/github/v/release/Federico-Anastasi/mango-code?include_prereleases&label=release&color=FFA61F"></a>
+  <img alt="Windows 10 and 11" src="https://img.shields.io/badge/Windows-10%20%C2%B7%2011-0078d4">
+  <img alt="Models run locally" src="https://img.shields.io/badge/models-run%20locally-FFA61F">
+  <img alt="Engines: llama.cpp" src="https://img.shields.io/badge/engines-llama.cpp-1f1f2e">
+</p>
+
+<p align="center">
+  <b>A coding agent that runs on your own computer, with open models on your own hardware.</b><br>
+  Your code, your prompts and the model's answers stay on your machine.
+</p>
+
+<p align="center">
+  <a href="#features">Features</a> ·
+  <a href="#screenshots">Screenshots</a> ·
+  <a href="#speed">Speed</a> ·
+  <a href="#tune-it-for-your-pc">Tune it for your PC</a> ·
+  <a href="#install">Install</a> ·
+  <a href="#privacy">Privacy</a> ·
+  <a href="#build-from-source">Build from source</a> ·
+  <a href="#license">License</a>
+</p>
 
 Mango Code is a desktop app for Windows, a terminal command and an HTTP interface for other apps. The agent is a fork of
 [opencode](https://github.com/anomalyco/opencode); the models run on [llama.cpp](https://github.com/ggml-org/llama.cpp)
 and on two engines of our own derived from it. The app is in English and Italian.
 
-![Mango Code fixing a bug with Qwen3.6 running locally: the conversation on the left, the change on the right](docs/images/chat.png)
+<p align="center">
+  <img src="docs/images/chat.png" alt="Mango Code fixing a bug with Qwen3.6 running locally: the conversation on the left, the change on the right" width="100%">
+  <br>
+  <sub>Qwen3.6-35B-A3B, on the PC's own graphics cards, finds a bug, fixes it and runs the tests.</sub>
+</p>
 
 ## Features
 
-- **Local models, set up for your PC.** At first run the app looks at your graphics cards, processor and memory, tells
-  you which models fit and how fast they are likely to be, then downloads the right engine (CUDA for NVIDIA, Vulkan for
-  AMD and Intel, or the processor alone) and the models you choose, with resume and checksum. A model runs entirely on
-  the graphics cards, with the largest context that fits, or entirely on the processor.
+**Local models, set up for your PC**
+- At first run the app looks at your graphics cards, processor and memory, tells you which models fit and how fast
+  they are likely to be, then downloads the right engine (CUDA for NVIDIA, Vulkan for AMD and Intel, or the processor
+  alone) and the models you choose, with resume and checksum. A model runs entirely on the graphics cards, with the
+  largest context that fits, or entirely on the processor.
 - **Recommended models**, each with arguments tuned for it: Qwen3.6-35B-A3B (the default), Qwen3.8-27B, Ternary
   Bonsai 2 27B, Qwen3.8-27B-TOQ-v1 (our 2-bit trellis quantization), LFM2.5-24B-A2B, Qwen3.5-4B and Qwen3.5-2B (for
   4 GB graphics cards). Most of them read images.
-- **Other open models.** Search Hugging Face, paste a link or pick a GGUF file already on your PC: before adding it, the
-  app tells you whether it fits in memory and whether its chat template handles tools and long conversations.
+- **Other open models.** Search Hugging Face, paste a link or pick a GGUF file already on your PC: before adding it,
+  the app tells you whether it fits in memory and whether its chat template handles tools and long conversations.
 - **Conversations that resume instantly.** Before the engine stops or switches model, it saves the conversation's
   state to disk; when you come back, it rereads only the new tokens instead of the whole conversation.
+
+**An agent you can see into**
 - **You decide what goes in the prompt.** Every built-in tool, MCP server, skill, instruction file and plugin can be
   turned on or off, for all folders or for one, and the settings page shows how many tokens each one costs.
+- **Projects are git repositories**: a folder you open becomes one if it isn't (with an empty first commit), so every
+  change the agent makes can be seen and undone.
 - **Built-in tools**: a browser the agent drives in the app's preview panel (or in your own Chrome), web search, Word,
   Excel, PowerPoint and PDF documents, voice dictation, and a set of skills for disciplined work (tests first,
   systematic debugging, verification before claiming success).
+
+**Wherever you work**
 - **Projects like a desktop app.** Open a folder, create a new project anywhere, or right-click a folder in File
   Explorer and choose "Open with Mango Code".
 - **Team mode.** A cloud manager (DeepSeek V4.1 Flash through [OpenRouter](https://openrouter.ai), with your key) plans
@@ -44,14 +78,18 @@ and on two engines of our own derived from it. The app is in English and Italian
 |---|---|
 | ![The agent writes a page and checks it in the built-in browser](docs/images/browser.png) | ![What the model reads: the token cost of every tool, switchable per folder](docs/images/prompt.png) |
 | The agent writes a page and checks it in the built-in browser. | What the model reads: the token cost of every tool, on or off per folder. |
-| ![Team mode: a cloud manager and cloud agents through OpenRouter](docs/images/team.png) | ![A new conversation, with the local model and the Team switch](docs/images/home.png) |
-| Team mode: a cloud manager and up to four cloud agents, through OpenRouter. | A new conversation, with the local model and the Team switch. |
+
+<p align="center">
+  <img src="docs/images/team.png" alt="Team mode: a cloud manager and cloud agents through OpenRouter" width="60%">
+  <br>
+  <sub>Team mode: a cloud manager and up to four cloud agents, through OpenRouter.</sub>
+</p>
 
 ## Speed
 
 Measured on an RTX 3060 Ti + GTX 1080 + GTX 1660 SUPER with the profiles in
-[`launcher/profiles/3060ti-1080-1660s/`](launcher/profiles/3060ti-1080-1660s), using `mango-bench`: the model started as the app starts it,
-real text cut to the exact number of tokens, temperature 0, no prompt cache. Tokens per second.
+[`launcher/profiles/3060ti-1080-1660s/`](launcher/profiles/3060ti-1080-1660s), using `mango-bench`: the model started as
+the app starts it, real text cut to the exact number of tokens, temperature 0, no prompt cache. Tokens per second.
 
 | Model | Context | Prefill 1k / 32k / 64k | Decode 1k / 32k / 64k |
 |---|---|---|---|
@@ -78,9 +116,28 @@ the settings that paid off, the ones that did not and why. The installed app inc
 
 ## Install
 
-Download the installer from this repository's Releases page and run it (Windows 10 or 11, 64-bit). The installer is
-small: the engine and the models are downloaded at first run, only the ones that suit your PC. Version 0.1.0 is not
-signed, so Windows may ask you to confirm.
+1. Download `Mango.Code_<version>_x64-setup.exe` from the
+   [latest release](https://github.com/Federico-Anastasi/mango-code/releases) (Windows 10 or 11, 64-bit).
+2. Windows may show "Windows protected your PC": the installer has no paid code-signing certificate. Click "More info",
+   then "Run anyway".
+3. Open Mango Code. The installer is small: the engine and the models are downloaded at first run, only the ones that
+   suit your PC.
+
+Once per start the app looks for a newer release and offers to install it; updates carry their own signature, which
+the app checks before installing.
+
+## Privacy
+
+The models run on your computer: your code, your prompts and the model's answers do not leave it. What goes online:
+
+- **Downloads**: the engines from GitHub and the models from Hugging Face, the ones you choose.
+- **Updates**: once per start, the app reads the latest release's `latest.json` from this repository.
+- **Web search**, when the agent uses it: the query goes to DuckDuckGo, Bing and Startpage.
+- **Team mode**, only when you turn it on: the conversation goes to OpenRouter, with your key.
+- **"Report a problem"**, only when you click Send: the logs, the PC details and, if you leave the switch on, a
+  screenshot of the window. Your user name, PC name, emails, network addresses and keys are removed before sending.
+
+Access from your phone is off by default. What the app protects, and what it does not: [SECURITY.md](SECURITY.md).
 
 ## Build from source
 
@@ -94,9 +151,7 @@ cd launcher; .\setup.ps1          # engines, agent, models, dependencies and the
 
 `setup.ps1` also works in parts (`-Only llama-prism|llama-toq|opencode|models|npm|config|command`). Details:
 [`launcher/MANGO-CODE.md`](launcher/MANGO-CODE.md) for the terminal, [`app/README.md`](app/README.md) for the app.
-
-Tests: `cargo test --workspace` in `app/`, and `bun test --cwd integration` from the root (end-to-end, with a fake
-engine: no graphics card is used).
+How to contribute and run the tests: [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Repository
 

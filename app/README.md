@@ -2,7 +2,11 @@
 
 Rust/Tauri 2. Double click → loading page → engine, dictation and agent server hidden, in a
 Job Object (they die with the app) → window with the agent's web UI (opencode, in `packages/` at the repo root).
-On close the engine saves its memory and stops; the X hides the window in the tray, "Quit" closes.
+On close the engine saves its memory and stops. Once the agent runs, the X hides the window in the tray (a click on the
+icon brings it back) and the icon's "Quit" closes; before that (model choice, download, startup error) the X quits.
+The window shows only the app's own pages: nothing else, a local file included, can take its place.
+At startup the dictation models (whisper `small` and the Silero VAD, ~490 MB) are downloaded if missing, with the
+progress on the loading page; without network the app starts without dictation and tries again next time.
 
 | where | what |
 |---|---|
@@ -71,8 +75,12 @@ the probably fastest one and, for those that do not fit, why (they cannot be cho
 that runs on the CPU or does not fit says so in its name; choosing one that does not fit shows the sentence of the plan (the
 manager answers 422, which the agent does not retry). Then it downloads engine and models
 with progress and the app starts as usual. What is being downloaded is in `<data>\first-run.json`: if the app is closed halfway,
-the next start resumes by itself. The "Models and engine" item of the tray icon reopens the choice when the app is in use
-(Cancel goes back to where it was; if something is downloaded the agent restarts to know the new models).
+the next start resumes by itself. "Models and engine" reopens the choice when the app is in use: from the tray icon,
+from Settings → Models, or from "Download more models…" at the bottom of the model menu under the chat (Cancel goes
+back to where it was; if something is downloaded the agent restarts to know the new models). The model menu under
+the chat lists the models on this PC: the engine loads the chosen one with the next message, and the chosen one is
+the default at the next start. A model marked `fallback` in the catalog (Qwen3.5-2B, for 4 GB cards) is proposed,
+and called the fastest, only when no other model fits on the graphics cards.
 
 With `--service` nobody is there to choose: the app writes the reason in `service.json` (`reason`) and in `startup.log`, and
 waits for the window to be opened from the icon and "Retry" to be pressed.
@@ -270,14 +278,62 @@ the data goes in `%LOCALAPPDATA%\MangoCode` (logs in `logs\`).
 - `scripts\test\ui.ps1 -Action shot|click|type|key|info`: picture of the window (DPI-aware, even covered),
   clicks in fractions of the window, text with SendKeys.
 - `scripts\test\send.ps1 -Text … -Directory …`: sends a message to the agent with the web UI routes.
-- Driving it via CDP: start it with `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9444` (9222 is
-  Chrome's). The variable applies to all the process's WebView2s: the Preview panel loses its port and the agent
-  can no longer find it (`integration/tests/environment.ts`, the option that starts the window without debugging).
+- Driving it via CDP: start it with `MANGO_WINDOW_CDP=9333`, which turns on remote debugging for the main window
+  only (9222 is Chrome's). Not `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=…`: it applies to all
+  the process's WebView2s, the Preview panel loses its port and the agent can't use it (the browser server refuses a
+  port that shows Mango Code's own window).
+- A test is valid when it is done as a user does it: a new conversation, the panel closed, clicks in the window.
 - Model speeds: `cargo run --release -p engine --bin mango-bench -- toq 3.6` (starts each model like
   the app; table at the end).
-- Logs: `%LOCALAPPDATA%\MangoCode\logs\{startup,agent,engine,manager}.log` (`manager.log`: who called `release`,
-  `resume` or `model`, when and with what outcome; the TOQ engine's `llama.log` is in the same folder); the agent's real one is
-  `%LOCALAPPDATA%\MangoCode\agent\data\opencode\log\opencode.log` (`init count=N` = skills loaded per instance).
+- Logs: `%LOCALAPPDATA%\MangoCode\logs\{startup,agent,engine,manager,ui}.log` (`manager.log`: who called `release`,
+  `resume` or `model`, when and with what outcome; `ui.log`: the web UI's uncaught errors and `console.error`, and the
+  calls to the app slower than a second or with no answer; the TOQ engine's `llama.log` is in the same folder); the
+  agent's real one is `%LOCALAPPDATA%\MangoCode\agent\data\opencode\log\opencode.log` (`init count=N` = skills loaded
+  per instance). With the app open, Windows can show these files at 0 bytes: they are being written, not empty.
+
+## Automatic updates
+
+`src-tauri/src/updater.rs`. Once per start, a minute after it (not periodically), the app reads
+`https://github.com/Federico-Anastasi/mango-code/releases/latest/download/latest.json` (the latest release that is not
+a pre-release), downloads the newer installer in the background and checks its signature against the public key in
+`tauri.conf.json`. Then the web UI offers "Install and restart": the button in the title bar, a notice, and Settings >
+Help, which also has "Check for updates". The click stops agent and engine as "Quit" does, starts the installer in
+passive mode (`/P /UPDATE /R`: only its progress bar, then it reopens the app) and closes the app. The installer is
+started by the app with `CREATE_BREAKAWAY_FROM_JOB`: inside the app's job Windows would kill it together with the app.
+No automatic checks in the service, in test instances (`MANGO_DATA`) and in debug builds.
+
+Publishing a release (`.github/workflows/release.yml`; official installers are built only there, never on a PC: a
+local build carries the PC's paths inside its binaries):
+1. raise `version` in `src-tauri/tauri.conf.json` and in `Cargo.toml` (a release candidate is `X.Y.Z-rc.N`, so the
+   final `X.Y.Z` is higher), and write the notes in `release-notes/v<version>.md`;
+2. push the tag `v<version>`: the workflow waits for the maintainer's approval on the `release` environment, which
+   holds the signing key (`TAURI_SIGNING_PRIVATE_KEY`, `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`);
+3. it builds the agent and the installer with `scripts\build.ps1`, checks the signature with
+   `scripts\verify-signature.mjs`, writes `latest.json` with `scripts\update-manifest.mjs` and creates the release with
+   the installer, its `.sig`, `latest.json` and the SHA-256 in the notes; a tag with `-` is a pre-release, which the
+   automatic update does not see.
+
+`scripts\build.ps1` on a PC signs with `%USERPROFILE%\.tauri\mango-code.key` (and `mango-code.password`) when the
+variables above are not set; without any key it builds an installer that does not update (a fork's build).
+
+Testing an update before publishing it: build the old version with `scripts\build.ps1 -InsecureUpdates` and install
+it; build the new one with `-Version <higher>` and `update-manifest.mjs --url http://127.0.0.1:8765/<installer>`; serve
+`latest.json` and the installer on 127.0.0.1:8765 and start the old app with
+`MANGO_UPDATE_URL=http://127.0.0.1:8765/latest.json` (honoured only for 127.0.0.1 and localhost; an http address works
+only in a `-InsecureUpdates` build). The key is the maintainer's and is never in the repo: if it is lost, the installed apps can no
+longer update.
+
+## Problem reports
+
+"Report a problem" (Settings > Help, the error page, the startup error page) is one click (`src-tauri/src/report.rs`).
+It sends a Sentry event to the project `mango-code` of the `mango-o6` organization (data in the EU): the user's
+optional line, the error, the computer as tags (GPU, VRAM, model, RAM) and two attachments, `report.txt` (summary and
+the end of every log) and `screenshot.png` (`PrintWindow`, panel included; only if the user leaves the switch on, because
+it can show the conversation). Before anything leaves, the user name in paths, the PC name, emails, network addresses,
+keys and tokens are replaced by placeholders; on Sentry's side the data scrubbers are on and IP addresses are not
+stored. Every report has level `error`, so the project's alert emails about it. The DSN is in the source (it only lets
+one send); `MANGO_SENTRY_DSN=<dsn>` at build time sends elsewhere, `MANGO_SENTRY_DSN=off` turns sending off, and then
+the button saves the same text on the Desktop and opens a GitHub issue already filled in.
 - Live engine speed: `llamacpp:tokens_predicted_total` in `engine.log` (delta over 15 s) and the `eval time` lines;
   the counters update at the end of a request, so a long write looks stuck.
 

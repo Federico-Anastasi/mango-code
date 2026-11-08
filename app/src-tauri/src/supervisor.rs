@@ -2,7 +2,8 @@
 //!
 //! The app itself enters a Job Object with KILL_ON_JOB_CLOSE at startup: every child and grandchild
 //! inherits it, so when the app closes, or crashes, Windows kills them all. No orphan
-//! engines holding the VRAM.
+//! engines holding the VRAM. A process started with CREATE_BREAKAWAY_FROM_JOB leaves it (the job allows it): the
+//! installer of an update (`updater.rs`), which must outlive the app it replaces.
 
 use anyhow::{bail, Context, Result};
 use mango_common::{tr, ProcSpec};
@@ -15,7 +16,7 @@ use std::time::{Duration, Instant};
 use windows::Win32::Foundation::HANDLE;
 use windows::Win32::System::JobObjects::{
     AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
-    SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+    SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_BREAKAWAY_OK,
     JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
 };
 use windows::Win32::System::Threading::GetCurrentProcess;
@@ -44,7 +45,7 @@ impl Supervisor {
         let job = unsafe {
             let job = CreateJobObjectW(None, None).context("CreateJobObjectW")?;
             let mut info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
-            info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+            info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_BREAKAWAY_OK;
             SetInformationJobObject(
                 job,
                 JobObjectExtendedLimitInformation,

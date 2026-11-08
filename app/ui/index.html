@@ -8,7 +8,7 @@
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <main data-view="avvio">
+  <main data-view="starting">
     <!-- Logo: the same as the icon (app/src-tauri/icons/mango.svg) -->
     <svg class="logo" viewBox="16 32 170 170" aria-hidden="true">
       <defs>
@@ -40,7 +40,7 @@
     <h1>Mango Code</h1>
 
     <!-- Startup in progress -->
-    <section id="avvio" aria-live="polite">
+    <section id="starting" aria-live="polite">
       <p class="subtitle" id="startup-title"></p>
       <ol class="steps" id="steps">
         <li data-step="startup"><span class="indicator"></span><span class="name" data-text="stepStartup"></span><span class="detail"></span></li>
@@ -53,13 +53,13 @@
     </section>
 
     <!-- Model choice: first run, or "Models and engine" from the tray icon -->
-    <section id="scelta" hidden>
-      <p class="subtitle" id="scelta-titolo"></p>
+    <section id="choice" hidden>
+      <p class="subtitle" id="choice-title"></p>
       <p class="explanation" id="choice-intro"></p>
       <h2 data-text="yourComputer"></h2>
       <dl class="computer" id="computer"></dl>
       <h2 data-text="models"></h2>
-      <ul class="models" id="modelli"></ul>
+      <ul class="models" id="models"></ul>
       <p class="note" data-text="fastestNote"></p>
       <p class="note" id="optimize"><span data-text="optimizeIntro"></span> <button type="button" class="link" id="optimize-open" data-text="optimizeOpen"></button><br><code id="optimize-folder"></code></p>
 
@@ -94,24 +94,24 @@
       </details>
 
       <div class="controls">
-        <p class="summary" id="riepilogo" aria-live="polite"></p>
+        <p class="summary" id="summary" aria-live="polite"></p>
         <div class="actions">
-          <button type="button" class="primary" id="scarica" disabled></button>
-          <button type="button" class="secondary" id="annulla" data-text="cancel" hidden></button>
+          <button type="button" class="primary" id="start-download" disabled></button>
+          <button type="button" class="secondary" id="cancel" data-text="cancel" hidden></button>
         </div>
         <p class="status" id="choice-status" aria-live="polite"></p>
       </div>
     </section>
 
     <!-- Download -->
-    <section id="scarico" hidden aria-live="polite">
-      <p class="subtitle" id="scarico-titolo"></p>
-      <ol class="steps download" id="passi"></ol>
+    <section id="download" hidden aria-live="polite">
+      <p class="subtitle" id="download-title"></p>
+      <ol class="steps download" id="download-steps"></ol>
       <p class="note" data-text="downloadNote"></p>
     </section>
 
     <!-- Error -->
-    <section id="errore" hidden role="alert">
+    <section id="error" hidden role="alert">
       <p class="subtitle" id="error-title"></p>
       <p class="explanation" id="error-sentence"></p>
       <p class="explanation" data-text="errorHint"></p>
@@ -122,8 +122,10 @@
       </details>
       <div class="actions">
         <button type="button" class="primary" id="retry" data-text="retry"></button>
+        <button type="button" class="secondary" id="report" data-text="report"></button>
         <button type="button" class="secondary" id="logs" data-text="openLogs"></button>
       </div>
+      <label class="screenshot" id="report-screenshot-row"><input type="checkbox" id="report-screenshot" checked> <span data-text="reportScreenshot"></span></label>
       <p class="status" id="status" aria-live="polite"></p>
     </section>
   </main>

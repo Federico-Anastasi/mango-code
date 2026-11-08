@@ -2,6 +2,7 @@ import { TextField } from "@opencode-ai/ui/text-field"
 import * as Sentry from "@sentry/solid"
 import { Logo } from "@opencode-ai/ui/logo"
 import { Button } from "@opencode-ai/ui/button"
+import { Switch } from "@opencode-ai/ui/v2/switch-v2"
 import { Component, createSignal, onMount, Show } from "solid-js"
 import { createStore } from "solid-js/store"
 import { usePlatform } from "@/context/platform"
@@ -225,6 +226,7 @@ export const ErrorPage: Component<ErrorPageProps> = (props) => {
   let recordedFatalError: Promise<void> | undefined
   const [store, setStore] = createStore({
     actionError: undefined as string | undefined,
+    screenshot: true,
   })
 
   function ensureFatalErrorRecorded() {
@@ -303,7 +305,38 @@ export const ErrorPage: Component<ErrorPageProps> = (props) => {
               {language.t("error.page.action.exportLogs")}
             </Button>
           </Show>
-          <Show when={Sentry.isEnabled}>
+          {/* mango-code: one click sends the error, the logs and the window to Mango Code (anonymized) */}
+          <Show when={window.__MANGO_DESKTOP__}>
+            {(bridge) => {
+              const [state, setState] = createSignal<"idle" | "sending" | "sent" | "github">("idle")
+              const label = () =>
+                ({
+                  idle: "error.page.action.report",
+                  sending: "error.page.action.reportSending",
+                  sent: "error.page.action.reportSent",
+                  github: "error.page.action.reportOpened",
+                })[state()] as "error.page.action.report"
+              return (
+                <Button
+                  size="large"
+                  disabled={state() !== "idle"}
+                  onClick={() => {
+                    setState("sending")
+                    bridge()
+                      .reportProblem({ error: formattedError(), screenshot: store.screenshot })
+                      .then((done) => setState(done.sent ? "sent" : "github"))
+                      .catch((err: unknown) => {
+                        setState("idle")
+                        setStore("actionError", formatError(err, language.t))
+                      })
+                  }}
+                >
+                  {language.t(label())}
+                </Button>
+              )
+            }}
+          </Show>
+          <Show when={!window.__MANGO_DESKTOP__ && Sentry.isEnabled()}>
             {(_) => {
               const [reported, setReported] = createSignal(false)
               return (
@@ -344,6 +377,14 @@ export const ErrorPage: Component<ErrorPageProps> = (props) => {
             </Show>
           </Show>
         </div>
+        <Show when={window.__MANGO_DESKTOP__}>
+          <div class="flex flex-col items-center gap-1 text-center max-w-2xl" data-component="report-screenshot">
+            <Switch checked={store.screenshot} onChange={(checked) => setStore("screenshot", checked)}>
+              {language.t("settings.help.report.screenshot.title")}
+            </Switch>
+            <p class="text-xs text-text-weak">{language.t("settings.help.report.screenshot.description")}</p>
+          </div>
+        </Show>
         <Show when={store.actionError}>
           {(message) => <p class="text-xs text-text-danger-base text-center max-w-2xl">{message()}</p>}
         </Show>

@@ -118,8 +118,8 @@ beforeAll(async () => {
 }, 200_000);
 
 test("without engine or models the window shows the choice: the computer, where each model runs and why one does not fit", async () => {
-  await waitUntil(() => p.evaluate(visible("scelta")), "the choice page");
-  const text: string = await p.evaluate(`document.getElementById('scelta').innerText`);
+  await waitUntil(() => p.evaluate(visible("choice")), "the choice page");
+  const text: string = await p.evaluate(`document.getElementById('choice').innerText`);
   expect(text).toContain("NVIDIA GeForce GTX 1060");
   expect(text).toContain("6 GB");
   expect(text).toContain("Intel Core i5-10400");
@@ -133,31 +133,31 @@ test("without engine or models the window shows the choice: the computer, where 
   expect(text).toContain("Sul processore · più lento · 32k di contesto");
   expect(text).toContain("Probabilmente il più veloce");
   expect(text).toContain("Per ottimizzare Mango Code su questo computer, usa un'AI di frontiera (per esempio Claude Code) con la skill di ottimizzazione inclusa");
-  expect(await p.evaluate(`document.getElementById('ottimizza-cartella').innerText`)).toMatch(/optimize$/);
+  expect(await p.evaluate(`document.getElementById('optimize-folder').innerText`)).toMatch(/optimize$/);
   // On the processor you can choose, written prominently; the one that fits nowhere you cannot.
   expect(await p.evaluate(`document.querySelector('input[value=second]').disabled`)).toBe(false);
-  expect(await p.evaluate(`document.querySelector('input[value=second]').closest('li').querySelector('.dove.processore') !== null`)).toBe(true);
+  expect(await p.evaluate(`document.querySelector('input[value=second]').closest('li').querySelector('.where.cpu') !== null`)).toBe(true);
   expect(await p.evaluate(`document.querySelector('input[value=huge]').disabled`)).toBe(true);
   expect(await p.evaluate(`document.querySelector('input[value=fake]').checked`)).toBe(true);
   expect(await p.evaluate(`document.querySelector('input[value=second]').checked`)).toBe(false);
   // To download: the model's 24 MiB and the engine (a little over a mebibyte).
-  expect(await p.evaluate(`document.getElementById('riepilogo').innerText`)).toMatch(/^Da scaricare: \d+ MB$/);
+  expect(await p.evaluate(`document.getElementById('summary').innerText`)).toMatch(/^Da scaricare: \d+ MB$/);
   // Whoever has no window in front finds written why the app is not ready yet.
   expect(readJson(path.join(env.data, "service.json")).reason).toContain("scelgano i modelli");
   await screenshot(p, "1-choice");
   // With no model ticked you cannot go on.
   await p.evaluate(`document.querySelector('input[value=fake]').click()`);
-  expect(await p.evaluate(`document.getElementById('scarica').disabled`)).toBe(true);
+  expect(await p.evaluate(`document.getElementById('start-download').disabled`)).toBe(true);
   await p.evaluate(`document.querySelector('input[value=fake]').click()`);
-  expect(await p.evaluate(`document.getElementById('scarica').disabled`)).toBe(false);
+  expect(await p.evaluate(`document.getElementById('start-download').disabled`)).toBe(false);
 }, 120_000);
 
 test("it downloads with progress, then the app starts as usual", async () => {
-  await p.evaluate(`document.getElementById('scarica').click()`);
-  await waitUntil(() => p.evaluate(visible("scarico")), "the download page");
-  expect(await p.evaluate(`document.getElementById('scarico-titolo').innerText`)).toBe("Scarico quello che serve");
-  await waitUntil(() => p.evaluate(`document.getElementById('passi').innerText.includes('%')`), "the progress in percent");
-  const steps: string = await p.evaluate(`document.getElementById('passi').innerText`);
+  await p.evaluate(`document.getElementById('start-download').click()`);
+  await waitUntil(() => p.evaluate(visible("download")), "the download page");
+  expect(await p.evaluate(`document.getElementById('download-title').innerText`)).toBe("Scarico quello che serve");
+  await waitUntil(() => p.evaluate(`document.getElementById('download-steps').innerText.includes('%')`), "the progress in percent");
+  const steps: string = await p.evaluate(`document.getElementById('download-steps').innerText`);
   expect(steps).toContain("Motore: llama.cpp per le schede NVIDIA (CUDA 12)");
   expect(steps).toContain("Fake model");
   await screenshot(p, "2-download");
@@ -173,10 +173,10 @@ test("it downloads with progress, then the app starts as usual", async () => {
 
 test("\"Modelli e motore\" goes back to the choice without stopping the agent; Cancel returns to where it was", async () => {
   await p.evaluate(`window.__MANGO_DESKTOP__.openModels()`);
-  await waitUntil(() => p.evaluate(visible("scelta")), "the choice reopened");
-  expect(await p.evaluate(`document.getElementById('scelta-titolo').innerText`)).toBe("Modelli e motore");
-  expect(await p.evaluate(`!document.getElementById('annulla').hidden`)).toBe(true);
-  const text: string = await p.evaluate(`document.getElementById('modelli').innerText`);
+  await waitUntil(() => p.evaluate(visible("choice")), "the choice reopened");
+  expect(await p.evaluate(`document.getElementById('choice-title').innerText`)).toBe("Modelli e motore");
+  expect(await p.evaluate(`!document.getElementById('cancel').hidden`)).toBe(true);
+  const text: string = await p.evaluate(`document.getElementById('models').innerText`);
   expect(text).toContain("Già sul computer");
   // The one already downloaded is no longer proposed: the recommended one is the other.
   expect(await p.evaluate(`document.querySelector('input[value=fake]').checked`)).toBe(false);
@@ -184,16 +184,16 @@ test("\"Modelli e motore\" goes back to the choice without stopping the agent; C
   await screenshot(p, "3-change");
   // The agent stayed on while the choice was shown.
   expect((await fetch(`${env.agent}/global/health`)).ok).toBe(true);
-  await p.evaluate(`document.getElementById('annulla').click()`);
+  await p.evaluate(`document.getElementById('cancel').click()`);
   await waitUntil(() => p.evaluate(`location.href.startsWith('${env.agent}')`), "the return to the web UI");
   expect(fs.existsSync(path.join(env.modelsDir, "second.gguf"))).toBe(false);
 }, 120_000);
 
 test("choosing another model downloads it and the agent restarts knowing it", async () => {
   await p.evaluate(`window.__MANGO_DESKTOP__.openModels()`);
-  await waitUntil(() => p.evaluate(visible("scelta")), "the choice reopened");
-  await p.evaluate(`document.getElementById('scarica').click()`);
-  await waitUntil(() => p.evaluate(visible("scarico")), "the second model's download");
+  await waitUntil(() => p.evaluate(visible("choice")), "the choice reopened");
+  await p.evaluate(`document.getElementById('start-download').click()`);
+  await waitUntil(() => p.evaluate(visible("download")), "the second model's download");
   await waitUntil(() => p.evaluate(`location.href.startsWith('${env.agent}')`), "the window back on the web UI", 120_000);
   expect(fs.statSync(path.join(env.modelsDir, "second.gguf")).size).toBe(12 * MIB);
   // The restarted agent offers the new model.
@@ -209,22 +209,43 @@ test("choosing another model downloads it and the agent restarts knowing it", as
 
 test("with the app closed halfway through the download, at the next start it resumes by itself", async () => {
   const { env: e, p: pg } = await withWindow();
-  await waitUntil(() => pg.evaluate(visible("scelta")), "the choice");
-  await pg.evaluate(`document.getElementById('scarica').click()`);
-  await waitUntil(() => pg.evaluate(`document.getElementById('passi').innerText.includes('%')`), "the progress");
+  await waitUntil(() => pg.evaluate(visible("choice")), "the choice");
+  await pg.evaluate(`document.getElementById('start-download').click()`);
+  await waitUntil(() => pg.evaluate(`document.getElementById('download-steps').innerText.includes('%')`), "the progress");
   expect(fs.existsSync(path.join(e.data, "first-run.json"))).toBe(true);
   pg.close();
   await e.restart();
   await Bun.sleep(1500);
   const pg2 = await page(e.cdp!, appWindow, 120_000);
   // No choice: the download starts again with the same models.
-  await waitUntil(() => pg2.evaluate(visible("scarico")), "the download resumed");
-  expect(await pg2.evaluate(`document.getElementById('scarico-titolo').innerText`)).toBe("Riprendo lo scaricamento");
+  await waitUntil(() => pg2.evaluate(visible("download")), "the download resumed");
+  expect(await pg2.evaluate(`document.getElementById('download-title').innerText`)).toBe("Riprendo lo scaricamento");
   await screenshot(pg2, "4-resume");
   await waitUntil(() => ready(e), "the app ready after the resume", 120_000);
   expect(fs.statSync(path.join(e.modelsDir, "fake.gguf")).size).toBe(24 * MIB);
   pg2.close();
 }, 300_000);
+
+// --- a download that fails ----------------------------------------------------------------------------------
+
+test("a download that fails shows the error page: the report includes the screenshot only if the switch stays on", async () => {
+  const broken = () => ({
+    ...fakeComputer(),
+    models: fakeComputer().models.map((m) => (m.key === "fake" ? { ...m, url: `${base}/missing.gguf` } : m)),
+  });
+  const e = await start([{ text: "Here I am." }], { window: true, firstRun: broken });
+  opened.push(e);
+  const pg = await page(e.cdp!, appWindow, 120_000);
+  await waitUntil(() => pg.evaluate(visible("choice")), "the choice");
+  await pg.evaluate(`document.getElementById('start-download').click()`);
+  await waitUntil(() => pg.evaluate(visible("error")), "the error page", 120_000);
+  const row = `document.getElementById('report-screenshot-row')`;
+  expect(await pg.evaluate(`getComputedStyle(${row}).display !== 'none'`)).toBe(true);
+  expect(await pg.evaluate(`document.getElementById('report-screenshot').checked`)).toBe(true);
+  expect(await pg.evaluate(`${row}.innerText`)).toContain("Includi una schermata della finestra");
+  await screenshot(pg, "5-error");
+  pg.close();
+}, 200_000);
 
 // --- without a window ---------------------------------------------------------------------------------------
 

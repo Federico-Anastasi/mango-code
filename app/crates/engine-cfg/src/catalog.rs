@@ -148,6 +148,10 @@ pub(crate) struct ModelCfg {
     /// the cards (it reads the fewest weights, and would win on every PC).
     #[serde(default)]
     pub fallback: bool,
+    /// Only on request: it stays in the list and whoever wants it chooses it, but it is never preselected nor marked
+    /// as the fastest (TOQ, until it is reliable as an agent).
+    #[serde(default)]
+    pub on_request: bool,
 }
 
 /// The image encoder's compute on a GPU, beyond its weights: an estimate, which with Qwen3.8's F16 weights (885 MiB)

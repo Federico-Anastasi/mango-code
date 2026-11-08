@@ -493,6 +493,15 @@ fn a_4gb_card_takes_the_2b() {
     assert!(c["3.5-2b"].fastest, "{:?}", c["3.5-2b"]);
 }
 
+/// TOQ is only on request: on a big NVIDIA card where it fits, it is never the fastest proposed.
+#[test]
+fn toq_is_never_proposed_as_the_fastest() {
+    let c = recommendations(&pc(vec![nvidia(0, "NVIDIA GeForce RTX 4090", 24_576, (8, 9), (12, 8))], 65_536));
+    assert!(c["toq"].on_request, "{:?}", c["toq"]);
+    assert!(!c["toq"].fastest, "{:?}", c["toq"]);
+    assert!(c.values().any(|r| r.fastest), "{c:?}");
+}
+
 /// The card is too small for the model: it runs entirely on the processor, with the cards' build (already on disk) and
 /// the cards empty. Never a part here and a part there.
 #[test]

@@ -4,6 +4,7 @@ import { TabsV2 } from "@opencode-ai/ui/v2/tabs-v2"
 import { Icon } from "@opencode-ai/ui/icon"
 import { useLanguage } from "@/context/language"
 import { SettingsGeneralV2 } from "./general"
+import { SettingsHelpV2 } from "./help"
 import { SettingsLocalModelsV2 } from "./local-models"
 import { SettingsProvidersV2 } from "./providers"
 import { SettingsModelsV2 } from "./models"
@@ -90,6 +91,12 @@ export const DialogSettings: Component<{
                         {language.t("settings.tab.team")}
                       </TabsV2.Trigger>
                     </Show>
+                    <Show when={inMangoDesktop()}>
+                      <TabsV2.Trigger value="help">
+                        <Icon name="help" />
+                        {language.t("settings.tab.help")}
+                      </TabsV2.Trigger>
+                    </Show>
                   </div>
                 </div>
 
@@ -132,6 +139,9 @@ export const DialogSettings: Component<{
         </TabsV2.Content>
         <TabsV2.Content value="team" class="settings-v2-panel">
           <SettingsTeamV2 />
+        </TabsV2.Content>
+        <TabsV2.Content value="help" class="settings-v2-panel">
+          <SettingsHelpV2 />
         </TabsV2.Content>
         <TabsV2.Content value="servers" class="settings-v2-panel">
           <SettingsServersV2 />

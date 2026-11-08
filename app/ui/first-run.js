@@ -47,11 +47,16 @@ const TEXTS = {
     continue: "Continua",
     cancel: "Annulla",
     downloadNote: "Se chiudi Mango Code, al prossimo avvio lo scaricamento riprende da dove era arrivato.",
-    errorHint: "Puoi riprovare. Se il problema si ripete, apri i log e mandali a chi ti assiste.",
+    errorHint: "Puoi riprovare. Se il problema si ripete, premi «Segnala il problema»: i log e, se lo lasci acceso, una schermata della finestra arrivano a Mango Code, senza i tuoi dati personali.",
     technicalDetails: "Dettagli tecnici",
     copyDetails: "Copia i dettagli",
     retry: "Riprova",
     openLogs: "Apri i log",
+    report: "Segnala il problema",
+    reportScreenshot: "Includi una schermata della finestra (aiuta a capire il problema, ma mostra quello che c'è nella finestra)",
+    reportSent: "Inviato, grazie.",
+    reportSaved: "Su GitHub si è aperta la segnalazione: allega il file salvato sul Desktop, ",
+    cannotReport: "Impossibile preparare la segnalazione: ",
     technicalDetailMarker: " (dettaglio tecnico:",
     // choice page
     choiceTitleCancelable: "Modelli e motore",
@@ -159,11 +164,16 @@ const TEXTS = {
     continue: "Continue",
     cancel: "Cancel",
     downloadNote: "If you close Mango Code, the download resumes where it left off at the next start.",
-    errorHint: "You can try again. If the problem happens again, open the logs and send them to whoever helps you.",
+    errorHint: "You can try again. If the problem happens again, press \"Report a problem\": the logs and, if you leave it on, a screenshot of the window reach Mango Code, without your personal data.",
     technicalDetails: "Technical details",
     copyDetails: "Copy the details",
     retry: "Retry",
     openLogs: "Open the logs",
+    report: "Report a problem",
+    reportScreenshot: "Include a screenshot of the window (it helps to understand the problem, but it shows what is in the window)",
+    reportSent: "Sent, thank you.",
+    reportSaved: "The issue is open on GitHub: attach the file saved on the Desktop, ",
+    cannotReport: "Cannot prepare the report: ",
     technicalDetailMarker: " (technical detail:",
     choiceTitleCancelable: "Models and engine",
     choiceTitleFirstRun: "Before you start, choose a model",
@@ -249,7 +259,7 @@ function applyLanguage(code) {
 const ORDER = ["startup", "engine", "voice", "agent", "preparing", "ready"];
 const $ = (id) => document.getElementById(id);
 const stepRows = [...document.querySelectorAll("#steps li")];
-const VIEWS = ["avvio", "scelta", "scarico", "errore"];
+const VIEWS = ["starting", "choice", "download", "error"];
 
 let received = false;    // a state has already arrived (an event always beats the initial read)
 let lastError = null;    // the last error state, to go back to the screen if "Retry" fails
@@ -257,7 +267,7 @@ let choice = null;       // the choice shown now (the app's assessment), for the
 let shownChoice = "";    // the same choice arriving twice does not reset what the user already ticked
 
 function view(name) {
-  if (name !== "scelta") {
+  if (name !== "choice") {
     shownChoice = "";
     choice = null;
   }
@@ -281,7 +291,7 @@ const where = (placement) => (placement === "gpu" ? t.onGpu : t.onCpu);
 // --- startup in progress ----------------------------------------------------------------------
 
 function showStartup(s) {
-  view("avvio");
+  view("starting");
   const pos = ORDER.indexOf(s.stage);
   if (pos < 0) return;
   $("startup-title").textContent = s.stage === "ready" ? t.readyTitle : t.startupTitle;
@@ -370,7 +380,7 @@ function modelItem(m, ticked) {
   // Where it runs, written first: whoever picks a model that goes on the processor reads it before downloading it. For
   // the user's models only where, without the context.
   const place = document.createElement("span");
-  place.className = "dove" + (m.placement === "cpu" ? " processore" : "");
+  place.className = "where" + (m.placement === "cpu" ? " cpu" : "");
   if (m.placement) {
     place.textContent = m.user ? where(m.placement) : `${where(m.placement)} · ${contextLabel(m.context)}`;
     place.title = t.memoryHint(m.reason, thousandWords(m.context));
@@ -400,7 +410,7 @@ function modelItem(m, ticked) {
 }
 
 function chosen() {
-  return [...document.querySelectorAll("#modelli input:checked")].map((c) => c.value);
+  return [...document.querySelectorAll("#models input:checked")].map((c) => c.value);
 }
 
 // How much would be downloaded with the choice made: the missing weights and the engines not yet installed
@@ -415,13 +425,13 @@ function toDownload() {
 
 function summary() {
   const { n, bytes } = toDownload();
-  $("scarica").disabled = n === 0;
-  $("scarica").textContent = bytes ? t.download : t.continue;
-  $("riepilogo").textContent = n === 0 ? t.chooseAtLeastOne : bytes ? t.toDownload(size(bytes)) : t.everythingThere;
+  $("start-download").disabled = n === 0;
+  $("start-download").textContent = bytes ? t.download : t.continue;
+  $("summary").textContent = n === 0 ? t.chooseAtLeastOne : bytes ? t.toDownload(size(bytes)) : t.everythingThere;
 }
 
 function showChoice(s) {
-  view("scelta");
+  view("choice");
   const signature = JSON.stringify(s);
   if (signature === shownChoice) return; // the same state arriving twice: what the user already ticked is not lost
   shownChoice = signature;
@@ -430,26 +440,26 @@ function showChoice(s) {
   const ticked = choice ? new Set([...chosen(), ...(s.added ? [s.added] : [])]) : null;
   choice = s;
   const assessment = s.assessment;
-  $("scelta-titolo").textContent = s.cancelable ? t.choiceTitleCancelable : t.choiceTitleFirstRun;
+  $("choice-title").textContent = s.cancelable ? t.choiceTitleCancelable : t.choiceTitleFirstRun;
   $("choice-intro").textContent = s.cancelable ? t.choiceIntroCancelable : t.choiceIntroFirstRun;
   showComputer(assessment);
-  $("modelli").replaceChildren(...assessment.models.map((m) => modelItem(m, ticked)));
+  $("models").replaceChildren(...assessment.models.map((m) => modelItem(m, ticked)));
   $("optimize-folder").textContent = s.optimize_dir;
   if (!ticked) refreshToken();
-  $("annulla").hidden = !s.cancelable;
+  $("cancel").hidden = !s.cancelable;
   $("choice-status").textContent = "";
-  $("annulla").disabled = false;
+  $("cancel").disabled = false;
   summary();
 }
 
-$("scarica").addEventListener("click", async () => {
-  $("scarica").disabled = true;
-  $("annulla").disabled = true;
+$("start-download").addEventListener("click", async () => {
+  $("start-download").disabled = true;
+  $("cancel").disabled = true;
   try {
     await invoke("choice_confirm", { chosen: chosen() });
   } catch (e) {
     $("choice-status").textContent = t.cannotStart + e;
-    $("annulla").disabled = false;
+    $("cancel").disabled = false;
     summary();
   }
 });
@@ -462,7 +472,7 @@ $("optimize-open").addEventListener("click", async () => {
   }
 });
 
-$("annulla").addEventListener("click", async () => {
+$("cancel").addEventListener("click", async () => {
   try {
     await invoke("choice_cancel");
   } catch (e) {
@@ -690,9 +700,9 @@ $("token-remove").addEventListener("click", async () => {
 // --- download ---------------------------------------------------------------------------------
 
 function showDownload(s) {
-  view("scarico");
-  $("scarico-titolo").textContent = s.detail;
-  $("passi").replaceChildren(
+  view("download");
+  $("download-title").textContent = s.detail;
+  $("download-steps").replaceChildren(
     ...s.download.steps.map((p) => {
       const li = document.createElement("li");
       li.className = p.state === "done" ? "done" : p.state === "in_progress" ? "active" : "";
@@ -725,7 +735,7 @@ function showDownload(s) {
 function showError(s) {
   lastError = s;
   const e = s.error || { title: s.detail, message: "", logs: null };
-  view("errore");
+  view("error");
   $("error-title").textContent = e.title;
   // What happened and what to do is read at once; the technical lines stay in the details.
   $("error-sentence").textContent = e.message.split(t.technicalDetailMarker)[0];
@@ -758,6 +768,19 @@ $("retry").addEventListener("click", async () => {
     showError(lastError);
     $("status").textContent = t.cannotRetry + e;
   }
+});
+
+$("report").hidden = !window.__MANGO_DESKTOP__;
+$("report-screenshot-row").hidden = !window.__MANGO_DESKTOP__;
+$("report").addEventListener("click", () => {
+  const details = $("error-title").textContent + "\n\n" + $("error-message").textContent;
+  window.__MANGO_DESKTOP__
+    .reportProblem({ error: details, screenshot: $("report-screenshot").checked })
+    .then((done) => {
+      $("status").textContent = done.sent ? t.reportSent : t.reportSaved + done.file;
+      $("report").disabled = done.sent;
+    })
+    .catch((e) => { $("status").textContent = t.cannotReport + (e?.message ?? e); });
 });
 
 $("logs").addEventListener("click", () => {

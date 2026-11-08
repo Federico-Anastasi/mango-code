@@ -15,6 +15,8 @@
   "_order": "The recommended local models in the order they are listed (selector and first run of the app, mango-code -Models): each local model in 'models' appears exactly once. The user's models (user-models.json, in the data dir) follow, then the cloud ones.",
   "models": {
     "toq": {
+      "on_request": true,
+      "_on_request": "TOQ stays in the list for whoever chooses it, but it is never preselected nor marked fastest: in our tests as an agent it wrote incoherent text and ignored web search.",
       "label": "Qwen3.8-27B-TOQ-v1",
       "_label": "The name the user sees (web UI, terminal, status bar): the full official name, the same as on GitHub and Hugging Face.",
       "quant": "",

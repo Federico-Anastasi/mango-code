@@ -66,6 +66,7 @@ impl System for Real {
                 user: c.origin == Origin::User,
                 fastest: c.fastest,
                 fallback: c.fallback,
+                on_request: c.on_request,
             })
             .collect())
     }

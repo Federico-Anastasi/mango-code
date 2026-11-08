@@ -65,7 +65,12 @@ opencode  ──provider mango, /v1 OpenAI-compatible──►  llama-server (pr
 4. **your Chrome**, if you turned on remote debugging from `chrome://inspect/#remote-debugging`;
 5. otherwise mango-code's browser, without logins.
 
-Which one it chose is written to `mcp-chrome.log` ("browser: …").
+Which one it chose is written to `mcp-chrome.log` ("browser: …"). A port that shows Mango Code's own window (the
+app page or the web UI) is never used: driving it would replace the app with the page.
+
+When the agent finishes a site it opens it in the panel, which opens by itself: first with a local server (`bun
+index.html`, port 3000; Bun is part of Mango Code), or the project's own dev server. In your own browser only if you
+ask.
 
 ### The banner, and how to remove it
 

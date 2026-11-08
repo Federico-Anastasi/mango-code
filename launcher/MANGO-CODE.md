@@ -210,8 +210,8 @@ for the t/s of the status bar: `MANGO_ENGINE_URL` makes them be asked to whoever
 
 `llama-server` has **no authentication**: whoever is on your network and finds port 8080 can use the model. On the
 home wifi that is exactly what you want; on a network that isn't yours, no - that is why `0.0.0.0` is never the default
-and `-Lan` has to be asked for by hand. Away from home nothing is opened to the internet: Tailscale is already on this
-machine, and `mango-code -Remote <tailscale-ip>` works identically without exposing anything.
+and `-Lan` has to be asked for by hand. Away from home nothing is opened to the internet: with Tailscale on both PCs,
+`mango-code -Remote <tailscale-ip>` works identically without exposing anything.
 
 ## Ports
 

@@ -24,8 +24,65 @@ use tauri_plugin_opener::OpenerExt;
 pub const INIT_SCRIPT: &str = r#"
 (() => {
   if (window.top !== window) return;
-  const call = (cmd, args) => window.__TAURI_INTERNALS__.invoke("plugin:mango-bridge|" + cmd, args);
+  const invoke = (cmd, args) => window.__TAURI_INTERNALS__.invoke("plugin:mango-bridge|" + cmd, args);
+
+  // What goes wrong in the page ends up in logs\ui.log (report.rs): uncaught errors, console.error, and the calls
+  // to the app that take more than a second or never answer. At most 100 lines a minute.
+  let budget = 100;
+  setInterval(() => (budget = 100), 60000);
+  const log = (level, text) => {
+    if (budget <= 0) return;
+    budget--;
+    invoke("ui_log", { level, text: String(text).slice(0, 4000), page: location.pathname }).catch(() => {});
+  };
+  const describe = (v) => {
+    if (v instanceof Error) return v.stack || String(v);
+    if (typeof v !== "object" || v === null) return String(v);
+    try { return JSON.stringify(v); } catch { return String(v); }
+  };
+  addEventListener("error", (e) => {
+    // the browser's warning about a ResizeObserver that resizes what it observes: harmless, and it would fill the log
+    if (!e.error && String(e.message).startsWith("ResizeObserver loop")) return;
+    log("error", e.error ? describe(e.error) : `${e.message} (${e.filename}:${e.lineno})`);
+  });
+  addEventListener("unhandledrejection", (e) => log("error", "unhandled rejection: " + describe(e.reason)));
+  const consoleError = console.error.bind(console);
+  console.error = (...args) => {
+    consoleError(...args);
+    log("console", args.map(describe).join(" "));
+  };
+  // These wait for the user (a dialog) or do slow work on purpose: their time says nothing.
+  const waits = new Set(["pick_folders", "report_problem", "update_check"]);
+  const call = (cmd, args) => {
+    if (waits.has(cmd)) return invoke(cmd, args);
+    const t0 = performance.now();
+    let settled = false;
+    const late = setTimeout(() => settled || log("slow", `${cmd}: no answer after 5 s`), 5000);
+    const p = invoke(cmd, args);
+    p.finally(() => {
+      settled = true;
+      clearTimeout(late);
+      const ms = Math.round(performance.now() - t0);
+      if (ms > 1000) log("slow", `${cmd}: ${ms} ms`);
+    }).catch(() => {});
+    return p;
+  };
+
   window.__MANGO_DESKTOP__ = Object.freeze({
+    // "Report a problem" ({ error?, note?, screenshot? }): logs, computer and (if asked) the window go to Mango Code,
+    // anonymized; resolves with { sent: true }. A build without the Sentry address writes a file on the Desktop and
+    // opens a GitHub issue instead: { sent: false, file }.
+    reportProblem: (o) =>
+      call("report_problem", { error: o?.error ?? null, note: o?.note ?? null, screenshot: !!o?.screenshot, page: location.href }),
+    // the app's logs folder in File Explorer
+    openLogs: () => call("open_logs_folder"),
+    // Automatic updates: state() and check() give { status, version?, percent?, message? } (the web UI's UpdaterState);
+    // install() stops agent and engine, runs the installer and closes the app. Changes arrive as "mango-update" on window.
+    updates: Object.freeze({
+      state: () => call("update_state"),
+      check: () => call("update_check"),
+      install: () => call("update_install"),
+    }),
     // folders chosen in the Windows picker (array), or null if the user cancels
     pickDirectories: (opts) => call("pick_folders", { title: opts?.title ?? null, multiple: !!opts?.multiple }),
     // the folder where "New project" creates projects if another one is not chosen (Documents\Mango Code)
@@ -498,7 +555,13 @@ pub fn install(app: &App) -> tauri::Result<()> {
                 crate::team::team_save,
                 crate::phone::phone_state,
                 crate::phone::phone_set_enabled,
-                crate::phone::phone_new_key
+                crate::phone::phone_new_key,
+                crate::report::ui_log,
+                crate::report::report_problem,
+                crate::report::open_logs_folder,
+                crate::updater::update_state,
+                crate::updater::update_check,
+                crate::updater::update_install
             ])
             .build(),
     )

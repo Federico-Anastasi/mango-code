@@ -21,6 +21,8 @@ mod supervisor;
 mod team;
 mod phone;
 mod tray;
+mod report;
+mod updater;
 
 use anyhow::{Context, Result};
 use mango_common::{port_busy, free_port, tr, Paths};
@@ -57,7 +59,7 @@ pub(crate) fn phone_port() -> u16 {
 
 /// `--service`: the app starts without showing the window (the tray icon opens it). This is how
 /// another app that only wants the service starts it (docs/INTEGRATION.md).
-fn service_mode() -> bool {
+pub(crate) fn service_mode() -> bool {
     std::env::args().any(|a| a == "--service")
 }
 /// How long to wait for the agent's browser, web search and documents to connect (and reconnect).
@@ -611,6 +613,7 @@ pub fn run() {
         ))
         .setup(|app| {
             bridge::install(app)?;
+            updater::install(app)?;
             let mut window = WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
                 .title("Mango Code")
                 // The Windows title bar follows the window theme: dark like the app, instead of

@@ -2263,7 +2263,7 @@ export default function LegacyLayout(props: ParentProps) {
       <Show when={updateVersion() !== undefined}>
         <UpdateAvailableToast version={updateVersion() ?? ""} install={installUpdate} language={language} />
       </Show>
-      <div class="flex-1 min-h-0 min-w-0 flex">
+      <div class="relative flex-1 min-h-0 min-w-0 flex">
         <Show when={preview.opened()}>
           <PreviewPanel
             width={preview.width()}

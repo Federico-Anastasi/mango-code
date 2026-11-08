@@ -7,7 +7,7 @@ import { DialogProvider } from "@opencode-ai/ui/context/dialog"
 import { I18nProvider } from "@opencode-ai/ui/context"
 import { pluralCategory, pluralKey, type UiI18nParams, type UiI18nPluralKey } from "@opencode-ai/ui/context/i18n"
 import { dict as uiEn } from "@opencode-ai/ui/i18n/en"
-import { dict as uiZh } from "@opencode-ai/ui/i18n/zh"
+import { dict as uiIt } from "@opencode-ai/ui/i18n/it"
 import { createEffect, createMemo, Suspense, type ParentProps } from "solid-js"
 import { getRequestEvent } from "solid-js/web"
 import "./app.css"
@@ -27,7 +27,7 @@ function detectLocaleFromHeader(header: string | null | undefined) {
   for (const item of header.split(",")) {
     const value = item.trim().split(";")[0]?.toLowerCase()
     if (!value) continue
-    if (value.startsWith("zh")) return "zh" as const
+    if (value.startsWith("it")) return "it" as const
     if (value.startsWith("en")) return "en" as const
   }
 }
@@ -40,7 +40,7 @@ function detectLocale() {
 
   if (typeof document === "object") {
     const value = document.documentElement.lang?.toLowerCase() ?? ""
-    if (value.startsWith("zh")) return "zh" as const
+    if (value.startsWith("it")) return "it" as const
     if (value.startsWith("en")) return "en" as const
   }
 
@@ -48,7 +48,7 @@ function detectLocale() {
     const languages = navigator.languages?.length ? navigator.languages : [navigator.language]
     for (const language of languages) {
       if (!language) continue
-      if (language.toLowerCase().startsWith("zh")) return "zh" as const
+      if (language.toLowerCase().startsWith("it")) return "it" as const
     }
   }
 
@@ -57,9 +57,9 @@ function detectLocale() {
 
 function UiI18nBridge(props: ParentProps) {
   const locale = createMemo(() => detectLocale())
-  const zh = uiZh as Partial<Record<string, string>>
+  const it = uiIt as Partial<Record<string, string>>
   const t = (key: keyof typeof uiEn, params?: UiI18nParams) => {
-    const value = locale() === "zh" ? (zh[key] ?? uiEn[key]) : uiEn[key]
+    const value = locale() === "it" ? (it[key] ?? uiEn[key]) : uiEn[key]
     const text = value ?? String(key)
     return resolveTemplate(text, params)
   }

@@ -114,7 +114,9 @@ export function PreviewPanel(props: {
 
   return (
     <aside
-      class="hidden xl:flex order-last shrink-0 h-full flex-col border-s border-border-weaker-base bg-background-base"
+      // Below xl (a laptop at 125-150% is 860-1100 px wide) there is no room next to the chat: the panel covers it
+      // whole, and its X or the globe in the title bar bring the chat back. Hiding it there left the agent's page unseen.
+      class="flex order-last shrink-0 h-full flex-col border-s border-border-weaker-base bg-background-base max-xl:absolute max-xl:inset-0 max-xl:z-30 max-xl:!w-full max-xl:border-s-0"
       style={{ width: `${props.width}px` }}
       aria-label={language.t("preview.title")}
     >

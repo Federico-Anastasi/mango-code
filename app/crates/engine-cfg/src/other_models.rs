@@ -309,8 +309,8 @@ pub fn analyze_local(paths: &Paths, hw: &Hardware, path: &Path) -> Result<Analys
         bail!(
             "{}",
             tr!(
-                "«{file_name}» è un pezzo di un modello diviso in più file: per ora i modelli divisi si aggiungono da Hugging Face.",
-                "«{file_name}» is a piece of a model split into several files: for now split models are added from Hugging Face."
+                "«{file_name}» è un pezzo di un modello diviso in più file: i modelli divisi si aggiungono da Hugging Face.",
+                "«{file_name}» is a piece of a model split into several files: split models are added from Hugging Face."
             )
         );
     }

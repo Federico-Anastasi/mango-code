@@ -70,6 +70,25 @@ export default function NewLayout(props: ParentProps) {
     install: () => void platform.updater?.install(),
   }
 
+  // mango-code: when a new version is ready, a notice too (once per version), not only the button in the title bar
+  const language = useLanguage()
+  let announced: string | undefined
+  createEffect(() => {
+    const version = update.version()
+    if (!version || version === announced) return
+    announced = version
+    showToast({
+      persistent: true,
+      icon: "download",
+      title: language.t("toast.update.title"),
+      description: language.t("toast.update.description", { version }),
+      actions: [
+        { label: language.t("toast.update.action.installRestart"), onClick: update.install },
+        { label: language.t("toast.update.action.notYet"), onClick: "dismiss" },
+      ],
+    })
+  })
+
   return (
     <div
       class="relative bg-v2-background-bg-deep flex-1 min-h-0 min-w-0 flex flex-col select-none [&_input]:select-text [&_textarea]:select-text [&_[contenteditable]]:select-text"
@@ -87,7 +106,7 @@ export default function NewLayout(props: ParentProps) {
             : undefined
         }
       />
-      <div class="flex-1 min-h-0 min-w-0 flex">
+      <div class="relative flex-1 min-h-0 min-w-0 flex">
         <main class="flex-1 min-h-0 min-w-0 overflow-x-hidden flex flex-col items-start contain-strict">
           <Suspense>{props.children}</Suspense>
         </main>

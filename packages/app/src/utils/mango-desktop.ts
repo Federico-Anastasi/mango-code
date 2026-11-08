@@ -1,4 +1,6 @@
+import { createSignal } from "solid-js"
 import type { Platform } from "@/context/platform"
+import type { UpdaterPlatform, UpdaterState } from "@/updater"
 
 /** Bridge to the Mango Code desktop app: the app (Tauri) defines it in every page, a normal browser does not. */
 export type MangoDesktop = {
@@ -11,6 +13,19 @@ export type MangoDesktop = {
   openExternal(url: string): Promise<void>
   /** "Models and engine": the window moves to the app page that downloads or removes models and changes the engine. */
   openModels(): Promise<void>
+  /**
+   * "Report a problem": logs, PC details and (if asked) the window go to Mango Code, anonymized: `{ sent: true }`.
+   * A build without the report address saves a file on the Desktop and opens a GitHub issue: `{ sent: false, file }`.
+   */
+  reportProblem(report?: { error?: string; note?: string; screenshot?: boolean }): Promise<{ sent: boolean; file?: string }>
+  /** The app's logs folder in File Explorer. */
+  openLogs(): Promise<void>
+  /** Automatic updates: the app checks the GitHub releases and downloads the new version; install() restarts into it. */
+  updates?: {
+    state(): Promise<UpdaterState>
+    check(): Promise<UpdaterState>
+    install(): Promise<void>
+  }
   /** Project files, by absolute path: they reject with { code, message } (not_found, forbidden, blocked_type, ...). */
   fileInfo(path: string): Promise<{ size: number; isDir: boolean }>
   openPath(path: string): Promise<void>
@@ -104,9 +119,16 @@ export function mangoPlatform(
   bridge: MangoDesktop,
 ): Pick<
   Platform,
-  "pickNativeDirectories" | "projectsFolder" | "createProjectFolder" | "readClipboardImage" | "openExternal" | "projectFiles"
+  | "pickNativeDirectories"
+  | "projectsFolder"
+  | "createProjectFolder"
+  | "readClipboardImage"
+  | "openExternal"
+  | "projectFiles"
+  | "updater"
 > {
   return {
+    updater: bridge.updates ? mangoUpdater(bridge.updates) : undefined,
     async pickNativeDirectories(opts) {
       const picked = await bridge.pickDirectories(opts)
       if (!picked) return null
@@ -136,4 +158,22 @@ export function mangoPlatform(
 /** True only inside the Mango Code desktop app (the bridge is there); a normal browser stays as it is. */
 export function inMangoDesktop() {
   return typeof window !== "undefined" && !!window.__MANGO_DESKTOP__
+}
+
+/**
+ * The updater of the web UI (Install-and-restart button in the title bar, notice, Settings > Help) on top of the
+ * app's: the state starts from the app and then follows its "mango-update" events.
+ */
+function mangoUpdater(updates: NonNullable<MangoDesktop["updates"]>): UpdaterPlatform {
+  const [state, setState] = createSignal<UpdaterState>({ status: "idle" })
+  window.addEventListener("mango-update", (event) => setState((event as CustomEvent<UpdaterState>).detail))
+  updates.state().then(setState, () => undefined)
+  return {
+    state,
+    check: () => updates.check().then((next) => (setState(next), next)),
+    install: () =>
+      updates.install().catch((cause: unknown) => {
+        setState({ status: "error", message: mangoDesktopError(cause).message })
+      }),
+  }
 }

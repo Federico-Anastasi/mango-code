@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Mango Code",
-  "version": "0.1.0",
+  "version": "0.1.0-rc.3",
   "identifier": "dev.mango.code",
   "build": {
     "frontendDist": "../ui"
@@ -16,6 +16,7 @@
   "bundle": {
     "active": true,
     "targets": ["nsis"],
+    "createUpdaterArtifacts": true,
     "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.ico"],
     "publisher": "Mango",
     "shortDescription": "Coding assistant that runs on your computer",
@@ -30,6 +31,13 @@
         "installerIcon": "icons/icon.ico",
         "installerHooks": "windows/hooks.nsh"
       }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEU0MDJEMDEzRTAyMjE3NUQKUldSZEZ5TGdFOUFDNUdIVnk1QUdtVTlxM0pYcDI4TzIxZ2pWaWFBODUxUUkzQlFQV1BzeFFmbUkK",
+      "endpoints": ["https://github.com/Federico-Anastasi/mango-code/releases/latest/download/latest.json"],
+      "windows": { "installMode": "passive" }
     }
   }
 }

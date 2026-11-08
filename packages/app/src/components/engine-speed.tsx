@@ -243,9 +243,11 @@ export function SessionWorkTime() {
     () => params.id,
     async (id) => parseWorkSteps(await fetchServerJson(serverSDK, `${SESSION_WORK_PATH}?sessionID=${encodeURIComponent(id)}`, 5000)),
   )
+  // Only once it has arrived: before that `steps.latest` suspends the whole conversation, and after a
+  // failure it throws the error into it.
   const older = createMemo(() =>
     olderWorkMs(
-      steps.latest ?? [],
+      steps.state === "ready" || steps.state === "refreshing" ? (steps.latest ?? []) : [],
       assistants().map((message) => message.id),
     ),
   )

@@ -1,4 +1,4 @@
-import { createResource, createSignal, Show } from "solid-js"
+import { createEffect, createSignal, onCleanup, Show } from "solid-js"
 import { useI18n } from "@opencode-ai/ui/context/i18n"
 import { useData } from "../context"
 import { formatFileSize, projectFileKind, projectFileKindKey, projectFileProblem } from "./project-file"
@@ -15,16 +15,21 @@ export function ProjectFileMeta(props: { path: string; details?: boolean }) {
   const i18n = useI18n()
   const [failed, setFailed] = createSignal<ReturnType<typeof projectFileProblem>>()
 
-  const [info] = createResource(
-    () => (data.files ? props.path : undefined),
-    async (path): Promise<Info> => {
-      try {
-        return { size: (await data.files!.info(path)).size }
-      } catch (cause) {
-        return { problem: projectFileProblem(cause) }
-      }
-    },
-  )
+  // A signal, not a resource: a pending resource read here suspends the nearest Suspense, which is the
+  // whole conversation. If the app answers late (or never) the chat went blank and stayed blank.
+  const [info, setInfo] = createSignal<Info>()
+  createEffect(() => {
+    const files = data.files
+    const path = props.path
+    setInfo(undefined)
+    if (!files) return
+    let current = true
+    onCleanup(() => (current = false))
+    files.info(path).then(
+      (found) => current && setInfo({ size: found.size }),
+      (cause: unknown) => current && setInfo({ problem: projectFileProblem(cause) }),
+    )
+  })
 
   const problem = () => {
     const found = info()

@@ -1,0 +1,89 @@
+# Builds, signs and publishes the Windows installer when a tag v<version> is pushed (app/README.md, "Automatic
+# updates"). The signing key lives in the `release` environment, which waits for the maintainer's approval.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+concurrency: release
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    environment: release
+    timeout-minutes: 150
+    env:
+      TAG: ${{ github.ref_name }}
+      # bindgen for whisper.cpp (voice dictation)
+      LIBCLANG_PATH: C:\Program Files\LLVM\bin
+      CARGO_TERM_COLOR: never
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: The tag is the app's version
+        run: |
+          $version = (Get-Content app/src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
+          if ($env:TAG -ne "v$version") { throw "tag $env:TAG, but tauri.conf.json says $version" }
+          if (-not (Select-String -Path app/Cargo.toml -SimpleMatch "version = `"$version`"" -Quiet)) { throw "app/Cargo.toml is not at $version" }
+          if (-not (Test-Path "app/release-notes/$env:TAG.md")) { throw "app/release-notes/$env:TAG.md is missing" }
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Tauri CLI
+        run: cargo install tauri-cli --version 2.11.4 --locked
+
+      - name: Node packages of the launcher and of the agent's plugins
+        run: |
+          foreach ($dir in "launcher", "launcher/opencode-home") {
+            Push-Location $dir
+            npm ci --no-audit --no-fund
+            if ($LASTEXITCODE) { throw "npm ci failed in $dir" }
+            Pop-Location
+          }
+
+      - name: The agent
+        run: ./launcher/setup.ps1 -Only opencode
+
+      - name: Installer, signed
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          if (-not $env:TAURI_SIGNING_PRIVATE_KEY) { throw "the release environment has no signing key" }
+          ./app/scripts/build.ps1
+
+      - name: Signature check
+        run: node app/scripts/verify-signature.mjs
+
+      - name: latest.json
+        run: node app/scripts/update-manifest.mjs --notes "Mango Code $($env:TAG.Substring(1))"
+
+      - name: Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $nsis = "app/target/release/bundle/nsis"
+          $exe = Get-Item "$nsis/*-setup.exe"
+          $sha = (Get-FileHash $exe -Algorithm SHA256).Hash.ToLower()
+          $notes = (Get-Content "app/release-notes/$env:TAG.md" -Raw).TrimEnd() + "`n`nSHA-256 of the installer: ``$sha``"
+          Set-Content -Path notes.md -Value $notes -Encoding utf8
+          $arguments = @($env:TAG, "--title", "Mango Code $($env:TAG.Substring(1))", "--notes-file", "notes.md")
+          if ($env:TAG.Contains("-")) { $arguments += "--prerelease" }
+          gh release create @arguments $exe.FullName "$($exe.FullName).sig" "$nsis/latest.json"
+          if ($LASTEXITCODE) { throw "gh release create failed" }

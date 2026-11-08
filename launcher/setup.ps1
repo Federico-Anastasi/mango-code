@@ -266,14 +266,14 @@ function Install-Opencode {
     Push-Location $repo
     try {
         $env:HUSKY = "0"
-        bun install --frozen-lockfile | Out-Null
-        if ($LASTEXITCODE -ne 0) { Warn (T "bun install fallito" "bun install failed"); return }
+        bun install --frozen-lockfile
+        if ($LASTEXITCODE -ne 0) { throw (T "bun install fallito" "bun install failed") }
         Push-Location "packages\opencode"
         try {
             $env:OPENCODE_VERSION = $OPENCODE_BUILD_VERSION; $env:OPENCODE_CHANNEL = "latest"
             Info (T "compilazione (5-15 min)..." "building (5-15 min)...")
-            bun run script/build.ts --single | Out-Null
-            if ($LASTEXITCODE -ne 0) { Warn (T "build fallita" "build failed"); return }
+            bun run script/build.ts --single
+            if ($LASTEXITCODE -ne 0) { throw (T "build dell'agente fallita" "agent build failed") }
         } finally { Pop-Location }
     } finally { Pop-Location }
     New-Item -ItemType Directory -Force -Path "$Opencode\web" | Out-Null
