@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/images/banner.png" alt="mango code: a coding agent on your own computer" width="100%">
+  <img src="docs/images/banner.png" alt="mango code: an AI agent on your own computer" width="100%">
 </p>
 
 <p align="center">
@@ -123,7 +123,7 @@ the app checks before installing.
 
 ## Privacy
 
-The models run on your computer: your code, your prompts and the model's answers do not leave it. What goes online:
+The models run on your computer: your files, your prompts and the model's answers do not leave it. What goes online:
 
 - **Downloads**: the engines from GitHub and the models from Hugging Face, the ones you choose.
 - **Updates**: once per start, the app reads the latest release's `latest.json` from this repository.
