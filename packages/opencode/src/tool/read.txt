@@ -1,0 +1,8 @@
+Reads a file or directory (an error if the path does not exist).
+
+- `filePath` is an absolute path.
+- Returns up to 2000 lines from the start of the file; `offset` (1-indexed line) reads later sections. Lines over 2000 characters are truncated: use grep for specific content in large files or files with long lines.
+- Lines come as `<line>: <content>`; directories list one entry per line, with a trailing `/` for subdirectories.
+- If unsure of the path, use glob.
+- Read several files in parallel when you need them. Read a larger window rather than repeated ~30-line slices.
+- Images and PDFs come back as file attachments. Word (.docx), Excel (.xlsx) and PowerPoint (.pptx) files come back as Markdown text, and so do PDFs when the model cannot read PDFs directly.

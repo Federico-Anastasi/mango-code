@@ -1,0 +1,23 @@
+{
+  "name": "mango-code-launcher",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Node dependencies of the mango-code launcher: web search MCP (readability/jsdom/turndown), browser MCP (chrome-devtools-mcp), documents server.",
+  "license": "AGPL-3.0-or-later",
+  "dependencies": {
+    "@mozilla/readability": "^0.6.0",
+    "@xmldom/xmldom": "^0.9.12",
+    "chrome-devtools-mcp": "^1.8.0",
+    "docx": "^9.15.0",
+    "exceljs": "^4.4.0",
+    "fast-formula-parser": "^1.0.19",
+    "jsdom": "^29.1.1",
+    "jszip": "^3.10.2",
+    "marked": "^18.1.2",
+    "pdf-lib": "^1.17.1",
+    "pdfmake": "^0.3.13",
+    "pptxgenjs": "^4.0.1",
+    "turndown": "^7.2.4",
+    "unpdf": "^1.9.1"
+  }
+}

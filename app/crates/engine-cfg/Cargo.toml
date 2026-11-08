@@ -1,0 +1,20 @@
+[package]
+name = "engine-cfg"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+mango-common.workspace = true
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+nvml-wrapper = "0.13.0"
+# The models' conversation format (Jinja) is tested without llama.cpp: pycompat for the string methods.
+minijinja = { version = "3", features = ["loop_controls", "preserve_order", "serde"] }
+minijinja-contrib = { version = "3", features = ["pycompat"] }
+raw-cpuid = "11"
+windows = { version = "0.58", features = ["Win32_Foundation", "Win32_Graphics_Dxgi", "Win32_System_SystemInformation"] }
+
+[dev-dependencies]
+tempfile = "3.27.0"

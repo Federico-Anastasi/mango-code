@@ -1,0 +1,34 @@
+{
+  "id": "3060ti-1080-1660s/lfm",
+  "model": "lfm",
+  "engine": "prism",
+  "build": "cuda-12",
+  "hardware": {
+    "gpus": [
+      "NVIDIA GeForce RTX 3060 Ti",
+      "NVIDIA GeForce GTX 1080",
+      "NVIDIA GeForce GTX 1660 SUPER"
+    ]
+  },
+  "env": {
+    "GGML_CUDA_CLOCK_KEEPER": "1"
+  },
+  "args": [
+    "-ngl",
+    "999",
+    "-fa",
+    "1",
+    "-ctk",
+    "f16",
+    "-ctv",
+    "f16",
+    "--spec-type",
+    "ngram-simple"
+  ],
+  "ctx": 131072,
+  "ts": "19,14,8",
+  "measurements": {
+    "date": "2026-10-20",
+    "note": "[engine] Prism for the clock keeper: without it, the three GPUs drop their clocks between one token and the next.\n[env] See bonsai2: keeps up the clocks of the GPUs that in the layer split sit idle 2/3 of the token.\n[spec] Lossless as on bonsai2. MEASURED 2026-10-20 from the server, temperature 0, 4k tokens: recopying a file with changes 99 -> 139 tok/s (81% of drafts accepted), new text 100 -> 111.\n[why] Text only, no mmproj. 40 layers of which 10 with attention (8 KV heads of 64): the f16 KV weighs ~20 KiB/token, 2.5 GiB at 128k, so it fits without compressing it. MEASURED 2026-10-20 with llama-bench on the prism engine, 19/14/8: decode 86 tok/s idle, 57 at 64k, 45.8 at 128k; prefill ~2040 tok/s. The 3.6 on the same bench: 42 / 26 / 18.6. KV q8_0 at 128k: 31 tok/s, because FA with quantized KV on Pascal takes the slow path. The QAD GGUF is trained to recover the loss of Q4_0. LFM Open 1.0 license: free under $10M of annual revenue.\n[ts] In LAYERS (41 = 40 + output). The 3060 Ti has double the bandwidth of the Pascals: idle 45/35/20 gives 86 tok/s, 55/35/10 90, but at 128k with f16 KV more than 19 layers on the 3060 Ti do not fit (20/14/7 and 50/35/15 go OOM)."
+  }
+}

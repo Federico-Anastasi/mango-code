@@ -1,0 +1,25 @@
+[data-component="tool-image"] {
+  display: block;
+  width: fit-content;
+  max-width: min(100%, 360px);
+  margin: 6px 0 2px;
+  padding: 0;
+  border: 0.5px solid var(--v2-border-border-base);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--v2-background-bg-layer-02);
+  cursor: zoom-in;
+  transition: border-color 0.15s ease;
+
+  &:hover {
+    border-color: var(--v2-border-border-strong);
+  }
+
+  img {
+    display: block;
+    width: 100%;
+    max-height: 240px;
+    object-fit: cover;
+    object-position: top;
+  }
+}

@@ -1,0 +1,5 @@
+Fetches a URL and returns its content as `format`: "markdown" (default), "text" or "html".
+
+- The URL must be fully formed; HTTP is upgraded to HTTPS.
+- Read-only. Very large content may be summarized.
+- If another tool fetches the web better, is more targeted to the task or has fewer restrictions, use that one instead.

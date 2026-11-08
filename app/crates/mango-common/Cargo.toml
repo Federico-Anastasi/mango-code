@@ -1,0 +1,20 @@
+[package]
+name = "mango-common"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+ureq = "3.5"
+sha2 = "0.10"
+# Read-only zip support with deflate: engines are downloaded as .zip.
+zip = { version = "9", default-features = false, features = ["deflate-flate2"] }
+windows-sys = { version = "0.61", features = ["Win32_Globalization", "Win32_Storage_FileSystem"] }
+keyring = { version = "3", features = ["windows-native"] }
+
+[dev-dependencies]
+tempfile = "3.27.0"
+tiny_http = "0.12"

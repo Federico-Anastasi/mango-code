@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="16 32 170 170" width="1024" height="1024">
+  <!-- Mango Code: a mango made of lines of code, which start at the left edge and end at different lengths -->
+  <defs>
+    <linearGradient id="skin" gradientUnits="userSpaceOnUse" x1="47" y1="59" x2="155" y2="178">
+      <stop offset="0" stop-color="#FFD84A"/>
+      <stop offset="0.5" stop-color="#FFA61F"/>
+      <stop offset="1" stop-color="#F0532B"/>
+    </linearGradient>
+    <clipPath id="mango">
+      <path d="M 96 52 C 142 40 182 78 176 126 C 171 166 134 190 94 184 C 66 180 44 172 24 150 C 34 150 42 144 44 132 C 46 92 62 60 96 52 Z"/>
+    </clipPath>
+  </defs>
+  <g clip-path="url(#mango)" fill="url(#skin)">
+    <rect x="0" y="44" width="150" height="9" rx="4.5"/>
+    <rect x="0" y="57" width="182" height="9" rx="4.5"/>
+    <rect x="0" y="70" width="128" height="9" rx="4.5"/>
+    <rect x="0" y="83" width="170" height="9" rx="4.5"/>
+    <rect x="0" y="96" width="182" height="9" rx="4.5"/>
+    <rect x="0" y="109" width="112" height="9" rx="4.5"/>
+    <rect x="0" y="122" width="160" height="9" rx="4.5"/>
+    <rect x="0" y="135" width="182" height="9" rx="4.5"/>
+    <rect x="0" y="148" width="140" height="9" rx="4.5"/>
+    <rect x="0" y="161" width="120" height="9" rx="4.5"/>
+    <rect x="0" y="174" width="182" height="9" rx="4.5"/>
+    <rect x="0" y="187" width="150" height="9" rx="4.5"/>
+  </g>
+</svg>

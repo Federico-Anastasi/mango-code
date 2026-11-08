@@ -1,0 +1,1 @@
+Loads a skill when the task matches one of those listed in the system prompt (the name must match one of them). Its instructions and resources, with workflow guidance and references to scripts or files in the skill's directory, are injected into the conversation.

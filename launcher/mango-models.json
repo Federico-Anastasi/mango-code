@@ -1,0 +1,198 @@
+{
+  "_note": "Mango Code's model catalog: what the models are and where to download them from. It is read by the app (engine-cfg), mango-engine.ps1. Adding a model = adding an entry here and its place in 'order'. How it runs on specific hardware (engine, arguments, measured context) is stated by its profile in profiles/; without a profile for the PC, the official llama.cpp applies with the arguments computed from the hardware (engine-cfg, general.rs). The gguf/mmproj paths are RELATIVE to the models folder (mango-paths.json, written by setup.ps1): this file stays valid on any machine. 'repo', 'revision' and 'files' (name, size, sha256 of each file) say where to download it from and how to verify it; 'ctx' and 'memory' (K+V cache per token at f16 and fixed state, from the GGUF header) are used to estimate whether the model fits in the PC's memory.",
+  "prism_build": "prism-b10709-9a9394a",
+  "_prism_build": "Tag of our fork mango-prism (PrismML's llama.cpp, b10709, plus the mango branch) for the models with the prism engine (3.6, 3.8, bonsai2, lfm): setup.ps1 -Only llama-prism clones it and builds into LLAMA/prism; the fork's Actions build the zips of mango-engines.json from the same tag. Same rule as llama_build: changing it is a decision, not an update.",
+  "toq_build": "toq-35e7256",
+  "_toq_build": "Tag of our fork mango-toq (ik_llama.cpp at upstream 35e7256, plus the mango branch: trellis weights, prefill on the main GPU, MTP, on-disk memory, batched generation): setup.ps1 -Only llama-toq clones it and builds into LLAMA/toq; the fork's Actions build the zips of mango-engines.json from the same tag.",
+  "_engine": "'requires_engine': the weights are in a format that the official llama.cpp cannot read (toq: ik_llama.cpp with the trellis branch). Such a model only runs where a profile says how: the one for the PC's GPUs or the one for its build (profiles/general/). The others also run with the official llama.cpp: the profiles for the RTX 3060 Ti + GTX 1080 + GTX 1660 SUPER (profiles/3060ti-1080-1660s/) speed them up with prism. A 'files' entry with 'engine' is used only by that engine (weights in its own format): each PC downloads the files of the engine the model runs with, and that engine opens its file instead of 'gguf'. They are built with setup.ps1 -Only llama-prism / llama-toq.",
+  "_memory": "The profiles' engines keep the conversations' on-disk memory (--cache-disk, one folder per model; cap and age shared by all in app/crates/engine-cfg/src/memory.rs): before shutting down, the engine saves the open conversation and on restart it rereads only the new tokens.",
+  "_active_permille": "In MoE models, the thousandths of the weights the engine reads for each token: the rest of the model plus the chosen experts (expert_used_count over expert_count), from the GGUF header. They tell which model is probably the fastest; in dense models it is missing (they read everything).",
+  "ctx": 131072,
+  "_ctx": "128k is Mango Code's TARGET context. A local model's 'ctx' is the maximum the model supports (from the GGUF header): the general plan uses the smaller of the two and goes lower only if memory is not enough. The context measured on specific hardware is in its profile. The status line uses the profile's ctx, if there is one.",
+  "default": "3.6",
+  "_default": "The model that is started when none has been chosen.",
+  "order": ["3.6", "3.8", "bonsai2", "toq", "lfm", "3.5-4b"],
+  "_order": "The recommended local models in the order they are listed (selector and first run of the app, mango-code -Models): each local model in 'models' appears exactly once. The user's models (user-models.json, in the data dir) follow, then the cloud ones.",
+  "models": {
+    "toq": {
+      "label": "Qwen3.8-27B-TOQ-v1",
+      "_label": "The name the user sees (web UI, terminal, status bar): the full official name, the same as on GitHub and Hugging Face.",
+      "quant": "",
+      "kind": "dense 27B / hybrid GDN / distilled trellis",
+      "gguf": "Qwen3.8-27B-TOQ-v1.gguf",
+      "mmproj": "Qwen3.8-27B-GGUF/mmproj-F16.gguf",
+      "repo": "federico-anastasi/Qwen3.8-27B-TOQ-v1",
+      "revision": "e4de94a46218910d69d00dba313adc776b903034",
+      "chat_template": "qwen3.8-mango.jinja",
+      "ctx": 262144,
+      "requires_engine": "toq",
+      "files": [
+        { "path": "Qwen3.8-27B-TOQ-v1.gguf", "size": 9489952128, "sha256": "f435afc543f84b8cbc278dc7059599034b6ef957973300dde0b28f52db584a24" },
+        { "path": "Qwen3.8-27B-GGUF/mmproj-F16.gguf", "size": 927607488, "sha256": "cbb841a9ee0636b2ec172f5bb8df2ea8dfeb01e90fe7c6126581d662a0b4e43e", "repo": "unsloth/Qwen3.8-27B-GGUF", "revision": "4ca720788d1e01f1bff70c033e0d0028fd02e502" }
+      ],
+      "memory": {
+        "kv_kib_token": 64,
+        "state_mib": 150
+      },
+      "shape": {
+        "layers": 64,
+        "attention_every": 4,
+        "attention_bytes": 96225280,
+        "recurrent_bytes": 100000640,
+        "output_bytes": 477788160,
+        "mtp_bytes": 106530816
+      },
+      "_shape": "From the GGUF header, like 'memory': used to split the layers across the GPUs (engine-cfg, split.rs) to tell, before downloading, whether the model fits and with what context. At start-up the plan rereads the real header."
+    },
+    "3.6": {
+      "label": "Qwen3.6-35B-A3B",
+      "quant": "IQ4_XS 4.09bpw",
+      "kind": "MoE 35B / 3B active",
+      "gguf": "Qwen3.6-35B-A3B-MTP-GGUF/Qwen3.6-35B-A3B-UD-IQ4_XS.gguf",
+      "mmproj": "Qwen3.6-35B-A3B-GGUF/mmproj-F16.gguf",
+      "repo": "unsloth/Qwen3.6-35B-A3B-MTP-GGUF",
+      "revision": "5bc3e238d916f48a861bac2f8a1990a0e9b7e98d",
+      "files": [
+        { "path": "Qwen3.6-35B-A3B-MTP-GGUF/Qwen3.6-35B-A3B-UD-IQ4_XS.gguf", "size": 18209036576, "sha256": "df27a780435b7b45c2597536112ea3cb091f8544c3d0c3318d9f4258b31f7adf" },
+        { "path": "Qwen3.6-35B-A3B-GGUF/mmproj-F16.gguf", "size": 899283680, "sha256": "8971ee4f331ff0a4c609374f32984b3d4e6dc086c0aa35f1d637fad1829e887f", "repo": "unsloth/Qwen3.6-35B-A3B-GGUF", "revision": "a483e9e6cbd595906af30beda3187c2663a1118c" }
+      ],
+      "_gguf": "The file with the MTP head (one extra layer, +0.46 GiB): needed by the draft. The repo also has mmproj-F16.gguf, the same encoder as the file without the head.",
+      "chat_template": "qwen3.6-mango.jinja",
+      "_chat_template": "chat-templates/qwen3.6-mango.jinja adds THREE lines to the GGUF's template, which silently drops non-first system messages (its loop does 'if loop.index0 >= num_sys and message.role != system'): a system message in the middle of the messages would make ~1600 prompt tokens vanish without an error. Here they are rendered in place, so 3.6 and 3.8 receive the exact same prompt.",
+      "ctx": 262144,
+      "memory": {
+        "kv_kib_token": 20,
+        "state_mib": 63
+      },
+      "active_permille": 170
+    },
+    "deepseek": {
+      "label": "DeepSeek V4.1 Flash",
+      "quant": "cloud",
+      "kind": "cloud / OpenRouter",
+      "cloud": {
+        "provider": "openrouter",
+        "provider_key": "openrouter",
+        "model_id": "deepseek/deepseek-v4.1-flash-20260910",
+        "base_url": "https://openrouter.ai/api/v1",
+        "api_key_file": "mango-secrets.json",
+        "api_key_field": "OPENROUTER_API_KEY",
+        "cost": {
+          "input": 0.15,
+          "output": 0.6,
+          "cache_read": 0.003
+        },
+        "image": true
+      },
+      "_image": "The model accepts images as input (verified on OpenRouter's public API on 2026-09-20: deepseek/deepseek-v4.1-flash -> text,image). Without this line mango-code generates modalities.input=[text] and opencode REJECTS images with 'this model does not support image input': see opencode.template.json, _modalities.",
+      "_cloud": "Not a local model: no gguf, no llama-server, no VRAM. mango-engine.ps1 sees 'cloud' and skips the whole engine. The key is in mango-secrets.json (gitignored, see mango-secrets.example.json), NEVER here: this file is versioned. It is spoken by opencode (@ai-sdk/openai-compatible provider on OpenRouter).",
+      "ctx": 1048576,
+      "_ctx": "1M declared by OpenRouter for deepseek-v4.1-flash-20260910. The generation cap is computed by mango-code.ps1 as for the others (Ctx/8, between 4k and 16k)."
+    },
+    "qwen": {
+      "label": "Qwen3.8-27B",
+      "quant": "cloud",
+      "kind": "cloud / OpenRouter",
+      "cloud": {
+        "provider": "openrouter",
+        "provider_key": "openrouter",
+        "model_id": "qwen/qwen3.8-27b",
+        "base_url": "https://openrouter.ai/api/v1",
+        "api_key_file": "mango-secrets.json",
+        "api_key_field": "OPENROUTER_API_KEY",
+        "cost": {
+          "input": 0.214,
+          "output": 2.55,
+          "cache_read": 0.15
+        },
+        "image": true
+      },
+      "_image": "The model accepts images (verified on OpenRouter's public API on 2026-09-20: qwen/qwen3.8-27b -> text,image,video). Without this line mango-code generates modalities.input=[text] and opencode rejects images.",
+      "_cloud": "It was the model of the -Team agents until 2026-09-19 (the default is now deepseek; it can still be selected with -Agent qwen): it does not run on the local GPUs but on OpenRouter (verified on the public API on 2026-09-19: id qwen/qwen3.8-27b, $0.214/M in, $2.55/M out, $0.15/M cache read). The manager starts up to 4 of them with launch_agent and closes them with close_agent; each agent is a separate opencode process with its own config folder (runtime\\opencode-agent-N). No gguf, no VRAM: mango-engine.ps1 sees 'cloud' and skips the engine. The key is in mango-secrets.json, never here.",
+      "ctx": 262144,
+      "_ctx": "262144 is the maximum declared by the provider that serves the model (top_provider.context_length), not the catalog's 1M: declaring more would make opencode compact later than the provider really accepts."
+    },
+    "3.8": {
+      "label": "Qwen3.8-27B",
+      "quant": "UD-IQ4_XS",
+      "kind": "dense 27B / hybrid GDN",
+      "gguf": "Qwen3.8-27B-GGUF/Qwen3.8-27B-UD-IQ4_XS.gguf",
+      "mmproj": "Qwen3.8-27B-GGUF/mmproj-F16.gguf",
+      "repo": "unsloth/Qwen3.8-27B-GGUF",
+      "revision": "4ca720788d1e01f1bff70c033e0d0028fd02e502",
+      "files": [
+        { "path": "Qwen3.8-27B-GGUF/Qwen3.8-27B-UD-IQ4_XS.gguf", "size": 14252845984, "sha256": "40fac4050e940397dbf13087afd50f4734a11805bf9d65ef8ddd7483470e6199" },
+        { "path": "Qwen3.8-27B-GGUF/mmproj-F16.gguf", "size": 927607488, "sha256": "cbb841a9ee0636b2ec172f5bb8df2ea8dfeb01e90fe7c6126581d662a0b4e43e" }
+      ],
+      "_license": "Apache-2.0, repo not gated.",
+      "chat_template": "qwen3.8-mango.jinja",
+      "_chat_template": "The GGUF template of this repo with ONE line changed: a system message that is not the first is rendered instead of raising 'System message must be at the beginning.', which would make every request with a system message in the middle answer 400. toq uses it too. It must be kept aligned if the GGUF changes.",
+      "ctx": 262144,
+      "memory": {
+        "kv_kib_token": 64,
+        "state_mib": 150
+      }
+    },
+    "bonsai2": {
+      "label": "Bonsai-2-27B",
+      "quant": "PQ2_0 ternary 2.13bpw",
+      "kind": "dense 27B ternary / hybrid GDN / PrismML fork",
+      "gguf": "Ternary-Bonsai-2-27B-gguf/Ternary-Bonsai-2-27B-PQ2_0.gguf",
+      "mmproj": "Ternary-Bonsai-2-27B-gguf/Ternary-Bonsai-2-27B-mmproj-Q8_0.gguf",
+      "repo": "prism-ml/Ternary-Bonsai-2-27B-gguf",
+      "revision": "839bd57023c1558945afea70a74fa83c054f35f9",
+      "files": [
+        { "path": "Ternary-Bonsai-2-27B-gguf/Ternary-Bonsai-2-27B-Q2_0.gguf", "size": 7626008928, "sha256": "4f99aed01b8a877e153f9aa6569a4440fe17c59701cc0953e36d7f460549e70e", "engine": "llamacpp" },
+        { "path": "Ternary-Bonsai-2-27B-gguf/Ternary-Bonsai-2-27B-PQ2_0.gguf", "size": 7206168928, "sha256": "3907dc1658db1f78a9826bf8d5bcb8dc65db0d466388937af57f2294fae62ec1", "engine": "prism" },
+        { "path": "Ternary-Bonsai-2-27B-gguf/Ternary-Bonsai-2-27B-mmproj-Q8_0.gguf", "size": 629246976, "sha256": "6807ede61d570bb86ba34b756a0fa109edc33668604de867c6ea6d8f1d631903" }
+      ],
+      "_files": "Two variants of the same weights, one per engine ('engine' of the file): Q2_0 for the official llama.cpp (CPU, CUDA, Vulkan: every PC without a profile), PQ2_0 for the three-GPU profile's prism fork, faster. Each PC downloads only the one for its engine; the encoder is needed by both. 'gguf' stays PQ2_0 for the terminal, which only starts the three-GPU profiles.",
+      "chat_template": "bonsai2-mango.jinja",
+      "_chat_template": "Copy of the GGUF's template with TWO lines changed: (1) a non-first system message is rendered instead of raising (same bug as 3.8, same fix); (2) preserve_thinking defaults to FALSE: the original keeps the reasoning of ALL turns in the history and burns context; the current turn's reasoning with tools stays.",
+      "ctx": 262144,
+      "memory": {
+        "kv_kib_token": 64,
+        "state_mib": 150
+      }
+    },
+    "lfm": {
+      "label": "LFM2.5-24B-A2B",
+      "quant": "Q4_0 QAD",
+      "kind": "MoE 24B / 2.4B active / hybrid conv+GQA",
+      "gguf": "LFM2.5-24B-A2B-GGUF/LFM2.5-24B-A2B-QAD-Q4_0.gguf",
+      "repo": "LiquidAI/LFM2.5-24B-A2B-GGUF",
+      "revision": "0912d33141f77e10705345a6732bfd83f0252fdc",
+      "files": [
+        { "path": "LFM2.5-24B-A2B-GGUF/LFM2.5-24B-A2B-QAD-Q4_0.gguf", "size": 13578190880, "sha256": "d1c03f73ecaf61017d70419eec9e5dc0b05d50ae26c23d522829b934fbabf8a5" }
+      ],
+      "_thinking": "It always reasons (the template opens <think> at every turn) and cannot be turned off; the template drops the reasoning of past turns by itself.",
+      "ctx": 131072,
+      "memory": {
+        "kv_kib_token": 20,
+        "state_mib": 1
+      },
+      "active_permille": 108
+    },
+    "3.5-4b": {
+      "label": "Qwen3.5-4B",
+      "_label": "The small model: it fits in 4 GB of RAM and also runs without a graphics card.",
+      "quant": "Q4_K_M",
+      "kind": "dense 4B / hybrid GDN",
+      "gguf": "Qwen3.5-4B-GGUF/Qwen3.5-4B-Q4_K_M.gguf",
+      "mmproj": "Qwen3.5-4B-GGUF/mmproj-F16.gguf",
+      "repo": "unsloth/Qwen3.5-4B-GGUF",
+      "revision": "e87f176479d0855a907a41277aca2f8ee7a09523",
+      "chat_template": "qwen3.5-mango.jinja",
+      "_chat_template": "chat-templates/qwen3.5-mango.jinja is the GGUF's template with ONE line changed: a non-first system message is rendered instead of raising raise_exception('System message must be at the beginning.'), like for 3.8. It is a copy of the model's template: it must be kept aligned if the GGUF changes.",
+      "ctx": 262144,
+      "files": [
+        { "path": "Qwen3.5-4B-GGUF/Qwen3.5-4B-Q4_K_M.gguf", "size": 2740937888, "sha256": "00fe7986ff5f6b463e62455821146049db6f9313603938a70800d1fb69ef11a4" },
+        { "path": "Qwen3.5-4B-GGUF/mmproj-F16.gguf", "size": 672423616, "sha256": "cd88edcf8d031894960bb0c9c5b9b7e1fea6ebee02b9f7ce925a00d12891f864" }
+      ],
+      "memory": {
+        "kv_kib_token": 32,
+        "state_mib": 53
+      }
+    }
+  }
+}

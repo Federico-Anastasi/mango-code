@@ -1,0 +1,91 @@
+{
+  "llamacpp": {
+    "_note": "Official llama.cpp builds for Windows x64. The stable release is v0.9.0 (4/11/2026): it has no files, it points to build b12110, which is the one downloaded here. Hash and size are of these files, computed after downloading them. The CUDA builds are 12.4 and 13.4; 'runtime' is their libraries (cudart, cuBLAS), which are added only if the PC lacks them. Changing version = recomputing every line.",
+    "version": "b12110",
+    "build": {
+      "cpu": {
+        "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12110/llama-b12110-bin-win-cpu-x64.zip",
+        "size": 24708445,
+        "sha256": "98901e327c252875accaf2d1bf364e10e868843b0b63468baad1aa945cdc5da2"
+      },
+      "vulkan": {
+        "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12110/llama-b12110-bin-win-vulkan-x64.zip",
+        "size": 37661146,
+        "sha256": "9732a5e48887ca54d0bfe4af4324dc85fd56cd8cda19b52df3542fa6ebe6874f"
+      },
+      "cuda-12": {
+        "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12110/llama-b12110-bin-win-cuda-12.4-x64.zip",
+        "size": 287014657,
+        "sha256": "1ce755bc3a061889234048f88e33328e17971eaad73c4666cfeb26026b317fee",
+        "runtime": {
+          "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12110/cudart-llama-bin-win-cuda-12.4-x64.zip",
+          "size": 391443627,
+          "sha256": "8c79a9b226de4b3cacfd1f83d24f962d0773be79f1e7b75c6af4ded7e32ae1d6"
+        }
+      },
+      "cuda-13": {
+        "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12110/llama-b12110-bin-win-cuda-13.4-x64.zip",
+        "size": 169175655,
+        "sha256": "dc910a969190b5d42e189afd73117f6bbdd8dd8ed6586342c5e0b82cab62c673",
+        "runtime": {
+          "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12110/cudart-llama-bin-win-cuda-13.4-x64.zip",
+          "size": 423535356,
+          "sha256": "738f8c251ac22b70c3ae6f83a10cf222725df0395246a2cf58f32bdb85fbe668"
+        }
+      }
+    }
+  },
+  "prism": {
+    "_note": "Our fork mango-prism (PrismML's llama.cpp plus the mango branch; prism_build in mango-models.json), built by the fork's workflow with mango-ci/build.ps1: the release of tag 'prism-b10709-9a9394a' carries the zips 'prism-b10709-9a9394a-win-<build>.zip' (cpu, vulkan, cuda-12) and, in its notes, the size and sha256 of each. The CUDA runtime is llama.cpp's.",
+    "version": "b10709-9a9394a",
+    "build": {
+      "cpu": {
+        "url": "https://github.com/Federico-Anastasi/mango-prism/releases/download/prism-b10709-9a9394a/prism-b10709-9a9394a-win-cpu.zip",
+        "size": 8613885,
+        "sha256": "f7abe6e2ae111e07b65b6be858ad86b46fd07689ab53d4b458c441a2a23ce846"
+      },
+      "vulkan": {
+        "url": "https://github.com/Federico-Anastasi/mango-prism/releases/download/prism-b10709-9a9394a/prism-b10709-9a9394a-win-vulkan.zip",
+        "size": 25849978,
+        "sha256": "3ae1016cabe0e0603967c18477ef08597b983916ab017d46469156f36d36687a"
+      },
+      "cuda-12": {
+        "url": "https://github.com/Federico-Anastasi/mango-prism/releases/download/prism-b10709-9a9394a/prism-b10709-9a9394a-win-cuda-12.zip",
+        "size": 207551338,
+        "sha256": "5f5e2b76cd5f2e98249fddc47c162a27a9efcd3be560e2435e7a88fb54b3182f",
+        "runtime": {
+          "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12110/cudart-llama-bin-win-cuda-12.4-x64.zip",
+          "size": 391443627,
+          "sha256": "8c79a9b226de4b3cacfd1f83d24f962d0773be79f1e7b75c6af4ded7e32ae1d6"
+        }
+      }
+    }
+  },
+  "toq": {
+    "_note": "Our fork mango-toq (ik_llama.cpp plus the mango branch; toq_build in mango-models.json), built like prism: the release of tag 'toq-35e7256' carries 'toq-35e7256-win-<build>.zip' with size and sha256 in its notes. The engine has no --list-devices (it exits with an error): 'gpu_check' false, for CUDA the app only checks that it starts.",
+    "version": "35e7256",
+    "gpu_check": false,
+    "build": {
+      "cpu": {
+        "url": "https://github.com/Federico-Anastasi/mango-toq/releases/download/toq-35e7256/toq-35e7256-win-cpu.zip",
+        "size": 25203085,
+        "sha256": "99cb91c111aed0c83d00511c7ed84148049a57dcf69b9bb34394aff5d699118f"
+      },
+      "vulkan": {
+        "url": "https://github.com/Federico-Anastasi/mango-toq/releases/download/toq-35e7256/toq-35e7256-win-vulkan.zip",
+        "size": 34416949,
+        "sha256": "bb7f8ef5f7ebd5a7ad1188ae40fb3276aacc92ca7734d6ac1915b21bd59fb468"
+      },
+      "cuda-12": {
+        "url": "https://github.com/Federico-Anastasi/mango-toq/releases/download/toq-35e7256/toq-35e7256-win-cuda-12.zip",
+        "size": 606275153,
+        "sha256": "f4273c9fc5cfbc047c948a2e74e8f73d7adeeb8a07b258d73861005d1dd3c6d2",
+        "runtime": {
+          "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12110/cudart-llama-bin-win-cuda-12.4-x64.zip",
+          "size": 391443627,
+          "sha256": "8c79a9b226de4b3cacfd1f83d24f962d0773be79f1e7b75c6af4ded7e32ae1d6"
+        }
+      }
+    }
+  }
+}

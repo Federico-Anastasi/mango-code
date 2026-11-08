@@ -1,0 +1,1 @@
+Searches file contents with a regular expression ("log.*Error", "function\s+\w+") and returns file paths and line numbers with the matching lines. `include` filters files ("*.js", "*.{ts,tsx}"). To count matches per file, use `rg` through the bash tool, not `grep`.

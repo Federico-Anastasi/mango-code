@@ -1,0 +1,31 @@
+{
+  "id": "generale/toq",
+  "model": "toq",
+  "engine": "toq",
+  "build": "cuda-12",
+  "hardware": {
+    "build": ["cuda-12", "cuda-13"]
+  },
+  "args": [
+    "-ngl",
+    "999",
+    "-fa",
+    "1",
+    "-wgt",
+    "1",
+    "-sm",
+    "layer",
+    "-ctk",
+    "q8_0",
+    "-ctv",
+    "q8_0",
+    "--image-min-tokens",
+    "1024"
+  ],
+  "ctx": 131072,
+  "split": true,
+  "ub": 512,
+  "measurements": {
+    "note": "[why] TOQ on every NVIDIA PC with a CUDA 12.4 or newer driver, without a profile for its GPUs: the trellis weights can only be read by the toq engine, and today its compute exists only for CUDA. The cuda-12 build also works with CUDA 13 drivers. For CPU and Vulkan, just add a profile below with that build, when the engine has it.\n[split] The GPUs, the layer map (LLAMA_LAYER_DEVICES) and the context are computed by the app from the GPUs' memory (engine-cfg/split.rs), up to 128k. The image encoder (about 1.5 GB) goes on a GPU the model leaves free, otherwise on the main one (MTMD_BACKEND_DEVICE): on the CPU this engine produces random text for images.\n[args] Those of the RTX 3060 Ti + GTX 1080 + GTX 1660 SUPER profile that are needed to make the engine work: -wgt 1 and -ub 512 are the measurements split.rs sizes the buffers on, -sm layer is needed by the layer map, q8_0 cache, --image-min-tokens 1024 as in that profile. The optimizations measured only on those GPUs (MTP, pre-Ampere CUDA graphs, q8 prompt prefill) are left out: they are added after a measurement on the PC, with its own profile."
+  }
+}

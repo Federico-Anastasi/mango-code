@@ -1,0 +1,9 @@
+# Build whisper.cpp (crate voice) with the AVX2 instructions: without them, ggml stays on SSE2
+# and is about a third slower. The app refuses dictation on processors without AVX2.
+# libclang (for bindgen) is a machine choice: LIBCLANG_PATH goes in the environment
+# or in ~/.cargo/config.toml, not here.
+[env]
+GGML_AVX = "ON"
+GGML_AVX2 = "ON"
+GGML_FMA = "ON"
+GGML_F16C = "ON"

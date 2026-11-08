@@ -1,0 +1,1 @@
+Finds files by name pattern ("**/*.js", "src/**/*.ts") and returns the matching paths. When several searches may be useful, run them in one response.

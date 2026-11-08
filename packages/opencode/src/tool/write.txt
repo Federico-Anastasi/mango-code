@@ -1,0 +1,5 @@
+Writes a file, overwriting any existing one at the path.
+
+- For an existing file, Read it first.
+- Prefer editing existing files; do not write new files unless required, and never create documentation files (*.md, README) unless explicitly requested.
+- No emojis in files unless asked.

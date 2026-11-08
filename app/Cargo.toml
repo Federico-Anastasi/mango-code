@@ -1,0 +1,33 @@
+[workspace]
+resolver = "2"
+members = [
+    "src-tauri",
+    "crates/mango-common",
+    "crates/engine-cfg",
+    "crates/agent-cfg",
+    "crates/voice",
+    "crates/engine",
+    "crates/phone",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-or-later"
+
+[workspace.dependencies]
+mango-common = { path = "crates/mango-common" }
+engine-cfg = { path = "crates/engine-cfg" }
+agent-cfg = { path = "crates/agent-cfg" }
+voice = { path = "crates/voice" }
+engine = { path = "crates/engine" }
+phone = { path = "crates/phone" }
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+# preserve_order: the agent's config lists the models in the catalog's order, not alphabetically
+serde_json = { version = "1", features = ["preserve_order"] }
+
+[profile.release]
+lto = "thin"
+codegen-units = 4
+strip = true

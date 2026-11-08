@@ -1,0 +1,5 @@
+{
+  "mcpServers": {
+    "echo": { "command": "bun", "args": ["tools/echo.mjs"] }
+  }
+}

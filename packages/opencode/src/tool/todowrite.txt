@@ -1,0 +1,11 @@
+Maintains a structured task list for the session: tracks progress on multi-step work and shows status to the user.
+
+Use it when the task needs 3+ distinct steps, is non-trivial and benefits from planning, or the user gives several tasks or asks for a todo list. When new instructions arrive, capture them as todos. Skip it for a single straightforward task (one edit, one command), or purely informational or conversational requests. When in doubt, use it.
+
+States: `pending`, `in_progress`, `completed`, `cancelled`.
+
+- Mark a task `in_progress` before starting it, and exactly one at a time while work remains.
+- Update in real time; do not batch completions. Mark `completed` only after the work is done, verification included, never on intent. Add any follow-ups you discover.
+- If blocked or partial, keep it `in_progress` and add a todo describing the blocker.
+- Preserve user-provided commands verbatim (flags, args, order).
+- Items are specific and actionable; split large work into smaller steps.

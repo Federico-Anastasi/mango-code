@@ -1,0 +1,106 @@
+import { Effect } from "effect"
+import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
+import { existsSync, statSync } from "node:fs"
+import type { InstanceStore } from "@/project/instance-store"
+import type { SessionPrompt } from "@/session/prompt"
+import { PromptSettings } from "@/session/settings"
+import { PromptMeasurement } from "@/session/prompt-measurement"
+import { tr } from "@/util/mango-language"
+
+// mango-code: the prompt settings page (see session/settings.ts) reads and changes what goes into the prompt of the
+// folder `?directory=`.
+//   GET /mango/settings?directory=<work>
+//     -> { directory, model, file: {default, folder}, items: [{type, name, tokens, enabled, source}] }
+//        `type`: tools, mcp, skills, instructions, plugins (can be turned on and off) and base (the base prompt, fixed).
+//        `tokens`: the weight measured with the first request of a conversation, `null` if there is none (the page says
+//        "not measured"). `source`: `default` or `folder`, which file the on/off comes from.
+//   PUT /mango/settings?directory=<work>  {"type", "name", "enabled", "scope": "all" | "folder"}
+//     -> the changed item. It applies from the next message.
+// The PUT goes only through the page (the request carries `Origin`, and the server lets through the ones from its own
+// web UI): connected apps add to the prompt and cannot turn anything off.
+export const SETTINGS_PATH = "/mango/settings"
+
+const failure = (message: string, status = 400) => HttpServerResponse.jsonUnsafe({ error: message }, { status })
+const isKind = (v: unknown): v is PromptSettings.Kind => (PromptSettings.KINDS as readonly string[]).includes(v as string)
+
+function loadValid(directory: string): { valid: PromptSettings.Valid } | { error: string } {
+  try {
+    return { valid: PromptSettings.load(directory) }
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : String(e) }
+  }
+}
+
+export function settingsEffect(
+  request: HttpServerRequest.HttpServerRequest,
+  store: InstanceStore.Interface,
+  prompt: SessionPrompt.Interface,
+) {
+  return Effect.gen(function* () {
+    const directory = new URL(request.url, "http://localhost").searchParams.get("directory")
+    if (!directory) return failure(tr("manca directory", "directory is missing"))
+    if (!existsSync(directory) || !statSync(directory).isDirectory())
+      return failure(tr(`non e' una cartella: ${directory}`, `not a folder: ${directory}`), 404)
+    const loaded = loadValid(directory)
+    if ("error" in loaded) return failure(loaded.error, 500)
+
+    if (request.method === "GET") {
+      const { model, items } = yield* store.provide({ directory }, prompt.items())
+      const { valid } = loaded
+      return HttpServerResponse.jsonUnsafe({
+        directory,
+        model,
+        file: { default: PromptSettings.defaultFile() ?? null, folder: PromptSettings.folderFile(directory) },
+        items: items.map((item) => {
+          const tokens = PromptMeasurement.tokens(directory, model, item.kind, item.name) ?? null
+          if (!isKind(item.kind)) return { type: item.kind, name: item.name, tokens, enabled: true, source: null }
+          return {
+            type: item.kind,
+            name: item.name,
+            tokens,
+            enabled: PromptSettings.enabled(valid, item.kind, item.name),
+            source: PromptSettings.source(valid, item.kind, item.name),
+          }
+        }),
+      })
+    }
+
+    if (!request.headers["origin"])
+      return failure(
+        tr(
+          "le impostazioni si cambiano dalla pagina delle impostazioni di Mango Code",
+          "settings are changed from the Mango Code settings page",
+        ),
+        403,
+      )
+    const body = yield* request.json.pipe(Effect.option)
+    const c = (body._tag === "Some" ? body.value : undefined) as
+      | { type?: unknown; name?: unknown; enabled?: unknown; scope?: unknown }
+      | undefined
+    if (!c || !isKind(c.type))
+      return failure(
+        tr(
+          `«type» deve essere uno fra: ${PromptSettings.KINDS.join(", ")}`,
+          `"type" must be one of: ${PromptSettings.KINDS.join(", ")}`,
+        ),
+      )
+    if (typeof c.name !== "string" || !c.name)
+      return failure(tr("«name» deve essere il nome di una voce", `"name" must be the name of an item`))
+    if (typeof c.enabled !== "boolean") return failure(tr("«enabled» deve essere true o false", `"enabled" must be true or false`))
+    if (c.scope !== "all" && c.scope !== "folder")
+      return failure(tr("«scope» deve essere «all» o «folder»", `"scope" must be "all" or "folder"`))
+    try {
+      PromptSettings.write(directory, c.scope, c.type, c.name, c.enabled)
+    } catch (e) {
+      return failure(e instanceof Error ? e.message : String(e), 500)
+    }
+    const after = loadValid(directory)
+    if ("error" in after) return failure(after.error, 500)
+    return HttpServerResponse.jsonUnsafe({
+      type: c.type,
+      name: c.name,
+      enabled: PromptSettings.enabled(after.valid, c.type, c.name),
+      source: PromptSettings.source(after.valid, c.type, c.name),
+    })
+  })
+}

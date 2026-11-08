@@ -1,0 +1,8 @@
+# Every file is stored and checked out byte for byte: no line-ending conversion, even with core.autocrlf on in the
+# user's configuration. opencode's sources need it (scripts, binary parts, tests on exact files), and it holds for
+# ours too, which all use LF.
+* -text
+
+# opencode: file generati
+packages/core/migration/**/snapshot.json linguist-generated
+packages/core/src/database/migration.gen.ts linguist-generated

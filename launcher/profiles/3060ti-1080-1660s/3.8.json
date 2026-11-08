@@ -1,0 +1,42 @@
+{
+  "id": "3060ti-1080-1660s/3.8",
+  "model": "3.8",
+  "engine": "prism",
+  "build": "cuda-12",
+  "hardware": {
+    "gpus": [
+      "NVIDIA GeForce RTX 3060 Ti",
+      "NVIDIA GeForce GTX 1080",
+      "NVIDIA GeForce GTX 1660 SUPER"
+    ]
+  },
+  "env": {
+    "GGML_CUDA_CLOCK_KEEPER": "1"
+  },
+  "args": [
+    "-ngl",
+    "999",
+    "-fa",
+    "1",
+    "-ctk",
+    "q8_0",
+    "-ctv",
+    "q8_0",
+    "--spec-type",
+    "draft-mtp",
+    "--spec-draft-n-max",
+    "2",
+    "--no-mmproj-offload",
+    "--image-min-tokens",
+    "1024"
+  ],
+  "ctx": 92160,
+  "ub": 256,
+  "ts": "42,36,22",
+  "measurements": {
+    "date": "2026-11-06",
+    "decode_tok_s": 25.4,
+    "prefill_tok_s": 267,
+    "note": "[measurements] mango-bench, 92k: decode 25.4 / 16.8 / 13.1 / 11.7 tok/s and prefill 267 / 258 / 204 / 175 tok/s at 1k / 32k / 64k / full. 102400 does not fit (KV on the 1660S). At 92k the first attempt at the compute buffer fails on the 1660S and the engine restarts without pipeline parallelism: it starts anyway.\n[engine] Prism fork with the clock keeper (GGML_CUDA_CLOCK_KEEPER): the GPUs stay awake only during the graphs.\n[ctx] Not the 128k target: at 128k llama.cpp does not fit the 64 layers in VRAM and moves some to the CPU; the log says 'fused Gated Delta Net (chunked) not supported, set to disabled': A SINGLE layer on the CPU turns off the fused GDN kernel for the WHOLE model and speed collapses to 3.2 tok/s. The right value is the maximum that fits with all layers on the GPU.\n[why] DENSE: all 27B active per token, so -ncmoe does not exist as a lever and every layer off the GPU is paid at EVERY token. Prefill was throttled by the 1660S, which unpatched llama.cpp runs with emulated mma kernels: see the mango-prism fork.\n[ub] 256 and not 128: the compute buffer (~110 MiB at ub 128, ~256 at ub 256) fits on all GPUs with -np 1. ub 512 goes OOM on the 1660S. If the server does not start because of OOM, the first knob to turn: 128.\n[ts] The automatic tensor-split goes by free VRAM and on the 1660S it may not fit. 42,36,22 = more layers on the 3060 Ti, which has 2x the useful bandwidth of the Pascals (73% of the bandwidth against 57% for the 1080 and 50% for the 1660S). 44,36,20 goes OOM on the 3060 Ti: that is the limit.\n[fa] -fa 1 is not optional: the quantized KV (-ctk/-ctv q8_0) WITHOUT flash attention does not start at all ('failed to create llama_context'). And the f16 KV does not fit in VRAM. So fa+q8_0 is the only combination that stands, not a preference.\n[ngl] -ngl 999 is MANDATORY here, not a default: without it, llama.cpp fits on its own and puts some layers on the CPU 'to make the context fit', turning off the fused GDN. Better a start that fails (and says so) than a model that starts at a third of the speed without anyone noticing."
+  }
+}

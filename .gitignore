@@ -1,0 +1,47 @@
+# The repo holds only code and documentation: binaries, weights and logs stay out.
+# The launcher's rules (runtime/, node_modules/, secrets, machine paths) are in launcher/.gitignore, next to what
+# they ignore.
+
+*.exe
+*.dll
+*.log
+*.stackdump
+
+# Coding agents' working folders, at the root only (the integration examples have their own .claude/).
+/.claude/
+
+# opencode
+.DS_Store
+node_modules
+.worktrees
+.sst
+.env
+.env.local
+.idea
+.vscode
+.codex
+*~
+playground
+tmp
+dist
+ts-dist
+.turbo
+**/.serena
+.serena/
+**/.omo
+.omo/
+/result
+refs
+Session.vim
+/opencode.json
+a.out
+target
+.scripts
+.direnv/
+
+# Local dev files
+opencode-dev
+UPCOMING_CHANGELOG.md
+logs/
+*.bun-build
+tsconfig.tsbuildinfo

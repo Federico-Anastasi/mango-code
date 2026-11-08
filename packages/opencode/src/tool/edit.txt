@@ -1,0 +1,6 @@
+Performs exact string replacements in files.
+
+- Read the file at least once in the conversation before editing.
+- Copy oldString exactly as it appears after the line prefix of the Read output (`1: `, line number + colon + space): same indentation, never the prefix itself.
+- oldString must match exactly one place in the file: if it is not found or found several times, add surrounding lines to make it unique, or use `replaceAll` to change every instance (e.g. to rename a variable).
+- Prefer editing existing files; do not write new files unless required. No emojis unless asked.
