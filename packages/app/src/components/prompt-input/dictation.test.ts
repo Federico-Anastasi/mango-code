@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { appendDictation, formatVoiceDuration, voiceFailureFromMediaError } from "./dictation"
+import { appendDictation, formatVoiceDuration, liveDictation, voiceFailureFromMediaError } from "./dictation"
 
 const text = (content: string, start = 0) => ({ type: "text", content, start, end: start + content.length })
 
@@ -45,4 +45,46 @@ test("formatVoiceDuration", () => {
   expect(formatVoiceDuration(0)).toBe("0:00")
   expect(formatVoiceDuration(7.9)).toBe("0:07")
   expect(formatVoiceDuration(75)).toBe("1:15")
+})
+
+describe("liveDictation", () => {
+  const field = (initial: string) => {
+    let parts = [text(initial)]
+    const live = liveDictation(
+      () => parts,
+      (next) => {
+        parts = next.parts
+      },
+    )
+    return { live, value: () => parts.map((part) => part.content).join("") }
+  }
+
+  test("the partials appear in the field, each one in place of the previous, and the final takes their place", () => {
+    const f = field("look at")
+    f.live.partial("the")
+    expect(f.value()).toBe("look at the")
+    f.live.partial("the log of")
+    expect(f.value()).toBe("look at the log of")
+    f.live.final("the log of today")
+    expect(f.value()).toBe("look at the log of today")
+  })
+
+  test("after a final the next sentence is added after it", () => {
+    const f = field("")
+    f.live.final("first sentence.")
+    f.live.partial("second")
+    expect(f.value()).toBe("first sentence. second")
+    f.live.final("second sentence.")
+    expect(f.value()).toBe("first sentence. second sentence.")
+  })
+
+  test("a partial without its final goes away, and the field is as it was", () => {
+    const f = field("look at")
+    f.live.partial("something")
+    f.live.clear()
+    expect(f.value()).toBe("look at")
+    // with nothing in progress clear changes nothing
+    f.live.clear()
+    expect(f.value()).toBe("look at")
+  })
 })

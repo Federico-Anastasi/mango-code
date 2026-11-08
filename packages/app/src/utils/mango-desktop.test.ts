@@ -16,6 +16,7 @@ function bridge(overrides: Partial<MangoDesktop> = {}) {
       opened.push(path)
     },
     revealPath: async () => {},
+    openModels: async () => {},
     ...overrides,
   }
   return { value, opened }

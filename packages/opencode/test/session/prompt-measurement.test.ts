@@ -57,6 +57,14 @@ describe("token measurement of the prompt items", () => {
     expect(PromptMeasurement.tokens("C:\\Projects\\d", "fake", "skills", "pdf")).toBeUndefined()
   })
 
+  test("the folder remembers the model of its last measurement: the one picked in the chat, not the default", async () => {
+    expect(PromptMeasurement.measuredModel("C:\\Projects\\e")).toBeUndefined()
+    await PromptMeasurement.measure("C:\\Projects\\e", "toq", [{ kind: "tools", name: "bash", text: "one" }])
+    await PromptMeasurement.measure("C:\\Projects\\e", "3.6", [{ kind: "tools", name: "bash", text: "one two" }])
+    expect(PromptMeasurement.measuredModel("c:\\projects\\E")).toBe("3.6")
+    expect(PromptMeasurement.tokens("C:\\Projects\\e", "3.6", "tools", "bash")).toBe(2)
+  })
+
   test("if the engine does not answer the item stays unmeasured and the error is reported", async () => {
     broken = true
     const r = await PromptMeasurement.measure("C:\\Projects\\e", "fake", [{ kind: "tools", name: "bash", text: "one two" }])

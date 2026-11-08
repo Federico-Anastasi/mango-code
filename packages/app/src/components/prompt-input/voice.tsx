@@ -38,6 +38,9 @@ export type VoiceState = "idle" | "starting" | "listening" | "ending"
 export type VoiceEvent = { type: string; text?: string; message?: string }
 
 /** Float32 [-1,1] → 16-bit little-endian PCM, as the service wants it. */
+/** Below this peak (about -46 dBFS) the microphone sent silence: muted, or not the one Windows uses. */
+const SILENT_PEAK = 0.005
+
 function toPcm16(samples: Float32Array): Uint8Array {
   const bytes = new Uint8Array(samples.length * 2)
   const view = new DataView(bytes.buffer)
@@ -53,11 +56,14 @@ export function createVoiceDictation(input: {
   pcm: (id: string, audio: ArrayBuffer) => Promise<VoiceEvent[]>
   end: (id: string) => Promise<VoiceEvent[]>
   onText: (text: string) => void
+  /** The sentence in progress, to show where the text goes; it is replaced by the next one or by `onText`. */
+  onPartial: (text: string) => void
+  /** The sentence in progress ended without text: what `onPartial` showed goes away. */
+  onClear: () => void
   onError: (failure: VoiceFailure) => void
 }) {
   const [state, setState] = createSignal<VoiceState>("idle")
   const [elapsed, setElapsed] = createSignal(0)
-  const [partial, setPartial] = createSignal("")
   let context: AudioContext | undefined
   let stream: MediaStream | undefined
   let source: MediaStreamAudioSourceNode | undefined
@@ -68,14 +74,18 @@ export function createVoiceDictation(input: {
   let buffered: Uint8Array[] = []
   let sending = false
   let disposed = false
+  // Whether this recording produced any text, and the loudest sample the microphone sent: at the end, a recording
+  // without text says why (silence from the microphone, or no words recognized) instead of ending in nothing.
+  let heard = false
+  let peak = 0
 
   const handle = (events: VoiceEvent[]) => {
     for (const event of events) {
-      if (event.type === "partial" && event.text) setPartial(event.text)
+      if (event.type === "partial" && event.text) input.onPartial(event.text)
       else if (event.type === "final" && event.text?.trim()) {
-        setPartial("")
+        heard = true
         input.onText(event.text.trim())
-      } else if (event.type === "empty") setPartial("")
+      } else if (event.type === "empty") input.onClear()
       else if (event.type === "error") input.onError({ kind: "service", detail: event.message })
     }
   }
@@ -149,9 +159,13 @@ export function createVoiceDictation(input: {
     context = new AudioContext({ sampleRate: SAMPLE_RATE })
     source = context.createMediaStreamSource(stream)
     processor = context.createScriptProcessor(4096, 1, 1)
+    heard = false
+    peak = 0
     processor.onaudioprocess = (event) => {
       if (disposed) return
-      buffered.push(toPcm16(event.inputBuffer.getChannelData(0)))
+      const samples = event.inputBuffer.getChannelData(0)
+      for (const sample of samples) peak = Math.max(peak, Math.abs(sample))
+      buffered.push(toPcm16(samples))
       if (buffered.length > MAX_BUFFERED) buffered.shift()
     }
     // The processor must be connected to receive the audio; the output stays silent (we do not
@@ -161,7 +175,6 @@ export function createVoiceDictation(input: {
 
     const begin = Date.now()
     setElapsed(0)
-    setPartial("")
     timer = setInterval(() => {
       const seconds = (Date.now() - begin) / 1000
       setElapsed(seconds)
@@ -187,11 +200,13 @@ export function createVoiceDictation(input: {
     if (session) {
       try {
         handle(await input.end(session))
+        if (!heard) input.onError({ kind: peak < SILENT_PEAK ? "silent" : "empty" })
       } catch {
         input.onError({ kind: "service" })
       }
     }
-    setPartial("")
+    // a partial without its final sentence does not stay in the prompt
+    input.onClear()
     setState("idle")
   }
 
@@ -208,7 +223,6 @@ export function createVoiceDictation(input: {
   return {
     state,
     elapsed,
-    partial,
     toggle() {
       if (state() === "idle") void start()
       else if (state() === "listening") void stop()
@@ -249,7 +263,12 @@ function voiceEvents(payload: Record<string, unknown>): VoiceEvent[] {
   return Array.isArray(payload.events) ? (payload.events as VoiceEvent[]) : []
 }
 
-export function PromptVoiceButton(props: { onText: (text: string) => void; disabled?: boolean }) {
+export function PromptVoiceButton(props: {
+  onText: (text: string) => void
+  onPartial: (text: string) => void
+  onClear: () => void
+  disabled?: boolean
+}) {
   const language = useLanguage()
   const serverSDK = useServerSDK()
   const messages: Record<VoiceFailureKind, () => string> = {
@@ -260,6 +279,7 @@ export function PromptVoiceButton(props: { onText: (text: string) => void; disab
     busy: () => language.t("prompt.voice.error.busy"),
     service: () => language.t("prompt.voice.error.service"),
     empty: () => language.t("prompt.voice.error.empty"),
+    silent: () => language.t("prompt.voice.error.silent"),
     limit: () => language.t("prompt.voice.error.limit"),
     timeout: () => language.t("prompt.voice.error.timeout"),
   }
@@ -272,6 +292,8 @@ export function PromptVoiceButton(props: { onText: (text: string) => void; disab
     pcm: async (id, audio) => voiceEvents(await call(`${VOICE_LIVE_PCM_PATH}?id=${encodeURIComponent(id)}`, audio)),
     end: async (id) => voiceEvents(await call(`${VOICE_LIVE_END_PATH}?id=${encodeURIComponent(id)}`)),
     onText: props.onText,
+    onPartial: props.onPartial,
+    onClear: props.onClear,
     onError: (failure) =>
       showToast({
         variant: failure.kind === "empty" || failure.kind === "limit" ? undefined : "error",
@@ -334,13 +356,6 @@ export function PromptVoiceButton(props: { onText: (text: string) => void; disab
         >
           <span class="size-2 shrink-0 animate-pulse rounded-full bg-current" />
           <span class="shrink-0">{formatVoiceDuration(voice.elapsed())}</span>
-          <Show when={voice.partial()}>
-            {(text) => (
-              <span class="truncate font-normal opacity-90" aria-live="polite">
-                {text()}
-              </span>
-            )}
-          </Show>
           <Show when={voice.state() === "ending"}>
             <LoaderV2 />
           </Show>

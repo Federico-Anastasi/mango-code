@@ -292,12 +292,13 @@ fn open_external(app: AppHandle, url: String) -> Result<(), BridgeError> {
     open_in_browser(&app, &url)
 }
 
-/// A page of the app itself: local loading page or web UI on the agent server.
+/// A page of the app itself: local loading page or web UI on the agent server. Nothing else may take the window's
+/// place: a local file (file://) the agent made, opened there by mistake, replaced the whole app.
 fn is_internal(url: &Url) -> bool {
     match url.scheme() {
         "http" | "https" => matches!(url.host_str(), Some("127.0.0.1" | "localhost" | "tauri.localhost")),
-        "mailto" => false,
-        _ => true,
+        "tauri" | "about" => true,
+        _ => false,
     }
 }
 
@@ -429,8 +430,10 @@ fn remember_page(url: String) -> Result<(), BridgeError> {
 // ---------------------------------------------------------------- models
 
 /// "Models and engine": the window moves to the choice of models to download, like the tray item.
+/// Async, so it runs off the window's thread: a synchronous command runs on it, and showing the window from there
+/// waits for that same thread (the app froze).
 #[tauri::command]
-fn open_models(app: AppHandle) {
+async fn open_models(app: AppHandle) {
     crate::choice::change(&app);
 }
 
@@ -568,6 +571,8 @@ mod tests {
         assert!(is_internal(&u("tauri://localhost/index.html")));
         assert!(!is_internal(&u("https://example.com/")));
         assert!(!is_internal(&u("mailto:a@b.it")));
+        assert!(!is_internal(&u("file:///C:/Users/a/site/index.html")));
+        assert!(!is_internal(&u("data:text/html,hello")));
     }
 
     #[test]

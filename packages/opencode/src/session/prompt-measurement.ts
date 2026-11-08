@@ -16,6 +16,11 @@ const measurements = new Map<string, Measurements>()
 const folderKey = (directory: string) => path.resolve(directory).toLowerCase()
 const itemKey = (kind: string, name: string) => `${kind}\u0000${name}`
 
+/** The model of the last measurement in this folder: the one that ran its latest conversation. */
+export function measuredModel(directory: string): string | undefined {
+  return measurements.get(folderKey(directory))?.model
+}
+
 /** The tokens of an item, or `undefined` if it has not been measured for this folder and this model. */
 export function tokens(directory: string, model: string, kind: string, name: string): number | undefined {
   const known = measurements.get(folderKey(directory))

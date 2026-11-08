@@ -227,6 +227,9 @@ export function ModelSelectorPopoverV2(props: {
   model?: ModelState
   trigger: ModelSelectorTrigger
   onClose?: () => void
+  /** The last item of the menu: by default it manages the models of the providers. */
+  manageLabel?: string
+  onManage?: () => void
 }) {
   const dialog = useDialog()
   const controller = createModelSelectorController({
@@ -242,11 +245,15 @@ export function ModelSelectorPopoverV2(props: {
       groups={controller.groups}
       current={controller.current}
       select={controller.select}
-      onManage={() => {
-        void import("./dialog-manage-models").then((module) => {
-          void dialog.show(() => <module.DialogManageModelsV2 />)
+      manageLabel={props.manageLabel}
+      onManage={
+        props.onManage ??
+        (() => {
+          void import("./dialog-manage-models").then((module) => {
+            void dialog.show(() => <module.DialogManageModelsV2 />)
+          })
         })
-      }}
+      }
       onClose={() => props.onClose?.()}
     />
   )
@@ -297,6 +304,7 @@ function ModelSelectorPopoverV2View(props: {
   groups: (models: ModelItem[]) => { category: string; items: ModelItem[] }[]
   current: () => string | undefined
   select: (item: ModelItem) => void
+  manageLabel?: string
   onManage: () => void
   onClose: () => void
 }) {
@@ -512,7 +520,7 @@ function ModelSelectorPopoverV2View(props: {
               onSelect={manage}
             >
               <Icon name="outline-sliders" size="small" />
-              <span class="min-w-0 flex-1 truncate leading-5">{language.t("dialog.model.manage")}</span>
+              <span class="min-w-0 flex-1 truncate leading-5">{props.manageLabel ?? language.t("dialog.model.manage")}</span>
             </MenuV2.Item>
           </div>
         </MenuV2.Content>

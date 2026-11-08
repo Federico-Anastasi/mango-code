@@ -9,6 +9,8 @@ export type MangoDesktop = {
   createProject(name: string, parent?: string): Promise<string>
   readClipboardImage(): Promise<ArrayBuffer | null>
   openExternal(url: string): Promise<void>
+  /** "Models and engine": the window moves to the app page that downloads or removes models and changes the engine. */
+  openModels(): Promise<void>
   /** Project files, by absolute path: they reject with { code, message } (not_found, forbidden, blocked_type, ...). */
   fileInfo(path: string): Promise<{ size: number; isDir: boolean }>
   openPath(path: string): Promise<void>

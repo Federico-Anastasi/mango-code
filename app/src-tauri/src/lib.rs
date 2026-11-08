@@ -109,6 +109,12 @@ struct AppState {
     folder: Mutex<Option<std::path::PathBuf>>,
 }
 
+/// The main window, through the reference kept at startup: looked up by label it is not found once the Preview
+/// panel has added its webview to it (the X and the tray icon then did nothing).
+pub(crate) fn main_window(app: &AppHandle) -> Option<tauri::WebviewWindow> {
+    app.try_state::<AppState>()?.main.get().cloned()
+}
+
 pub(crate) fn publish(app: &AppHandle, s: Status) {
     *app.state::<AppState>().status.lock().unwrap() = s.clone();
     let _ = app.emit("mango://status", s);
@@ -287,10 +293,18 @@ fn startup(app: &AppHandle, mode: Mode) -> Result<()> {
         .running_plan()
         .with_context(|| tr!("il motore si è spento subito dopo l'avvio", "the engine stopped right after starting"))?;
 
-    // --- dictation (optional: without the whisper model the microphone stays off)
+    // --- dictation. Its models (about 490 MB) are downloaded here the first time, with the progress on this page;
+    // without network the app starts anyway, without dictation, and tries again at the next start.
     let voice_url = {
+        let dir = voice::models_dir(&paths);
+        let missing = voice::missing_files(&dir);
+        if !missing.is_empty() {
+            if let Err(e) = download_voice(app, &dir, &missing) {
+                eprintln!("dictation off: {e:#}");
+            }
+        }
         let model = voice::model_path(&paths);
-        if model.is_file() {
+        if voice::missing_files(&dir).is_empty() {
             set_status(app, "voice", tr!("Avvio della dettatura", "Starting dictation"));
             match voice::start(&model, free_port(VOICE_PORT)?) {
                 Ok(v) => {
@@ -453,6 +467,27 @@ fn connect_tools(app: &AppHandle, agent_url: &str) {
     std::thread::sleep(std::time::Duration::from_secs(4));
 }
 
+/// Downloads the dictation models that are missing, showing the megabytes on the loading page.
+fn download_voice(app: &AppHandle, dir: &std::path::Path, missing: &[&voice::ModelFile]) -> Result<()> {
+    std::fs::create_dir_all(dir).with_context(|| dir.display().to_string())?;
+    let total: u64 = missing.iter().map(|f| f.size).sum();
+    let mut before = 0;
+    for f in missing {
+        let mut shown = u64::MAX;
+        voice::download(f, dir, &mut |done, _| {
+            let mb = (before + done) / 1_000_000;
+            if mb / 10 != shown / 10 {
+                shown = mb;
+                let all = total / 1_000_000;
+                set_status(app, "voice", tr!("Scarico il modello della dettatura ({mb} di {all} MB)", "Downloading the dictation model ({mb} of {all} MB)"));
+            }
+        })
+        .with_context(|| f.name)?;
+        before += f.size;
+    }
+    Ok(())
+}
+
 /// Before "ready": the engine reads the system prompt and the tools of the conversation the user
 /// will open and saves its base (see `preparation.rs`). If the base is already there it costs nothing and
 /// the page does not show it; if the read fails the app starts anyway (the first conversation
@@ -589,6 +624,14 @@ pub fn run() {
             if let Some(d) = std::env::var_os("MANGO_DATA") {
                 window = window.data_directory(std::path::PathBuf::from(d).join("finestra"));
             }
+            // For tests that click in the window: remote debugging on the main window only. Through
+            // WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS it would apply to the Preview panel too and replace its port, and
+            // the agent would have no panel.
+            if let Some(port) = std::env::var("MANGO_WINDOW_CDP").ok().and_then(|p| p.parse::<u16>().ok()) {
+                window = window.additional_browser_args(&format!(
+                    "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --remote-debugging-port={port} --remote-debugging-address=127.0.0.1"
+                ));
+            }
             let main = bridge::window(window, app.handle()).build()?;
             let _ = app.state::<AppState>().main.set(main);
             // The Preview panel is born with the window and before the agent: the browser
@@ -610,11 +653,15 @@ pub fn run() {
         .build(context)
         .expect("Tauri startup")
         .run(|app, ev| match ev {
-            // Window close: the X only hides it. The app stays alive (and with it the engine)
-            // and reopens from the tray icon; only "Quit" of that icon stops everything.
+            // Window close. Once the agent runs, the X only hides the window: the app stays alive (and with it the
+            // loaded model) and reopens from the tray icon, whose "Quit" stops everything. Before that (model choice,
+            // download, startup, a startup error) there is nothing to keep alive and the X quits: an interrupted
+            // download resumes at the next start.
             RunEvent::WindowEvent { label, event: tauri::WindowEvent::CloseRequested { api, .. }, .. } if label == "main" => {
                 api.prevent_close();
-                if let Some(w) = app.get_webview_window("main") {
+                if app.state::<AppState>().agent.lock().unwrap().is_none() {
+                    tray::quit(app);
+                } else if let Some(w) = main_window(app) {
                     let _ = w.hide();
                 }
             }

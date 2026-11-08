@@ -219,7 +219,7 @@ fn catalog_of_local_models() {
     assert_eq!(entries[0].ctx, 81_920, "without a profile, the general plan: the model's target if it fits");
 }
 
-const LOCAL_ORDER: [&str; 6] = ["3.6", "3.8", "bonsai2", "toq", "lfm", "3.5-4b"];
+const LOCAL_ORDER: [&str; 7] = ["3.6", "3.8", "bonsai2", "toq", "lfm", "3.5-4b", "3.5-2b"];
 
 fn real_paths() -> Paths {
     Paths {
@@ -482,6 +482,17 @@ fn if_it_does_not_fit_the_error_says_how_much_is_missing_and_what_to_do() {
     assert!(e.contains(&tr!("le schede video ne hanno 0,0 e la RAM 2,0", "the graphics cards have 0.0 and the RAM 2.0")), "{e}");
 }
 
+/// A 4 GB card (GTX 1650): the 2B, without the image encoder, is the one that fits on it, with a large context; the 4B
+/// runs on the processor.
+#[test]
+fn a_4gb_card_takes_the_2b() {
+    let c = recommendations(&pc(vec![nvidia(0, "NVIDIA GeForce GTX 1650", 4096, (7, 5), (12, 6))], 16_384));
+    assert_eq!(c["3.5-2b"].placement, Some(Placement::Gpu), "{:?}", c["3.5-2b"]);
+    assert!(c["3.5-2b"].context >= 65_536, "{:?}", c["3.5-2b"]);
+    assert_eq!(c["3.5-4b"].placement, Some(Placement::Cpu), "{:?}", c["3.5-4b"]);
+    assert!(c["3.5-2b"].fastest, "{:?}", c["3.5-2b"]);
+}
+
 /// The card is too small for the model: it runs entirely on the processor, with the cards' build (already on disk) and
 /// the cards empty. Never a part here and a part there.
 #[test]
@@ -573,8 +584,8 @@ fn with_a_24gb_card_all_the_models_fit() {
 }
 
 /// An 8 GB card and 32 GB of RAM: Bonsai 2 (7.6 GB) and Qwen3.6 (17 GB) don't fit on the card and run on the
-/// processor; the 4B fits on the card with the image encoder, which takes some context from it, and is the fastest;
-/// TOQ, which only has the cards' engine, doesn't fit.
+/// processor; the 4B fits on the card with the image encoder, which takes some context from it, and is the fastest (the
+/// 2B fits too, but it is for smaller cards); TOQ, which only has the cards' engine, doesn't fit.
 #[test]
 fn an_8gb_card_and_32gb_of_ram() {
     let c = recommendations(&pc(vec![nvidia(0, "NVIDIA GeForce RTX 3060 Ti", 8192, (8, 6), (12, 6))], 32_768));
@@ -594,7 +605,7 @@ fn an_8gb_card_and_32gb_of_ram() {
 
 /// Three cards (22 GB in all) without a profile: those that fit go on the cards, Qwen3.6 and Qwen3.8 on
 /// the processor. The fastest is LFM, on the cards and with fewer weights read per token (a MoE with 2 billion
-/// active parameters).
+/// active parameters); the 2B, which reads fewer, is for smaller cards.
 #[test]
 fn three_cards_without_a_profile() {
     let hw = pc(vec![nvidia(0, "A", 8192, (8, 6), (12, 6)), nvidia(1, "B", 8192, (6, 1), (12, 6)), nvidia(2, "C", 6144, (7, 5), (12, 6))], 65_536);
@@ -602,7 +613,7 @@ fn three_cards_without_a_profile() {
     for k in ["3.6", "3.8"] {
         assert_eq!(c[k].placement, Some(Placement::Cpu), "{k}: {:?}", c[k]);
     }
-    for k in ["bonsai2", "toq", "lfm", "3.5-4b"] {
+    for k in ["bonsai2", "toq", "lfm", "3.5-4b", "3.5-2b"] {
         assert_eq!(c[k].placement, Some(Placement::Gpu), "{k}: {:?}", c[k]);
     }
     assert_eq!(c.values().filter(|c| c.fastest).map(|c| c.model.as_str()).collect::<Vec<_>>(), ["lfm"]);

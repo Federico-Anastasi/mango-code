@@ -93,7 +93,7 @@ pub fn normalize(written: &str) -> Result<Url, String> {
 }
 
 fn notify(app: &AppHandle, event: serde_json::Value) {
-    if let Some(w) = app.get_webview_window("main") {
+    if let Some(w) = crate::main_window(app) {
         let _ = w.eval(format!("window.dispatchEvent(new CustomEvent('mango-preview',{{detail:{event}}}))"));
     }
 }
@@ -106,7 +106,7 @@ pub fn install(app: &AppHandle) -> anyhow::Result<()> {
     std::fs::create_dir_all(&data)?;
     app.manage(Panel { cdp_port: port, state: Mutex::new(State { zoom: 1.0, ..Default::default() }) });
 
-    let main = app.get_webview_window("main").ok_or_else(|| anyhow::anyhow!("main window missing"))?;
+    let main = crate::main_window(app).ok_or_else(|| anyhow::anyhow!("main window missing"))?;
     let (for_nav, for_windows, for_title, for_load) = (app.clone(), app.clone(), app.clone(), app.clone());
     let builder = WebviewBuilder::new(LABEL, WebviewUrl::External(BLANK.parse()?))
         .data_directory(data)

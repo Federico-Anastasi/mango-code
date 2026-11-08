@@ -16,8 +16,8 @@ and on two engines of our own derived from it. The app is in English and Italian
   AMD and Intel, or the processor alone) and the models you choose, with resume and checksum. A model runs entirely on
   the graphics cards, with the largest context that fits, or entirely on the processor.
 - **Recommended models**, each with arguments tuned for it: Qwen3.6-35B-A3B (the default), Qwen3.8-27B, Ternary
-  Bonsai 2 27B, Qwen3.8-27B-TOQ-v1 (our 2-bit trellis quantization), LFM2.5-24B-A2B and Qwen3.5-4B. Most of them read
-  images.
+  Bonsai 2 27B, Qwen3.8-27B-TOQ-v1 (our 2-bit trellis quantization), LFM2.5-24B-A2B, Qwen3.5-4B and Qwen3.5-2B (for
+  4 GB graphics cards). Most of them read images.
 - **Other open models.** Search Hugging Face, paste a link or pick a GGUF file already on your PC: before adding it, the
   app tells you whether it fits in memory and whether its chat template handles tools and long conversations.
 - **Conversations that resume instantly.** Before the engine stops or switches model, it saves the conversation's

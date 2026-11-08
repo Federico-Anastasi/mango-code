@@ -11,7 +11,7 @@
   "_ctx": "128k is Mango Code's TARGET context. A local model's 'ctx' is the maximum the model supports (from the GGUF header): the general plan uses the smaller of the two and goes lower only if memory is not enough. The context measured on specific hardware is in its profile. The status line uses the profile's ctx, if there is one.",
   "default": "3.6",
   "_default": "The model that is started when none has been chosen.",
-  "order": ["3.6", "3.8", "bonsai2", "toq", "lfm", "3.5-4b"],
+  "order": ["3.6", "3.8", "bonsai2", "toq", "lfm", "3.5-4b", "3.5-2b"],
   "_order": "The recommended local models in the order they are listed (selector and first run of the app, mango-code -Models): each local model in 'models' appears exactly once. The user's models (user-models.json, in the data dir) follow, then the cloud ones.",
   "models": {
     "toq": {
@@ -192,6 +192,28 @@
       "memory": {
         "kv_kib_token": 32,
         "state_mib": 53
+      }
+    },
+    "3.5-2b": {
+      "label": "Qwen3.5-2B",
+      "_label": "The smallest model: with a 4 GB graphics card (GTX 1650) it is the one that fits on the card. Text only: the image encoder would not fit next to it.",
+      "fallback": true,
+      "_fallback": "Proposed as the fastest only when no other recommended model fits on the graphics cards: it reads the fewest weights and would be the fastest on every PC.",
+      "quant": "Q4_K_M",
+      "kind": "dense 2B / hybrid GDN",
+      "gguf": "Qwen3.5-2B-GGUF/Qwen3.5-2B-Q4_K_M.gguf",
+      "repo": "unsloth/Qwen3.5-2B-GGUF",
+      "revision": "f6d5376be1edb4d416d56da11e5397a961aca8ae",
+      "chat_template": "qwen3.5-mango.jinja",
+      "_chat_template": "The same file as the 4B's: it is the 2B's template (thinking off unless asked) with the changes of qwen3.5-mango.jinja.",
+      "ctx": 262144,
+      "files": [
+        { "path": "Qwen3.5-2B-GGUF/Qwen3.5-2B-Q4_K_M.gguf", "size": 1280835840, "sha256": "aaf42c8b7c3cab2bf3d69c355048d4a0ee9973d48f16c731c0520ee914699223" }
+      ],
+      "_memory": "From the model's config.json: cache of 6 attention layers x 2 x 2 heads x 256 x 2 bytes = 12 KiB per token; state of 18 GDN layers x 16 heads x 128 x 128 x 4 bytes plus the convolution, about 20 MiB.",
+      "memory": {
+        "kv_kib_token": 12,
+        "state_mib": 21
       }
     }
   }

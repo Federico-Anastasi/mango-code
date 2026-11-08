@@ -142,6 +142,9 @@ pub fn plan(paths: &Paths, inp: &AgentInputs) -> Result<AgentPlan> {
         // launcher's guest Chrome, which doesn't exist in the app.
         env("MANGO_PANEL_CDP", &inp.browser.preview_port.to_string()),
         env("MANGO_BROWSER_CHOICE", &inp.browser.choice.to_string_lossy()),
+        // Every folder the agent works in becomes a git repository (project.ts, ensureGit): projects, diffs and the
+        // files the app opens go through it.
+        env("MANGO_PROJECTS_GIT", "1"),
         // Offline: no models.dev, updates, sharing, LSP downloads.
         env("OPENCODE_DISABLE_AUTOUPDATE", "1"),
         env("OPENCODE_DISABLE_MODELS_FETCH", "1"),

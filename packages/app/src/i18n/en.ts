@@ -124,6 +124,7 @@ export const dict = {
   "dialog.model.search.placeholder": "Search models",
   "dialog.model.empty": "No model results",
   "dialog.model.manage": "Manage models",
+  "dialog.model.downloadMore": "Download more models…",
   "dialog.model.manage.description": "Customize which models appear in the model selector.",
   "dialog.model.manage.provider.toggle": "Toggle all {{provider}} models",
 
@@ -288,7 +289,9 @@ export const dict = {
   "settings.prompt.title": "What the model reads",
   "settings.prompt.description":
     "Every new conversation starts with these items and the model rereads them on every request: the more they weigh, the longer it takes to answer. Turn off what you don't need; the change applies from the next message. The weight of each item is measured with the first request of a conversation in the folder.",
-  "settings.prompt.noFolder": "Open a folder to see what the model reads inside it.",
+  "settings.prompt.noFolder": "You have no projects yet: create one from Home.",
+  "settings.prompt.project.title": "Project",
+  "settings.prompt.project.description": "What is on, and how much it weighs, depends on the project.",
   "settings.prompt.loadError": "Could not read the settings: {{message}}",
   "settings.prompt.saveError": "Could not save the change: {{message}}",
   "settings.prompt.unexpectedResponse": "unexpected response from the server",
@@ -299,6 +302,14 @@ export const dict = {
   "settings.prompt.scope.folder": "Only {{folder}}",
   "settings.prompt.fromFolder": "Set for this folder only",
   "settings.tab.team": "Team",
+  "settings.tab.localModels": "Models",
+  "settings.localModels.title": "Models",
+  "settings.localModels.change.title": "Change model",
+  "settings.localModels.change.description":
+    "Click the model's name under the chat's text field and pick another one: it loads with your next message.",
+  "settings.localModels.manage.title": "Models and engine",
+  "settings.localModels.manage.description": "Download more models, remove them from this PC or change the engine.",
+  "settings.localModels.manage.button": "Open",
   "settings.team.title": "Team",
   "settings.team.description":
     "A cloud manager guides the local developer and up to four cloud agents. Turn it on for a conversation with the Team switch next to the model. The cloud models are billed by OpenRouter.",
@@ -410,6 +421,8 @@ export const dict = {
   "prompt.voice.error.busy": "The microphone is in use by another application.",
   "prompt.voice.error.service": "The transcription service is not responding.",
   "prompt.voice.error.empty": "No words recognized.",
+  "prompt.voice.error.silent":
+    "No sound comes from the microphone: in Windows check which microphone is the default and that it is not muted.",
   "prompt.toast.attachmentDuplicate.title": "This file has already been uploaded",
   "prompt.toast.modelAgentRequired.title": "Select an agent and model",
   "prompt.toast.modelAgentRequired.description": "Choose an agent and model before sending a prompt.",
@@ -793,8 +806,8 @@ export const dict = {
   "home.sessions.group.yesterday": "Yesterday",
   "home.sessions.group.older": "Older",
   "session.untitled": "New conversation",
-  "titlebar.history": "History",
-  "titlebar.history.tooltip": "Conversation history and projects",
+  "titlebar.history": "Home",
+  "titlebar.history.tooltip": "Projects and conversations",
   "home.session.rename.title": "Rename conversation",
   "home.session.delete.title": "Delete conversation",
   "home.session.delete.confirm": "Delete «{{name}}»? This cannot be undone.",

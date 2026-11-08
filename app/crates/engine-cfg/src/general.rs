@@ -301,6 +301,8 @@ pub struct Recommendation {
     pub origin: Origin,
     /// Among the recommended ones that fit, probably the fastest (`mark_fastest`).
     pub fastest: bool,
+    /// A model for small graphics cards (catalog `fallback`): proposed only when no other one fits on the cards.
+    pub fallback: bool,
 }
 
 /// The catalog's local models, in its order, each with the verdict for `hw`: with the profile if there is one,
@@ -342,7 +344,17 @@ pub fn recommended(paths: &Paths, hw: &Hardware) -> Result<Vec<Recommendation>> 
             Err(e) => (0, None, format!("{e:#}")),
         };
         read.push(cfg.read_per_token(cfg.engine_with(&setup)));
-        v.push(Recommendation { model: key.to_string(), placement, context, reason, bytes, profile, origin: file.origin(key), fastest: false });
+        v.push(Recommendation {
+            model: key.to_string(),
+            placement,
+            context,
+            reason,
+            bytes,
+            profile,
+            origin: file.origin(key),
+            fastest: false,
+            fallback: cfg.fallback,
+        });
     }
     mark_fastest(&mut v, &read);
     Ok(v)
@@ -350,12 +362,15 @@ pub fn recommended(paths: &Paths, hw: &Hardware) -> Result<Vec<Recommendation>> 
 
 /// Among the recommended ones that fit, the probably fastest to write: on the cards beats the processor; at equal
 /// place, whoever reads fewer weights for each token wins (a MoE reads only the chosen experts). On a tie, the first.
+/// A `fallback` model takes part only if no other one fits on the cards.
 fn mark_fastest(v: &mut [Recommendation], read: &[u64]) {
+    let recommended = |c: &Recommendation| c.origin == Origin::Recommended;
+    let others_on_cards = v.iter().any(|c| !c.fallback && recommended(c) && c.placement == Some(Placement::Gpu));
     let best = v
         .iter()
         .zip(read)
         .enumerate()
-        .filter(|(_, (c, _))| c.origin == Origin::Recommended)
+        .filter(|(_, (c, _))| recommended(c) && !(c.fallback && others_on_cards))
         .filter_map(|(i, (c, &l))| Some((c.placement? == Placement::Cpu, l, i)))
         .min();
     if let Some((_, _, i)) = best {

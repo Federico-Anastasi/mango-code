@@ -1,3 +1,5 @@
+import os from "node:os"
+import path from "node:path"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { and, eq, sql } from "drizzle-orm"
 import { Database } from "@opencode-ai/core/database/database"
@@ -210,10 +212,35 @@ const layer = Layer.effect(
         )
     })
 
+    // mango-code: every folder Mango Code works in is a git repository with at least one commit (the agent's snapshots,
+    // diffs and the files the app opens all go through the project, whose identity is the first commit). A folder
+    // without git gets `git init`; a repository without commits gets an empty first commit, made from the empty tree so
+    // nothing the user staged ends up in it. The author is fixed: git on a new PC may have none configured. Only with
+    // MANGO_PROJECTS_GIT (set by the app), and never on a drive root or the user's own folder.
+    const ensureGit = Effect.fnUntraced(function* (directory: string, initialized: boolean) {
+      if (process.env.MANGO_PROJECTS_GIT !== "1") return
+      const resolved = path.resolve(directory)
+      if (resolved === path.parse(resolved).root || resolved.toLowerCase() === os.homedir().toLowerCase()) return
+      if (!initialized) {
+        const init = yield* git(["init", "-q"], { cwd: resolved })
+        if (init.code !== 0) return yield* Effect.logWarning("git init failed", { directory: resolved, stderr: init.stderr })
+      }
+      const tree = yield* git(["hash-object", "-t", "tree", "--stdin"], { cwd: resolved })
+      const commit = yield* git(
+        ["-c", "user.name=Mango Code", "-c", "user.email=mango-code@localhost", "commit-tree", tree.text.trim(), "-m", "Mango Code: start"],
+        { cwd: resolved },
+      )
+      const ref = commit.code === 0 ? yield* git(["update-ref", "HEAD", commit.text.trim()], { cwd: resolved }) : commit
+      if (ref.code !== 0) yield* Effect.logWarning("first commit failed", { directory: resolved, stderr: ref.stderr })
+    })
+
     const fromDirectory = Effect.fn("Project.fromDirectory")(function* (directory: string) {
       yield* Effect.logInfo("fromDirectory", { directory })
 
-      const data = yield* projectV2.resolve(AbsolutePath.make(directory))
+      const found = yield* projectV2.resolve(AbsolutePath.make(directory))
+      const without = found.id === ProjectV2.ID.global
+      if (without) yield* ensureGit(directory, !!found.vcs)
+      const data = without ? yield* projectV2.resolve(AbsolutePath.make(directory)) : found
       const worktree = data.id === ProjectV2.ID.make("global") && !data.vcs ? "/" : data.directory
 
       // Phase 2: upsert

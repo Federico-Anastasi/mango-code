@@ -27,7 +27,7 @@ import { usePlatform } from "@/context/platform"
 import { useSDK } from "@/context/sdk"
 import { useSync } from "@/context/sync"
 import { createSessionTabs } from "@/pages/session/helpers"
-import { appendDictation } from "@/components/prompt-input/dictation"
+import { liveDictation } from "@/components/prompt-input/dictation"
 import { PromptVoiceButton } from "@/components/prompt-input/voice"
 import { showToast } from "@/utils/toast"
 import { PromptInputV2, type PromptInputV2Suggestion } from "@opencode-ai/session-ui/v2/prompt-input"
@@ -53,6 +53,10 @@ export function PromptInputV2Composer(props: PromptInputV2ComposerProps) {
   const dialog = useDialog()
   const command = useCommand()
   const language = useLanguage()
+  const dictation = liveDictation(props.controller.parts, (next) => {
+    props.controller.onInput(next.value, next.parts, next.cursor)
+    props.controller.restoreFocus()
+  })
 
   return (
     <div class="flex flex-col gap-3">
@@ -64,13 +68,7 @@ export function PromptInputV2Composer(props: PromptInputV2ComposerProps) {
         attachKeybind={command.keybindParts("file.attach")}
         attachShortcut={command.keybind("file.attach")}
         trailingControl={
-          <PromptVoiceButton
-            onText={(text) => {
-              const next = appendDictation(props.controller.parts(), text)
-              props.controller.onInput(next.value, next.parts, next.cursor)
-              props.controller.restoreFocus()
-            }}
-          />
+          <PromptVoiceButton onText={dictation.final} onPartial={dictation.partial} onClear={dictation.clear} />
         }
         modelControl={
           <>
@@ -496,6 +494,9 @@ export function usePromptInputV2Controller(props: PromptInputV2ControllerProps):
   return controller as PromptInputV2ComposerController
 }
 
+/** The app's provider of local models (agent-cfg `PROVIDER`): one model for each model on this PC. */
+const MANGO_PROVIDER = "mango"
+
 function PromptInputV2ModelControl(props: {
   loading: boolean
   paid: boolean
@@ -507,6 +508,7 @@ function PromptInputV2ModelControl(props: {
   onClose: () => void
   onUnpaidClick: () => void
 }) {
+  const language = useLanguage()
   const shouldAnimate = createMemo<boolean>((previous) => previous ?? props.loading)
   const content = () => (
     <>
@@ -525,16 +527,34 @@ function PromptInputV2ModelControl(props: {
       </span>
     </>
   )
-  // Mango Code app: there is a single model, so no selector: the name stays as information
+  // Mango Code app: the menu lists the models on this PC (the engine loads the chosen one at the next message) and
+  // ends with the app page that downloads more of them.
   if (inMangoDesktop()) {
     return (
       <Show when={!props.loading}>
-        <span
-          data-action="prompt-model"
-          class="flex h-7 min-w-0 max-w-[260px] items-center gap-1.5 px-2 text-[13px] text-v2-text-text-faint"
-        >
-          <span class="truncate leading-4">{props.modelName}</span>
-        </span>
+        <ModelSelectorPopoverV2
+          model={props.model}
+          provider={MANGO_PROVIDER}
+          manageLabel={language.t("dialog.model.downloadMore")}
+          onManage={() => void window.__MANGO_DESKTOP__?.openModels()}
+          trigger={(triggerProps) => (
+            <ButtonV2
+              {...triggerProps}
+              variant="ghost-muted"
+              size="normal"
+              style={{ height: "28px" }}
+              class="min-w-0 max-w-[260px] justify-start ![font-weight:440] group"
+              data-action="prompt-model"
+              data-control-type="popover"
+            >
+              <span class="truncate leading-4">{props.modelName}</span>
+              <span class="-ml-0.5 -mr-1 flex shrink-0">
+                <Icon name="chevron-down" />
+              </span>
+            </ButtonV2>
+          )}
+          onClose={props.onClose}
+        />
       </Show>
     )
   }

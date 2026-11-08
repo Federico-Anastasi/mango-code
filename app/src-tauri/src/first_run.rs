@@ -89,6 +89,9 @@ pub struct Recommendation {
     /// Among the recommended ones that fit, probably the fastest.
     #[serde(default)]
     pub fastest: bool,
+    /// A model for small graphics cards: recommended only when no other one fits on the cards.
+    #[serde(default)]
+    pub fallback: bool,
 }
 
 /// The computer and the disk, seen from outside: the part that the tests replace.
@@ -127,6 +130,8 @@ pub struct Model {
     pub user: bool,
     /// The one to propose: the first Mango Code recommendation that fits and is not ready yet.
     pub recommended: bool,
+    /// See `Recommendation::fallback`.
+    pub fallback: bool,
 }
 
 impl Model {
@@ -186,10 +191,13 @@ pub fn assess(s: &dyn System) -> Result<Assessment> {
             engine: s.engine_for(&v.key)?,
             user: c.user,
             recommended: false,
+            fallback: c.fallback,
         });
     }
-    // The first one to download that fits on the GPUs; on the CPU only if none fits on the GPUs.
-    let candidate = |m: &Model| !m.user && m.placement.is_some() && !m.ready();
+    // The first one to download that fits on the GPUs; on the CPU only if none fits on the GPUs. A model for small
+    // cards only if no other one fits on the cards, downloaded or not.
+    let others_on_cards = models.iter().any(|m| !m.user && !m.fallback && m.placement == Some(Placement::Gpu));
+    let candidate = |m: &Model| !m.user && m.placement.is_some() && !m.ready() && !(m.fallback && others_on_cards);
     let chosen = models
         .iter()
         .position(|m| candidate(m) && m.placement == Some(Placement::Gpu))
@@ -371,7 +379,7 @@ mod tests {
 
     fn advice(key: &str, fits: bool) -> Recommendation {
         let (placement, reason) = if fits { (Some(Placement::Gpu), String::new()) } else { (None, "too big".into()) };
-        Recommendation { model: key.into(), placement, context: 32768, reason, bytes: 1000, user: false, fastest: false }
+        Recommendation { model: key.into(), placement, context: 32768, reason, bytes: 1000, user: false, fastest: false, fallback: false }
     }
 
     /// Three models (a, b, c): c does not fit. Nothing on disk, general engine to download.
@@ -505,6 +513,20 @@ mod tests {
         }
         let v = assess(&p).unwrap();
         assert_eq!(recommended_keys(&v), ["a"]);
+    }
+
+    /// A model for small cards (b) is not proposed when another one fits on the cards, even if that one is already
+    /// downloaded; it is when it is the only one on the cards.
+    #[test]
+    fn the_model_for_small_cards_only_when_nothing_else_fits_on_them() {
+        let mut p = empty();
+        p.recommendations[1].fallback = true;
+        p.entries[0].present = true;
+        p.engines[0] = cuda(true);
+        assert!(assess(&p).unwrap().models.iter().all(|m| !m.recommended));
+
+        p.recommendations[0].placement = Some(Placement::Cpu);
+        assert_eq!(recommended_keys(&assess(&p).unwrap()), ["b"]);
     }
 
     #[test]

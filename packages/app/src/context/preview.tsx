@@ -1,4 +1,4 @@
-import { onCleanup, onMount } from "solid-js"
+import { createSignal, onCleanup, onMount } from "solid-js"
 import { createStore } from "solid-js/store"
 import { createSimpleContext } from "@opencode-ai/ui/context"
 import { persisted } from "@/utils/persist"
@@ -7,7 +7,6 @@ import { persisted } from "@/utils/persist"
 export type PreviewDevice = "desktop" | "tablet" | "phone"
 
 type Store = {
-  opened: boolean
   width: number
   device: PreviewDevice
 }
@@ -18,9 +17,9 @@ const PREVIEW_DEFAULT_WIDTH = 520
 /**
  * The "Preview" panel: the agent's browser inside the window.
  *
- * The state that matters to the user (open, width, format) is kept between launches, like
- * the other panels of the app. The address is NOT: the native panel knows it, and the web UI
- * asks it (`preview.state`).
+ * Width and format are kept between launches. Whether it is open is NOT: the page it showed is not
+ * kept either (the native panel knows it, and the web UI asks it with `preview.state`), so at the
+ * next launch it would reopen empty. It opens when the agent opens a page, or with its button.
  */
 export const { use: usePreview, provider: PreviewProvider } = createSimpleContext({
   name: "Preview",
@@ -28,27 +27,28 @@ export const { use: usePreview, provider: PreviewProvider } = createSimpleContex
   init: () => {
     const [store, setStore] = persisted(
       "preview.v1",
-      createStore<Store>({ opened: false, width: PREVIEW_DEFAULT_WIDTH, device: "desktop" }),
+      createStore<Store>({ width: PREVIEW_DEFAULT_WIDTH, device: "desktop" }),
     )
+    const [opened, setOpened] = createSignal(false)
 
     // The agent navigates while the panel is closed: the app opens it by itself, so the user sees
     // the page being built appear instead of having to go and look for it.
     onMount(() => {
       const onPreview = (event: Event) => {
         const detail = (event as CustomEvent<{ kind?: string }>).detail
-        if (detail?.kind === "open") setStore("opened", true)
+        if (detail?.kind === "open") setOpened(true)
       }
       window.addEventListener("mango-preview", onPreview)
       onCleanup(() => window.removeEventListener("mango-preview", onPreview))
     })
 
     return {
-      opened: () => store.opened,
+      opened,
       width: () => store.width,
       device: () => store.device,
-      open: () => setStore("opened", true),
-      close: () => setStore("opened", false),
-      toggle: () => setStore("opened", (opened) => !opened),
+      open: () => setOpened(true),
+      close: () => setOpened(false),
+      toggle: () => setOpened((open) => !open),
       resize: (width: number) => setStore("width", Math.round(Math.max(PREVIEW_MIN_WIDTH, width))),
       setDevice: (device: PreviewDevice) => setStore("device", device),
     }

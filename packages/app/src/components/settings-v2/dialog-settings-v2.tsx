@@ -4,7 +4,7 @@ import { TabsV2 } from "@opencode-ai/ui/v2/tabs-v2"
 import { Icon } from "@opencode-ai/ui/icon"
 import { useLanguage } from "@/context/language"
 import { SettingsGeneralV2 } from "./general"
-import { SettingsKeybinds } from "../settings-keybinds"
+import { SettingsLocalModelsV2 } from "./local-models"
 import { SettingsProvidersV2 } from "./providers"
 import { SettingsModelsV2 } from "./models"
 import { SettingsPromptV2 } from "./prompt"
@@ -28,7 +28,10 @@ export const DialogSettings: Component<{
   const tabs = useTabs()
   const serverSync = useServerSync()
   const [tab, setTab] = createSignal(props.defaultValue ?? "general")
-  const directory = createMemo(() => {
+  // The project the settings are about: the one picked in the page, else the open tab's, else the one selected in
+  // the home, else the first project. Opened from the home, the pages that depend on a project are never empty.
+  const [picked, setPicked] = createSignal<string>()
+  const routeDirectory = createMemo(() => {
     const route = layout.route()
     if (route.type === "dir-new-sesssion") return route.dir
     if (route.type === "draft") {
@@ -38,6 +41,14 @@ export const DialogSettings: Component<{
     if (route.type === "session") return serverSync().session.get(route.sessionId)?.directory
     return undefined
   })
+  const projects = createMemo(() =>
+    layout.projects
+      .list()
+      .map((project) => ({ worktree: project.worktree, name: project.name || folderName(project.worktree) })),
+  )
+  const directory = createMemo(
+    () => picked() ?? routeDirectory() ?? layout.home.selection().directory ?? projects()[0]?.worktree,
+  )
 
   const showProviders = () => {
     void dialog.show(() => <DialogSettings sessionID={props.sessionID} defaultValue="providers" />)
@@ -63,10 +74,12 @@ export const DialogSettings: Component<{
                       <Icon name="sliders" />
                       {language.t("settings.tab.general")}
                     </TabsV2.Trigger>
-                    <TabsV2.Trigger value="shortcuts">
-                      <Icon name="keyboard" />
-                      {language.t("settings.tab.shortcuts")}
-                    </TabsV2.Trigger>
+                    <Show when={inMangoDesktop()}>
+                      <TabsV2.Trigger value="local-models">
+                        <Icon name="models" />
+                        {language.t("settings.tab.localModels")}
+                      </TabsV2.Trigger>
+                    </Show>
                     <TabsV2.Trigger value="prompt">
                       <Icon name="bullet-list" />
                       {language.t("settings.tab.prompt")}
@@ -111,11 +124,11 @@ export const DialogSettings: Component<{
         <TabsV2.Content value="general" class="settings-v2-panel">
           <SettingsGeneralV2 sessionID={props.sessionID} />
         </TabsV2.Content>
-        <TabsV2.Content value="shortcuts" class="settings-v2-panel">
-          <SettingsKeybinds v2 />
+        <TabsV2.Content value="local-models" class="settings-v2-panel">
+          <SettingsLocalModelsV2 />
         </TabsV2.Content>
         <TabsV2.Content value="prompt" class="settings-v2-panel">
-          <SettingsPromptV2 directory={directory} />
+          <SettingsPromptV2 directory={directory} projects={projects} onPick={setPicked} />
         </TabsV2.Content>
         <TabsV2.Content value="team" class="settings-v2-panel">
           <SettingsTeamV2 />
@@ -132,4 +145,8 @@ export const DialogSettings: Component<{
       </TabsV2>
     </Dialog>
   )
+}
+
+function folderName(path: string) {
+  return path.split(/[\\/]/).filter(Boolean).pop() ?? path
 }

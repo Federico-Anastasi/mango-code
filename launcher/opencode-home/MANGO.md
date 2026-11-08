@@ -16,6 +16,12 @@ MCP server.
 - Verify before you claim: show the command's output, not the promise that it works.
 - Skills are invoked with the `skill` tool, by name. Don't look for them on disk.
 - The context is small (80-128k, not 200k): don't pour whole files into it when the part you need is enough.
+- When you finish a web page or a site, open it in the app's browser, the panel next to the chat, with
+  `chrome-devtools_new_page`. Serve it first with a local server, so it works as on the web (modules, `fetch`):
+  `Start-Process -WindowStyle Hidden bun -ArgumentList 'index.html' -WorkingDirectory <the site's folder>`, then
+  open `http://localhost:3000` (Bun is part of Mango Code: nothing to install). If the project has its own dev server
+  (`npm run dev` and the like), start that one the same way, in the background, and open its address. In the user's
+  own browser (`start`) only if they ask for it.
 
 ## Reading files
 

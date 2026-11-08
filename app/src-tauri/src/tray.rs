@@ -51,14 +51,14 @@ fn relabel(items: &[MenuItem<Wry>; 3]) {
 }
 
 pub fn show(app: &AppHandle) {
-    if let Some(window) = app.get_webview_window("main") {
+    if let Some(window) = crate::main_window(app) {
         let _ = window.unminimize();
         let _ = window.show();
         let _ = window.set_focus();
     }
 }
 
-fn quit(app: &AppHandle) {
+pub(crate) fn quit(app: &AppHandle) {
     if let Some(supervisor) = app.state::<crate::AppState>().sup.get() {
         supervisor.shutdown();
     }

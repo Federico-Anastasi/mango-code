@@ -441,6 +441,18 @@ export function Titlebar(props: {
                   <PreviewToggle opened={props.preview!.opened} toggle={props.preview!.toggle} />
                 </Show>
                 <TitlebarV2Right state={v2RightState()} />
+                <TooltipV2 placement="bottom" value={language.t("command.settings.open")}>
+                  <IconButtonV2
+                    type="button"
+                    variant="ghost-muted"
+                    size="large"
+                    class="shrink-0"
+                    icon={<IconV2 name="settings-gear" />}
+                    onClick={() => command.trigger("settings.open")}
+                    aria-label={language.t("command.settings.open")}
+                    data-action="titlebar-settings"
+                  />
+                </TooltipV2>
               </div>
             )
           }}

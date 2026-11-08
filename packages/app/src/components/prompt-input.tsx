@@ -73,7 +73,7 @@ import {
   type PromptInputSubmission,
 } from "./prompt-input/contracts"
 import { createPromptSubmit } from "./prompt-input/submit"
-import { appendDictation } from "./prompt-input/dictation"
+import { liveDictation } from "./prompt-input/dictation"
 import { PromptVoiceButton } from "./prompt-input/voice"
 import { PromptPopover, type AtOption, type SlashCommand } from "./prompt-input/slash-popover"
 import { PromptContextItems } from "./prompt-input/context-items"
@@ -263,6 +263,14 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     const model = props.controls.model.selection.current()
     if (!model) return true
     return model.capabilities?.input.image ?? true
+  })
+
+  const dictation = liveDictation(prompt.current, (next) => {
+    prompt.set(next.parts, next.cursor)
+    requestAnimationFrame(() => {
+      editorRef.focus()
+      setCursorPosition(editorRef, next.cursor)
+    })
   })
 
   const [store, setStore] = createPromptInputTransientState(
@@ -1585,16 +1593,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
 
             <div class="flex items-center gap-1 pointer-events-auto">
               <Show when={store.mode === "normal"}>
-                <PromptVoiceButton
-                  onText={(text) => {
-                    const next = appendDictation(prompt.current(), text)
-                    prompt.set(next.parts, next.cursor)
-                    requestAnimationFrame(() => {
-                      editorRef.focus()
-                      setCursorPosition(editorRef, next.cursor)
-                    })
-                  }}
-                />
+                <PromptVoiceButton onText={dictation.final} onPartial={dictation.partial} onClear={dictation.clear} />
               </Show>
               <Tooltip placement="top" inactive={!working() && blank()} value={tip()}>
                 <IconButton

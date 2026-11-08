@@ -45,7 +45,11 @@ export function settingsEffect(
     if ("error" in loaded) return failure(loaded.error, 500)
 
     if (request.method === "GET") {
-      const { model, items } = yield* store.provide({ directory }, prompt.items())
+      const listed = yield* store.provide({ directory }, prompt.items())
+      // The weights of the model that ran the folder's latest conversation: chosen in the chat, it can differ from
+      // the agent's default model, and its measurements are the ones there are.
+      const model = PromptMeasurement.measuredModel(directory) ?? listed.model
+      const items = listed.items
       const { valid } = loaded
       return HttpServerResponse.jsonUnsafe({
         directory,

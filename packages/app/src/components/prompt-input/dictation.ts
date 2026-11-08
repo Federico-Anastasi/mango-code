@@ -6,6 +6,7 @@ export type VoiceFailureKind =
   | "busy"
   | "service"
   | "empty"
+  | "silent"
   | "limit"
   | "timeout"
 
@@ -29,6 +30,40 @@ export function formatVoiceDuration(seconds: number) {
 }
 
 type DictationPart = { type: string; content?: string; start?: number; end?: number }
+
+type Dictated<T> = { parts: T[]; value: string; cursor: number }
+
+/**
+ * The dictated text goes into the prompt while it is spoken: each partial replaces the previous one, the final sentence
+ * takes its place, and `clear` (nothing recognized) puts the prompt back as it was. `read` gives the prompt's parts,
+ * `write` sets them.
+ */
+export function liveDictation<T extends DictationPart>(read: () => readonly T[], write: (next: Dictated<T>) => void) {
+  let base: readonly T[] | undefined
+  const show = (text: string) => {
+    base ??= read()
+    write(text.trim() ? appendDictation(base, text) : unchanged(base))
+  }
+  return {
+    partial: show,
+    final(text: string) {
+      show(text)
+      base = undefined
+    },
+    clear() {
+      if (base) write(unchanged(base))
+      base = undefined
+    },
+  }
+}
+
+function unchanged<T extends DictationPart>(parts: readonly T[]): Dictated<T> {
+  const value = parts
+    .filter((part) => part.type !== "image")
+    .map((part) => part.content ?? "")
+    .join("")
+  return { parts: [...parts], value, cursor: value.length }
+}
 
 // Appends the dictated text to the text parts of the prompt (images stay at the end, as the editor keeps
 // them), with a separating space if needed.

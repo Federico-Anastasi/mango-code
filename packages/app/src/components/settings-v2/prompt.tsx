@@ -1,6 +1,7 @@
 // mango-code: what goes into the prompt (server settings, route `/mango/settings`). Each item with its weight in
 // tokens, a switch, and the choice of whether the change applies to all folders or only to the open one.
 import { SegmentedControlItemV2, SegmentedControlV2 } from "@opencode-ai/ui/v2/segmented-control-v2"
+import { SelectV2 } from "@opencode-ai/ui/v2/select-v2"
 import { Switch } from "@opencode-ai/ui/v2/switch-v2"
 import { type Accessor, type Component, createResource, createSignal, For, Show } from "solid-js"
 import { useLanguage } from "@/context/language"
@@ -22,7 +23,11 @@ import "./settings-v2.css"
 
 type Scope = "all" | "folder"
 
-export const SettingsPromptV2: Component<{ directory: Accessor<string | undefined> }> = (props) => {
+export const SettingsPromptV2: Component<{
+  directory: Accessor<string | undefined>
+  projects: Accessor<{ worktree: string; name: string }[]>
+  onPick: (directory: string) => void
+}> = (props) => {
   const language = useLanguage()
   const serverSDK = useServerSDK()
   const [scope, setScope] = createSignal<Scope>("all")
@@ -96,6 +101,24 @@ export const SettingsPromptV2: Component<{ directory: Accessor<string | undefine
           when={props.directory()}
           fallback={<p class="settings-v2-prompt-note">{language.t("settings.prompt.noFolder")}</p>}
         >
+          <SettingsListV2>
+            <SettingsRowV2
+              title={language.t("settings.prompt.project.title")}
+              description={language.t("settings.prompt.project.description")}
+            >
+              <SelectV2
+                appearance="inline"
+                data-action="settings-prompt-project"
+                options={props.projects()}
+                current={props.projects().find((project) => project.worktree === props.directory())}
+                placement="bottom-end"
+                gutter={6}
+                value={(project) => project.worktree}
+                label={(project) => project.name}
+                onSelect={(project) => project && props.onPick(project.worktree)}
+              />
+            </SettingsRowV2>
+          </SettingsListV2>
           <p class="settings-v2-prompt-note">{language.t("settings.prompt.description")}</p>
           <Show when={error()}>{(message) => <p class="settings-v2-prompt-error">{message()}</p>}</Show>
           <Show when={settings()}>

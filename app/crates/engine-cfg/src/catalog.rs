@@ -144,6 +144,10 @@ pub(crate) struct ModelCfg {
     /// In MoEs, the thousandths of the weights that are read for each token (the chosen experts and the rest of the
     /// model), from the GGUF header; absent in dense ones, which read all of them.
     pub active_permille: Option<u64>,
+    /// A model for small graphics cards: it is proposed as the fastest only when no other recommended model fits on
+    /// the cards (it reads the fewest weights, and would win on every PC).
+    #[serde(default)]
+    pub fallback: bool,
 }
 
 /// The image encoder's compute on a GPU, beyond its weights: an estimate, which with Qwen3.8's F16 weights (885 MiB)

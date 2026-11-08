@@ -142,6 +142,23 @@ function myChrome() {
   }
 }
 
+// Does the browser on this port show Mango Code's own window (the app page or the web UI)? Then it is not the
+// panel: a navigation there would replace the app with the page. It happened with remote debugging turned on for
+// the whole app process, which gives every WebView2 of the app the same port.
+async function showsMangoCode(port) {
+  try {
+    const res = await fetch("http://127.0.0.1:" + port + "/json/list", { signal: AbortSignal.timeout(1500) });
+    const pages = res.ok ? await res.json() : [];
+    return pages.some(
+      (p) =>
+        p.type === "page" &&
+        (/^https?:\/\/tauri\.localhost\//.test(p.url) || (p.title === "Mango Code" && /^http:\/\/(127\.0\.0\.1|localhost):\d+\//.test(p.url))),
+    );
+  } catch {
+    return false;
+  }
+}
+
 async function decide() {
   const choice = String(process.env.MANGO_CHROME || "").toLowerCase();
   const forceReal = choice === "real";
@@ -171,11 +188,14 @@ async function decide() {
   // 1. the app's preview panel: it is the agent's browser.
   const panel = panelPort();
   if (panel && (await alive(panel))) {
-    return { flags: ["--browserUrl", "http://127.0.0.1:" + panel], mode: "app preview panel (port " + panel + ")" };
+    if (!(await showsMangoCode(panel))) {
+      return { flags: ["--browserUrl", "http://127.0.0.1:" + panel], mode: "app preview panel (port " + panel + ")" };
+    }
+    process.stderr.write("mango-chrome-mcp | port " + panel + " shows Mango Code's own window, not the panel: not used\n");
   }
 
   // 2. already running: always the best choice, nothing to start.
-  if (!forceReal && (await hasHttpJson(9333))) {
+  if (!forceReal && (await hasHttpJson(9333)) && !(await showsMangoCode(9333))) {
     return { flags: ["--browserUrl", "http://127.0.0.1:9333"], mode: "mango-code browser (9333)" };
   }
   // 3. seeded: ours beats yours, because it has the logins AND doesn't show the banner.
