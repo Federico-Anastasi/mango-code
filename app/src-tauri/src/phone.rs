@@ -13,7 +13,10 @@ struct Service(Result<Phone, String>);
 /// later, and until then the phone gets `502`.
 pub fn install(app: &AppHandle) {
     let service = mango_common::data_dir()
-        .and_then(|data| Phone::new(&data, &data.join("logs"), listen_on(), crate::phone_port(), crate::agent_port()))
+        .and_then(|data| {
+            let reports = std::sync::Arc::new(crate::report::PhoneReports(app.clone()));
+            Phone::new(&data, &data.join("logs"), listen_on(), crate::phone_port(), crate::agent_port(), reports)
+        })
         .map_err(|e| format!("{e:#}"));
     app.manage(Service(service));
 }

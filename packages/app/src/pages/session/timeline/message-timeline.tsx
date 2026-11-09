@@ -1303,7 +1303,8 @@ export function MessageTimeline(props: {
         const statsRow = row as Accessor<TimelineRowByTag<"TurnStats">>
         return (
           <TimelineRowFrame row={statsRow}>
-            <div data-slot="session-turn-message-container" class="w-full px-4 md:px-5">
+            {/* the line of the details of the answer (model, time) is right above: a little air between the two */}
+            <div data-slot="session-turn-message-container" class="w-full px-4 pt-1.5 md:px-5">
               <TurnStats messages={assistantMessagesByParent().get(statsRow().userMessageID) ?? emptyAssistantMessages} />
             </div>
           </TimelineRowFrame>

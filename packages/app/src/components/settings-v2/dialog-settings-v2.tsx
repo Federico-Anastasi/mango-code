@@ -1,4 +1,4 @@
-import { Component, createMemo, createSignal, Show, startTransition } from "solid-js"
+import { Component, createMemo, createResource, createSignal, Show, startTransition } from "solid-js"
 import { Dialog } from "@opencode-ai/ui/v2/dialog-v2"
 import { TabsV2 } from "@opencode-ai/ui/v2/tabs-v2"
 import { Icon } from "@opencode-ai/ui/icon"
@@ -17,6 +17,7 @@ import { useLayout } from "@/context/layout"
 import { useTabs } from "@/context/tabs"
 import { useServerSync } from "@/context/server-sync"
 import { inMangoDesktop } from "@/utils/mango-desktop"
+import { reportTarget } from "@/utils/report"
 import { mangoVersion } from "@/utils/mango-version"
 
 export const DialogSettings: Component<{
@@ -29,6 +30,7 @@ export const DialogSettings: Component<{
   const tabs = useTabs()
   const serverSync = useServerSync()
   const [tab, setTab] = createSignal(props.defaultValue ?? "general")
+  const [report] = createResource(reportTarget)
   // The project the settings are about: the one picked in the page, else the open tab's, else the one selected in
   // the home, else the first project. Opened from the home, the pages that depend on a project are never empty.
   const [picked, setPicked] = createSignal<string>()
@@ -91,7 +93,8 @@ export const DialogSettings: Component<{
                         {language.t("settings.tab.team")}
                       </TabsV2.Trigger>
                     </Show>
-                    <Show when={inMangoDesktop()}>
+                    {/* "Report a problem" is also from the phone: the app on the computer sends it */}
+                    <Show when={report()}>
                       <TabsV2.Trigger value="help">
                         <Icon name="help" />
                         {language.t("settings.tab.help")}

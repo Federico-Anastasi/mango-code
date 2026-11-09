@@ -25,7 +25,6 @@ use tauri::{
     webview::{NewWindowResponse, PageLoadEvent, WebviewBuilder},
     AppHandle, LogicalPosition, LogicalSize, Manager, Rect, Url, WebviewUrl, Window,
 };
-use tauri_plugin_opener::OpenerExt;
 
 const LABEL: &str = "preview";
 const BLANK: &str = "about:blank";
@@ -119,7 +118,7 @@ pub fn install(app: &AppHandle) -> anyhow::Result<()> {
             if !scheme_allowed(url) {
                 // mailto and the like: to the Windows program that handles them, never inside the panel
                 if matches!(url.scheme(), "mailto") {
-                    let _ = for_nav.opener().open_url(url.as_str(), None::<&str>);
+                    let _ = crate::supervisor::open_outside_job(url.as_str());
                 }
                 return false;
             }
@@ -251,7 +250,7 @@ pub fn preview_external(app: AppHandle) -> Result<(), BridgeError> {
     if !matches!(url.scheme(), "http" | "https" | "file") {
         return Err(err("invalid", tr!("niente da aprire: {url}", "nothing to open: {url}")));
     }
-    app.opener().open_url(url.as_str(), None::<&str>).map_err(io)
+    crate::supervisor::open_outside_job(url.as_str()).map_err(io)
 }
 
 #[cfg(test)]

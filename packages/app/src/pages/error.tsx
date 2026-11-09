@@ -3,9 +3,11 @@ import * as Sentry from "@sentry/solid"
 import { Logo } from "@opencode-ai/ui/logo"
 import { Button } from "@opencode-ai/ui/button"
 import { Switch } from "@opencode-ai/ui/v2/switch-v2"
-import { Component, createSignal, onMount, Show } from "solid-js"
+import { Component, createResource, createSignal, onMount, Show } from "solid-js"
 import { createStore } from "solid-js/store"
 import { usePlatform } from "@/context/platform"
+import { createAttachments, ReportAttachments } from "@/components/report-attachments"
+import { reportTarget } from "@/utils/report"
 import { useLanguage } from "@/context/language"
 import { errorDescriptionKey } from "./error-description"
 
@@ -223,6 +225,9 @@ export const ErrorPage: Component<ErrorPageProps> = (props) => {
   const platform = usePlatform()
   const language = useLanguage()
   const formattedError = () => formatError(props.error, language.t)
+  // the files the user attaches to the report (where the report can carry them)
+  const [target] = createResource(reportTarget)
+  const attachments = createAttachments(() => target()?.info.maxBytes ?? 0)
   let recordedFatalError: Promise<void> | undefined
   const [store, setStore] = createStore({
     actionError: undefined as string | undefined,
@@ -305,9 +310,10 @@ export const ErrorPage: Component<ErrorPageProps> = (props) => {
               {language.t("error.page.action.exportLogs")}
             </Button>
           </Show>
-          {/* mango-code: one click sends the error, the logs and the window to Mango Code (anonymized) */}
-          <Show when={window.__MANGO_DESKTOP__}>
-            {(bridge) => {
+          {/* mango-code: one click sends the error, the logs, the window and the files the user attached to Mango Code
+              (anonymized, except the files); from the phone too: the app on the computer sends it */}
+          <Show when={target()}>
+            {(to) => {
               const [state, setState] = createSignal<"idle" | "sending" | "sent" | "github">("idle")
               const label = () =>
                 ({
@@ -322,8 +328,8 @@ export const ErrorPage: Component<ErrorPageProps> = (props) => {
                   disabled={state() !== "idle"}
                   onClick={() => {
                     setState("sending")
-                    bridge()
-                      .reportProblem({ error: formattedError(), screenshot: store.screenshot })
+                    to()
+                      .send({ error: formattedError(), screenshot: store.screenshot && to().info.screenshot, files: attachments.files() })
                       .then((done) => setState(done.sent ? "sent" : "github"))
                       .catch((err: unknown) => {
                         setState("idle")
@@ -377,7 +383,12 @@ export const ErrorPage: Component<ErrorPageProps> = (props) => {
             </Show>
           </Show>
         </div>
-        <Show when={window.__MANGO_DESKTOP__}>
+        <Show when={target()?.info.attachments}>
+          <div class="w-full max-w-md">
+            <ReportAttachments attachments={attachments} />
+          </div>
+        </Show>
+        <Show when={target()?.info.screenshot}>
           <div class="flex flex-col items-center gap-1 text-center max-w-2xl" data-component="report-screenshot">
             <Switch checked={store.screenshot} onChange={(checked) => setStore("screenshot", checked)}>
               {language.t("settings.help.report.screenshot.title")}

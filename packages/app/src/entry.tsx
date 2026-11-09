@@ -9,6 +9,7 @@ import { createBrowserDraftStore } from "@/utils/draft-store"
 import { dict as en } from "@/i18n/en"
 import { authFromToken } from "@/utils/server"
 import { mangoPlatform } from "@/utils/mango-desktop"
+import { followVisibleArea } from "@/utils/visible-area"
 import pkg from "../package.json"
 import { ServerConnection } from "./context/server"
 
@@ -138,6 +139,7 @@ if (import.meta.env.VITE_SENTRY_DSN) {
 }
 
 if (root instanceof HTMLElement) {
+  followVisibleArea(root)
   const auth = authFromToken(new URLSearchParams(location.search).get("auth_token"))
   void loadInitialLocale({ url: getCurrentUrl(), auth }).then((locale) => {
     clearAuthToken()

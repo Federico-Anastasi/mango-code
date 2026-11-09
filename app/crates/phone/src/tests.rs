@@ -50,6 +50,27 @@ fn agent(reply: &'static str) -> Agent {
     Agent { port, received }
 }
 
+/// The app's side of the reports: it keeps what arrives, refuses what starts with "bad".
+struct FakeReports {
+    received: Mutex<Vec<Vec<u8>>>,
+}
+
+impl Reports for FakeReports {
+    fn max_body(&self) -> u64 {
+        100
+    }
+    fn info(&self) -> serde_json::Value {
+        serde_json::json!({ "maxBytes": 60 })
+    }
+    fn submit(&self, body: Vec<u8>) -> std::result::Result<serde_json::Value, (u16, String)> {
+        if body.starts_with(b"bad") {
+            return Err((422, "this report is not good".into()));
+        }
+        self.received.lock().unwrap().push(body);
+        Ok(serde_json::json!({ "sent": true }))
+    }
+}
+
 fn free_port() -> u16 {
     TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port()
 }
@@ -58,13 +79,15 @@ struct Fixture {
     t: Phone,
     port: u16,
     data: tempfile::TempDir,
+    reports: Arc<FakeReports>,
 }
 
 fn fixture(agent: &Agent) -> Fixture {
     let data = tempfile::tempdir().unwrap();
     let port = free_port();
-    let t = Phone::new(data.path(), &data.path().join("logs"), Ipv4Addr::LOCALHOST, port, agent.port).unwrap();
-    Fixture { t, port, data }
+    let reports = Arc::new(FakeReports { received: Mutex::new(Vec::new()) });
+    let t = Phone::new(data.path(), &data.path().join("logs"), Ipv4Addr::LOCALHOST, port, agent.port, reports.clone()).unwrap();
+    Fixture { t, port, data, reports }
 }
 
 impl Fixture {
@@ -223,6 +246,53 @@ fn app_routes_methods_and_chunked_bodies_are_refused() {
     assert!(a.received.try_recv().is_err());
 }
 
+/// The reports are the app's, not the agent's: they need the session like everything else, they carry a body the app
+/// reads, they are bounded and nothing of them reaches the agent.
+#[test]
+fn problem_reports_go_to_the_app_with_the_session_and_within_the_limit() {
+    let a = agent(OK);
+    let p = fixture(&a);
+    p.t.set_enabled(true).unwrap();
+    let post = |extra: &str, body: &str| {
+        format!("POST /phone/report HTTP/1.1\r\nHost: {{host}}\r\n{extra}Content-Length: {}\r\n\r\n{body}", body.len())
+    };
+    // without a session: 401, and the app saw nothing
+    assert_eq!(status(&p.send(&post("", "hello"))), "401");
+    assert_eq!(status(&p.send("GET /phone/report HTTP/1.1\r\nHost: {host}\r\nAccept: application/json\r\n\r\n")), "401");
+    assert!(p.reports.received.lock().unwrap().is_empty());
+
+    let cookie = p.enter();
+    let cookie = format!("Cookie: mango_phone={cookie}\r\n");
+    // a foreign page cannot send one
+    assert_eq!(status(&p.send(&post(&format!("{cookie}Origin: https://foreign.example\r\n"), "hello"))), "403");
+
+    // the page asks what it may send
+    let info = p.send(&format!("GET /phone/report HTTP/1.1\r\nHost: {{host}}\r\n{cookie}\r\n"));
+    assert_eq!(status(&info), "200");
+    assert!(info.ends_with("{\"maxBytes\":60}"), "{info}");
+
+    // a report: the app gets the body as it is
+    let ok = p.send(&post(&format!("{cookie}Origin: http://{{host}}\r\n"), "hello"));
+    assert_eq!(status(&ok), "200", "{ok}");
+    assert!(ok.ends_with("{\"sent\":true}"));
+    assert_eq!(p.reports.received.lock().unwrap().as_slice(), [b"hello".to_vec()]);
+    // the app says no: its status and its sentence reach the phone
+    let bad = p.send(&post(&cookie, "bad report"));
+    assert_eq!(status(&bad), "422");
+    assert!(bad.contains("this report is not good"));
+    // too big: refused before reading it
+    let big = p.send(&post(&cookie, &"x".repeat(101)));
+    assert_eq!(status(&big), "413", "{big}");
+    // other methods, no length
+    assert_eq!(status(&p.send(&format!("DELETE /phone/report HTTP/1.1\r\nHost: {{host}}\r\n{cookie}\r\n"))), "405");
+    assert_eq!(status(&p.send(&format!("POST /phone/report HTTP/1.1\r\nHost: {{host}}\r\n{cookie}\r\n"))), "400");
+    // the agent never saw any of it, and the log has the outcome and no content
+    assert!(a.received.try_recv().is_err());
+    let log = p.log();
+    assert!(log.contains("\"report\"") && !log.contains("hello"));
+    assert_eq!(p.reports.received.lock().unwrap().len(), 1);
+}
+
 #[test]
 fn a_new_key_and_turning_off_drop_the_sessions() {
     let a = agent(OK);
@@ -287,7 +357,7 @@ fn on_and_sessions_stay_after_a_restart() {
     p.t.set_enabled(true).unwrap();
     let cookie = p.enter();
     p.t.d.listener.lock().unwrap().take().unwrap().close();
-    let t = Phone::new(p.data.path(), &p.data.path().join("logs"), Ipv4Addr::LOCALHOST, p.port, a.port).unwrap();
+    let t = Phone::new(p.data.path(), &p.data.path().join("logs"), Ipv4Addr::LOCALHOST, p.port, a.port, p.reports.clone()).unwrap();
     assert!(t.state().listening);
     let r = p.send(&format!("GET /x HTTP/1.1\r\nHost: {{host}}\r\nCookie: mango_phone={cookie}\r\n\r\n"));
     assert_eq!(status(&r), "200");

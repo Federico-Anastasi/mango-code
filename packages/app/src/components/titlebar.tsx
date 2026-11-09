@@ -363,8 +363,6 @@ export function Titlebar(props: {
               ].filter((v) => v !== undefined)
             })
 
-            const [tabsAreOverflowing, setTabsAreOverflowing] = createSignal(false)
-
             return (
               <div
                 class="h-full flex-1 overflow-hidden flex flex-row items-center gap-1.5 px-2 md:pr-3"
@@ -405,8 +403,6 @@ export function Titlebar(props: {
                 <TitlebarTabStrip
                   tabs={tabsStore}
                   currentTab={currentTab}
-                  forceTruncate={tabsAreOverflowing()}
-                  onOverflowChange={setTabsAreOverflowing}
                   onNavigate={(tab, el) => {
                     tabs.select(tab)
                     el?.scrollIntoView({ behavior: "instant" })

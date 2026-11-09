@@ -19,6 +19,7 @@ import { sessionHasOpenTab, useTabs } from "@/context/tabs"
 import { compareSessionTime, displayName, errorMessage, projectForSession } from "@/pages/layout/helpers"
 import { useSessionTabAvatarState } from "@/pages/layout/project-avatar-state"
 import { pathKey } from "@/utils/path-key"
+import { projectsToOpen } from "./server-projects"
 import { showToast } from "@/utils/toast"
 import { inMangoDesktop } from "@/utils/mango-desktop"
 import { Binary } from "@opencode-ai/core/util/binary"
@@ -87,15 +88,20 @@ export function createHomeSessionsController(home: HomeController) {
     refetchOnMount: "always",
     refetchOnReconnect: true,
   }))
-  // mango-code: the project list lives in the browser. A browser that never had one (the phone, the first time) starts
-  // from the folders of the conversations the server knows, the most recent on top; the app on the PC already has its own.
+  // mango-code: the project list lives in the browser, but the agent knows every project ever opened, from the computer or
+  // from another browser. A browser that does not have them (the phone, the first time or after a project was opened on
+  // the computer) adds them every time Home opens, except the ones the user closed here; the app on the PC keeps its own.
   createEffect(() => {
     const ctx = home.server.focusedContext()
-    const index = sessionLoad.data
-    if (inMangoDesktop() || !ctx || !index || ctx.projects.known()) return
-    index.sessions
-      .toSorted((a, b) => a.time.updated - b.time.updated)
-      .forEach((session) => ctx.projects.open(session.directory))
+    if (inMangoDesktop() || !ctx) return
+    void ctx.sdk.client.project.list().then((result) => {
+      const known = result.data ?? []
+      projectsToOpen(
+        known,
+        ctx.projects.list().map((project) => project.worktree),
+        ctx.projects.recentlyClosed().map((project) => project.worktree),
+      ).forEach((directory) => ctx.projects.open(directory))
+    })
   })
   const refreshSessions = () => void sessionLoad.refetch()
   const indexedSessions = createMemo(() =>

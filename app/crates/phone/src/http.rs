@@ -3,7 +3,8 @@
 //! Order of the checks: the requested address (`Host`) must be numeric, otherwise `403`; if there is an `Origin` it
 //! must be `http://<Host>`, otherwise `403`; `/phone` is the entry with the key; every other request without a valid
 //! session `401`; methods other than `GET`, `HEAD`, `POST`, `PUT`, `PATCH`, `DELETE` `405`; the routes that only serve
-//! the app on the PC (`PC_ONLY`) `403`; a chunked body (`Transfer-Encoding`) `400`.
+//! the app on the PC (`PC_ONLY`) `403`; a chunked body (`Transfer-Encoding`) `400`. After these, `/phone/report` is
+//! answered here by the app's `Reports` (`report`); everything else is forwarded.
 //!
 //! The forwarding goes to `127.0.0.1:<agent port>` with the agent's `Host` and, if there was one, `Origin` (to the
 //! agent it is its own web UI) and without `Cookie`, `Referer`, `Authorization` or the proxy headers. One request per
@@ -23,6 +24,8 @@ const COOKIE: &str = "mango_phone";
 const MAX_HEAD: usize = 64 * 1024;
 /// The time to send the head and the body: a connection that sends nothing doesn't hold a thread forever.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+/// The route answered here, not by the agent: the problem report (see `Reports`).
+const REPORT: &str = "/phone/report";
 const METHODS: &[&str] = &["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"];
 /// Agent routes the web UI doesn't use: the app calls them at start (`warmup`) and the attached apps (`extra-folders`).
 const PC_ONLY: &[&str] = &["/mango/warmup", "/mango/extra-folders"];
@@ -184,8 +187,47 @@ fn handle(c: &TcpStream, d: &Inner) {
     let Ok(length) = head.header("content-length").map_or(Ok(0), |v| v.parse::<u64>()) else {
         return refuse(400, "invalid Content-Length", tr!("Content-Length non valido", "invalid Content-Length"));
     };
+    if head.path() == REPORT {
+        return report(c, d, &head, rest, length, &address);
+    }
     if let Err(e) = forward(c, d, &head, rest, length) {
         respond(c, 502, "application/json", &error(&tr!("l'agente non risponde: {e:#}", "the agent does not answer: {e:#}")), &[]);
+    }
+}
+
+/// `/phone/report`: `GET` says what a report may carry, `POST` hands one to the app. The body must have a length and
+/// stay within what the app allows; what comes back is the app's reply or its status and sentence. The log has the
+/// outcome and never the content.
+fn report(c: &TcpStream, d: &Inner, head: &Head, rest: Vec<u8>, length: u64, address: &str) {
+    let log = |outcome: u16| d.log(serde_json::json!({ "event": "report", "outcome": outcome, "address": address, "bytes": length }));
+    let fail = |status: u16, message: &str| {
+        log(status);
+        respond(c, status, "application/json", &error(message), &[]);
+    };
+    match head.method.as_str() {
+        "GET" => respond(c, 200, "application/json", &d.reports.info().to_string(), &["Cache-Control: no-store"]),
+        "POST" => {
+            if head.header("content-length").is_none() {
+                return fail(400, &tr!("serve Content-Length", "Content-Length is required"));
+            }
+            if length > d.reports.max_body() {
+                return fail(413, &tr!("la segnalazione è troppo grande", "the report is too large"));
+            }
+            let mut body = rest;
+            body.truncate(length as usize);
+            let missing = length - body.len() as u64;
+            if (&*c).take(missing).read_to_end(&mut body).is_err() || body.len() as u64 != length {
+                return fail(400, &tr!("segnalazione incompleta", "incomplete report"));
+            }
+            match d.reports.submit(body) {
+                Ok(reply) => {
+                    log(200);
+                    respond(c, 200, "application/json", &reply.to_string(), &["Cache-Control: no-store"]);
+                }
+                Err((status, message)) => fail(status, &message),
+            }
+        }
+        _ => fail(405, &tr!("metodo non ammesso", "method not allowed")),
     }
 }
 
@@ -410,11 +452,14 @@ fn respond(c: &TcpStream, status: u16, content_type: &str, body: &str, extra: &[
 
 fn reason(status: u16) -> &'static str {
     match status {
+        200 => "OK",
         303 => "See Other",
         400 => "Bad Request",
         401 => "Unauthorized",
         403 => "Forbidden",
         405 => "Method Not Allowed",
+        413 => "Payload Too Large",
+        422 => "Unprocessable Content",
         500 => "Internal Server Error",
         502 => "Bad Gateway",
         _ => "",

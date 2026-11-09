@@ -148,6 +148,11 @@ pub fn last_page_file() -> Result<PathBuf> {
     Ok(data_dir()?.join("last-page.txt"))
 }
 
+/// File with the zoom of the app's window (absent: 100%).
+pub fn zoom_file() -> Result<PathBuf> {
+    Ok(data_dir()?.join("zoom.txt"))
+}
+
 fn is_dist(p: &Path) -> bool {
     p.join("mango-models.json").is_file()
 }

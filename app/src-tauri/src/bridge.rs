@@ -69,11 +69,22 @@ pub const INIT_SCRIPT: &str = r#"
   };
 
   window.__MANGO_DESKTOP__ = Object.freeze({
-    // "Report a problem" ({ error?, note?, screenshot? }): logs, computer and (if asked) the window go to Mango Code,
-    // anonymized; resolves with { sent: true }. A build without the Sentry address writes a file on the Desktop and
-    // opens a GitHub issue instead: { sent: false, file }.
-    reportProblem: (o) =>
-      call("report_problem", { error: o?.error ?? null, note: o?.note ?? null, screenshot: !!o?.screenshot, page: location.href }),
+    // "Report a problem" ({ error?, note?, screenshot?, files? }; files are File objects the user chose, they go as they
+    // are): logs, computer and (if asked) the window go to Mango Code, anonymized; resolves with { sent: true }. A build
+    // without the Sentry address writes a file on the Desktop and opens a GitHub issue instead: { sent: false, file }.
+    // The body is the one report.rs reads: the length of a JSON header (4 bytes), the header, the files one after the other.
+    reportProblem: async (o) => {
+      const files = Array.from(o?.files ?? []);
+      const header = new TextEncoder().encode(JSON.stringify({
+        error: o?.error ?? null, note: o?.note ?? null, page: location.href, screenshot: !!o?.screenshot,
+        files: files.map((f) => ({ name: f.name, type: f.type, size: f.size })),
+      }));
+      const length = new Uint8Array(4);
+      new DataView(length.buffer).setUint32(0, header.length);
+      return call("report_problem", await new Blob([length, header, ...files]).arrayBuffer());
+    },
+    // What a report may carry: { maxBytes (the user's files together), attachments, screenshot }
+    reportInfo: () => call("report_info"),
     // the app's logs folder in File Explorer
     openLogs: () => call("open_logs_folder"),
     // Automatic updates: state() and check() give { status, version?, percent?, message? } (the web UI's UpdaterState);
@@ -154,6 +165,14 @@ pub const INIT_SCRIPT: &str = r#"
   addEventListener("load", sync);
   matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => setTimeout(sync, 50));
   setInterval(sync, 1000);
+
+  // The zoom (Ctrl+ / Ctrl- / Ctrl+0 are the browser's): after a change of the page scale the app
+  // remembers it for the next start.
+  let zooming;
+  addEventListener("resize", () => {
+    clearTimeout(zooming);
+    zooming = setTimeout(() => call("remember_zoom", { pageScale: devicePixelRatio }).catch(() => {}), 800);
+  });
 
   // Last page of the web UI (project or conversation): the app reopens it at the next start.
   let page = "";
@@ -334,19 +353,17 @@ async fn read_clipboard_image() -> Result<Response, BridgeError> {
 // ---------------------------------------------------------------- external links
 
 /// Opens in the default browser only http, https and mailto: no local files or other schemes.
-fn open_in_browser(app: &AppHandle, url: &str) -> Result<(), BridgeError> {
+fn open_in_browser(url: &str) -> Result<(), BridgeError> {
     let parsed = Url::parse(url).map_err(|e| err("invalid", format!("{url}: {e}")))?;
     if !matches!(parsed.scheme(), "http" | "https" | "mailto") {
         return Err(err("invalid", tr!("schema non ammesso: {}", "scheme not allowed: {}", parsed.scheme())));
     }
-    app.opener()
-        .open_url(parsed.as_str(), None::<&str>)
-        .map_err(|e| err("io", format!("{url}: {e}")))
+    crate::supervisor::open_outside_job(parsed.as_str()).map_err(|e| err("io", format!("{url}: {e}")))
 }
 
 #[tauri::command]
-fn open_external(app: AppHandle, url: String) -> Result<(), BridgeError> {
-    open_in_browser(&app, &url)
+fn open_external(url: String) -> Result<(), BridgeError> {
+    open_in_browser(&url)
 }
 
 /// A page of the app itself: local loading page or web UI on the agent server. Nothing else may take the window's
@@ -455,9 +472,7 @@ async fn open_path(app: AppHandle, path: String) -> Result<(), BridgeError> {
     if real.is_file() && is_executable(&real) {
         return Err(err("blocked_type", real.display().to_string()));
     }
-    app.opener()
-        .open_path(plain(&real).to_string_lossy(), None::<&str>)
-        .map_err(|e| err("io", format!("{}: {e}", real.display())))
+    crate::supervisor::open_outside_job(&plain(&real).to_string_lossy()).map_err(|e| err("io", format!("{}: {e}", real.display())))
 }
 
 /// Shows the file in File Explorer, already selected.
@@ -541,6 +556,7 @@ pub fn install(app: &App) -> tauri::Result<()> {
                 reveal_path,
                 set_titlebar_color,
                 remember_page,
+                crate::zoom::remember_zoom,
                 open_models,
                 crate::preview::preview_place,
                 crate::preview::preview_go,
@@ -558,6 +574,7 @@ pub fn install(app: &App) -> tauri::Result<()> {
                 crate::phone::phone_new_key,
                 crate::report::ui_log,
                 crate::report::report_problem,
+                crate::report::report_info,
                 crate::report::open_logs_folder,
                 crate::updater::update_state,
                 crate::updater::update_check,
@@ -572,7 +589,6 @@ pub fn window<'a>(
     builder: WebviewWindowBuilder<'a, Wry, App>,
     app: &AppHandle,
 ) -> WebviewWindowBuilder<'a, Wry, App> {
-    let for_popups = app.clone();
     let for_nav = app.clone();
     builder
         .initialization_script(INIT_SCRIPT)
@@ -580,7 +596,7 @@ pub fn window<'a>(
         .disable_drag_drop_handler()
         // target=_blank and window.open: never a second app window, always the default browser
         .on_new_window(move |url, _| {
-            if let Err(e) = open_in_browser(&for_popups, url.as_str()) {
+            if let Err(e) = open_in_browser(url.as_str()) {
                 eprintln!("external link not opened: {}", e.message);
             }
             NewWindowResponse::Deny
@@ -594,7 +610,7 @@ pub fn window<'a>(
             if is_internal(url) {
                 return true;
             }
-            if let Err(e) = open_in_browser(&for_nav, url.as_str()) {
+            if let Err(e) = open_in_browser(url.as_str()) {
                 eprintln!("external link not opened: {}", e.message);
             }
             false

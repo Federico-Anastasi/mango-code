@@ -93,8 +93,6 @@ export function createServerProjects<T extends ServerProjectState>(input: {
   }
   return {
     list: current,
-    // mango-code: true if this browser has already had a list for the server (even an empty one, after closing everything).
-    known: () => input.store.projects[input.scope()] !== undefined,
     recentlyClosed: currentClosed,
     remove,
     open(directory: string) {

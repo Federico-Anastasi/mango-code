@@ -23,6 +23,7 @@ mod phone;
 mod tray;
 mod report;
 mod updater;
+mod zoom;
 
 use anyhow::{Context, Result};
 use mango_common::{port_busy, free_port, tr, Paths};
@@ -621,6 +622,8 @@ pub fn run() {
                 .theme(Some(tauri::Theme::Dark))
                 .inner_size(1360.0, 880.0)
                 .min_inner_size(900.0, 600.0)
+                // Ctrl+ / Ctrl- / Ctrl+0: the browser's own zoom (`zoom.rs` remembers it)
+                .zoom_hotkeys_enabled(true)
                 .visible(!service_mode());
             // An instance with its own data (MANGO_DATA) keeps its own WebView2 data too: two WebView2 with
             // different options (the remote debugging of the tests) on the same folder do not start.
@@ -636,6 +639,9 @@ pub fn run() {
                 ));
             }
             let main = bridge::window(window, app.handle()).build()?;
+            if let Some(zoom) = mango_common::zoom_file().ok().and_then(|f| zoom::read(&f)) {
+                let _ = main.set_zoom(zoom);
+            }
             let _ = app.state::<AppState>().main.set(main);
             // The Preview panel is born with the window and before the agent: the browser
             // server connects to its port. If it is not born the app starts anyway, with the

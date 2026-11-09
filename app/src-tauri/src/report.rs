@@ -5,15 +5,23 @@
 //!   and the calls to the app that take more than a second. They end up in `logs\ui.log`, next to the logs of the
 //!   agent and the engine.
 //! - `report_problem` ("Report a problem"): one click. With a Sentry address in the build (`MANGO_SENTRY_DSN`) the
-//!   report is sent there: an event with what the user wrote, the error and the computer as separate fields, and two
-//!   attachments, `report.txt` (summary and the end of every log) and `screenshot.png` (only if the user leaves the box
-//!   ticked). Without it (a build of your own), the same text goes to a file on the Desktop and a GitHub issue opens
-//!   already filled in. In both cases the text is anonymized first (`anonymize`).
+//!   report is sent there: an event with what the user wrote, the error and the computer as separate fields, and
+//!   attachments: `report.txt` (summary and the end of every log), `screenshot.png` (only if the user leaves the box
+//!   ticked) and the files the user chose or pasted, which go as they are, untouched. Without the address (a build of
+//!   your own), the text goes to a file on the Desktop and a GitHub issue opens already filled in, and there are no
+//!   attachments. The text is anonymized first (`anonymize`), the user's files are not.
+//! - What the page sends is one body (`Submission::parse`): 4 bytes with the length of a JSON header (`error`, `note`,
+//!   `page`, `screenshot`, `files` with name, type and size), the header, then the bytes of the files one after the
+//!   other. The same body comes from the window (the bridge) and from the phone (`PhoneReports`, `/phone/report`).
+//! - The limits: Sentry takes at most 40 MB for a request and 200 MB of attachments per event (its documentation on
+//!   attachments). The request goes out uncompressed, so it must stay under 40 MB with the report
+//!   text and the screenshot in it: the user's files may add up to `FILES_MAX`, and the whole envelope is measured
+//!   before sending (`ENVELOPE_MAX`). A file that is too large is refused with a sentence, never dropped.
 
 use crate::bridge::{err, BridgeError};
 use mango_common::tr;
 use regex::Regex;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::os::windows::process::CommandExt;
@@ -38,6 +46,17 @@ const TAIL: u64 = 256 * 1024;
 /// The error in the issue address: the whole of it is in the file, and an address that is too long is cut by the browser.
 const ERROR_IN_ISSUE: usize = 1500;
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+/// What Sentry takes for a request (bytes). The envelope goes out uncompressed.
+const ENVELOPE_MAX: usize = 40_000_000;
+/// What the user's files may add up to (bytes): `ENVELOPE_MAX` minus room for `report.txt` (the end of up to a dozen logs)
+/// and a screenshot of a large window.
+pub const FILES_MAX: usize = 30_000_000;
+/// The most the JSON header of a report may weigh: the user's note and an error text.
+const HEADER_MAX: usize = 256 * 1024;
+
+fn megabytes(bytes: usize) -> String {
+    format!("{:.1} MB", bytes as f64 / 1_000_000.0)
+}
 
 /// One line (or one indented block) in `logs\ui.log`.
 #[tauri::command]
@@ -60,9 +79,9 @@ pub fn ui_log(level: String, text: String, page: Option<String>) -> Result<(), B
 
 /// The logs folder in File Explorer.
 #[tauri::command]
-pub fn open_logs_folder(app: AppHandle) -> Result<(), BridgeError> {
+pub fn open_logs_folder() -> Result<(), BridgeError> {
     let logs = mango_common::data_dir().map_err(|e| err("io", e.to_string()))?.join("logs");
-    app.opener().open_path(logs.display().to_string(), None::<&str>).map_err(|e| err("io", format!("{}: {e}", logs.display())))
+    crate::supervisor::open_outside_job(&logs.display().to_string()).map_err(|e| err("io", format!("{}: {e}", logs.display())))
 }
 
 #[derive(Serialize)]
@@ -72,44 +91,188 @@ pub struct Sent {
     file: Option<String>,
 }
 
-/// "Report a problem". `error`: what the page knows of the problem (the error pages pass theirs); `note`: what the
-/// user wrote; `screenshot`: whether to attach the window.
+/// What a report may carry, for the page that shows the form (the bridge's `report_info` and `GET /phone/report`).
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReportInfo {
+    /// What the user's files may add up to, in bytes.
+    max_bytes: usize,
+    /// Whether files can be attached: only when the report goes to Sentry (a build of your own writes a text file).
+    attachments: bool,
+    /// Whether the window can be photographed: not from the phone, where the window is the computer's.
+    screenshot: bool,
+}
+
+impl ReportInfo {
+    fn new(screenshot: bool) -> ReportInfo {
+        ReportInfo { max_bytes: FILES_MAX, attachments: SENTRY_DSN.is_some(), screenshot: screenshot && SENTRY_DSN.is_some() }
+    }
+}
+
 #[tauri::command]
-pub async fn report_problem(
-    app: AppHandle,
+pub fn report_info() -> ReportInfo {
+    ReportInfo::new(true)
+}
+
+/// A file the user chose or pasted: it goes as it is.
+struct Attachment {
+    name: String,
+    content_type: String,
+    bytes: Vec<u8>,
+}
+
+/// What the page sends (see the top of the file).
+struct Submission {
     error: Option<String>,
     note: Option<String>,
     page: Option<String>,
-    screenshot: Option<bool>,
-) -> Result<Sent, BridgeError> {
-    let version = app.package_info().version.to_string();
+    screenshot: bool,
+    files: Vec<Attachment>,
+}
+
+#[derive(Deserialize)]
+struct Header {
+    error: Option<String>,
+    note: Option<String>,
+    page: Option<String>,
+    #[serde(default)]
+    screenshot: bool,
+    #[serde(default)]
+    files: Vec<FileHeader>,
+}
+
+#[derive(Deserialize)]
+struct FileHeader {
+    name: String,
+    #[serde(rename = "type", default)]
+    content_type: String,
+    size: usize,
+}
+
+/// The name of a file as Sentry will show it: no folders, no control characters, not empty.
+fn file_name(name: &str) -> String {
+    let base = name.rsplit(['/', '\\']).next().unwrap_or("");
+    let clean: String = base.chars().filter(|c| !c.is_control()).take(120).collect();
+    let clean = clean.trim();
+    if clean.is_empty() { "file".to_string() } else { clean.to_string() }
+}
+
+impl Submission {
+    fn parse(body: &[u8]) -> Result<Submission, BridgeError> {
+        let invalid = || err("invalid", tr!("segnalazione non valida", "invalid report"));
+        let length = u32::from_be_bytes(body.get(..4).and_then(|b| b.try_into().ok()).ok_or_else(invalid)?) as usize;
+        if length > HEADER_MAX {
+            return Err(err("too_large", tr!("il testo della segnalazione è troppo lungo", "the text of the report is too long")));
+        }
+        let header: Header = serde_json::from_slice(body.get(4..4 + length).ok_or_else(invalid)?).map_err(|_| invalid())?;
+        let mut rest = &body[4 + length..];
+        let total = header.files.iter().try_fold(0usize, |sum, f| sum.checked_add(f.size)).ok_or_else(invalid)?;
+        if let Some(big) = header.files.iter().find(|f| f.size > FILES_MAX) {
+            return Err(err(
+                "too_large",
+                tr!(
+                    "«{}» pesa {}: gli allegati possono arrivare a {} in tutto",
+                    "«{}» is {}: attachments can add up to {}",
+                    file_name(&big.name),
+                    megabytes(big.size),
+                    megabytes(FILES_MAX)
+                ),
+            ));
+        }
+        if total > FILES_MAX {
+            return Err(err(
+                "too_large",
+                tr!(
+                    "gli allegati pesano {}: possono arrivare a {} in tutto",
+                    "the attachments are {}: they can add up to {}",
+                    megabytes(total),
+                    megabytes(FILES_MAX)
+                ),
+            ));
+        }
+        if total != rest.len() {
+            return Err(err("invalid", tr!("gli allegati non sono arrivati interi", "the attachments did not arrive whole")));
+        }
+        let mut files = Vec::new();
+        for f in header.files {
+            let (bytes, tail) = rest.split_at(f.size);
+            rest = tail;
+            let content_type = if f.content_type.trim().is_empty() { "application/octet-stream".to_string() } else { f.content_type };
+            files.push(Attachment { name: file_name(&f.name), content_type, bytes: bytes.to_vec() });
+        }
+        Ok(Submission { error: header.error, note: header.note, page: header.page, screenshot: header.screenshot, files })
+    }
+}
+
+/// "Report a problem" from the window: the body described at the top of the file.
+#[tauri::command]
+pub async fn report_problem(app: AppHandle, request: tauri::ipc::Request<'_>) -> Result<Sent, BridgeError> {
+    let tauri::ipc::InvokeBody::Raw(body) = request.body() else {
+        return Err(err("invalid", tr!("segnalazione non valida", "invalid report")));
+    };
+    let submission = Submission::parse(body)?;
     // The window is captured first: while the report is being prepared the page does not change.
-    let png = match (SENTRY_DSN, screenshot.unwrap_or(false), crate::main_window(&app)) {
+    let png = match (SENTRY_DSN, submission.screenshot, crate::main_window(&app)) {
         (Some(_), true, Some(w)) => window_png(&w).map_err(|e| ui_note(&format!("screenshot: {e:#}"))).ok(),
         _ => None,
     };
-    let desktop = app.path().desktop_dir().ok();
-    let done = tauri::async_runtime::spawn_blocking(move || {
-        let who = Who::current();
-        let report = Report::collect(&version, error, note, page, &who)?;
-        match SENTRY_DSN {
-            Some(dsn) => report.send(dsn, &version, png).map(|_| Sent { sent: true, file: None }),
-            None => {
-                let desktop = desktop.ok_or_else(|| err("io", tr!("cartella Desktop non trovata", "Desktop folder not found")))?;
-                let file = report.write(&desktop)?;
-                Ok(Sent { sent: false, file: Some(file.display().to_string()) })
-            }
+    tauri::async_runtime::spawn_blocking(move || deliver(&app, submission, png)).await.map_err(|e| err("io", e.to_string()))?
+}
+
+/// Prepares the report and sends it (or, without a Sentry address, writes it on the Desktop and opens the issue).
+fn deliver(app: &AppHandle, submission: Submission, png: Option<Vec<u8>>) -> Result<Sent, BridgeError> {
+    let version = app.package_info().version.to_string();
+    let who = Who::current();
+    let Submission { error, note, page, files, .. } = submission;
+    if SENTRY_DSN.is_none() && !files.is_empty() {
+        return Err(err("invalid", tr!("questa versione non invia allegati", "this build does not send attachments")));
+    }
+    let report = Report::collect(&version, error, note, page, &who)?;
+    let done = match SENTRY_DSN {
+        Some(dsn) => report.send(dsn, &version, png, &files).map(|_| Sent { sent: true, file: None })?,
+        None => {
+            let desktop = app
+                .path()
+                .desktop_dir()
+                .map_err(|_| err("io", tr!("cartella Desktop non trovata", "Desktop folder not found")))?;
+            let file = report.write(&desktop)?;
+            Sent { sent: false, file: Some(file.display().to_string()) }
         }
-    })
-    .await
-    .map_err(|e| err("io", e.to_string()))??;
+    };
     if let Some(file) = &done.file {
         let file = PathBuf::from(file);
         let _ = app.opener().reveal_item_in_dir(&file);
         let issue = issue_url(&Report::computer_of(&file), &file);
-        app.opener().open_url(issue.as_str(), None::<&str>).map_err(|e| err("io", format!("{issue}: {e}")))?;
+        crate::supervisor::open_outside_job(issue.as_str()).map_err(|e| err("io", format!("{issue}: {e}")))?;
     }
     Ok(done)
+}
+
+/// The phone's reports (`/phone/report`): the same body as the window's, without the screenshot (the window is the
+/// computer's, not the phone's) and without the page (it is the phone's).
+pub struct PhoneReports(pub AppHandle);
+
+impl phone::Reports for PhoneReports {
+    fn max_body(&self) -> u64 {
+        (FILES_MAX + HEADER_MAX + 4) as u64
+    }
+
+    fn info(&self) -> serde_json::Value {
+        serde_json::to_value(ReportInfo::new(false)).unwrap_or_default()
+    }
+
+    fn submit(&self, body: Vec<u8>) -> std::result::Result<serde_json::Value, (u16, String)> {
+        let status = |e: &BridgeError| match e.code {
+            "too_large" => 413,
+            "invalid" => 400,
+            _ => 500,
+        };
+        let mut submission = Submission::parse(&body).map_err(|e| (status(&e), e.message))?;
+        submission.screenshot = false;
+        submission.page = None;
+        let sent = deliver(&self.0, submission, None).map_err(|e| (status(&e), e.message))?;
+        serde_json::to_value(sent).map_err(|e| (500, e.to_string()))
+    }
 }
 
 /// What a report carries, already anonymized.
@@ -163,13 +326,8 @@ impl Report {
         Ok(Report { note, error, page, computer, text })
     }
 
-    /// One Sentry envelope: the event and its attachments.
-    fn send(&self, dsn: &str, version: &str, png: Option<Vec<u8>>) -> Result<(), BridgeError> {
-        let dsn = Url::parse(dsn).map_err(|e| err("invalid", format!("Sentry DSN: {e}")))?;
-        let project = dsn.path().trim_matches('/').to_string();
-        let host = dsn.host_str().unwrap_or_default();
-        let port = dsn.port().map(|p| format!(":{p}")).unwrap_or_default();
-        let endpoint = format!("{}://{host}{port}/api/{project}/envelope/", dsn.scheme());
+    /// One Sentry envelope: the event and its attachments, if it stays within what Sentry takes.
+    fn envelope(&self, dsn: &Url, version: &str, png: Option<&[u8]>, files: &[Attachment]) -> Result<Vec<u8>, BridgeError> {
         let id = uuid::Uuid::new_v4().simple().to_string();
 
         let title = self
@@ -221,13 +379,37 @@ impl Report {
         item(&mut body, json!({ "type": "event", "length": event.len() }), &event);
         let text = self.text.as_bytes();
         item(&mut body, json!({ "type": "attachment", "length": text.len(), "filename": "report.txt", "content_type": "text/plain" }), text);
-        if let Some(png) = &png {
+        if let Some(png) = png {
             item(&mut body, json!({ "type": "attachment", "length": png.len(), "filename": "screenshot.png", "content_type": "image/png" }), png);
         }
+        for f in files {
+            item(&mut body, json!({ "type": "attachment", "length": f.bytes.len(), "filename": f.name, "content_type": f.content_type }), &f.bytes);
+        }
+        if body.len() > ENVELOPE_MAX {
+            return Err(err(
+                "too_large",
+                tr!(
+                    "la segnalazione pesa {}, più di quanto si può inviare ({}): togli un file o la schermata",
+                    "the report is {}, more than can be sent ({}): remove a file or the screenshot",
+                    megabytes(body.len()),
+                    megabytes(ENVELOPE_MAX)
+                ),
+            ));
+        }
+        Ok(body)
+    }
 
+    fn send(&self, dsn: &str, version: &str, png: Option<Vec<u8>>, files: &[Attachment]) -> Result<(), BridgeError> {
+        let dsn = Url::parse(dsn).map_err(|e| err("invalid", format!("Sentry DSN: {e}")))?;
+        let project = dsn.path().trim_matches('/').to_string();
+        let host = dsn.host_str().unwrap_or_default();
+        let port = dsn.port().map(|p| format!(":{p}")).unwrap_or_default();
+        let endpoint = format!("{}://{host}{port}/api/{project}/envelope/", dsn.scheme());
+        let body = self.envelope(&dsn, version, png.as_deref(), files)?;
         let key = dsn.username();
+        // 30 s and 3 more for every MB: the files of a report can be tens of MB over a slow line
         ureq::post(&endpoint)
-            .timeout(std::time::Duration::from_secs(30))
+            .timeout(std::time::Duration::from_secs(30 + 3 * (body.len() / 1_000_000) as u64))
             .set("Content-Type", "application/x-sentry-envelope")
             .set("X-Sentry-Auth", &format!("Sentry sentry_version=7, sentry_client=mango-code/{version}, sentry_key={key}"))
             .send_bytes(&body)
@@ -487,6 +669,87 @@ engine on http://127.0.0.1:8080, listening 0.0.0.0, Mango Code 0.1.0, version 10
         assert!(t.starts_with("[... 10 bytes]"));
         assert_eq!(t.matches('a').count(), TAIL as usize);
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A body as the page builds it: the length of the header, the header, the files.
+    fn body(header: serde_json::Value, files: &[&[u8]]) -> Vec<u8> {
+        let head = serde_json::to_vec(&header).unwrap();
+        let mut out = (head.len() as u32).to_be_bytes().to_vec();
+        out.extend_from_slice(&head);
+        files.iter().for_each(|f| out.extend_from_slice(f));
+        out
+    }
+
+    #[test]
+    fn what_the_page_sends_is_read_whole_and_the_files_are_untouched() {
+        let bytes = body(
+            json!({ "note": "it hangs", "error": null, "page": "http://127.0.0.1:4096/", "screenshot": true,
+                    "files": [{ "name": "C:\\Users\\Alice\\Desktop\\screen.png", "type": "image/png", "size": 3 }, { "name": "a.docx", "type": "", "size": 2 }] }),
+            &[&[1, 2, 3], &[255, 0]],
+        );
+        let s = Submission::parse(&bytes).unwrap();
+        assert_eq!(s.note.as_deref(), Some("it hangs"));
+        assert!(s.screenshot && s.error.is_none());
+        let names: Vec<_> = s.files.iter().map(|f| (f.name.as_str(), f.content_type.as_str(), f.bytes.as_slice())).collect();
+        // no folders in the name (it carries the user's name), a missing type becomes the generic one, the bytes are the same
+        assert_eq!(names, [("screen.png", "image/png", &[1u8, 2, 3][..]), ("a.docx", "application/octet-stream", &[255u8, 0][..])]);
+        // no files is a report like before
+        assert!(Submission::parse(&body(json!({ "note": "x" }), &[])).unwrap().files.is_empty());
+    }
+
+    #[test]
+    fn a_file_that_is_too_large_is_refused_with_a_sentence_that_names_it() {
+        // one file over the limit (the bytes are not even needed to know)
+        let one = body(json!({ "files": [{ "name": "movie.mp4", "type": "video/mp4", "size": FILES_MAX + 1 }] }), &[]);
+        let e = Submission::parse(&one).err().unwrap();
+        assert_eq!(e.code, "too_large");
+        assert!(e.message.contains("movie.mp4") && e.message.contains("30.0 MB"), "{}", e.message);
+        // two that are fine alone and not together
+        let two = body(json!({ "files": [{ "name": "a", "size": FILES_MAX / 2 + 1 }, { "name": "b", "size": FILES_MAX / 2 + 1 }] }), &[]);
+        assert_eq!(Submission::parse(&two).err().unwrap().code, "too_large");
+        // exactly the limit passes the size check (it then fails only because the bytes are not there)
+        let exact = body(json!({ "files": [{ "name": "a", "size": FILES_MAX }] }), &[]);
+        assert_eq!(Submission::parse(&exact).err().unwrap().code, "invalid");
+    }
+
+    #[test]
+    fn a_body_that_is_cut_or_lies_is_not_read() {
+        let whole = body(json!({ "files": [{ "name": "a", "size": 3 }] }), &[&[1, 2, 3]]);
+        assert!(Submission::parse(&whole).is_ok());
+        for cut in [0, 2, 5, whole.len() - 1] {
+            assert_eq!(Submission::parse(&whole[..cut]).err().unwrap().code, "invalid", "cut at {cut}");
+        }
+        // the header says 2, three come
+        let more = body(json!({ "files": [{ "name": "a", "size": 2 }] }), &[&[1, 2, 3]]);
+        assert_eq!(Submission::parse(&more).err().unwrap().code, "invalid");
+        assert_eq!(Submission::parse(&body(json!("not an object"), &[])).err().unwrap().code, "invalid");
+    }
+
+    fn a_report() -> Report {
+        Report {
+            note: Some("it hangs".into()),
+            error: None,
+            page: None,
+            computer: Computer { windows: "10".into(), cpu: "cpu".into(), ram_mib: 1, gpus: Vec::new(), model: "m".into() },
+            text: "the text".into(),
+        }
+    }
+
+    #[test]
+    fn the_envelope_carries_the_files_with_their_exact_lengths_and_stays_under_the_limit() {
+        let dsn = Url::parse("https://key@o1.ingest.de.sentry.io/2").unwrap();
+        let files = [Attachment { name: "screen.png".into(), content_type: "image/png".into(), bytes: vec![7; 5] }];
+        let body = a_report().envelope(&dsn, "0.1.0", None, &files).unwrap();
+        let text = String::from_utf8_lossy(&body);
+        assert!(text.contains(r#""filename":"screen.png""#) && text.contains(r#""length":5"#), "{text}");
+        assert!(text.contains(r#""filename":"report.txt""#));
+        assert!(body.ends_with(&[7, 7, 7, 7, 7, b'\n']));
+        // the report alone is small; with the largest allowed files and a large screenshot it can go over: then it says so
+        let big = [Attachment { name: "big.bin".into(), content_type: "application/octet-stream".into(), bytes: vec![0; FILES_MAX] }];
+        assert!(a_report().envelope(&dsn, "0.1.0", Some(&vec![0; 8_000_000]), &big).is_ok());
+        let e = a_report().envelope(&dsn, "0.1.0", Some(&vec![0; 11_000_000]), &big).err().unwrap();
+        assert_eq!(e.code, "too_large");
+        assert!(e.message.contains("40.0 MB"), "{}", e.message);
     }
 
     #[test]

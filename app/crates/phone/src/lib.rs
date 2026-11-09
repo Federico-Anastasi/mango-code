@@ -36,6 +36,16 @@ use std::time::{SystemTime, UNIX_EPOCH};
 const SESSION_DURATION_S: u64 = 90 * 24 * 3600;
 const MAX_SESSIONS: usize = 20;
 
+/// What the app does for the problem reports that come from the phone (`GET` and `POST /phone/report`).
+pub trait Reports: Send + Sync {
+    /// The most bytes a report may carry: a bigger one is refused (`413`) before being read.
+    fn max_body(&self) -> u64;
+    /// What the phone's page needs to know before showing the form: the reply to `GET /phone/report`.
+    fn info(&self) -> serde_json::Value;
+    /// A report as the phone sent it. Ok: the reply; Err: the HTTP status and the sentence for the user.
+    fn submit(&self, body: Vec<u8>) -> std::result::Result<serde_json::Value, (u16, String)>;
+}
+
 /// The phone service. Cloning is cheap: all copies are the same service.
 #[derive(Clone)]
 pub struct Phone {
@@ -49,6 +59,7 @@ struct Inner {
     listen_on: std::net::Ipv4Addr,
     port: u16,
     agent_port: u16,
+    reports: Arc<dyn Reports>,
     saved: Mutex<Saved>,
     listener: Mutex<Option<http::Listener>>,
     /// The error of the last start (the port in use), until it is retried.
@@ -98,7 +109,14 @@ pub struct Access {
 impl Phone {
     /// Reads the state from `<data>\phone.json` (if it's not there, off) and, if it was on, reopens the port on
     /// `listen_on:port`.
-    pub fn new(data: &Path, logs: &Path, listen_on: std::net::Ipv4Addr, port: u16, agent_port: u16) -> Result<Phone> {
+    pub fn new(
+        data: &Path,
+        logs: &Path,
+        listen_on: std::net::Ipv4Addr,
+        port: u16,
+        agent_port: u16,
+        reports: Arc<dyn Reports>,
+    ) -> Result<Phone> {
         let file = data.join("phone.json");
         let saved = match std::fs::read_to_string(&file) {
             Ok(t) => serde_json::from_str(&t).with_context(|| tr!("{} non si legge", "{} cannot be read", file.display()))?,
@@ -113,6 +131,7 @@ impl Phone {
                 listen_on,
                 port,
                 agent_port,
+                reports,
                 saved: Mutex::new(saved),
                 listener: Mutex::new(None),
                 error: Mutex::new(None),

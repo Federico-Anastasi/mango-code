@@ -109,9 +109,9 @@
 
   "compaction": {
     "auto": true,
-    "prune": true
+    "prune": false
   },
-  "_compaction": "prune true (default false) throws away old tool outputs instead of keeping them until compaction: on a real 80k, a couple of cats of large files eat the context and are no longer needed by anyone ten turns later.",
+  "_compaction": "prune stays false (the default): it replaces old tool outputs once they pass ~40k tokens, which changes the old part of the conversation and makes the engine re-read everything after it (tens of thousands of tokens, again every ~20k). The engine cache comes first; when the context is full, auto compaction summarizes once.",
 
   "skills": {
     "paths": ["{{SELF}}\\mango-plugin\\skills"]

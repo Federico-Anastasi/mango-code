@@ -3,7 +3,8 @@
 //! The app itself enters a Job Object with KILL_ON_JOB_CLOSE at startup: every child and grandchild
 //! inherits it, so when the app closes, or crashes, Windows kills them all. No orphan
 //! engines holding the VRAM. A process started with CREATE_BREAKAWAY_FROM_JOB leaves it (the job allows it): the
-//! installer of an update (`updater.rs`), which must outlive the app it replaces.
+//! installer of an update (`updater.rs`), which must outlive the app it replaces, and the programs the app opens for
+//! the user (`open_outside_job`).
 
 use anyhow::{bail, Context, Result};
 use mango_common::{tr, ProcSpec};
@@ -22,6 +23,8 @@ use windows::Win32::System::JobObjects::{
 use windows::Win32::System::Threading::GetCurrentProcess;
 
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+/// The process leaves the app's job (which allows it): it survives the app.
+pub const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x0100_0000;
 
 pub struct Supervisor {
     _job: HANDLE,
@@ -161,6 +164,24 @@ impl Supervisor {
         }
     }
 }
+
+/// Opens a file, a folder or an address with its Windows program, outside the app's job: the browser or the
+/// spreadsheet the app opens for the user must stay open when the app quits. The opener plugin started them inside
+/// the job, and Windows closed them together with the app (tried on a second PC: Chrome, opened by the app, closed
+/// when the app quit). Same command as the plugin: Invoke-Item for paths, Start-Process for addresses.
+pub fn open_outside_job(target: &str) -> std::io::Result<()> {
+    Command::new("powershell.exe")
+        .args(["-NoProfile", "-NonInteractive", "-Command", OPEN_SCRIPT])
+        .env("MANGO_OPEN_TARGET", target)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .creation_flags(CREATE_NO_WINDOW | CREATE_BREAKAWAY_FROM_JOB)
+        .spawn()
+        .map(|_| ())
+}
+
+const OPEN_SCRIPT: &str = "$ErrorActionPreference = 'Stop'; if (Test-Path -LiteralPath $env:MANGO_OPEN_TARGET) { Invoke-Item -LiteralPath $env:MANGO_OPEN_TARGET } else { Start-Process -FilePath $env:MANGO_OPEN_TARGET }";
 
 /// Last `n` non-empty lines of a log, for the error messages.
 pub fn tail(path: &Path, n: usize) -> String {

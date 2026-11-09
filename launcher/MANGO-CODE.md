@@ -97,8 +97,11 @@ difference between a free reminder and one that costs 40 seconds of GPU.
 
 ### What opencode brings
 
-- **`compaction.prune`**: throws away old tool outputs instead of keeping them until compaction. On a real 80k, two
-  `cat`s of big files eat the context and nobody needs them ten turns later.
+- **The engine's cache comes first.** `compaction.prune` is off: it replaced old tool outputs once they passed ~40k
+  tokens, which changed the old part of the conversation and made the engine re-read everything after it. For the
+  same reason the chat templates keep the reasoning of past turns (`preserve_thinking` true by default): dropping it
+  changed the previous turn at every new message. Measured: the message after a turn re-reads ~25 tokens instead of
+  thousands; with 110k tokens of tool outputs in the history, still ~25.
 - **Few tools in the prefill**: opencode has 13 by default. Capturing the real request, the **tool definitions weighed
   46,481 characters against the system prompt's 22,645** — the tools are twice the instructions, and they are paid for
   at every turn in prefill. `chrome-devtools` alone was 25,429 over 29 tools. After cutting the 13 that are duplicates

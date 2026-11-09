@@ -23,6 +23,20 @@ const DEVICES: { id: PreviewDevice; icon: string; label: string; width?: number 
 /** How often the panel is asked which page it is showing (back/forward included). */
 const SYNC_MS = 700
 
+/**
+ * Whether something opened above the page (a dialog, a menu, a list, a popover) is in the way of the native panel,
+ * which is drawn above all the page: then it has to step aside. Kobalte marks its topmost open layer with
+ * `data-kb-top-layer` and, while a modal one is open (dialogs, menus, lists), blocks the pointer on the whole body.
+ */
+function layerOver(rect: DOMRect, own: HTMLElement | undefined) {
+  if (document.body.style.pointerEvents === "none") return true
+  return [...document.querySelectorAll<HTMLElement>("[data-kb-top-layer]")].some((layer) => {
+    if (own?.contains(layer)) return false
+    const box = layer.getBoundingClientRect()
+    return box.width > 0 && box.height > 0 && box.left < rect.right && box.right > rect.left && box.top < rect.bottom && box.bottom > rect.top
+  })
+}
+
 export function PreviewPanel(props: {
   width: number
   device: PreviewDevice
@@ -38,6 +52,7 @@ export function PreviewPanel(props: {
   const [title, setTitle] = createSignal("")
   const [loading, setLoading] = createSignal(false)
   let placeholder: HTMLDivElement | undefined
+  let panel: HTMLElement | undefined
 
   const deviceWidth = createMemo(() => DEVICES.find((device) => device.id === props.device)?.width)
 
@@ -58,7 +73,7 @@ export function PreviewPanel(props: {
         height: rect.height,
         dpr: window.devicePixelRatio || 1,
         zoom,
-        visible: !!url() && rect.width >= 1 && rect.height >= 1,
+        visible: !!url() && rect.width >= 1 && rect.height >= 1 && !layerOver(rect, panel),
       })
       .catch(() => {})
   }
@@ -83,10 +98,17 @@ export function PreviewPanel(props: {
     if (!el) return
     const observer = new ResizeObserver(() => place())
     observer.observe(el)
+    // Layers open and close in portals under the body: the panel steps aside and comes back with them.
+    const portals = new MutationObserver(() => place())
+    portals.observe(document.body, { childList: true, attributes: true, attributeFilter: ["style"] })
+    const topLayer = new MutationObserver(() => place())
+    topLayer.observe(document.body, { subtree: true, attributes: true, attributeFilter: ["data-kb-top-layer"] })
     const timer = window.setInterval(() => void sync(), SYNC_MS)
     void sync()
     onCleanup(() => {
       observer.disconnect()
+      portals.disconnect()
+      topLayer.disconnect()
       window.clearInterval(timer)
       void api()
         ?.place({ x: 0, y: 0, width: 0, height: 0, dpr: 1, zoom: 1, visible: false })
@@ -114,10 +136,11 @@ export function PreviewPanel(props: {
 
   return (
     <aside
-      // Below xl (a laptop at 125-150% is 860-1100 px wide) there is no room next to the chat: the panel covers it
-      // whole, and its X or the globe in the title bar bring the chat back. Hiding it there left the agent's page unseen.
-      class="flex order-last shrink-0 h-full flex-col border-s border-border-weaker-base bg-background-base max-xl:absolute max-xl:inset-0 max-xl:z-30 max-xl:!w-full max-xl:border-s-0"
-      style={{ width: `${props.width}px` }}
+      ref={panel}
+      // Next to the chat, like the review panel, from 768 px (a laptop at 150% is ~860 px wide): never more than 55%
+      // of the room, so the chat stays readable. Only below 768 px it covers the chat; its X or the globe bring it back.
+      class="flex order-last shrink-0 h-full flex-col border-s border-border-weaker-base bg-background-base max-md:absolute max-md:inset-0 max-md:z-30 max-md:!w-full max-md:!max-w-none max-md:border-s-0"
+      style={{ width: `${props.width}px`, "max-width": "55%" }}
       aria-label={language.t("preview.title")}
     >
       <div class="relative h-full min-h-0 flex flex-col">

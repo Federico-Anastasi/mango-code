@@ -54,6 +54,9 @@ const TEXTS = {
     openLogs: "Apri i log",
     report: "Segnala il problema",
     reportScreenshot: "Includi una schermata della finestra (aiuta a capire il problema, ma mostra quello che c'è nella finestra)",
+    reportFiles: "Allega file",
+    reportFilesHint: "Immagini, documenti o altro. I file partono così come sono: non vengono anonimizzati.",
+    reportFilesTooLarge: "«{name}» pesa {size}: gli allegati possono arrivare a {max} in tutto.",
     reportSent: "Inviato, grazie.",
     reportSaved: "Su GitHub si è aperta la segnalazione: allega il file salvato sul Desktop, ",
     cannotReport: "Impossibile preparare la segnalazione: ",
@@ -171,6 +174,9 @@ const TEXTS = {
     openLogs: "Open the logs",
     report: "Report a problem",
     reportScreenshot: "Include a screenshot of the window (it helps to understand the problem, but it shows what is in the window)",
+    reportFiles: "Attach files",
+    reportFilesHint: "Images, documents or anything else. Files are sent as they are: they are not anonymized.",
+    reportFilesTooLarge: "«{name}» is {size}: attachments can add up to {max} in total.",
     reportSent: "Sent, thank you.",
     reportSaved: "The issue is open on GitHub: attach the file saved on the Desktop, ",
     cannotReport: "Cannot prepare the report: ",
@@ -772,10 +778,32 @@ $("retry").addEventListener("click", async () => {
 
 $("report").hidden = !window.__MANGO_DESKTOP__;
 $("report-screenshot-row").hidden = !window.__MANGO_DESKTOP__;
+
+// The files the user attaches: where the report can carry them (the app says how much), within the limit for the whole.
+let reportFiles = [];
+let reportMax = 0;
+const megabytes = (n) => (n < 1e6 ? Math.round(n / 1e3) + " KB" : (n / 1e6).toFixed(1) + " MB");
+window.__MANGO_DESKTOP__?.reportInfo().then((info) => {
+  reportMax = info.maxBytes;
+  $("report-files-row").hidden = !info.attachments;
+}).catch(() => {});
+$("report-files").addEventListener("change", (event) => {
+  let total = reportFiles.reduce((sum, f) => sum + f.size, 0);
+  for (const file of event.target.files) {
+    if (total + file.size > reportMax) {
+      $("status").textContent = t.reportFilesTooLarge.replace("{name}", file.name).replace("{size}", megabytes(file.size)).replace("{max}", megabytes(reportMax));
+      continue;
+    }
+    reportFiles.push(file);
+    total += file.size;
+  }
+  event.target.value = "";
+  $("report-files-list").textContent = reportFiles.map((f) => f.name + " (" + megabytes(f.size) + ")").join(", ");
+});
 $("report").addEventListener("click", () => {
   const details = $("error-title").textContent + "\n\n" + $("error-message").textContent;
   window.__MANGO_DESKTOP__
-    .reportProblem({ error: details, screenshot: $("report-screenshot").checked })
+    .reportProblem({ error: details, screenshot: $("report-screenshot").checked, files: reportFiles })
     .then((done) => {
       $("status").textContent = done.sent ? t.reportSent : t.reportSaved + done.file;
       $("report").disabled = done.sent;

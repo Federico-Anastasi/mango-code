@@ -17,10 +17,23 @@
   font-style: normal;
 }
 
+/* The app is exactly the area the user sees (utils/visible-area.ts keeps the two variables): the page itself never scrolls,
+   the messages scroll inside it and the prompt stays at the bottom, also with the keyboard open. */
+html {
+  overscroll-behavior: none;
+}
+
+#root {
+  position: fixed;
+  inset-inline: 0;
+  top: var(--visible-top, 0px);
+  height: var(--visible-height, 100dvh);
+}
+
 @media (display-mode: standalone) {
   /* WebKit excludes safe-area insets from dvh in installed apps. */
   #root {
-    height: 100vh;
+    height: var(--visible-height, 100vh);
   }
 }
 

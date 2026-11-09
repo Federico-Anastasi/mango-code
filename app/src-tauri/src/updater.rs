@@ -14,6 +14,7 @@
 //! No automatic checks for the service, the test instances (`MANGO_DATA`) and the development builds.
 
 use crate::bridge::{err, BridgeError};
+use crate::supervisor::CREATE_BREAKAWAY_FROM_JOB;
 use mango_common::tr;
 use serde::Serialize;
 use std::os::windows::process::CommandExt;
@@ -174,8 +175,6 @@ pub fn update_install(app: AppHandle) -> Result<(), BridgeError> {
     Ok(())
 }
 
-/// The process leaves the app's job (supervisor.rs, which allows it): it survives the app.
-const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x0100_0000;
 
 #[cfg(test)]
 mod tests {

@@ -2,6 +2,8 @@
 
 Rust/Tauri 2. Double click → loading page → engine, dictation and agent server hidden, in a
 Job Object (they die with the app) → window with the agent's web UI (opencode, in `packages/` at the repo root).
+What the app opens for the user (files with "Open", links in the browser, the logs folder) starts outside that job
+(`supervisor::open_outside_job`): a browser opened by the app stays open when the app quits.
 On close the engine saves its memory and stops. Once the agent runs, the X hides the window in the tray (a click on the
 icon brings it back) and the icon's "Quit" closes; before that (model choice, download, startup error) the X quits.
 The window shows only the app's own pages: nothing else, a local file included, can take its place.
@@ -10,7 +12,7 @@ progress on the loading page; without network the app starts without dictation a
 
 | where | what |
 |---|---|
-| `src-tauri/` | window, startup (`lib.rs`), process supervisor, native bridge for the web UI (`bridge.rs`), Preview panel (`preview.rs`), "Use my Chrome" (`chrome.rs`), model preparation (`preparation.rs`), first run and model changes (`first_run.rs`, `choice.rs`, `system.rs`), "Other models" (`other_models.rs`), the Team (`team.rs`), tray |
+| `src-tauri/` | window, startup (`lib.rs`), process supervisor, native bridge for the web UI (`bridge.rs`), Preview panel (`preview.rs`), "Use my Chrome" (`chrome.rs`), model preparation (`preparation.rs`), first run and model changes (`first_run.rs`, `choice.rs`, `system.rs`), "Other models" (`other_models.rs`), the Team (`team.rs`), zoom of the window (`zoom.rs`), problem reports (`report.rs`), tray |
 | `crates/engine` | the engine manager on 8080: starts the model the request asks for, saves the conversation before stopping, releases and resumes the GPUs (`/engine/*`), rejects web pages. Also `fake-engine` (the tests), `mango-bench` (the speeds of the catalog models), `mango-tune` (tuning: measures a tune, keeps the log, writes the profile; the `optimize/` skill uses it) and `mango-launch` (the engine plan, the model list and the downloads for the terminal: the same logic as the app, `--hardware <file.json>` applies it to a PC that is not this one) |
 | `crates/mango-common` | paths (`Paths::discover`), data folder, service file, `Build` (the build of an engine: `cpu`, `vulkan`, `cuda-12`, `cuda-13`), the app's language (`i18n`); `download`: download of engines (`mango-engines.json`) and models (`mango-models.json`) with resume and sha256, plus Hugging Face (`download/hugging_face.rs`: search, links, GGUF files with hash); `credentials`: the keys in the Windows Credential Manager |
 | `crates/engine-cfg` | the PC's hardware (`hardware.rs`: GPUs of any vendor, CPU, RAM, build to use), the optimized profile if it applies (`profiles.rs`, `launcher/profiles/`) or the general plan with the official llama.cpp (`general.rs`), the recommended models (`recommended`), the split of layers across GPUs (`split.rs`) |
@@ -148,6 +150,11 @@ address in `100.64.0.0/10`). The phone does not see the bridge: no phone setting
   `/phone`; `Origin` different from `http://<requested address>` `403`; without a valid session `401` (a sentence for the
   browser, JSON for the rest); methods other than `GET`, `HEAD`, `POST`, `PUT`, `PATCH`, `DELETE` `405`; the routes only the
   app on the PC uses (`/mango/warmup`, `/mango/extra-folders`) `403`; chunked body `400`; agent off `502`.
+- **Problem reports** (`/phone/report`): the one route the port answers itself. `GET` says what a report may carry,
+  `POST` hands one to the app (`phone::Reports`, implemented by `PhoneReports` in `report.rs`: the logs and the sending are
+  on the computer). It needs the same session, `Origin` and `Content-Length` as everything else, the body is bounded
+  (`413` above the limit, refused before reading it) and the log has the outcome, never the content. The web UI shows
+  "Report a problem" in Settings > Help also from the phone, without the window's screenshot, the updates or the logs.
 - **Forwarding**: to the agent with its own `Host` and `Origin` (for the agent it is its web UI), without `Cookie`, `Referer`,
   `Authorization` or proxy headers; one request per connection, the response streamed (events included), the
   web UI terminal (WebSocket) both ways.
@@ -161,6 +168,16 @@ address in `100.64.0.0/10`). The phone does not see the bridge: no phone setting
 - Tests: `cargo test -p phone` (the rules one by one, on 127.0.0.1); `integration/tests/phone.test.ts` (the real app:
   turned on from the bridge, entry, web UI and agent from the port, turned off). In development builds `MANGO_PHONE_PC_ONLY` keeps
   the port on `127.0.0.1`, so the tests do not make Windows ask to open it.
+
+## Zoom
+
+Ctrl+ / Ctrl- / Ctrl+0 zoom the whole window (the keys are the browser's own: the window is built with
+`zoom_hotkeys_enabled`). The web UI tells the app its page scale after a change (`remember_zoom`, 800 ms after the last
+resize of the page, `INIT_SCRIPT` in `bridge.rs`); `zoom.rs` turns it into the zoom (page scale over the screen's scale)
+and keeps it in `<data>\zoom.txt` (the file goes away at 100%), and `lib.rs` applies it to the window at the next start.
+The Preview panel is a webview of its own and keeps its zoom: `preview_place` already converts the placeholder's rectangle
+with the page scale, so after a zoom the native panel stays on its place. While a dialog, menu or list is open above the
+page the panel steps aside (`layerOver` in `preview-panel.tsx`: Kobalte marks its open layers) and comes back when it closes.
 
 ## What goes in the prompt
 
@@ -327,11 +344,21 @@ longer update.
 
 "Report a problem" (Settings > Help, the error page, the startup error page) is one click (`src-tauri/src/report.rs`).
 It sends a Sentry event to the project `mango-code` of the `mango-o6` organization (data in the EU): the user's
-optional line, the error, the computer as tags (GPU, VRAM, model, RAM) and two attachments, `report.txt` (summary and
-the end of every log) and `screenshot.png` (`PrintWindow`, panel included; only if the user leaves the switch on, because
-it can show the conversation). Before anything leaves, the user name in paths, the PC name, emails, network addresses,
-keys and tokens are replaced by placeholders; on Sentry's side the data scrubbers are on and IP addresses are not
-stored. Every report has level `error`, so the project's alert emails about it. The DSN is in the source (it only lets
+optional line, the error, the computer as tags (GPU, VRAM, model, RAM) and the attachments: `report.txt` (summary and
+the end of every log), `screenshot.png` (`PrintWindow`, panel included; only if the user leaves the switch on, because
+it can show the conversation) and the files the user chose with "Attach files" or pasted (an image), which go **as they
+are**: the form says so. Before anything leaves, the user name in paths, the PC name, emails, network addresses,
+keys and tokens are replaced by placeholders (not in the user's files); on Sentry's side the data scrubbers are on and IP
+addresses are not stored.
+
+The page sends one body, from the window (`reportProblem` of the bridge) and from the phone (`POST /phone/report`):
+4 bytes with the length of a JSON header (`error`, `note`, `page`, `screenshot`, `files` with name, type and size), the
+header, the files one after the other (`Submission::parse`, `utils/report.ts`). The limits are Sentry's (its documentation
+on attachments): 40 MB for a request and 200 MB of attachments per event. The request goes out uncompressed,
+so the user's files may add up to 30 MB (`FILES_MAX`) and the whole envelope is measured before sending (`ENVELOPE_MAX`,
+40 MB, with `report.txt` and the screenshot in it). The page checks the limit before sending (`maxBytes` from `report_info`
+or `GET /phone/report`) and the app checks again: a file that is too large is refused with a sentence that names it, in
+the form, never dropped. A build without the Sentry address has no attachments (it writes a text file). Every report has level `error`, so the project's alert emails about it. The DSN is in the source (it only lets
 one send); `MANGO_SENTRY_DSN=<dsn>` at build time sends elsewhere, `MANGO_SENTRY_DSN=off` turns sending off, and then
 the button saves the same text on the Desktop and opens a GitHub issue already filled in.
 - Live engine speed: `llamacpp:tokens_predicted_total` in `engine.log` (delta over 15 s) and the `eval time` lines;

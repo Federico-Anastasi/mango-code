@@ -120,9 +120,8 @@ step is `total`, that is `input + cache.read + cache.write + output + reasoning`
   tokens of the **request that produces it** (the whole session to summarize: it is not the context afterwards, ignore it for
   the context used); then **`session.compacted`** (`properties: { sessionID }`, just one); then the step that resumes, whose
   `total` is the new context. Between `session.compacted` and the end of that step the new context is not yet known.
-- **The context also drops without a summary**: at the end of the turn Mango Code removes old tool outputs when there are
-  many (`compaction.prune`, on; `message.part.updated` of that part with `state.time.compacted`). There is no dedicated
-  event: the value of the next step applies. (From the code, not tested with the fake engine.)
+- **Old tool outputs are not removed** (`compaction.prune`, off): removing them would change the old part of the
+  conversation and make the engine re-read everything after it. The context drops only with the summary above.
 
 Test: `integration/tests/token.test.ts`; the fake engine declares the tokens of every step (`fake-engine.rs`).
 

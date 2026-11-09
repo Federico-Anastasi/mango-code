@@ -14,10 +14,13 @@ export type MangoDesktop = {
   /** "Models and engine": the window moves to the app page that downloads or removes models and changes the engine. */
   openModels(): Promise<void>
   /**
-   * "Report a problem": logs, PC details and (if asked) the window go to Mango Code, anonymized: `{ sent: true }`.
+   * "Report a problem": logs, PC details, (if asked) the window and the files the user chose go to Mango Code, the
+   * first three anonymized and the files as they are: `{ sent: true }`.
    * A build without the report address saves a file on the Desktop and opens a GitHub issue: `{ sent: false, file }`.
    */
-  reportProblem(report?: { error?: string; note?: string; screenshot?: boolean }): Promise<{ sent: boolean; file?: string }>
+  reportProblem(report?: { error?: string; note?: string; screenshot?: boolean; files?: File[] }): Promise<{ sent: boolean; file?: string }>
+  /** What a report may carry (`maxBytes`: the user's files together). */
+  reportInfo(): Promise<{ maxBytes: number; attachments: boolean; screenshot: boolean }>
   /** The app's logs folder in File Explorer. */
   openLogs(): Promise<void>
   /** Automatic updates: the app checks the GitHub releases and downloads the new version; install() restarts into it. */

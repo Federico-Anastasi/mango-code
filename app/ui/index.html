@@ -126,6 +126,11 @@
         <button type="button" class="secondary" id="logs" data-text="openLogs"></button>
       </div>
       <label class="screenshot" id="report-screenshot-row"><input type="checkbox" id="report-screenshot" checked> <span data-text="reportScreenshot"></span></label>
+      <div class="screenshot" id="report-files-row" hidden>
+        <label class="link"><input type="file" id="report-files" multiple hidden><span data-text="reportFiles"></span></label>
+        <div id="report-files-list"></div>
+        <div data-text="reportFilesHint"></div>
+      </div>
       <p class="status" id="status" aria-live="polite"></p>
     </section>
   </main>

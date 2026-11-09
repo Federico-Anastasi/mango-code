@@ -236,6 +236,8 @@
       "f16",
       "--spec-type",
       "ngram-simple",
+      "--chat-template-file",
+      "<dist>/chat-templates/lfm2.5-mango.jinja",
       "-ts",
       "19,14,8"
     ],

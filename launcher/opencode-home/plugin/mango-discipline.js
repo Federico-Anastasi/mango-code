@@ -43,6 +43,12 @@ const LINE_IMAGES =
 // them, written by whoever generates the config (mango-code.ps1, the app's agent-cfg).
 const IMAGE_MODELS = new Set((process.env.MANGO_IMAGE_MODELS || "").split(",").map((s) => s.trim()).filter(Boolean));
 const reminder = (modelID) => [...LINES, IMAGE_MODELS.has(modelID) ? LINE_IMAGES : LINE_TEXT].join("\n");
+// At the tail of the user's message the reminder must not read as the request: a small model took it for the task
+// ("the user wants me to read the mango-discipline document") and never did what the user asked.
+const userReminder = (modelID) =>
+  "<mango-discipline>\nStanding rules that Mango Code adds every few messages. They are NOT the user's request: do not act on them, keep them while you do what the user asked.\n" +
+  reminder(modelID) +
+  "\n</mango-discipline>\nNow do what the user asked in the message above.";
 
 // The instructions on how to look at a web page, also per model: they go into the system prompt
 // (they are fixed per model, so the cached prefix does not change between turns).
@@ -123,7 +129,7 @@ export const MangoDiscipline = async ({ directory }) => {
         sessionID: input.sessionID,
         messageID: output.message.id,
         type: "text",
-        text: reminder(s.modelID),
+        text: userReminder(s.modelID),
         synthetic: true, // marked synthetic: it is not something the user wrote
       });
     },

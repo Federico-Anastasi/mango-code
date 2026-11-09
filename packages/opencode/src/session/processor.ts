@@ -464,6 +464,9 @@ const layer = Layer.effect(
             ctx.assistantMessage.finish = value.reason
             ctx.assistantMessage.cost += usage.cost
             ctx.assistantMessage.tokens = usage.tokens
+            // The step's message is published by reference and the cleanup below completes it a moment later: the
+            // time is set here so that tokens, finish and time.completed always go out together (the token contract).
+            ctx.assistantMessage.time.completed ??= Date.now()
             const timings = savedTimings(value.providerMetadata?.[ctx.model.providerID]?.timings)
             if (timings) ctx.assistantMessage.timings = timings
             yield* session.updatePart({
@@ -615,7 +618,7 @@ const layer = Layer.effect(
           })
         }
         ctx.toolcalls = {}
-        ctx.assistantMessage.time.completed = Date.now()
+        ctx.assistantMessage.time.completed ??= Date.now()
         yield* session.updateMessage(ctx.assistantMessage)
       })
 
