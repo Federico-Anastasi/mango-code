@@ -1,4 +1,5 @@
-import { createEffect } from "solid-js"
+import { createEffect, Show } from "solid-js"
+import { createMediaQuery } from "@solid-primitives/media"
 import { ScrollView } from "@opencode-ai/ui/scroll-view"
 import { isDirectoryMissingError, reportMissingDirectory } from "@/utils/missing-directory"
 import { createHomeController } from "./home/home-controller"
@@ -9,6 +10,7 @@ import { createHomeScrollController } from "./home/home-scroll-controller"
 import { createHomeSessionSearchController } from "./home/home-session-search-controller"
 import { createHomeSessionsController } from "./home/home-sessions-controller"
 import { HomeSessions } from "./home/home-sessions"
+import { HomeMobile } from "./home/home-mobile"
 
 export function NewHome() {
   const home = createHomeController()
@@ -16,6 +18,7 @@ export function NewHome() {
   const sessions = createHomeSessionsController(home)
   const search = createHomeSessionSearchController(home, sessions)
   const scroll = createHomeScrollController(sessions.data.groups)
+  const phone = createMediaQuery("(max-width: 767px)")
 
   // mango-code: `?project=<folder>` opens that folder as a project (the launcher passes it with
   // -Web -Dir), so there is no need to browse the disk from the picker. The parameter disappears from the URL.
@@ -64,34 +67,36 @@ export function NewHome() {
   return (
     <div
       class={`
-        m-2 min-h-0 flex-1 self-stretch overflow-hidden rounded-[10px]
-        bg-v2-background-bg-base shadow-[var(--v2-elevation-raised)]
+        relative m-2 min-h-0 flex-1 self-stretch overflow-hidden rounded-[10px] max-md:m-0 max-md:rounded-none
+        bg-v2-background-bg-base shadow-[var(--v2-elevation-raised)] max-md:shadow-none
       `}
     >
-      <ScrollView
-        class="h-full [container-type:size]"
-        thumbContainer={scroll.viewport.thumbTrack}
-        thumbHoverTarget={scroll.viewport.hoverTarget}
-        viewportRef={scroll.viewport.setViewport}
-        onScroll={(event) => scroll.viewport.update(event.currentTarget.scrollTop)}
-        onWheel={scroll.viewport.containOuterWheel}
-      >
-        <div
-          class={`
+      <Show when={!phone()} fallback={<HomeMobile projects={projects} sessions={sessions} />}>
+        <ScrollView
+          class="absolute inset-0 [container-type:size]"
+          thumbContainer={scroll.viewport.thumbTrack}
+          thumbHoverTarget={scroll.viewport.hoverTarget}
+          viewportRef={scroll.viewport.setViewport}
+          onScroll={(event) => scroll.viewport.update(event.currentTarget.scrollTop)}
+          onWheel={scroll.viewport.containOuterWheel}
+        >
+          <div
+            class={`
             mx-auto grid min-h-full w-full max-w-[1080px] grid-rows-[auto_minmax(0,1fr)_auto] gap-4 px-3
             lg:grid-cols-[280px_minmax(0,720px)] lg:grid-rows-1 lg:gap-8 lg:px-6
           `}
-        >
-          <HomeProjects projects={projects} scroll={scroll} />
-          <HomeSessions sessions={sessions} search={search} scroll={scroll} />
-          <HomeUtilityNav
-            class="flex lg:hidden"
-            onOpenSettings={projects.utility.settings}
-            onOpenHelp={projects.utility.help}
-            language={projects.copy.language}
-          />
-        </div>
-      </ScrollView>
+          >
+            <HomeProjects projects={projects} scroll={scroll} />
+            <HomeSessions sessions={sessions} search={search} scroll={scroll} />
+            <HomeUtilityNav
+              class="flex lg:hidden"
+              onOpenSettings={projects.utility.settings}
+              onOpenHelp={projects.utility.help}
+              language={projects.copy.language}
+            />
+          </div>
+        </ScrollView>
+      </Show>
     </div>
   )
 }

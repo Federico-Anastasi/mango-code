@@ -13,6 +13,7 @@ import type { ServerConnection } from "@/context/server"
 import { sessionHref } from "@/utils/session-route"
 import { useServerSync } from "@/context/server-sync"
 import { usePlatform } from "@/context/platform"
+import { phoneProjectFiles } from "@/utils/phone-files"
 
 export function DirectoryDataProvider(
   props: ParentProps<{
@@ -68,7 +69,7 @@ export function DirectoryDataProvider(
           sessionID={params.id}
           onNavigateToSession={(sessionID: string) => navigate(href(sessionID))}
           onSessionHref={href}
-          files={platform.projectFiles}
+          files={platform.projectFiles ?? phoneProjectFiles(directory)}
         >
           <LocalProvider>{props.children}</LocalProvider>
         </DataProvider>

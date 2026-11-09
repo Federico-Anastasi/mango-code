@@ -43,6 +43,8 @@ const ENGINE_PORT: u16 = 8080;
 const VOICE_PORT: u16 = 4097;
 /// Port of the phone service (off by default, see `phone.rs`). Fixed: it is in the link and the QR.
 const PHONE_PORT: u16 = 47096;
+/// The phone service's second port, for the pages of the browser panel: open only while the first is.
+const PHONE_PREVIEW_PORT: u16 = 47097;
 
 /// The automated tests start their own instance next to the real app, on their own ports.
 fn port_from_env(var: &str, default: u16) -> u16 {
@@ -56,6 +58,9 @@ fn engine_port() -> u16 {
 }
 pub(crate) fn phone_port() -> u16 {
     port_from_env("MANGO_PHONE_PORT", PHONE_PORT)
+}
+pub(crate) fn phone_preview_port() -> u16 {
+    port_from_env("MANGO_PHONE_PREVIEW_PORT", PHONE_PREVIEW_PORT)
 }
 
 /// `--service`: the app starts without showing the window (the tray icon opens it). This is how

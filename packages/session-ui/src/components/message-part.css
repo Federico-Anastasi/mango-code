@@ -220,6 +220,14 @@
     pointer-events: auto;
   }
 
+  /* with a finger there is no hovering: the actions of a message are always there */
+  @media (hover: none) {
+    [data-slot="user-message-copy-wrapper"] {
+      opacity: 1;
+      pointer-events: auto;
+    }
+  }
+
   .text-text-strong {
     color: var(--v2-text-text-base);
   }
@@ -1600,5 +1608,12 @@ body:not([data-new-layout]) {
 
   [data-component="tool-loaded-file"] {
     color: var(--text-weak);
+  }
+}
+
+@media (max-width: 767px) {
+  [data-component="reasoning-part"] [data-component="markdown"],
+  [data-component="bash-output"] [data-slot="bash-pre"] code {
+    font-size: 14px;
   }
 }

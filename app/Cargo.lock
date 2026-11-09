@@ -10,7 +10,7 @@ checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
 name = "agent-cfg"
-version = "0.1.0-rc.4"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "mango-common",
@@ -1052,7 +1052,7 @@ checksum = "66b7e2430c6dff6a955451e2cfc438f09cea1965a9d6f87f7e3b90decc014099"
 
 [[package]]
 name = "engine"
-version = "0.1.0-rc.4"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1068,7 +1068,7 @@ dependencies = [
 
 [[package]]
 name = "engine-cfg"
-version = "0.1.0-rc.4"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "mango-common",
@@ -2387,7 +2387,7 @@ checksum = "f9f8bd3e56ce4dfc153cf470fffbfa98c7620958b312ca5c3a4b8d5181fd13c6"
 
 [[package]]
 name = "mango-code"
-version = "0.1.0-rc.4"
+version = "0.1.0"
 dependencies = [
  "agent-cfg",
  "anyhow",
@@ -2415,7 +2415,7 @@ dependencies = [
 
 [[package]]
 name = "mango-common"
-version = "0.1.0-rc.4"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "keyring",
@@ -3068,7 +3068,7 @@ dependencies = [
 
 [[package]]
 name = "phone"
-version = "0.1.0-rc.4"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -5193,7 +5193,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "voice"
-version = "0.1.0-rc.4"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "mango-common",

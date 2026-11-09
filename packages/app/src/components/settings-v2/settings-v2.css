@@ -826,3 +826,114 @@
 .settings-v2-prompt-weight[data-measured] {
   color: var(--v2-text-text-base);
 }
+
+/* On a phone the settings fill the screen and are two screens: the list of pages, then the chosen page (settings-v2-phone-bar
+   has the way back). Rows and fields are made for the thumb: 16 px text, taller rows. */
+@media (max-width: 767px) {
+  [data-component="dialog-v2"][data-variant="settings"] [data-slot="dialog-container"] {
+    width: 100% !important;
+    height: 100% !important;
+    border-radius: 0;
+  }
+
+  [data-component="tabs-v2"].settings-v2[data-variant="settings"][data-orientation="vertical"] {
+    flex-direction: column;
+  }
+
+  .settings-v2-phone-bar {
+    display: flex;
+    flex-shrink: 0;
+    align-items: center;
+    gap: 4px;
+    min-height: 56px;
+    padding: 6px 8px;
+    border-bottom: 1px solid var(--v2-border-border-base);
+  }
+
+  .settings-v2-phone-bar h2 {
+    min-width: 0;
+    margin: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 17px;
+    font-weight: 600;
+    color: var(--v2-text-text-base);
+  }
+
+  [data-component="tabs-v2"].settings-v2[data-variant="settings"][data-orientation="vertical"]
+    [data-slot="tabs-v2-list"] {
+    width: 100%;
+    min-width: 0;
+    flex: 1;
+    border-inline-end: 0;
+    padding: 12px;
+  }
+
+  [data-component="tabs-v2"].settings-v2[data-variant="settings"][data-orientation="vertical"]
+    [data-slot="tabs-v2-section-title"] {
+    display: none;
+  }
+
+  /* the list is a menu: every row looks the same, there is no selected one */
+  [data-component="tabs-v2"].settings-v2[data-variant="settings"][data-orientation="vertical"]
+    [data-slot="tabs-v2-trigger-wrapper"],
+  [data-component="tabs-v2"].settings-v2[data-variant="settings"][data-orientation="vertical"]
+    [data-slot="tabs-v2-trigger-wrapper"]:has([data-selected]) {
+    height: 56px;
+    border-radius: 10px;
+    background-color: var(--v2-background-bg-layer-02);
+    color: var(--v2-text-text-base);
+    font-size: 16px;
+  }
+
+  [data-component="tabs-v2"].settings-v2[data-variant="settings"][data-orientation="vertical"]
+    [data-slot="tabs-v2-trigger"] {
+    gap: 12px;
+    padding: 0 16px;
+    font-size: 16px;
+  }
+
+  [data-component="tabs-v2"].settings-v2[data-variant="settings"][data-orientation="vertical"] .settings-v2-panel {
+    flex: 1;
+    min-height: 0;
+    user-select: text;
+  }
+
+  /* one screen at a time */
+  [data-component="tabs-v2"].settings-v2[data-variant="settings"][data-orientation="vertical"]:not([data-phone-page])
+    .settings-v2-panel,
+  [data-component="tabs-v2"].settings-v2[data-variant="settings"][data-orientation="vertical"][data-phone-page]
+    [data-slot="tabs-v2-list"] {
+    display: none;
+  }
+
+  /* the title of the page is in the bar */
+  .settings-v2-tab-header {
+    display: none;
+  }
+
+  .settings-v2-tab-body {
+    gap: 24px;
+    padding: 16px 16px 32px;
+  }
+
+  [data-component="settings-v2-list"] {
+    padding-inline: 16px;
+  }
+
+  [data-component="settings-v2-row"] {
+    flex-wrap: wrap;
+    padding-block: 16px;
+  }
+
+  [data-slot="settings-v2-row-title"] {
+    font-size: 16px;
+    line-height: 22px;
+  }
+
+  [data-slot="settings-v2-row-description"] {
+    font-size: 15px;
+    line-height: 22px;
+  }
+}

@@ -5,6 +5,7 @@ import {
   createSignal,
   Match,
   on,
+  onCleanup,
   onMount,
   Show,
   Switch,
@@ -41,6 +42,11 @@ import type { PromptSession } from "@/context/prompt"
 import "./titlebar.css"
 import { newTabTooltipKeybind } from "./command-tooltip-keybind"
 import { normalizeSessionInfo } from "@/utils/session"
+import { sessionTitle } from "@/utils/session-title"
+import { useServerSync } from "@/context/server-sync"
+import { phoneBarActions, phoneChanges } from "@/utils/phone-changes"
+import { phonePreview, previewFailed } from "@/utils/phone-preview"
+import { WordmarkV2 } from "@opencode-ai/ui/v2/wordmark-v2"
 
 const legacyTitlebarHeight = 40
 const v2TitlebarHeight = 36
@@ -75,6 +81,7 @@ export function Titlebar(props: {
   const language = useLanguage()
   const settings = useSettings()
   const server = useServer()
+  const serverSync = useServerSync()
   const navigate = useNavigate()
   const location = useLocation()
   const params = useParams()
@@ -180,7 +187,7 @@ export function Titlebar(props: {
       data-slot={useV2Titlebar() ? "titlebar-v2" : undefined}
       classList={{
         "shrink-0 relative flex flex-row": true,
-        "h-9 bg-v2-background-bg-deep overflow-visible": useV2Titlebar(),
+        "h-9 max-md:h-12 bg-v2-background-bg-deep overflow-visible": useV2Titlebar(),
         "h-10 bg-background-base overflow-hidden": !useV2Titlebar(),
         "order-last": bottom(),
       }}
@@ -363,93 +370,216 @@ export function Titlebar(props: {
               ].filter((v) => v !== undefined)
             })
 
-            return (
-              <div
-                class="h-full flex-1 overflow-hidden flex flex-row items-center gap-1.5 px-2 md:pr-3"
-                classList={{
-                  "pt-2": !bottom(),
-                  "pb-2": bottom(),
-                  "md:pl-2": macTrafficLights(),
-                  "md:pl-4": !macTrafficLights(),
-                }}
-              >
-                <ChannelIndicator debugTools={props.debugTools} />
-                <Show when={windows() || linux()}>
-                  <WindowsAppMenu command={command} platform={platform} variant="v2" />
-                </Show>
-                <TooltipV2
-                  placement="bottom"
-                  value={
-                    <>
-                      {language.t("titlebar.history.tooltip")}
-                      <KeybindV2 keys={command.keybindParts("home.toggle")} variant="neutral" />
-                    </>
-                  }
-                  class="shrink-0"
-                >
-                  <ButtonV2
-                    type="button"
-                    variant={layout.route().type === "home" ? "neutral" : "ghost-muted"}
-                    size="large"
-                    class="shrink-0"
-                    icon="menu"
-                    onClick={toggleHome}
-                    aria-pressed={layout.route().type === "home"}
-                  >
-                    {language.t("titlebar.history")}
-                  </ButtonV2>
-                </TooltipV2>
+            // On a phone the bar is one row. In the Home: the mark and the settings. In a conversation: the arrow that goes one level up
+            // (from the changes to the conversation, from the conversation to the Home), the title, a new conversation, the changes and
+            // the menu of the conversation (which the page puts in the bar, with the settings inside). Elsewhere the arrow,
+            // the title and the settings. The row of tabs and the browser panel are for the computer.
+            const onHome = () => layout.route().type === "home"
+            const inSession = () => layout.route().type === "session"
+            const barTitle = () => {
+              const route = layout.route()
+              if (route.type === "session" && phoneChanges.opened()) return language.t("session.review.change.other")
+              if (route.type !== "session") return language.t("session.untitled")
+              // the title the conversation has now (it is born untitled and gets its name after the first answer)
+              return sessionTitle(
+                serverSync().session.get(route.sessionId)?.title ?? session()?.title,
+                language.t("session.untitled"),
+              )
+            }
+            createEffect(
+              on(
+                () => {
+                  const route = layout.route()
+                  return route.type === "session" ? route.sessionId : route.type
+                },
+                () => {
+                  phoneChanges.close()
+                  phonePreview.close()
+                },
+                { defer: true },
+              ),
+            )
 
-                <TitlebarTabStrip
-                  tabs={tabsStore}
-                  currentTab={currentTab}
-                  onNavigate={(tab, el) => {
-                    tabs.select(tab)
-                    el?.scrollIntoView({ behavior: "instant" })
+            return (
+              <Show
+                when={!mobile()}
+                fallback={
+                  <div
+                    data-component="titlebar-mobile"
+                    class="flex h-full min-w-0 flex-1 flex-row items-center gap-0.5 px-1"
+                  >
+                    <Show
+                      when={!onHome()}
+                      fallback={
+                        <h1 class="ml-3 flex min-w-0 flex-1 items-center">
+                          <WordmarkV2 class="h-6 w-auto text-v2-background-bg-inverse" />
+                          <span class="sr-only">Mango Code</span>
+                        </h1>
+                      }
+                    >
+                      <IconButtonV2
+                        type="button"
+                        variant="ghost-muted"
+                        size="large"
+                        class="!size-11 shrink-0"
+                        icon={<IconV2 name="chevron-left" />}
+                        onClick={() => (phoneChanges.opened() ? phoneChanges.close() : toggleHome())}
+                        aria-label={language.t("common.goBack")}
+                        data-action="titlebar-back"
+                      />
+                      <h1 class="min-w-0 flex-1 truncate px-1 text-[16px] leading-6 text-v2-text-text-base [font-weight:530]">
+                        {barTitle()}
+                      </h1>
+                    </Show>
+                    <Show when={updateState().visible}>
+                      <TitlebarUpdateIconButton state={updateState()} />
+                    </Show>
+                    <Show when={inSession()}>
+                      <IconButtonV2
+                        type="button"
+                        variant="ghost-muted"
+                        size="large"
+                        class="!size-11 shrink-0"
+                        icon={<IconV2 name="edit" />}
+                        onClick={openNewTab}
+                        aria-label={language.t("command.session.new")}
+                        data-action="titlebar-new"
+                      />
+                      <Show when={phonePreview.available()}>
+                        <IconButtonV2
+                          type="button"
+                          variant="ghost-muted"
+                          size="large"
+                          class="!size-11 shrink-0"
+                          icon={<IconV2 name="globe" />}
+                          onClick={() => void phonePreview.open().catch(previewFailed(language.t("preview.phone.failed")))}
+                          aria-label={language.t("preview.toggle")}
+                          data-action="titlebar-preview"
+                        />
+                      </Show>
+                      <IconButtonV2
+                        type="button"
+                        variant="ghost-muted"
+                        size="large"
+                        class="!size-11 shrink-0"
+                        state={phoneChanges.opened() ? "pressed" : undefined}
+                        icon={<IconV2 name="sidebar-right" />}
+                        onClick={phoneChanges.toggle}
+                        aria-pressed={phoneChanges.opened()}
+                        aria-label={language.t("session.review.change.other")}
+                        data-action="titlebar-changes"
+                      />
+                      <div
+                        data-slot="phone-session-actions"
+                        class="flex shrink-0 items-center"
+                        ref={(el) => {
+                          phoneBarActions.set(el)
+                          onCleanup(() => phoneBarActions.set(undefined))
+                        }}
+                      />
+                    </Show>
+                    <Show when={!inSession()}>
+                      <IconButtonV2
+                        type="button"
+                        variant="ghost-muted"
+                        size="large"
+                        class="!size-11 shrink-0"
+                        icon={<IconV2 name="settings-gear" />}
+                        onClick={() => command.trigger("settings.open")}
+                        aria-label={language.t("command.settings.open")}
+                        data-action="titlebar-settings"
+                      />
+                    </Show>
+                  </div>
+                }
+              >
+                <div
+                  class="h-full flex-1 overflow-hidden flex flex-row items-center gap-1.5 px-2 md:pr-3"
+                  classList={{
+                    "pt-2": !bottom(),
+                    "pb-2": bottom(),
+                    "md:pl-2": macTrafficLights(),
+                    "md:pl-4": !macTrafficLights(),
                   }}
-                  onClose={(tab) => {
-                    const index = tabsStore.findIndex((item) => tabKey(item) === tabKey(tab))
-                    if (index !== -1) tabsStoreActions.closeTab(index)
-                  }}
-                  onReorder={(keys) => tabsStoreActions.reorder(keys)}
-                />
-                <TooltipV2
-                  placement="bottom"
-                  value={
-                    <>
-                      {language.t("command.session.new")}
-                      <KeybindV2 keys={newTabTooltipKeybind(command)} variant="neutral" />
-                    </>
-                  }
                 >
-                  <IconButtonV2
-                    type="button"
-                    variant="ghost-muted"
-                    size="large"
+                  <ChannelIndicator debugTools={props.debugTools} />
+                  <Show when={windows() || linux()}>
+                    <WindowsAppMenu command={command} platform={platform} variant="v2" />
+                  </Show>
+                  <TooltipV2
+                    placement="bottom"
+                    value={
+                      <>
+                        {language.t("titlebar.history.tooltip")}
+                        <KeybindV2 keys={command.keybindParts("home.toggle")} variant="neutral" />
+                      </>
+                    }
                     class="shrink-0"
-                    icon={<IconV2 name="plus" />}
-                    onClick={openNewTab}
-                    aria-label={language.t("command.session.new")}
+                  >
+                    <ButtonV2
+                      type="button"
+                      variant={layout.route().type === "home" ? "neutral" : "ghost-muted"}
+                      size="large"
+                      class="shrink-0"
+                      icon="menu"
+                      onClick={toggleHome}
+                      aria-pressed={layout.route().type === "home"}
+                    >
+                      {language.t("titlebar.history")}
+                    </ButtonV2>
+                  </TooltipV2>
+
+                  <TitlebarTabStrip
+                    tabs={tabsStore}
+                    currentTab={currentTab}
+                    onNavigate={(tab, el) => {
+                      tabs.select(tab)
+                      el?.scrollIntoView({ behavior: "instant" })
+                    }}
+                    onClose={(tab) => {
+                      const index = tabsStore.findIndex((item) => tabKey(item) === tabKey(tab))
+                      if (index !== -1) tabsStoreActions.closeTab(index)
+                    }}
+                    onReorder={(keys) => tabsStoreActions.reorder(keys)}
                   />
-                </TooltipV2>
-                <div class="flex-1" />
-                <Show when={props.preview}>
-                  <PreviewToggle opened={props.preview!.opened} toggle={props.preview!.toggle} />
-                </Show>
-                <TitlebarV2Right state={v2RightState()} />
-                <TooltipV2 placement="bottom" value={language.t("command.settings.open")}>
-                  <IconButtonV2
-                    type="button"
-                    variant="ghost-muted"
-                    size="large"
-                    class="shrink-0"
-                    icon={<IconV2 name="settings-gear" />}
-                    onClick={() => command.trigger("settings.open")}
-                    aria-label={language.t("command.settings.open")}
-                    data-action="titlebar-settings"
-                  />
-                </TooltipV2>
-              </div>
+                  <TooltipV2
+                    placement="bottom"
+                    value={
+                      <>
+                        {language.t("command.session.new")}
+                        <KeybindV2 keys={newTabTooltipKeybind(command)} variant="neutral" />
+                      </>
+                    }
+                  >
+                    <IconButtonV2
+                      type="button"
+                      variant="ghost-muted"
+                      size="large"
+                      class="shrink-0"
+                      icon={<IconV2 name="plus" />}
+                      onClick={openNewTab}
+                      aria-label={language.t("command.session.new")}
+                    />
+                  </TooltipV2>
+                  <div class="flex-1" />
+                  <Show when={props.preview}>
+                    <PreviewToggle opened={props.preview!.opened} toggle={props.preview!.toggle} />
+                  </Show>
+                  <TitlebarV2Right state={v2RightState()} />
+                  <TooltipV2 placement="bottom" value={language.t("command.settings.open")}>
+                    <IconButtonV2
+                      type="button"
+                      variant="ghost-muted"
+                      size="large"
+                      class="shrink-0"
+                      icon={<IconV2 name="settings-gear" />}
+                      onClick={() => command.trigger("settings.open")}
+                      aria-label={language.t("command.settings.open")}
+                      data-action="titlebar-settings"
+                    />
+                  </TooltipV2>
+                </div>
+              </Show>
             )
           }}
         </Match>

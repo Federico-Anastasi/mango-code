@@ -360,7 +360,7 @@ export const SessionReview = (props: SessionReviewProps) => {
             <Button
               size="small"
               icon="chevron-grabber-vertical"
-              class="w-[106px] justify-start"
+              class="w-[106px] justify-start max-md:w-auto"
               onClick={handleExpandOrCollapseAll}
             >
               <Switch>

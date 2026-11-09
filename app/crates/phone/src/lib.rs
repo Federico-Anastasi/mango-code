@@ -1,8 +1,8 @@
 //! Mango Code from the phone: the agent's web UI over the network, from the home Wi-Fi or from outside with Tailscale.
 //!
 //! **Off by default.** When on, it listens on a port of its own (`0.0.0.0:<port>`) and forwards the requests to the
-//! agent's server, which stays on `127.0.0.1` and doesn't change for whoever uses it from the PC. When off, the port
-//! isn't open.
+//! agent's server, which stays on `127.0.0.1` and doesn't change for whoever uses it from the PC. Next to it a second
+//! port, for the pages of the computer's browser panel (`site.rs`). When off, neither port is open.
 //!
 //! * You get in with the link that carries the key (`GET /phone?key=…`, 24 random bytes, compared in constant time):
 //!   the reply sets the `mango_phone` cookie (a random value of one session, never the key, `HttpOnly;
@@ -11,15 +11,19 @@
 //! * Every other request passes only with a valid session, only if the requested address is numeric (a name is
 //!   another site's that points to the computer, DNS rebinding) and, if there is an `Origin`, only if it is that of
 //!   the requested address. The checks and the forwarding are in `http.rs`.
+//! * The second port accepts the same session, address and origin, and sends only to the page the panel on the computer
+//!   shows at that moment: a server on the computer's loopback, or a local file's folder, read-only.
 //! * Turning off and remaking the key drop all the sessions and close the open connections; turning off also removes
 //!   the key, so a link seen earlier doesn't reopen access when it is turned on again.
 //!
 //! **A session is worth the computer**: it commands an agent that has the shell. The state lives in
 //! `<data>\phone.json`, every entry and every refusal in `<logs>\phone.log` (never the key).
 
+mod files;
 mod http;
-mod qr;
 mod network;
+mod qr;
+mod site;
 
 use anyhow::{Context, Result};
 use mango_common::tr;
@@ -46,6 +50,33 @@ pub trait Reports: Send + Sync {
     fn submit(&self, body: Vec<u8>) -> std::result::Result<serde_json::Value, (u16, String)>;
 }
 
+/// The page the browser panel on the computer is showing.
+#[derive(Clone, Debug)]
+pub struct Shown {
+    /// Its address, as the panel has it.
+    pub url: String,
+    pub title: String,
+    /// The file, if the address is a local one (`file://`).
+    pub file: Option<PathBuf>,
+}
+
+/// A page the phone asks the panel to open. The phone port has checked it: an address of the computer's own, or an HTML
+/// file inside a project.
+pub enum Page {
+    Url(String),
+    File(PathBuf),
+}
+
+/// What the app knows of the computer that the phone's pages and files need.
+pub trait Computer: Send + Sync {
+    /// The page the panel shows now; `None` if it shows nothing.
+    fn shown(&self) -> Option<Shown>;
+    /// Makes the panel open `page`. Err: the HTTP status and the sentence for the user.
+    fn open(&self, page: Page) -> std::result::Result<(), (u16, String)>;
+    /// The project folders the agent knows. Err: why they could not be read.
+    fn project_folders(&self) -> std::result::Result<Vec<PathBuf>, String>;
+}
+
 /// The phone service. Cloning is cheap: all copies are the same service.
 #[derive(Clone)]
 pub struct Phone {
@@ -58,8 +89,11 @@ struct Inner {
     /// Where the port is opened: `0.0.0.0` (all networks); tests use `127.0.0.1`.
     listen_on: std::net::Ipv4Addr,
     port: u16,
+    /// The second port, for the browser panel's pages.
+    preview_port: u16,
     agent_port: u16,
     reports: Arc<dyn Reports>,
+    computer: Arc<dyn Computer>,
     saved: Mutex<Saved>,
     listener: Mutex<Option<http::Listener>>,
     /// The error of the last start (the port in use), until it is retried.
@@ -114,8 +148,10 @@ impl Phone {
         logs: &Path,
         listen_on: std::net::Ipv4Addr,
         port: u16,
+        preview_port: u16,
         agent_port: u16,
         reports: Arc<dyn Reports>,
+        computer: Arc<dyn Computer>,
     ) -> Result<Phone> {
         let file = data.join("phone.json");
         let saved = match std::fs::read_to_string(&file) {
@@ -130,8 +166,10 @@ impl Phone {
                 log: logs.join("phone.log"),
                 listen_on,
                 port,
+                preview_port,
                 agent_port,
                 reports,
+                computer,
                 saved: Mutex::new(saved),
                 listener: Mutex::new(None),
                 error: Mutex::new(None),
@@ -205,7 +243,7 @@ impl Phone {
         Ok(self.state())
     }
 
-    /// Opens the port if it isn't already open; if it doesn't open, the error stays in the state.
+    /// Opens the ports if they aren't already open; if one doesn't open, neither does, and the error stays in the state.
     fn open(&self) {
         let mut listener = self.d.listener.lock().unwrap();
         if listener.is_some() {
@@ -217,8 +255,8 @@ impl Phone {
                 *self.d.error.lock().unwrap() = None;
             }
             Err(e) => {
-                self.d.log(serde_json::json!({ "event": "port not open", "reason": format!("port {} does not open: {e:#}", self.d.port) }));
-                *self.d.error.lock().unwrap() = Some(tr!("la porta {} non si apre: {e:#}", "port {} does not open: {e:#}", self.d.port));
+                self.d.log(serde_json::json!({ "event": "port not open", "reason": format!("{e:#}") }));
+                *self.d.error.lock().unwrap() = Some(format!("{e:#}"));
             }
         }
     }

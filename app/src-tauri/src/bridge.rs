@@ -392,7 +392,7 @@ fn is_executable(path: &Path) -> bool {
 }
 
 /// Project folders the agent server knows (main folder and any working copies).
-fn agent_projects() -> Result<Vec<PathBuf>, BridgeError> {
+pub(crate) fn agent_projects() -> Result<Vec<PathBuf>, BridgeError> {
     let url = format!("http://127.0.0.1:{}/project", crate::agent_port());
     let body = ureq::get(&url)
         .timeout(std::time::Duration::from_secs(3))
@@ -402,13 +402,39 @@ fn agent_projects() -> Result<Vec<PathBuf>, BridgeError> {
         .map_err(|e| err("unavailable", format!("{url}: {e}")))?;
     let list: Vec<serde_json::Value> = serde_json::from_str(&body)
         .map_err(|e| err("unavailable", tr!("{url}: risposta non valida: {e}", "{url}: invalid response: {e}")))?;
+    Ok(project_dirs(&list))
+}
+
+/// The folders of the agent's projects and their sandboxes. The agent also lists a "global" project whose folder is `/`: the
+/// root of a disk is every folder, not a project, so roots are left out (otherwise every file on C: would count as "in a project").
+fn project_dirs(list: &[serde_json::Value]) -> Vec<PathBuf> {
     let mut dirs = Vec::new();
-    for p in &list {
+    for p in list {
         dirs.extend(p.get("worktree").and_then(|w| w.as_str()).map(PathBuf::from));
         let sandboxes = p.get("sandboxes").and_then(|s| s.as_array());
         dirs.extend(sandboxes.into_iter().flatten().filter_map(|s| s.as_str()).map(PathBuf::from));
     }
-    Ok(dirs)
+    dirs.retain(|d| d.parent().is_some());
+    dirs
+}
+
+#[cfg(test)]
+mod project_dirs_tests {
+    use super::*;
+
+    #[test]
+    fn the_global_project_and_disk_roots_are_not_projects() {
+        let list = serde_json::json!([
+            { "worktree": "/" },
+            { "worktree": "C:\\", "sandboxes": ["D:\\"] },
+            { "worktree": "C:\\Users\\Alice\\Documents\\Mango Code\\ricette", "sandboxes": ["C:\\Users\\Alice\\sandbox-1"] }
+        ]);
+        let dirs = project_dirs(list.as_array().unwrap());
+        assert_eq!(
+            dirs,
+            vec![PathBuf::from("C:\\Users\\Alice\\Documents\\Mango Code\\ricette"), PathBuf::from("C:\\Users\\Alice\\sandbox-1")]
+        );
+    }
 }
 
 /// Is `real` (already resolved, without `..` or links) inside one of the allowed folders?

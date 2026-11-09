@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="{lang}">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#15171f">
+<title>Mango Code</title>
+<link rel="icon" type="image/svg+xml" href="/favicon-v3.svg">
+<style>
+html { background: #15171f; }
+body {
+  margin: 0;
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  padding: max(24px, env(safe-area-inset-top)) max(24px, env(safe-area-inset-right)) max(24px, env(safe-area-inset-bottom)) max(24px, env(safe-area-inset-left));
+  color: #f1f0eb;
+  font: 17px/1.5 Inter, system-ui, -apple-system, sans-serif;
+}
+main { width: 100%; max-width: 420px; }
+img { display: block; width: 88px; height: auto; margin: 0 0 20px; }
+h1 { margin: 0 0 12px; font-size: 26px; line-height: 1.2; }
+p { margin: 0 0 20px; color: #a9a8b4; }
+.notice { color: #ffb547; }
+form { margin-top: 28px; padding-top: 24px; border-top: 1px solid #ffffff1a; }
+label { display: block; margin-bottom: 8px; color: #a9a8b4; font-size: 15px; }
+input, button { box-sizing: border-box; width: 100%; min-height: 48px; border-radius: 10px; font: inherit; font-size: 16px; }
+input { padding: 0 14px; color: #f1f0eb; background: #1f222d; border: 1px solid #ffffff1a; }
+button { margin-top: 12px; border: 0; color: #15171f; background: #ffa61f; font-weight: 600; }
+</style>
+<main>
+  <img src="/favicon-v3.svg" alt="">
+  <h1>{title}</h1>
+  <p>{steps}</p>
+  {notice}
+  <form id="f">
+    <label for="k">{label}</label>
+    <input id="k" name="key" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" inputmode="url">
+    <button>{button}</button>
+  </form>
+</main>
+<script>
+// The link carries the key after `key=`; a key pasted alone works too.
+document.getElementById('f').onsubmit = function (e) {
+  e.preventDefault();
+  var v = document.getElementById('k').value.trim();
+  var m = v.match(/key=([0-9a-f]+)/i);
+  if (v) location.href = '/phone?key=' + encodeURIComponent(m ? m[1] : v);
+};
+</script>

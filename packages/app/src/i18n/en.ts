@@ -266,6 +266,8 @@ export const dict = {
   "preview.openExternal": "Open in your browser",
   "preview.close": "Close the preview",
   "preview.empty": "The page the agent opens appears here. You can also type an address.",
+  "preview.phone.back": "Back to the conversation",
+  "preview.phone.failed": "The preview could not be opened",
   "settings.general.row.useChrome.title": "Use my Chrome",
   "settings.general.row.useChrome.description":
     "The agent drives your Chrome, with your logins. Turn on remote debugging in chrome://inspect first; Chrome asks for confirmation on every connection. Off, the agent uses the Preview panel.",

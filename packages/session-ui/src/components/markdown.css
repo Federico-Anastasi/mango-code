@@ -383,3 +383,33 @@ body:not([data-new-layout]) [data-component="markdown"] {
   text-decoration: underline;
   text-underline-offset: 2px;
 }
+
+/* On a phone the text is read at 16 px (the variable is set in the app); code and tables are a step smaller so that lines of code
+   still show a useful width. */
+@media (max-width: 767px) {
+  [data-component="markdown"] {
+    h1 {
+      font-size: 20px;
+    }
+
+    h2 {
+      font-size: 18px;
+    }
+
+    h3,
+    h4,
+    h5,
+    h6 {
+      font-size: 16px;
+    }
+
+    .shiki,
+    table {
+      font-size: 14px;
+    }
+
+    :not(pre) > code {
+      font-size: 0.875em;
+    }
+  }
+}

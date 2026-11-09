@@ -17,23 +17,76 @@
   font-style: normal;
 }
 
-/* The app is exactly the area the user sees (utils/visible-area.ts keeps the two variables): the page itself never scrolls,
-   the messages scroll inside it and the prompt stays at the bottom, also with the keyboard open. */
-html {
-  overscroll-behavior: none;
+/* The screen's safe areas (notch, home indicator): zero in a browser tab, real in an app installed on the home screen. */
+:root {
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
 }
 
-#root {
-  position: fixed;
-  inset-inline: 0;
-  top: var(--visible-top, 0px);
-  height: var(--visible-height, 100dvh);
-}
+/* On a phone the app is exactly the page the browser gives it (the page itself never scrolls: the messages scroll inside it and the
+   prompt stays at the bottom) and, while the keyboard is open, the part of it above the keyboard (utils/visible-area.ts keeps
+   the two variables and data-keyboard). The layout keeps the safe areas free (pages/layout-new.tsx). */
+@media (max-width: 767px) {
+  html {
+    overscroll-behavior: none;
+  }
 
-@media (display-mode: standalone) {
-  /* WebKit excludes safe-area insets from dvh in installed apps. */
+  /* Reading text is 16 px, the small print (times, models, code) 14 px: one step up from the desktop. */
+  :root {
+    --font-size-small: 14px;
+    --font-size-base: 16px;
+    --font-size-large: 18px;
+  }
+
   #root {
-    height: var(--visible-height, 100vh);
+    position: fixed;
+    inset: 0;
+    top: var(--keyboard-top, 0px);
+    height: var(--keyboard-height, auto);
+  }
+
+  /* Buttons are made for the thumb: at least 44 px each way. */
+  :is([data-component="icon-button"], [data-component="icon-button-v2"]) {
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  :is(
+    [data-component="button-v2"],
+    [data-component="select-v2"],
+    [data-component="sticky-accordion-header"] button,
+    [data-component="collapsible"] > button
+  ) {
+    min-height: 44px;
+  }
+
+  /* The rows of a menu are 44 px tall and read at 16 px. */
+  [data-component="menu-v2-content"] [data-component="menu-v2-item"] {
+    height: 44px;
+  }
+
+  [data-component="menu-v2-content"] [data-component="menu-v2-item"] [data-slot="menu-v2-item-content"] {
+    font-size: 16px;
+  }
+
+  /* In the prompt the buttons keep their size (the toolbar is made for it) and their touch area grows around them. */
+  form[class~="group/prompt-input"]
+    :is([data-component="icon-button"], [data-component="icon-button-v2"], [data-component="button-v2"]) {
+    position: relative;
+    min-width: 0;
+    min-height: 0;
+  }
+
+  form[class~="group/prompt-input"]
+    :is([data-component="icon-button"], [data-component="icon-button-v2"], [data-component="button-v2"])::after {
+    content: "";
+    position: absolute;
+    inset: -8px;
+  }
+
+  /* Whatever is typed in is 16 px at least: below that iOS zooms the page when the field gets the focus. */
+  :is(input:not([type="checkbox"], [type="radio"], [type="range"]), textarea, select, [contenteditable="true"]) {
+    font-size: max(16px, 1em);
   }
 }
 

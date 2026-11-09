@@ -141,20 +141,55 @@ web UI settings in the app ("From your phone", `settings-v2/phone.tsx`, `phone_*
 `src-tauri/src/phone.rs`), which shows the link with the key and its QR for the home network and for Tailscale (an
 address in `100.64.0.0/10`). The phone does not see the bridge: no phone settings from the phone.
 
-- **Its own port**: `0.0.0.0:47096` (`MANGO_PHONE_PORT` for the tests), open only while on. Agent and engine stay
-  on `127.0.0.1` as before; the engine cannot be reached from the phone.
+- **Its own ports**: `0.0.0.0:47096` for the web UI and `0.0.0.0:47097` for the browser panel's pages
+  (`MANGO_PHONE_PORT` and `MANGO_PHONE_PREVIEW_PORT` for the tests), both open only while on: if one does not open, neither
+  does, and the settings say which. Agent and engine stay on `127.0.0.1` as before; the engine cannot be reached from the phone.
 - **Entry**: `GET /phone?key=…` (24 random bytes, compared in constant time) → `303` to `/` with the cookie
   `mango_phone` (a random value of a session, never the key; `HttpOnly; SameSite=Strict; Path=/`, 90 days, not
-  renewed); wrong or missing key `401`.
+  renewed); wrong or missing key `401` with a page made for the phone (`crates/phone/src/key.html`: the app's dark look, the icon, how
+  to get in and a field to paste the link or the key, for an app on the home screen that cannot open a link).
 - **Every other request**: requested address not numeric (a name pointing to the computer, DNS rebinding) `403`, also for
   `/phone`; `Origin` different from `http://<requested address>` `403`; without a valid session `401` (a sentence for the
-  browser, JSON for the rest); methods other than `GET`, `HEAD`, `POST`, `PUT`, `PATCH`, `DELETE` `405`; the routes only the
+  browser, JSON for the rest), except the manifest and the icons of the app (`PUBLIC_FILES`), which the system reads without the cookie;
+  methods other than `GET`, `HEAD`, `POST`, `PUT`, `PATCH`, `DELETE` `405`; the routes only the
   app on the PC uses (`/mango/warmup`, `/mango/extra-folders`) `403`; chunked body `400`; agent off `502`.
 - **Problem reports** (`/phone/report`): the one route the port answers itself. `GET` says what a report may carry,
   `POST` hands one to the app (`phone::Reports`, implemented by `PhoneReports` in `report.rs`: the logs and the sending are
   on the computer). It needs the same session, `Origin` and `Content-Length` as everything else, the body is bounded
   (`413` above the limit, refused before reading it) and the log has the outcome, never the content. The web UI shows
   "Report a problem" in Settings > Help also from the phone, without the window's screenshot, the updates or the logs.
+- **The browser panel from the phone** (`site.rs`). The pages the agent builds live on the computer (`127.0.0.1:<port>`, local
+  files), which the phone cannot reach, so the preview port shows them. Every request there needs the same session (the
+  cookie of the first port is valid on the second: cookies do not depend on the port) and has the same checks: numeric
+  address `403`, foreign `Origin` `403`, no session `401` (JSON, never the page that asks for the key), methods and chunked
+  bodies as above. It is a port of its own and not a path under the first because pages with absolute paths (`/assets/…`)
+  break inside a prefix. What it serves is decided on every request by what the panel on the computer shows *at that
+  moment*, and never by what the phone writes: the phone sends only a path and a query.
+  - A page on `http://localhost:<port>` or `http://127.0.0.1:<port>` is relayed to that loopback address (`localhost` is tried
+    on `127.0.0.1` and `::1`; no name is resolved), with the page's own `Host`, `Origin` and cookies, without the phone's
+    session cookie, `Referer` or `Authorization`. A redirect to the page's own address comes back as a path, and a WebSocket
+    (the reload of a development server) passes both ways. Absolute addresses written inside the page (`http://localhost:3000/api`)
+    still point at the phone itself and do not work.
+  - A local file (`file://`) serves its folder, read-only (`GET` and `HEAD`, `Range` for videos): `/` is the file, and no path
+    may leave the folder (`..`, a drive, a stream, a device name, a link out are `404`; the real file is resolved and must be
+    inside).
+  - A page of the internet, a blank panel or a server that does not answer get a page that says so (`404`, `502`).
+  - `GET /phone/preview` (main port) says the preview port and the path of the page the panel shows (never its address on the
+    disk); `POST /phone/preview` asks the panel to open a page first: `{"url"}` of a page of the computer (the same
+    `localhost`/`127.0.0.1` rule) or `{"directory","path"}` of an HTML file of a project. The panel opens it (it is the
+    computer's panel: on the computer it appears as when the agent opens a page).
+  - On the phone, the globe in a conversation's bar opens the page full screen, over the conversation, in a frame (without
+    the right to take the app away: no `allow-top-navigation`) with the arrow back to the conversation and a reload. A tap
+    on a link to `localhost` or `127.0.0.1` in a message opens it there.
+- **Files from the chat** (`/phone/file?directory=…&path=…`, main port): the cards of the documents the agent wrote (Word,
+  Excel, PowerPoint, PDF, images) have "Open" also on the phone: the file is taken as a download (`Content-Disposition:
+  attachment`, `nosniff`, so it is never shown as a page of the app); an HTML file opens in the preview instead. The same session
+  and checks, `GET`/`HEAD` only, and only a file inside the folder of the conversation's project: `directory` must be, or lie
+  inside, a project folder the agent knows, `path` must be absolute and, with links and `..` resolved, inside `directory`
+  (`403` otherwise, `404` if it is not there). With `&info=1` the answer is the size, as the card shows it. The log has the
+  outcome and never a name.
+- **Pages are never kept**: the HTML of the web UI goes out with `Cache-Control: no-cache` (the files with a hash in their name keep
+  their own rule), so after an update the phone asks again.
 - **Forwarding**: to the agent with its own `Host` and `Origin` (for the agent it is its web UI), without `Cookie`, `Referer`,
   `Authorization` or proxy headers; one request per connection, the response streamed (events included), the
   web UI terminal (WebSocket) both ways.
@@ -165,7 +200,14 @@ address in `100.64.0.0/10`). The phone does not see the bridge: no phone setting
 - **A session is worth the computer**: it commands an agent with the shell. At home the traffic goes in the clear on the Wi-Fi (this is
   why the cookie has no `Secure`); on Tailscale it is encrypted. The first time Windows asks whether the app may receive
   connections: allow it on private networks (and on Tailscale's, if Windows classifies it as public).
-- Tests: `cargo test -p phone` (the rules one by one, on 127.0.0.1); `integration/tests/phone.test.ts` (the real app:
+- **The page on a phone** (under 768 px; the computer's layout does not change): the page is exactly the area the browser leaves and
+  follows the keyboard while it is open. The top bar is one row: in the Home the mark and the settings; in a conversation the back arrow,
+  the title, a new conversation, the preview (the globe), the changes and the menu "…" (the settings are its first item); elsewhere the arrow, the title and the
+  settings. The changes are a screen of their own. Messages are read at 16 px, small print and code at 14 px; buttons and menu rows are
+  44 px tall, fields 16 px (iOS does not zoom them). The settings are two screens. The app can be put on the home screen (manifest with
+  its icons).
+- Tests: `cargo test -p phone` (the rules one by one, on 127.0.0.1: both ports, the checks, what the preview port may reach,
+  the folder and project limits); `integration/tests/phone.test.ts` (the real app:
   turned on from the bridge, entry, web UI and agent from the port, turned off). In development builds `MANGO_PHONE_PC_ONLY` keeps
   the port on `127.0.0.1`, so the tests do not make Windows ask to open it.
 

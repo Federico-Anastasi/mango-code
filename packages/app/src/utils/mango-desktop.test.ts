@@ -18,6 +18,7 @@ function bridge(overrides: Partial<MangoDesktop> = {}) {
     revealPath: async () => {},
     openModels: async () => {},
     reportProblem: async () => ({ sent: true }),
+    reportInfo: async () => ({ maxBytes: 30 * 1024 * 1024, attachments: true, screenshot: true }),
     openLogs: async () => {},
     ...overrides,
   }
@@ -58,7 +59,7 @@ describe("mangoPlatform", () => {
     expect(await files.info("C:\P\a.docx")).toEqual({ size: 11264, isDir: false })
     await files.open("C:\P\a.docx")
     expect(opened).toEqual(["C:\P\a.docx"])
-    expect(await files.reveal("C:\P\a.docx").catch((e) => e)).toEqual({ code: "not_found", message: "x" })
+    expect(await files.reveal!("C:\P\a.docx").catch((e) => e)).toEqual({ code: "not_found", message: "x" })
   })
 
   test("external links: only http, https and mailto go through the bridge", () => {

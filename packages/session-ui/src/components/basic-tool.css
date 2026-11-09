@@ -408,3 +408,16 @@ body:not([data-new-layout]) {
     font-family: var(--font-family-mono);
   }
 }
+
+@media (max-width: 767px) {
+  [data-component="tool-trigger"] [data-slot="basic-tool-tool-time"],
+  body[data-new-layout]
+    [data-component="task-tool-card"]
+    :is([data-component="task-tool-title"], [data-slot="basic-tool-tool-subtitle"]) {
+    font-size: 14px;
+  }
+
+  [data-component="tool-detail"] {
+    font-size: 13px;
+  }
+}

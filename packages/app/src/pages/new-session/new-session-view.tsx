@@ -36,18 +36,21 @@ export function NewSessionView(props: {
     <div class="@container relative flex flex-col min-h-0 h-full flex-1">
       <div
         data-component="session-new-design"
-        class="relative flex-1 min-h-0 overflow-hidden rounded-[10px] bg-v2-background-bg-deep"
+        class="relative flex-1 min-h-0 overflow-hidden rounded-[10px] bg-v2-background-bg-deep max-md:rounded-none"
       >
-        <div class="absolute inset-x-0 top-[25.375%] flex justify-center px-6">
-          <div class={NEW_SESSION_CONTENT_WIDTH}>
-            <WordmarkV2 class="h-auto w-full text-v2-background-bg-inverse" />
-            <div class="mt-8 flex flex-col gap-8">
+        {/* On a phone the empty state (the mark) takes the room above and the prompt, with the project under it, sits at the bottom. */}
+        <div class="absolute inset-x-0 top-[25.375%] flex justify-center px-6 max-md:inset-y-0 max-md:px-3">
+          <div class={`${NEW_SESSION_CONTENT_WIDTH} max-md:flex max-md:flex-col`}>
+            <div class="max-md:flex max-md:flex-1 max-md:items-center max-md:px-3">
+              <WordmarkV2 class="h-auto w-full text-v2-background-bg-inverse" />
+            </div>
+            <div class="mt-8 flex flex-col gap-8 max-md:mt-0 max-md:flex-col-reverse max-md:gap-1 max-md:pb-2">
               <PromptInputV2Composer controller={props.input} />
               <Show when={props.project.empty()}>
                 <PromptProjectAddButton controller={props.project} />
               </Show>
               <Show when={props.project.selected()}>
-                <div class="flex min-h-7 min-w-0 flex-col items-center justify-center gap-0 text-v2-text-text-faint sm:flex-row">
+                <div class="flex min-h-7 min-w-0 flex-col items-center justify-center gap-0 text-v2-text-text-faint sm:flex-row max-md:flex-row max-md:flex-wrap max-md:justify-start">
                   <PromptProjectSelector controller={props.project} placement="bottom" />
                   {/* Git branch and workspaces: programmer stuff, hidden in the Mango Code app */}
                   <Show when={!inMangoDesktop()}>

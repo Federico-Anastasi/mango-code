@@ -213,6 +213,26 @@ pub fn preview_go(app: AppHandle, url: String) -> Result<(), BridgeError> {
     panel(&app)?.navigate(url).map_err(io)
 }
 
+/// The page the panel shows now, for the phone: its address and title; `None` while it is blank.
+pub(crate) fn shown(app: &AppHandle) -> Option<(String, String)> {
+    let s = app.try_state::<Panel>()?.state.lock().unwrap().clone();
+    (!is_blank(&s.url)).then_some((s.url, s.title))
+}
+
+/// Opens `url` in the panel because the phone asked: the panel is the computer's, the phone only looks at what it shows.
+/// The address is noted at once, so the phone that asked sees this page and not the one before while it loads.
+pub(crate) fn open_for_phone(app: &AppHandle, url: Url) -> Result<(), BridgeError> {
+    let wv = panel(app)?;
+    {
+        let p = app.state::<Panel>();
+        let mut s = p.state.lock().unwrap();
+        s.url = url.as_str().to_string();
+        s.title.clear();
+        s.loading = true;
+    }
+    wv.navigate(url).map_err(io)
+}
+
 /// Back, forward, reload, stop.
 #[tauri::command]
 pub fn preview_nav(app: AppHandle, action: String) -> Result<(), BridgeError> {

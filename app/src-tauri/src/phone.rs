@@ -1,10 +1,12 @@
 //! "From your phone" in the web UI settings: turns the phone service on and off (crate `phone`), gives
 //! its links with the QR and renews the key. The commands go through the bridge: only the app window
-//! sees them, the phone does not.
+//! sees them, the phone does not. `PhoneComputer` is what the phone service asks of the app: the page the browser panel
+//! shows, opening one in it, and the project folders.
 
 use crate::bridge::{err, BridgeError};
+use mango_common::tr;
 use tauri::{AppHandle, Manager};
-use phone::{State, Phone};
+use phone::{Computer, Page, Phone, Shown, State};
 
 /// The service, or why there is none (a `phone.json` that cannot be read): the settings page says it.
 struct Service(Result<Phone, String>);
@@ -15,7 +17,8 @@ pub fn install(app: &AppHandle) {
     let service = mango_common::data_dir()
         .and_then(|data| {
             let reports = std::sync::Arc::new(crate::report::PhoneReports(app.clone()));
-            Phone::new(&data, &data.join("logs"), listen_on(), crate::phone_port(), crate::agent_port(), reports)
+            let computer = std::sync::Arc::new(PhoneComputer(app.clone()));
+            Phone::new(&data, &data.join("logs"), listen_on(), crate::phone_port(), crate::phone_preview_port(), crate::agent_port(), reports, computer)
         })
         .map_err(|e| format!("{e:#}"));
     app.manage(Service(service));
@@ -48,4 +51,28 @@ pub fn phone_set_enabled(app: AppHandle, enabled: bool) -> Result<State, BridgeE
 #[tauri::command]
 pub fn phone_new_key(app: AppHandle) -> Result<State, BridgeError> {
     service(&app)?.new_key().map_err(|e| err("io", format!("{e:#}")))
+}
+
+/// What the phone service asks of the app (`phone::Computer`).
+struct PhoneComputer(AppHandle);
+
+impl Computer for PhoneComputer {
+    fn shown(&self) -> Option<Shown> {
+        let (url, title) = crate::preview::shown(&self.0)?;
+        let file = tauri::Url::parse(&url).ok().filter(|u| u.scheme() == "file").and_then(|u| u.to_file_path().ok());
+        Some(Shown { url, title, file })
+    }
+
+    fn open(&self, page: Page) -> Result<(), (u16, String)> {
+        let url = match page {
+            Page::Url(address) => crate::preview::normalize(&address).map_err(|m| (400, m))?,
+            Page::File(path) => tauri::Url::from_file_path(crate::bridge::plain(&path))
+                .map_err(|()| (400, tr!("{} non è un percorso valido", "{} is not a valid path", path.display())))?,
+        };
+        crate::preview::open_for_phone(&self.0, url).map_err(|e| (503, e.message))
+    }
+
+    fn project_folders(&self) -> Result<Vec<std::path::PathBuf>, String> {
+        crate::bridge::agent_projects().map_err(|e| e.message)
+    }
 }

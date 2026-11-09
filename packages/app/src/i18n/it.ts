@@ -248,6 +248,8 @@ export const dict = {
   "preview.openExternal": "Apri nel tuo browser",
   "preview.close": "Chiudi l'anteprima",
   "preview.empty": "Qui compare la pagina che apre l'agente. Puoi anche scrivere un indirizzo.",
+  "preview.phone.back": "Torna alla conversazione",
+  "preview.phone.failed": "Non riesco ad aprire l'anteprima",
   "settings.general.row.useChrome.title": "Usa il mio Chrome",
   "settings.general.row.useChrome.description":
     "L'agente guida il tuo Chrome, con i tuoi accessi. Prima accendi il debug remoto in chrome://inspect; Chrome chiede conferma a ogni connessione. Spento, l'agente usa il pannello Anteprima.",

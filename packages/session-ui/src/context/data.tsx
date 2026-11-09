@@ -47,13 +47,14 @@ export type NavigateToSessionFn = (sessionID: string) => void
 export type SessionHrefFn = (sessionID: string) => string
 
 /**
- * Project files on the user's computer (absolute paths), provided by the desktop app. A rejection
+ * Project files on the user's computer (absolute paths), provided by the desktop app or, from a phone, by the phone port. A rejection
  * carries `{ code }`: "not_found" if the file is gone, "blocked_type" if the type cannot be opened from here.
  */
 export type ProjectFiles = {
   info(path: string): Promise<{ size: number; isDir: boolean }>
   open(path: string): Promise<void>
-  reveal(path: string): Promise<void>
+  /** Not every client can show a folder: a phone has none. */
+  reveal?(path: string): Promise<void>
 }
 
 export const { use: useData, provider: DataProvider } = createSimpleContext({
@@ -78,7 +79,9 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
       },
       navigateToSession: props.onNavigateToSession,
       sessionHref: props.onSessionHref,
-      files: props.files,
+      get files() {
+        return props.files
+      },
     }
   },
 })

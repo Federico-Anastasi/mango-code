@@ -2,6 +2,9 @@ import { Component, createMemo, createResource, createSignal, Show, startTransit
 import { Dialog } from "@opencode-ai/ui/v2/dialog-v2"
 import { TabsV2 } from "@opencode-ai/ui/v2/tabs-v2"
 import { Icon } from "@opencode-ai/ui/icon"
+import { Icon as IconV2 } from "@opencode-ai/ui/v2/icon"
+import { IconButtonV2 } from "@opencode-ai/ui/v2/icon-button-v2"
+import { createMediaQuery } from "@solid-primitives/media"
 import { useLanguage } from "@/context/language"
 import { SettingsGeneralV2 } from "./general"
 import { SettingsHelpV2 } from "./help"
@@ -30,6 +33,19 @@ export const DialogSettings: Component<{
   const tabs = useTabs()
   const serverSync = useServerSync()
   const [tab, setTab] = createSignal(props.defaultValue ?? "general")
+  // On a phone the settings are two screens: the list of pages, then the page that was chosen (with a way back).
+  const phone = createMediaQuery("(max-width: 767px)")
+  const [page, setPage] = createSignal(!!props.defaultValue)
+  const titles: Record<string, string> = {
+    general: language.t("settings.tab.general"),
+    "local-models": language.t("settings.tab.localModels"),
+    prompt: language.t("settings.tab.prompt"),
+    team: language.t("settings.tab.team"),
+    help: language.t("settings.tab.help"),
+    servers: language.t("status.popover.tab.servers"),
+    providers: language.t("settings.providers.title"),
+    models: language.t("settings.models.title"),
+  }
   const [report] = createResource(reportTarget)
   // The project the settings are about: the one picked in the page, else the open tab's, else the one selected in
   // the home, else the first project. Opened from the home, the pages that depend on a project are never empty.
@@ -65,8 +81,27 @@ export const DialogSettings: Component<{
         value={tab()}
         onChange={(value) => void startTransition(() => setTab(value))}
         class="settings-v2"
+        data-phone-page={phone() && page() ? "" : undefined}
       >
-        <TabsV2.List>
+        <Show when={phone()}>
+          <div class="settings-v2-phone-bar">
+            <IconButtonV2
+              type="button"
+              variant="ghost-muted"
+              size="large"
+              class="!size-11 shrink-0"
+              icon={<IconV2 name={page() ? "chevron-left" : "close"} />}
+              aria-label={page() ? language.t("common.goBack") : language.t("common.close")}
+              onClick={() => (page() ? setPage(false) : dialog.close())}
+            />
+            <h2>{page() ? titles[tab()] : language.t("sidebar.settings")}</h2>
+          </div>
+        </Show>
+        <TabsV2.List
+          onClick={(event: MouseEvent) => {
+            if (phone() && (event.target as HTMLElement).closest('[data-slot="tabs-v2-trigger"]')) setPage(true)
+          }}
+        >
           <div class="flex flex-col justify-between h-full w-full">
             <div class="flex flex-col gap-3 w-full">
               <div class="flex flex-col gap-3">
@@ -103,8 +138,8 @@ export const DialogSettings: Component<{
                   </div>
                 </div>
 
-                {/* in the Mango Code app there is a single local model: no providers, servers and models */}
-                <Show when={!inMangoDesktop()}>
+                {/* in the Mango Code app there is a single local model: no providers, servers and models; nor from the phone */}
+                <Show when={!inMangoDesktop() && !phone()}>
                   <div class="flex flex-col gap-1.5">
                     <TabsV2.SectionTitle>{language.t("settings.section.server")}</TabsV2.SectionTitle>
                     <div class="flex flex-col gap-1.5 w-full">

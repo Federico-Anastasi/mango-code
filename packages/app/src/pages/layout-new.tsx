@@ -1,7 +1,9 @@
-import { createEffect, onCleanup, Show, Suspense, type ParentProps } from "solid-js"
+import { createEffect, onCleanup, onMount, Show, Suspense, type ParentProps } from "solid-js"
 import { createStore } from "solid-js/store"
 import { DebugBar } from "@/components/debug-bar"
 import { PreviewPanel } from "@/components/preview-panel"
+import { PhonePreview } from "@/components/phone-preview"
+import { openLocalLinks, phonePreview, previewFailed } from "@/utils/phone-preview"
 import { TabsInfoPopup } from "@/components/help-button"
 import { Titlebar, type TitlebarUpdate } from "@/components/titlebar"
 import { useGlobal } from "@/context/global"
@@ -72,6 +74,15 @@ export default function NewLayout(props: ParentProps) {
 
   // mango-code: when a new version is ready, a notice too (once per version), not only the button in the title bar
   const language = useLanguage()
+
+  // From a phone the browser panel of the computer can be seen (see `utils/phone-preview.ts`); a link to a page of the computer opens there.
+  onMount(() => {
+    void phonePreview.detect()
+    onCleanup(
+      openLocalLinks((url) => void phonePreview.openPage({ url }).catch(previewFailed(language.t("preview.phone.failed")))),
+    )
+  })
+
   let announced: string | undefined
   createEffect(() => {
     const version = update.version()
@@ -91,11 +102,7 @@ export default function NewLayout(props: ParentProps) {
 
   return (
     <div
-      class="relative bg-v2-background-bg-deep flex-1 min-h-0 min-w-0 flex flex-col select-none [&_input]:select-text [&_textarea]:select-text [&_[contenteditable]]:select-text"
-      style={{
-        "padding-top": "env(safe-area-inset-top, 0px)",
-        "padding-bottom": "env(safe-area-inset-bottom, 0px)",
-      }}
+      class="relative bg-v2-background-bg-deep flex-1 min-h-0 min-w-0 flex flex-col select-none pt-[var(--safe-top)] pb-[var(--safe-bottom)] [#root[data-keyboard]_&]:pb-0 [&_input]:select-text [&_textarea]:select-text [&_[contenteditable]]:select-text"
     >
       <Titlebar
         update={update}
@@ -107,7 +114,8 @@ export default function NewLayout(props: ParentProps) {
         }
       />
       <div class="relative flex-1 min-h-0 min-w-0 flex">
-        <main class="flex-1 min-h-0 min-w-0 overflow-x-hidden flex flex-col items-start contain-strict">
+        {/* On a phone the page fills the main area by position: WebKit does not resolve the percentage heights of what sits in a flexed box. */}
+        <main class="flex-1 min-h-0 min-w-0 overflow-x-hidden flex flex-col items-start contain-strict max-md:relative max-md:[&>*]:!absolute max-md:[&>*]:inset-0">
           <Suspense>{props.children}</Suspense>
         </main>
         <Show when={preview.opened()}>
@@ -121,6 +129,7 @@ export default function NewLayout(props: ParentProps) {
         </Show>
       </div>
       {import.meta.env.DEV && state.debugTools && <DebugBar inline />}
+      <PhonePreview />
       <TabsInfoPopup />
       <ToastRegion v2 />
     </div>

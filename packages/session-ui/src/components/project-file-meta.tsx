@@ -6,8 +6,8 @@ import { formatFileSize, projectFileKind, projectFileKindKey, projectFileProblem
 type Info = { size: number } | { problem: ReturnType<typeof projectFileProblem> }
 
 /**
- * Type and size of a project file, with "Open" and "Show in folder". Without the desktop app
- * (a normal browser) there is no way to touch the disk: only the type is shown, no buttons.
+ * Type and size of a project file, with "Open" and, where there is a folder to show, "Show in folder". Without the desktop app
+ * or the phone port (a normal browser) there is no way to touch the disk: only the type is shown, no buttons.
  * The buttons are `span`, not `button`: they also sit inside the clickable header of a file.
  */
 export function ProjectFileMeta(props: { path: string; details?: boolean }) {
@@ -43,7 +43,7 @@ export function ProjectFileMeta(props: { path: string; details?: boolean }) {
   const run = (event: Event, action: "open" | "reveal") => {
     event.stopPropagation()
     event.preventDefault()
-    data.files![action](props.path).then(
+    data.files![action]!(props.path).then(
       () => setFailed(undefined),
       (cause: unknown) => setFailed(projectFileProblem(cause)),
     )
@@ -72,9 +72,11 @@ export function ProjectFileMeta(props: { path: string; details?: boolean }) {
           <span data-slot="project-file-action" {...press("open")}>
             {i18n.t("ui.file.open")}
           </span>
-          <span data-slot="project-file-action" {...press("reveal")}>
-            {i18n.t("ui.file.reveal")}
-          </span>
+          <Show when={data.files?.reveal}>
+            <span data-slot="project-file-action" {...press("reveal")}>
+              {i18n.t("ui.file.reveal")}
+            </span>
+          </Show>
           <Show when={problem()}>
             {(why) => (
               <span data-slot="project-file-problem">
