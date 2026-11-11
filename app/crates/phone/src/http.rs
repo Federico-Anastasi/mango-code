@@ -22,12 +22,16 @@ use std::io::{Read, Write};
 use std::net::{Ipv4Addr, Ipv6Addr, Shutdown, SocketAddr, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const COOKIE: &str = "mango_phone";
 const MAX_HEAD: usize = 64 * 1024;
 /// The time to send the head and the body: a connection that sends nothing doesn't hold a thread forever.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+/// The time to send the head in all, however slowly it comes.
+const HEAD_TIMEOUT: Duration = if cfg!(test) { Duration::from_secs(2) } else { Duration::from_secs(10) };
+/// Connections open at once, both ports: past this a new one is closed unanswered. A phone needs a handful.
+pub(crate) const MAX_CONNECTIONS: usize = 64;
 /// The route answered here, not by the agent: the problem report (see `Reports`).
 const REPORT: &str = "/phone/report";
 const METHODS: &[&str] = &["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"];
@@ -61,59 +65,73 @@ enum Role {
     Preview,
 }
 
-/// The open ports: a thread accepts connections on each until `close` stops them.
+/// The open ports: one thread accepts the connections on all of them until `close` stops it, and every few seconds it
+/// follows the addresses (`Inner::reconcile`).
 pub(crate) struct Listener {
     stopped: Arc<AtomicBool>,
-    threads: Vec<std::thread::JoinHandle<()>>,
+    thread: std::thread::JoinHandle<()>,
 }
 
 impl Listener {
     /// Closes the ports; when it returns they are closed.
     pub(crate) fn close(self) {
         self.stopped.store(true, Ordering::SeqCst);
-        for t in self.threads {
-            let _ = t.join();
-        }
+        let _ = self.thread.join();
     }
 }
 
-/// Opens both ports, or neither.
-pub(crate) fn listen(d: Arc<Inner>) -> Result<Listener> {
-    let bind = |port: u16| {
-        let l = TcpListener::bind((d.listen_on, port)).with_context(|| tr!("la porta {port} non si apre", "port {port} does not open"))?;
-        // Non-blocking, to notice `close` without a fake connection.
-        l.set_nonblocking(true)?;
-        anyhow::Ok(l)
-    };
-    let (main, preview) = (bind(d.port)?, bind(d.preview_port)?);
-    let stopped = Arc::new(AtomicBool::new(false));
-    let threads = [(main, Role::Main), (preview, Role::Preview)]
-        .into_iter()
-        .map(|(l, role)| accept(l, role, d.clone(), stopped.clone()))
-        .collect::<std::io::Result<_>>()?;
-    Ok(Listener { stopped, threads })
+/// How often the addresses are read again: the Wi-Fi changes them.
+const RECHECK: Duration = Duration::from_secs(3);
+
+/// A port with the listeners it has now, one for each address.
+pub(crate) struct Port {
+    role: Role,
+    pub(crate) number: u16,
+    pub(crate) listeners: Vec<(Ipv4Addr, TcpListener)>,
 }
 
-fn accept(l: TcpListener, role: Role, d: Arc<Inner>, stopped: Arc<AtomicBool>) -> std::io::Result<std::thread::JoinHandle<()>> {
-    std::thread::Builder::new().name("phone-port".into()).spawn(move || {
-        while !stopped.load(Ordering::SeqCst) {
-            let Ok((c, _)) = l.accept() else {
-                std::thread::sleep(Duration::from_millis(50));
-                continue;
-            };
-            // On Windows the connection inherits the port's «non-blocking». It is registered before passing it to its
-            // thread: whoever turns off while the port closes finds it already among those to close.
-            if c.set_nonblocking(false).is_err() {
-                continue;
-            }
-            let id = d.track(&c);
-            let d = d.clone();
-            let _ = std::thread::Builder::new().name("phone-request".into()).spawn(move || {
-                handle(&c, &d, role);
-                d.untrack(id);
-            });
+/// Opens both ports on the addresses the links show, and keeps them there.
+pub(crate) fn listen(d: Arc<Inner>) -> Result<Listener> {
+    let mut ports = [
+        Port { role: Role::Main, number: d.port, listeners: Vec::new() },
+        Port { role: Role::Preview, number: d.preview_port, listeners: Vec::new() },
+    ];
+    d.reconcile(&mut ports);
+    let stopped = Arc::new(AtomicBool::new(false));
+    let flag = stopped.clone();
+    let thread = std::thread::Builder::new().name("phone-port".into()).spawn(move || run(&d, ports, &flag))?;
+    Ok(Listener { stopped, thread })
+}
+
+fn run(d: &Arc<Inner>, mut ports: [Port; 2], stopped: &AtomicBool) {
+    let mut checked = Instant::now();
+    while !stopped.load(Ordering::SeqCst) {
+        if checked.elapsed() >= RECHECK {
+            d.reconcile(&mut ports);
+            checked = Instant::now();
         }
-    })
+        let mut idle = true;
+        for port in &ports {
+            for (_, l) in &port.listeners {
+                let Ok((c, _)) = l.accept() else { continue };
+                idle = false;
+                // On Windows the connection inherits the port's «non-blocking». It is registered before passing it to its
+                // thread: whoever turns off while the port closes finds it already among those to close.
+                if c.set_nonblocking(false).is_err() || d.connections.lock().unwrap().len() >= MAX_CONNECTIONS {
+                    continue;
+                }
+                let id = d.track(&c);
+                let (d, role) = (d.clone(), port.role);
+                let _ = std::thread::Builder::new().name("phone-request".into()).spawn(move || {
+                    handle(&c, &d, role);
+                    d.untrack(id);
+                });
+            }
+        }
+        if idle {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
 }
 
 pub(crate) struct Head {
@@ -146,6 +164,7 @@ impl Head {
 fn read_head(mut c: &TcpStream) -> Result<(Head, Vec<u8>)> {
     let mut buf = Vec::new();
     let mut chunk = [0u8; 4096];
+    let deadline = Instant::now() + HEAD_TIMEOUT;
     let end = loop {
         if let Some(i) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
             break i;
@@ -153,13 +172,23 @@ fn read_head(mut c: &TcpStream) -> Result<(Head, Vec<u8>)> {
         if buf.len() > MAX_HEAD {
             bail!("{}", tr!("testata troppo grande", "head too large"));
         }
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            bail!("{}", tr!("testata troppo lenta", "head too slow"));
+        }
+        c.set_read_timeout(Some(left.min(REQUEST_TIMEOUT)))?;
         let n = c.read(&mut chunk)?;
         if n == 0 {
             bail!("{}", tr!("connessione chiusa nella testata", "connection closed in the head"));
         }
         buf.extend_from_slice(&chunk[..n]);
     };
+    c.set_read_timeout(Some(REQUEST_TIMEOUT))?;
     let text = std::str::from_utf8(&buf[..end]).with_context(|| tr!("testata non UTF-8", "head is not UTF-8"))?;
+    // Only "\r\n" ends a line: any other break or a NUL would become lines of the request to the agent.
+    if text.replace("\r\n", "").contains(['\r', '\n', '\0']) {
+        bail!("{}", tr!("caratteri di controllo nella testata", "control characters in the head"));
+    }
     let mut lines = text.split("\r\n");
     let mut first = lines.next().unwrap_or("").split(' ');
     let (Some(method), Some(url), Some(version), None) = (first.next(), first.next(), first.next(), first.next()) else {
@@ -175,7 +204,7 @@ fn read_head(mut c: &TcpStream) -> Result<(Head, Vec<u8>)> {
 }
 
 fn handle(c: &TcpStream, d: &Inner, role: Role) {
-    let _ = c.set_read_timeout(Some(REQUEST_TIMEOUT));
+    let _ = c.set_write_timeout(Some(REQUEST_TIMEOUT));
     let address = c.peer_addr().map(|a| a.ip().to_string()).unwrap_or_default();
     let (head, rest) = match read_head(c) {
         Ok(x) => x,
@@ -257,7 +286,7 @@ pub(crate) fn body(c: &TcpStream, mut rest: Vec<u8>, length: u64, max: u64) -> O
     }
     rest.truncate(length as usize);
     let missing = length - rest.len() as u64;
-    (&*c).take(missing).read_to_end(&mut rest).ok()?;
+    c.take(missing).read_to_end(&mut rest).ok()?;
     (rest.len() as u64 == length).then_some(rest)
 }
 
@@ -474,7 +503,7 @@ pub(crate) fn relay(c: &TcpStream, head: &Head, rest: Vec<u8>, length: u64, up: 
     // The body: what was already read with the head, then the rest from the phone. Bytes beyond `Content-Length` don't pass.
     let already = rest.len().min(length as usize);
     agent.write_all(&rest[..already])?;
-    std::io::copy(&mut (&*c).take(length - already as u64), &mut agent)?;
+    std::io::copy(&mut c.take(length - already as u64), &mut agent)?;
     let _ = c.set_read_timeout(None);
 
     let mut to_phone = c.try_clone()?;
@@ -541,7 +570,7 @@ pub(crate) fn relay(c: &TcpStream, head: &Head, rest: Vec<u8>, length: u64, up: 
 /// the phone asks again at every opening, so after an update it never shows the old version (the files with a hash in the name
 /// are other addresses and stay in its cache). For a page of the computer (`site` is its address) a redirect to its own address
 /// becomes a path, which the phone follows on the same port. For a page with a content policy, `frame` is added to what it may
-/// show in a frame. `None` until the head is whole; beyond `MAX_HEAD` it passes as it is.
+/// show in a frame, with `blob:` (the PDF the page itself holds in memory). `None` until the head is whole; beyond `MAX_HEAD` it passes as it is.
 fn with_connection_close(t: &[u8], site: Option<&str>, frame: Option<&str>) -> Option<Vec<u8>> {
     let Some(end) = t.windows(4).position(|w| w == b"\r\n\r\n") else {
         return (t.len() > MAX_HEAD).then(|| t.to_vec());
@@ -559,7 +588,7 @@ fn with_connection_close(t: &[u8], site: Option<&str>, frame: Option<&str>) -> O
         })
         .map(|r| match (site, r.split_once(':')) {
             (_, Some((name, value))) if page && frame.is_some() && name.eq_ignore_ascii_case("content-security-policy") => {
-                format!("{name}: {}; frame-src 'self' {}", value.trim().trim_end_matches(';'), frame.unwrap_or_default())
+                format!("{name}: {}; frame-src 'self' blob: {}", value.trim().trim_end_matches(';'), frame.unwrap_or_default())
             }
             (Some(host), Some((name, value))) if name.eq_ignore_ascii_case("location") => {
                 let own = value.trim().strip_prefix(&format!("http://{host}")).filter(|p| p.is_empty() || p.starts_with(['/', '?']));
@@ -704,7 +733,7 @@ mod tests {
     fn the_web_ui_may_frame_the_preview_port_and_only_it() {
         let head = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Security-Policy: default-src 'self'; img-src data:\r\n\r\n<html>";
         let page = String::from_utf8(with_connection_close(head.as_bytes(), None, Some("http://192.168.1.20:47097")).unwrap()).unwrap();
-        assert!(page.contains("\r\nContent-Security-Policy: default-src 'self'; img-src data:; frame-src 'self' http://192.168.1.20:47097\r\n"), "{page}");
+        assert!(page.contains("\r\nContent-Security-Policy: default-src 'self'; img-src data:; frame-src 'self' blob: http://192.168.1.20:47097\r\n"), "{page}");
         // a file without the page's type, and a page without a policy, are left as they are
         let script = "HTTP/1.1 200 OK\r\nContent-Type: text/javascript\r\nContent-Security-Policy: default-src 'self'\r\n\r\n";
         let r = String::from_utf8(with_connection_close(script.as_bytes(), None, Some("http://192.168.1.20:47097")).unwrap()).unwrap();

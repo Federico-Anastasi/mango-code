@@ -42,7 +42,15 @@ fn toq_profile() -> Value {
 impl Fake {
     /// The files are there (empty); the GGUF's content is supplied by the test.
     pub fn new() -> Fake {
-        let dir = tempfile::tempdir().unwrap();
+        Fake::in_dir(tempfile::tempdir().unwrap())
+    }
+
+    /// Like `new`, in a folder whose name has letters the engines' command line does not carry (a user called José).
+    pub fn with_accents() -> Fake {
+        Fake::in_dir(tempfile::Builder::new().prefix("José Nicolò è ñ ").tempdir().unwrap())
+    }
+
+    fn in_dir(dir: tempfile::TempDir) -> Fake {
         let r = dir.path();
         let paths = Paths {
             dist: r.join("dist"),

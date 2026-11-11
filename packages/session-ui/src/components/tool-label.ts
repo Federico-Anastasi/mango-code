@@ -25,6 +25,8 @@ type Kind =
   | "question"
   | "browser"
   | "document"
+  | "documentRead"
+  | "documentEdit"
   | "generic"
 
 const KINDS: Record<string, Kind> = {
@@ -49,6 +51,9 @@ const KINDS: Record<string, Kind> = {
   "web-search_search_images": "images",
   "web-search_read_url": "webfetch",
   documents_create: "document",
+  documents_convert: "document",
+  documents_read: "documentRead",
+  documents_edit: "documentEdit",
 }
 
 const BROWSER_PREFIX = "chrome-devtools_"
@@ -218,6 +223,8 @@ export function toolLabel(
     case "edit":
       return { title, subtitle: fileName(input.filePath) }
     case "document":
+    case "documentRead":
+    case "documentEdit":
       return { title, subtitle: fileName(input.file) }
     case "shell":
       return { title, subtitle: shellSummary(input) }
@@ -245,6 +252,7 @@ export function toolErrorMessage(tool: string, error: string, t: Translate) {
     return t(tool.startsWith(BROWSER_PREFIX) ? "ui.toolError.browserTimeout" : "ui.toolError.timeout")
   }
   if (tool === "edit" && /oldString|could not find|multiple matches/i.test(error)) return t("ui.toolError.editNotFound")
+  if (/fetch failed|ENOTFOUND|ECONNREFUSED|ECONNRESET|EAI_AGAIN|all engines failed/i.test(error)) return t("ui.toolError.offline")
   if (/file not found|ENOENT|no such file/i.test(error)) return t("ui.toolError.fileNotFound")
   if (/rejected permission|permission denied|not allowed|denied/i.test(error)) return t("ui.toolError.denied")
   return t("ui.toolErrorCard.failed")

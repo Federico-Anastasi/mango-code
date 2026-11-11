@@ -98,6 +98,17 @@ export function engineTimingsExtractor(providerID: string) {
 // The engine is the same llama-server as the timings above; its address is the provider's.
 let engineOrigin: string | undefined
 
+// The engine may be another PC's: the app then gives the agent its key (`MANGO_ENGINE_KEY`, in the environment only), and every
+// call to the engine's own routes carries it. On this PC's engine there is no key and nothing is added.
+const engineKey = () => process.env["MANGO_ENGINE_KEY"] || undefined
+
+export const engineIsRemote = () => engineKey() !== undefined
+
+function engineHeaders(): Record<string, string> {
+  const key = engineKey()
+  return key ? { Authorization: `Bearer ${key}` } : {}
+}
+
 export function setEngineOrigin(baseURL: string) {
   engineOrigin = new URL(baseURL).origin
 }
@@ -147,7 +158,7 @@ export function parseWait(engine: unknown): EngineWait | undefined {
 /** The engine's wait, asked to the manager. It answers at once even when the engine is off. */
 export function engineWait(): Promise<EngineWait | undefined> {
   if (!engineOrigin) return Promise.resolve(undefined)
-  return fetch(`${engineOrigin}/engine`, { signal: AbortSignal.timeout(2000) })
+  return fetch(`${engineOrigin}/engine`, { headers: engineHeaders(), signal: AbortSignal.timeout(2000) })
     .then((response) => (response.ok ? response.json() : undefined))
     .then(parseWait)
     // An engine without a manager (llama-server alone): no wait to report.
@@ -165,7 +176,7 @@ const ENGINE_SLOTS_TIMEOUT_MS = 8000
  */
 export function readingProgress(): Promise<EngineReading | undefined> {
   if (!engineOrigin) return Promise.resolve(undefined)
-  readingRequest ??= fetch(`${engineOrigin}/slots?lite=1`, { signal: AbortSignal.timeout(ENGINE_SLOTS_TIMEOUT_MS) })
+  readingRequest ??= fetch(`${engineOrigin}/slots?lite=1`, { headers: engineHeaders(), signal: AbortSignal.timeout(ENGINE_SLOTS_TIMEOUT_MS) })
     .then((response) => (response.ok ? response.json() : undefined))
     .then(parseReading)
     // Engine stopped or without the endpoint: no progress, and the page shows only the time.

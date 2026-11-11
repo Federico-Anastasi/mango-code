@@ -1,5 +1,4 @@
-// mango-team.js - links the opencode sessions of a TEAM (separate processes, separate terminals)
-// as fixed roles:
+// mango-team.js - links the opencode sessions of a TEAM (separate processes) as fixed roles:
 //   - MANAGER (cloud, e.g. deepseek): reasons, decides, and gives the instructions.
 //   - DEV (local, e.g. 3.6): does the operational work.
 //   - AGENTS (cloud, default deepseek on OpenRouter): up to 4, started by the MANAGER when needed,
@@ -12,33 +11,30 @@
 //   - MANAGER -> DEV: tool `ask_dev`. Sends the instruction with promptAsync and returns AT ONCE.
 //   - DEV -> MANAGER: tool `ask_manager`. The dev calls it when done (or when it needs a
 //     decision) and what it writes reaches the manager as a "[DEV]" message.
-//   - MANAGER -> AGENT i: tool `launch_agent` (opens the window, only once) and `ask_agent`
+//   - MANAGER -> AGENT i: tool `launch_agent` (starts it, only once) and `ask_agent`
 //     (sends the instruction). The agent answers with `ask_manager`, prefixed "[AGENT i]".
-//     `close_agent` closes its window (process tree) and frees the slot.
+//     `close_agent` ends its process and frees the slot.
 // What does not go through a tool does NOT arrive: the manager does not read the intermediate
 // steps, it only sees the messages the others decide to send it.
 //
 // HOW THEY FIND EACH OTHER, WITHOUT A SEPARATE BRIDGE SERVER:
 // opencode already exposes an HTTP server per process (PluginInput.serverUrl) and the SDK can
 // send a message without waiting (session.promptAsync). Each side, at its first message, writes
-// its OWN session to a file (the port is fixed, mango-code.ps1 sets it):
-//   - dev        -> runtime\team-link.json
-//   - manager    -> runtime\team-link-manager.json
-//   - agent i    -> runtime\team-link-agent-<i>.json
+// its OWN session to a file in MANGO_TEAM_DIR:
+//   - dev        -> team-link.json
+//   - manager    -> team-link-manager.json
+//   - agent i    -> team-link-agent-<i>.json
 // The other side reads that file and delivers the message: no polling, no reading of the
 // history, no blocking wait.
 //
-// ROLE: decided by MANGO_TEAM_ROLE (env, mango-code.ps1 sets it). Outside the team the variable
-// is absent and this plugin does nothing. Agents also carry MANGO_AGENT_ID (1-4).
-//
-// IN THE APP (Mango Code desktop) the team is the same, with three differences:
+// IN THE APP (Mango Code desktop), which is the only place this runs:
 //   - the MANAGER is not a separate process: it is the opencode agent `MANGO_TEAM_AGENT` (`team`) in the
 //     app's server. The other conversations of the same server are not the team's: the plugin ignores them,
 //     and the manager's instructions enter only those of its agent;
 //   - dev and agents are HIDDEN `opencode serve` processes that the plugin starts when needed, described by
-//     `MANGO_TEAM_LAUNCH` (launch.json), in the manager's project folder;
-//   - links and pids live in `MANGO_TEAM_DIR`, in the app's data, not in `<MANGO_HOME>/runtime`
-//     (the distribution is read-only).
+//     `MANGO_TEAM_LAUNCH` (launch.json), in the manager's project folder; each one gets its role from
+//     `MANGO_TEAM_ROLE` (and `MANGO_AGENT_ID` for the agents);
+//   - links and pids live in `MANGO_TEAM_DIR`, in the app's data (the distribution is read-only).
 import { tool } from "@opencode-ai/plugin";
 import { createOpencodeClient } from "@opencode-ai/sdk";
 import { spawn, spawnSync } from "node:child_process";
@@ -47,14 +43,14 @@ import path from "node:path";
 
 const ROLE = process.env.MANGO_TEAM_ROLE || "";
 const HOME = process.env.MANGO_HOME || "";
-const TEAM_DIR = process.env.MANGO_TEAM_DIR || (HOME ? path.join(HOME, "runtime") : "");
+const TEAM_DIR = process.env.MANGO_TEAM_DIR || "";
 const TEAM_AGENT = process.env.MANGO_TEAM_AGENT || "";
-// DEV: only one (mango-code -Team: a local dev on the same engine, the whole context for it).
+// DEV: only one (a local dev on the same engine, the whole context for it).
 // The dev always writes team-link.json and its replies arrive labeled "[DEV]".
-const DEV_LINK = TEAM_DIR ? path.join(TEAM_DIR, "team-link.json") : "";
-const MGR_LINK = TEAM_DIR ? path.join(TEAM_DIR, "team-link-manager.json") : "";
+const DEV_LINK = path.join(TEAM_DIR, "team-link.json");
+const MGR_LINK = path.join(TEAM_DIR, "team-link-manager.json");
 const AGENT_ID = process.env.MANGO_AGENT_ID || "";
-const AGENT_DIR = process.env.MANGO_AGENT_DIR || (TEAM_DIR ? path.join(TEAM_DIR, "mango-agents") : "");
+const AGENT_DIR = process.env.MANGO_AGENT_DIR || "";
 // 0 is a valid number (the app may have no agents): do not fall back to 4.
 const AGENT_MAX = process.env.MANGO_AGENT_MAX ? Number(process.env.MANGO_AGENT_MAX) : 4;
 const AGENT_PORTS = (process.env.MANGO_AGENT_PORTS || "4092,4093,4094,4095")
@@ -64,36 +60,18 @@ const AGENT_PORTS = (process.env.MANGO_AGENT_PORTS || "4092,4093,4094,4095")
 const AGENT_LABEL = process.env.MANGO_AGENT_LABEL || "cloud model on OpenRouter";
 const LAUNCH = process.env.MANGO_TEAM_LAUNCH ? JSON.parse(fs.readFileSync(process.env.MANGO_TEAM_LAUNCH, "utf8")) : null;
 
-const agentLink = (id) => (TEAM_DIR ? path.join(TEAM_DIR, `team-link-agent-${id}.json`) : "");
+const agentLink = (id) => path.join(TEAM_DIR, `team-link-agent-${id}.json`);
 
 // --- AN AGENT'S LIFE -----------------------------------------------------------------------
-// The agent's window (agent-<i>.ps1, generated by mango-code.ps1) writes its $PID to
-// agent-<i>.pid as soon as it starts. It is the root of the powershell -> opencode tree: killing
-// it closes the window and everything under it. The PID is also the only way to know whether an
-// agent is still ALIVE: the link stays on disk even if the user closes the window by hand.
-const agentPidFile = (id) => (AGENT_DIR ? path.join(AGENT_DIR, `agent-${id}.pid`) : "");
-
-function readAgentPid(id) {
-  try {
-    const pid = Number(fs.readFileSync(agentPidFile(id), "utf8").trim());
-    return Number.isInteger(pid) && pid > 0 ? pid : 0;
-  } catch { return 0; }
-}
+// Each hidden process has a file with its pid (startHidden writes it as soon as it starts). Killing the pid ends
+// the process and everything under it. The pid is also the only way to know whether an agent is still ALIVE: the
+// link stays on disk even if the process dies.
+const agentPidFile = (id) => path.join(AGENT_DIR, `agent-${id}.pid`);
+const readAgentPid = (id) => readPidFile(agentPidFile(id));
 
 function pidAlive(pid) {
   if (!pid) return false;
   try { process.kill(pid, 0); return true; } catch (e) { return e?.code === "EPERM"; }
-}
-
-// Who listens on the agent's port: the fallback if the .pid is missing (window opened by an old
-// version of the script). Closes opencode but leaves the powershell window (-NoExit).
-function pidOnPort(port) {
-  const r = spawnSync("netstat", ["-ano", "-p", "tcp"], { encoding: "utf8", windowsHide: true });
-  for (const line of (r.stdout || "").split(/\r?\n/)) {
-    const c = line.trim().split(/\s+/);
-    if (c.length >= 5 && c[3] === "LISTENING" && c[1].endsWith(`:${port}`)) return Number(c[4]) || 0;
-  }
-  return 0;
 }
 
 function killTree(pid) {
@@ -125,12 +103,7 @@ function readLink(file) {
 // text to show to whoever called the tool.
 async function deliver(linkFile, text, who) {
   const link = readLink(linkFile);
-  if (!link) {
-    return (
-      `The ${who} is not connected yet: no message has reached its window yet. ` +
-      "Tell the user to write something there (even just 'ready'), then retry."
-    );
-  }
+  if (!link) return `The ${who} is not connected yet: retry in a few seconds.`;
   const client = createOpencodeClient({ baseUrl: link.serverUrl, directory: link.directory });
   const res = await client.session.promptAsync({
     path: { id: link.sessionID },
@@ -158,7 +131,7 @@ async function todosOf(linkFile, label) {
   }
 }
 
-// The agent that starts writes its link after the first message (the startup --prompt).
+// The agent that starts writes its link after its first message (the startup one, see startHidden).
 // launch_agent waits for it to appear instead of making the manager retry by hand.
 async function waitForLink(file, ms) {
   const end = Date.now() + ms;
@@ -169,19 +142,18 @@ async function waitForLink(file, ms) {
   return fs.existsSync(file);
 }
 
-// --- HIDDEN DEV AND AGENTS (only in the app: there is a `launch.json`) -----------------------
-// In the terminal, dev and agents are windows opened by mango-code.ps1. In the app each one is a windowless
-// `opencode serve`, with its own config and data (so its sessions do not end up among the user's
-// conversations), working in the manager's project folder. It inherits the app server's environment,
-// including the OpenRouter key: it is not in any file. The session is born with a first message, like the
-// terminal's `--prompt`: that is what makes it write the link.
+// --- HIDDEN DEV AND AGENTS (described by `launch.json`) --------------------------------------
+// Each one is a windowless `opencode serve`, with its own config and data (so its sessions do not end up among
+// the user's conversations), working in the manager's project folder. It inherits the app server's environment,
+// including the OpenRouter key: it is not in any file. The session is born with a first message: that is what
+// makes it write the link.
 const BOOT_DEV =
   "[START] You are the DEV of the team. Do nothing now: reply only with the word ready and wait for instructions from the manager.";
 const bootAgent = (n) =>
   `You are AGENT ${n} of the team. You have no memory of other conversations. Tell the manager you are ready ` +
   "with the ask_manager tool (one line only), then wait for its instructions.";
 
-const devPidFile = () => (TEAM_DIR ? path.join(TEAM_DIR, "dev.pid") : "");
+const devPidFile = () => path.join(TEAM_DIR, "dev.pid");
 
 function readPidFile(file) {
   try {
@@ -259,9 +231,9 @@ function processReady(pidFile, linkFile, directory) {
 
 const sameFolder = (a, b) => !!a && !!b && path.resolve(a).toLowerCase() === path.resolve(b).toLowerCase();
 
-// In the app the dev starts at the first instruction. Returns null if it is there, otherwise the error for the model.
+// The dev starts at the first instruction. Returns null if it is there, otherwise the error for the model.
 async function ensureDev(directory) {
-  if (!LAUNCH || processReady(devPidFile(), DEV_LINK, directory)) return null;
+  if (processReady(devPidFile(), DEV_LINK, directory)) return null;
   fs.rmSync(DEV_LINK, { force: true });
   const err = await startHidden({
     name: "dev", role: "dev", spec: LAUNCH.dev, pidFile: devPidFile(), boot: BOOT_DEV, directory,
@@ -330,8 +302,8 @@ function watchTurnEnd(serverUrl, managerLink, prefix) {
       if (parts.length > 0 && parts.every((p) => p.synthetic === true)) return;
       reported = false;
       reminderSent = false;
-      // The launcher's startup message ("[START] ...") only serves to connect the window and to
-      // warm the prompt cache: it is not a task, so no end-of-turn reminder.
+      // The startup message ("[START] ...") only serves to connect the process and to warm the prompt cache:
+      // it is not a task, so no end-of-turn reminder.
       if (parts.some((p) => p.type === "text" && String(p.text || "").startsWith("[START]"))) reported = true;
     },
     hasReported() {
@@ -354,12 +326,14 @@ function watchTurnEnd(serverUrl, managerLink, prefix) {
 }
 
 export const MangoTeam = async ({ serverUrl, directory }) => {
-  if (!ROLE || !HOME) return {};
+  if (!ROLE) return {};
+  // The app sets all of these: a missing one is a broken installation, not a Team that stays quiet.
+  if (!HOME) throw new Error("mango-team: MANGO_HOME is missing");
+  if (!TEAM_DIR) throw new Error("mango-team: MANGO_TEAM_DIR is missing");
 
   // --- DEV: announces itself, and has the tool to talk to the manager -------------------------
-  // Every message rewrites the file with the session that is ACTIVE now: if the user opens a new one
-  // in the TUI, the link corrects itself on the next turn instead of staying attached to a dead
-  // session.
+  // Every message rewrites the file with the session that is ACTIVE now: the link corrects itself on the next
+  // turn instead of staying attached to a dead session.
   if (ROLE === "dev") {
     const end = watchTurnEnd(serverUrl, MGR_LINK, "[DEV]");
     return {
@@ -371,7 +345,7 @@ export const MangoTeam = async ({ serverUrl, directory }) => {
       tool: {
         ask_manager: tool({
           description:
-            "Sends a message to the MANAGER (separate window) and returns AT ONCE: it does NOT wait. " +
+            "Sends a message to the MANAGER and returns AT ONCE: it does NOT wait. " +
             "ALWAYS call it when you have finished the assigned task, with a dense and verifiable " +
             "summary: what you did, what you checked, the result. Also call it midway if you need a " +
             "decision, a permission or a clarification. It is the ONLY way the manager learns what " +
@@ -404,7 +378,7 @@ export const MangoTeam = async ({ serverUrl, directory }) => {
       tool: {
         ask_manager: tool({
           description:
-            "Sends a message to the MANAGER (separate window) and returns AT ONCE: it does NOT wait. " +
+            "Sends a message to the MANAGER and returns AT ONCE: it does NOT wait. " +
             "ALWAYS call it when you have finished the assigned task, with a dense and verifiable " +
             "summary: what you did, what you checked, the result. Also call it midway if you need a " +
             "decision, a permission or a clarification. It is the ONLY way the manager learns what " +
@@ -425,15 +399,17 @@ export const MangoTeam = async ({ serverUrl, directory }) => {
 
   // --- MANAGER: talks to the dev, and starts/uses up to 4 agents --------------------------------
   if (ROLE === "manager") {
+    if (!TEAM_AGENT) throw new Error("mango-team: MANGO_TEAM_AGENT is missing");
+    if (!LAUNCH) throw new Error("mango-team: MANGO_TEAM_LAUNCH is missing");
     const launched = new Set();
-    // In the app the server also holds the normal conversations: only those of the `team` agent belong to the team.
-    const inTeam = (agent) => !TEAM_AGENT || agent === TEAM_AGENT;
+    // The server also holds the normal conversations: only those of the `team` agent belong to the team.
+    const inTeam = (agent) => agent === TEAM_AGENT;
     const teamSessions = new Set();
-    const managerInstructions = TEAM_AGENT ? fs.readFileSync(path.join(HOME, "opencode-home", "MANGO-manager.md"), "utf8") : "";
+    const managerInstructions = fs.readFileSync(path.join(HOME, "opencode-home", "MANGO-manager.md"), "utf8");
     const managerTools = {
         ask_dev: tool({
           description:
-            "Sends an instruction to the local DEV (separate window) and returns AT ONCE: it does NOT " +
+            "Sends an instruction to the local DEV and returns AT ONCE: it does NOT " +
             "wait for the reply, so after calling this tool continue the conversation with the user " +
             "or think about the next step - do not sit waiting. When the dev finishes, its summary " +
             "will arrive as a separate message, prefixed '[DEV]': it sends it with ask_manager, so " +
@@ -454,9 +430,9 @@ export const MangoTeam = async ({ serverUrl, directory }) => {
 
         launch_agent: tool({
           description:
-            `Opens the window of a cloud AGENT (${AGENT_LABEL}), from 1 to ${AGENT_MAX}. ` +
-            "Call it ONCE per agent, when you need it: the window stays open and the agent " +
-            "announces by itself that it is ready (you will receive an '[AGENT N]' message). It does not block " +
+            `Starts a cloud AGENT (${AGENT_LABEL}), from 1 to ${AGENT_MAX}. ` +
+            "Call it ONCE per agent, when you need it: it stays running and announces by itself that it is " +
+            "ready (you will receive an '[AGENT N]' message). It does not block " +
             "the user but waits a few seconds for the agent to connect. Then use `ask_agent` to " +
             "give it tasks, and `close_agent` when it is done. Do not start agents you do not " +
             "need: each one costs OpenRouter tokens.",
@@ -468,44 +444,20 @@ export const MangoTeam = async ({ serverUrl, directory }) => {
             if (!Number.isInteger(n) || n < 1 || n > AGENT_MAX) {
               return `Invalid agent number: choose an integer from 1 to ${AGENT_MAX}.`;
             }
-            if (LAUNCH ? processReady(agentPidFile(n), agentLink(n), directory) : pidAlive(readAgentPid(n))) {
+            if (processReady(agentPidFile(n), agentLink(n), directory)) {
               return `Agent ${n} is already open. Use ask_agent to talk to it, or close_agent to close it.`;
             }
-            // A window closed by hand leaves its link: clean it, so waitForLink waits for the NEW one.
+            // A process that died leaves its link: clean it, so waitForLink waits for the NEW one.
             forgetAgent(n);
-            if (LAUNCH) {
-              const err = await startHidden({
-                name: `agent-${n}`, role: "agent", id: n, spec: LAUNCH.agents.find((a) => a.id === n),
-                pidFile: agentPidFile(n), boot: bootAgent(n), directory,
-              });
-              if (err) return err;
-            } else {
-              const script = path.join(AGENT_DIR, `agent-${n}.ps1`);
-              if (!AGENT_DIR || !fs.existsSync(script)) {
-                return `Cannot find agent ${n}'s script (${script}). Restart mango-code -Team.`;
-              }
-              try {
-                // `cmd /c start` is the only reliable way to open a NEW window from a process
-                // running in another console (a plain spawn would inherit it).
-                const child = spawn("cmd", ["/c", "start", "", "powershell", "-NoExit", "-File", script], {
-                  detached: true,
-                  stdio: "ignore",
-                  windowsHide: false,
-                });
-                child.unref();
-              } catch (e) {
-                return `Could not open agent ${n}'s window: ${e?.message ?? e}`;
-              }
-            }
+            const err = await startHidden({
+              name: `agent-${n}`, role: "agent", id: n, spec: LAUNCH.agents.find((a) => a.id === n),
+              pidFile: agentPidFile(n), boot: bootAgent(n), directory,
+            });
+            if (err) return err;
             launched.add(n);
             const connected = await waitForLink(agentLink(n), 25_000);
             const port = AGENT_PORTS[n - 1] || "?";
-            if (!connected) {
-              return (
-                `Agent ${n} started (port ${port}), but is not connected yet. ` +
-                "Look at its window: if it is stuck on a question, answer there. Retry ask_agent shortly."
-              );
-            }
+            if (!connected) return `Agent ${n} started (port ${port}), but is not connected yet. Retry ask_agent shortly.`;
             return `Agent ${n} started and connected (port ${port}). You can now use ask_agent ${n} to give it a task.`;
           },
         }),
@@ -529,12 +481,12 @@ export const MangoTeam = async ({ serverUrl, directory }) => {
             const pid = readAgentPid(n);
             if (pid && !pidAlive(pid)) {
               forgetAgent(n);
-              return `Agent ${n} was closed (its window is gone). Reopen it with launch_agent ${n}.`;
+              return `Agent ${n} was closed (its process is gone). Reopen it with launch_agent ${n}.`;
             }
             if (!readLink(agentLink(n))) {
               return (
                 `Agent ${n} is not connected. Start it with launch_agent ${n}, or wait for its ` +
-                "ready message. If its window was opened a moment ago, retry in a few seconds."
+                "ready message. If it was started a moment ago, retry in a few seconds."
               );
             }
             const err = await deliver(agentLink(n), "[MANAGER]\n" + instruction, `agent ${n}`);
@@ -556,7 +508,7 @@ export const MangoTeam = async ({ serverUrl, directory }) => {
               const state = alive
                 ? (link ? "connected" : "started, not connected yet")
                 : launched.has(i) || link
-                  ? "closed (window no longer open)"
+                  ? "closed (process gone)"
                   : "not started";
               lines.push(`agent ${i}: ${state} (port ${AGENT_PORTS[i - 1] || "?"})`);
             }
@@ -583,7 +535,7 @@ export const MangoTeam = async ({ serverUrl, directory }) => {
 
         close_agent: tool({
           description:
-            "Closes an AGENT: ends its process and its window and frees the slot (it can be " +
+            "Closes an AGENT: ends its process and frees the slot (it can be " +
             "reopened with launch_agent, but starts from zero). Use it when the agent has finished its " +
             "task and is no longer needed, or if it is stuck. What it is doing is interrupted: if you " +
             "need its result, first wait for its '[AGENT N]' message.",
@@ -595,24 +547,16 @@ export const MangoTeam = async ({ serverUrl, directory }) => {
             if (!Number.isInteger(n) || n < 1 || n > AGENT_MAX) {
               return `Invalid agent number: choose an integer from 1 to ${AGENT_MAX}.`;
             }
-            let pid = readAgentPid(n);
-            let hadWindow = true;
-            if (!pidAlive(pid)) {
-              pid = pidOnPort(AGENT_PORTS[n - 1]);
-              hadWindow = false;
-            }
+            const pid = readAgentPid(n);
             launched.delete(n);
-            if (!pid) {
+            if (!pidAlive(pid)) {
               forgetAgent(n);
               return `Agent ${n} is not open: nothing to close.`;
             }
             const err = killTree(pid);
             if (err && pidAlive(pid)) return `Could not close agent ${n} (PID ${pid}): ${err}`;
             forgetAgent(n);
-            return hadWindow
-              ? `Agent ${n} closed (window and process). The slot is free.`
-              : `Agent ${n} closed (opencode on port ${AGENT_PORTS[n - 1]}); its powershell window ` +
-                "may stay open: it has to be closed by hand.";
+            return `Agent ${n} closed. The slot is free.`;
           },
         }),
     };
@@ -625,7 +569,7 @@ export const MangoTeam = async ({ serverUrl, directory }) => {
         writeLink(MGR_LINK, serverUrl, input.sessionID, { directory, agent: input.agent, model: input.model });
       },
       "experimental.chat.system.transform": async (input, output) => {
-        if (TEAM_AGENT && teamSessions.has(input.sessionID)) output.system.push(managerInstructions);
+        if (teamSessions.has(input.sessionID)) output.system.push(managerInstructions);
       },
       tool: managerTools,
     };

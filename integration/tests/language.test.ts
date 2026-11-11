@@ -1,5 +1,5 @@
 // The shared language (docs/INTEGRATION.md, §5 "Language"): `GET`/`PUT /mango/language` read and write the `language`
-// key of `<data>\settings.json`, the file shared with the app, the terminal and the prompt settings. The other keys
+// key of `<data>\settings.json`, the file shared with the app and the prompt settings. The other keys
 // of the file stay; the agent's error texts follow the language. Fake engine, no GPU.
 //
 // With `MANGO_OPENCODE=<folder with web\mango-code.exe>` it tries a separate build of the agent.

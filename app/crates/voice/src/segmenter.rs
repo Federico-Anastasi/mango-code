@@ -339,8 +339,7 @@ mod tests {
 
     #[test]
     fn a_too_long_sentence_is_cut_at_the_breath() {
-        let mut cfg = Config::default();
-        cfg.max_sentence_ms = 4000.0;
+        let cfg = Config { max_sentence_ms: 4000.0, ..Config::default() };
         // 100 windows of voice (3.2 s), a breath (p 0.6) of one window, 40 of voice: the cut falls on the breath
         let v = run(cfg, &[(VOICE, 100), (0.6, 1), (VOICE, 40), (SILENCE, 40)]);
         assert_eq!(names(&v), ["speaking", "prepare", "close", "prepare", "close"]);

@@ -86,6 +86,7 @@ export function createHomeSessionIndexCache(queryClient: QueryClient, server: st
   const indexKey = homeSessionIndexKey(server)
   const eventsKey = homeSessionEventsKey(server)
   let connected = false
+  const removed = new Set<string>()
 
   return {
     indexKey,
@@ -98,7 +99,8 @@ export function createHomeSessionIndexCache(queryClient: QueryClient, server: st
       queryClient.setQueryData<HomeSessionEvents>(eventsKey, (current) => trimHomeSessionEvents(current, sequence))
     },
     sessions(index: HomeSessionIndex | undefined, events: HomeSessionEvents | undefined) {
-      return homeSessionIndexSessions(index, events)
+      const sessions = homeSessionIndexSessions(index, events)
+      return removed.size === 0 ? sessions : sessions.filter((session) => !removed.has(session.id))
     },
     apply(event: HomeSessionEvent) {
       if (!queryClient.getQueryState(indexKey)) return
@@ -116,6 +118,16 @@ export function createHomeSessionIndexCache(queryClient: QueryClient, server: st
         })
       }
       queryClient.setQueryData<HomeSessionEvents>(eventsKey, { sequence: next.sequence, entries: [] })
+    },
+    remove(sessionID: string) {
+      removed.add(sessionID)
+      if (!queryClient.getQueryState(indexKey)) return
+      queryClient.setQueryData<HomeSessionIndex>(indexKey, (index) => {
+        if (!index) return index
+        const at = index.sessions.findIndex((session) => session.id === sessionID)
+        if (at === -1) return index
+        return { ...index, sessions: index.sessions.toSpliced(at, 1) }
+      })
     },
     refresh(event: Event["type"]) {
       const result = homeSessionIndexRefresh(event, connected)

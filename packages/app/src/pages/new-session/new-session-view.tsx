@@ -1,4 +1,6 @@
+import { createMediaQuery } from "@solid-primitives/media"
 import { useDialog } from "@opencode-ai/ui/context/dialog"
+import { ButtonV2 } from "@opencode-ai/ui/v2/button-v2"
 import { Tooltip } from "@opencode-ai/ui/tooltip"
 import { Icon as IconV2 } from "@opencode-ai/ui/v2/icon"
 import { TooltipV2 } from "@opencode-ai/ui/v2/tooltip-v2"
@@ -16,6 +18,7 @@ import {
 } from "@/components/prompt-project-selector"
 import { StatusPopoverV2 } from "@/components/status-popover"
 import { useLanguage } from "@/context/language"
+import { usePrompt } from "@/context/prompt"
 import { useSDK } from "@/context/sdk"
 import { useServerSync } from "@/context/server-sync"
 import { useProviders } from "@/hooks/use-providers"
@@ -32,6 +35,7 @@ export function NewSessionView(props: {
   project: PromptProjectController
   workspace: NewSessionWorkspaceController
 }) {
+  const phone = createMediaQuery("(max-width: 767px)")
   return (
     <div class="@container relative flex flex-col min-h-0 h-full flex-1">
       <div
@@ -46,14 +50,17 @@ export function NewSessionView(props: {
             </div>
             <div class="mt-8 flex flex-col gap-8 max-md:mt-0 max-md:flex-col-reverse max-md:gap-1 max-md:pb-2">
               <PromptInputV2Composer controller={props.input} />
+              <Show when={props.project.selected()}>
+                <NewSessionExamples restoreFocus={props.input.restoreFocus} />
+              </Show>
               <Show when={props.project.empty()}>
                 <PromptProjectAddButton controller={props.project} />
               </Show>
               <Show when={props.project.selected()}>
                 <div class="flex min-h-7 min-w-0 flex-col items-center justify-center gap-0 text-v2-text-text-faint sm:flex-row max-md:flex-row max-md:flex-wrap max-md:justify-start">
                   <PromptProjectSelector controller={props.project} placement="bottom" />
-                  {/* Git branch and workspaces: programmer stuff, hidden in the Mango Code app */}
-                  <Show when={!inMangoDesktop()}>
+                  {/* Git branch and workspaces: programmer stuff, hidden in the Mango Code app and on the phone */}
+                  <Show when={!inMangoDesktop() && !phone()}>
                     <Show
                       when={props.workspace.bar.visible()}
                       fallback={
@@ -80,6 +87,29 @@ export function NewSessionView(props: {
         </Show>
       </div>
     </div>
+  )
+}
+
+const EXAMPLES = ["new.example.page", "new.example.word", "new.example.fix"] as const
+
+/** Three things to ask, under the empty prompt: a click puts the text in the prompt, it does not send it. */
+function NewSessionExamples(props: { restoreFocus: () => void }) {
+  const language = useLanguage()
+  const prompt = usePrompt()
+  const use = (text: string) => {
+    prompt.set([{ type: "text", content: text, start: 0, end: text.length }], text.length)
+    props.restoreFocus()
+  }
+  return (
+    <Show when={!prompt.dirty()}>
+      <div data-component="new-session-examples" class="flex flex-wrap justify-center gap-2 max-md:justify-start">
+        {EXAMPLES.map((key) => (
+          <ButtonV2 variant="neutral" size="normal" onClick={() => use(language.t(key))}>
+            {language.t(key)}
+          </ButtonV2>
+        ))}
+      </div>
+    </Show>
   )
 }
 

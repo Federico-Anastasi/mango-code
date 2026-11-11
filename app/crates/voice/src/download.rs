@@ -5,6 +5,7 @@ use anyhow::Result;
 use mango_common::download::RemoteFile;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::AtomicBool;
 
 /// A file to download. `size` and `sha256` are the repository's (`lfs.oid` from the Hugging Face API); the URLs point
 /// to a fixed revision, so they don't change under our feet.
@@ -44,10 +45,11 @@ pub fn missing_files(dir: &Path) -> Vec<&'static ModelFile> {
 
 /// Downloads `file` into `dir` and returns its path: resume from a `.part`, hash verification and atomic rename are
 /// `mango_common::download`'s.
-/// `progress(downloaded, total)` is called at intervals and when the file is done.
-pub fn download(file: &ModelFile, dir: &Path, progress: &mut dyn FnMut(u64, u64)) -> Result<PathBuf> {
+/// `progress(downloaded, total)` is called at intervals and when the file is done. When `stop` becomes true it ends with
+/// `mango_common::download::Stopped`.
+pub fn download(file: &ModelFile, dir: &Path, stop: &AtomicBool, progress: &mut dyn FnMut(u64, u64)) -> Result<PathBuf> {
     let dest = dir.join(file.name);
     let remote = RemoteFile { url: file.url.to_string(), size: file.size, sha256: file.sha256.to_string() };
-    mango_common::download::download(&remote, &dest, progress)?;
+    mango_common::download::download_stoppable(&remote, &dest, stop, progress)?;
     Ok(dest)
 }

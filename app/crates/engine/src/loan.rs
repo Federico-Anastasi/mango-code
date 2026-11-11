@@ -57,6 +57,7 @@ pub fn owner_of(client: SocketAddr, server: SocketAddr) -> Option<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::windows::process::CommandExt;
 
     #[test]
     fn recognizes_the_process_at_the_other_end_of_the_connection() {
@@ -69,7 +70,15 @@ mod tests {
 
     #[test]
     fn follows_the_end_of_a_process() {
-        let mut child = std::process::Command::new("ping").args(["-n", "30", "127.0.0.1"]).stdout(std::process::Stdio::null()).spawn().unwrap();
+        let mut child = std::process::Command::new("ping")
+            .args(["-n", "30", "127.0.0.1"])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            // DETACHED_PROCESS: no console at all. With CREATE_NO_WINDOW Windows still starts one, and killing the
+            // process while it starts leaves a terminal window open on the screen with an error.
+            .creation_flags(0x0000_0008)
+            .spawn().unwrap();
         let p = Process::open(child.id()).unwrap();
         assert!(p.alive());
         child.kill().unwrap();

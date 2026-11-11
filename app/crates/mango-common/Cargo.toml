@@ -8,11 +8,16 @@ license.workspace = true
 anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-ureq = "3.5"
+ureq.workspace = true
+# To tell a certificate Windows refuses from other network errors (`internet::is_certificate_error`), and to play the filter in the tests
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 sha2 = "0.10"
+getrandom = "0.2"
 # Read-only zip support with deflate: engines are downloaded as .zip.
 zip = { version = "9", default-features = false, features = ["deflate-flate2"] }
-windows-sys = { version = "0.61", features = ["Win32_Globalization", "Win32_Storage_FileSystem"] }
+windows-sys = { version = "0.61", features = ["Win32_Globalization", "Win32_Storage_FileSystem", "Win32_Foundation", "Win32_NetworkManagement_IpHelper", "Win32_NetworkManagement_Ndis", "Win32_Networking_WinSock"] }
+# The networks Windows calls public (`network::is_public`).
+windows = { version = "0.58", features = ["Win32_Foundation", "Win32_Networking_NetworkListManager", "Win32_System_Com", "Win32_Networking_WinHttp"] }
 keyring = { version = "3", features = ["windows-native"] }
 
 [dev-dependencies]

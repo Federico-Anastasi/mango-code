@@ -44,6 +44,14 @@ describe("prompt settings in the page", () => {
     expect(itemsOf(s, "base").map((v) => v.name)).toEqual(["base"])
   })
 
+  test("an item that weighs nothing is not listed while it is on, but stays listed once it is off to be turned back on", () => {
+    const s = parsePromptSettings({
+      ...body,
+      items: [...body.items, item("plugins", "mango-project", 0), item("plugins", "mango-web-diet", 0, false)],
+    })!
+    expect(itemsOf(s, "plugins").map((v) => v.name)).toEqual(["mango-web-diet"])
+  })
+
   test("the total is the base plus the enabled items; the unmeasured ones are counted apart, never estimated", () => {
     const s = parsePromptSettings(body)!
     // 1400 + 800 + 250 + 1100 + 55: webfetch is off, "new" is not measured

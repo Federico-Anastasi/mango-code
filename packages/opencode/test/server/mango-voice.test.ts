@@ -3,12 +3,12 @@ import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { Server } from "../../src/server/server"
-import { VOICE_TRANSCRIBE_PATH } from "../../src/server/shared/voice"
+import { VOICE_LIVE_PCM_PATH } from "../../src/server/shared/voice"
 import { resetDatabase } from "../fixture/db"
 import { disposeAllInstances } from "../fixture/fixture"
 
-// mango-code: the dictation route forwards the audio to the local service announced in
-// MANGO_VOICE_URL and returns its response.
+// mango-code: the dictation routes forward the audio to the local service announced in
+// MANGO_VOICE_URL and return its response.
 const original = process.env.MANGO_VOICE_URL
 const originalSettings = process.env.MANGO_SETTINGS
 
@@ -32,9 +32,9 @@ afterEach(async () => {
 })
 
 function post(body: BodyInit) {
-  return Server.Default().app.request(VOICE_TRANSCRIBE_PATH, {
+  return Server.Default().app.request(`${VOICE_LIVE_PCM_PATH}?id=a1`, {
     method: "POST",
-    headers: { "content-type": "audio/webm;codecs=opus" },
+    headers: { "content-type": "application/octet-stream" },
     body,
   })
 }
@@ -47,24 +47,25 @@ describe("dictation", () => {
     expect((await response.json()).error).toContain("dettatura spenta")
   })
 
-  test("forwards audio and type to the service and returns its response", async () => {
+  test("forwards the audio chunk of a session to the service and returns its events", async () => {
     const seen: { path?: string; type?: string | null; size?: number } = {}
     const upstream = Bun.serve({
       port: 0,
       hostname: "127.0.0.1",
       async fetch(request) {
-        seen.path = new URL(request.url).pathname
+        const url = new URL(request.url)
+        seen.path = url.pathname + url.search
         seen.type = request.headers.get("content-type")
         seen.size = (await request.arrayBuffer()).byteLength
-        return Response.json({ text: "hello", audio_s: 1, elapsed_s: 0.1 })
+        return Response.json({ events: [{ type: "partial", text: "hello" }] })
       },
     })
     try {
       process.env.MANGO_VOICE_URL = `http://127.0.0.1:${upstream.port}`
       const response = await post(new Uint8Array(1000))
       expect(response.status).toBe(200)
-      expect((await response.json()).text).toBe("hello")
-      expect(seen).toEqual({ path: "/transcribe", type: "audio/webm;codecs=opus", size: 1000 })
+      expect((await response.json()).events).toEqual([{ type: "partial", text: "hello" }])
+      expect(seen).toEqual({ path: "/live/pcm?id=a1", type: "application/octet-stream", size: 1000 })
     } finally {
       upstream.stop(true)
     }

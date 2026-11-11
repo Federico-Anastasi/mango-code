@@ -312,6 +312,33 @@ describe("tool.read env file permissions", () => {
   }
 })
 
+describe("tool.read missing paths", () => {
+  it.instance("names the closest existing folder when the folder does not exist", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      yield* put(path.join(test.directory, "src", "main.ts"), "export {}")
+      const missing = path.join(test.directory, "src", "lib", "deep", "util.ts")
+
+      const message = (yield* fail(test.directory, { filePath: missing })).message
+      expect(message).toBe(
+        `File not found: ${missing}
+The folder ${path.join(test.directory, "src", "lib")} does not exist. The closest existing folder is ${path.join(test.directory, "src")}.`,
+      )
+    }),
+  )
+
+  it.instance("keeps the file suggestions when only the file is missing", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      yield* put(path.join(test.directory, "src", "main.ts"), "export {}")
+
+      const message = (yield* fail(test.directory, { filePath: path.join(test.directory, "src", "main") })).message
+      expect(message).toContain("Did you mean one of these?")
+      expect(message).toContain(path.join(test.directory, "src", "main.ts"))
+    }),
+  )
+})
+
 describe("tool.read truncation", () => {
   it.instance("truncates large file by bytes and sets truncated metadata", () =>
     Effect.gen(function* () {

@@ -26,10 +26,15 @@ tauri-plugin-single-instance = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2"
 tauri-plugin-updater = "2"
-ureq = "2"
+ureq.workspace = true
+webview2-com = "0.39"
 chrono = "0.4"
 regex = "1"
 uuid = { version = "1", features = ["v4"] }
 arboard = "3"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp"] }
 windows = { version = "0.58", features = ["Win32_Foundation", "Win32_System_JobObjects", "Win32_Graphics_Dwm", "Win32_System_Threading", "Win32_Security", "Win32_Graphics_Gdi", "Win32_Storage_Xps", "Win32_UI_WindowsAndMessaging"] }
+
+[dev-dependencies]
+# To play the company filter in the tests (`mango_common::internet::fake_proxy`)
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }

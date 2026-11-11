@@ -4,32 +4,12 @@
   "engine": "prism",
   "build": "cuda-12",
   "hardware": {
-    "gpus": [
-      "NVIDIA GeForce RTX 3060 Ti",
-      "NVIDIA GeForce GTX 1080",
-      "NVIDIA GeForce GTX 1660 SUPER"
-    ]
+    "gpus": ["NVIDIA GeForce RTX 3060 Ti", "NVIDIA GeForce GTX 1080", "NVIDIA GeForce GTX 1660 SUPER"]
   },
   "env": {
     "GGML_CUDA_CLOCK_KEEPER": "1"
   },
-  "args": [
-    "-ngl",
-    "999",
-    "-fa",
-    "1",
-    "-ctk",
-    "q8_0",
-    "-ctv",
-    "q8_0",
-    "--spec-type",
-    "draft-mtp",
-    "--spec-draft-n-max",
-    "2",
-    "--no-mmproj-offload",
-    "--image-min-tokens",
-    "1024"
-  ],
+  "args": ["-ngl", "999", "-fa", "1", "-ctk", "q8_0", "-ctv", "q8_0", "--spec-type", "draft-mtp", "--spec-draft-n-max", "2", "--no-mmproj-offload", "--image-min-tokens", "1024"],
   "ctx": 92160,
   "ub": 256,
   "ts": "42,36,22",

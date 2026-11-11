@@ -2,7 +2,7 @@
   "name": "mango-code-launcher",
   "version": "1.0.0",
   "private": true,
-  "description": "Node dependencies of the mango-code launcher: web search MCP (readability/jsdom/turndown), browser MCP (chrome-devtools-mcp), documents server.",
+  "description": "Node dependencies of the MCP servers and tools in this folder: web search MCP (readability/jsdom/turndown), browser MCP (chrome-devtools-mcp), documents server.",
   "license": "AGPL-3.0-or-later",
   "dependencies": {
     "@mozilla/readability": "^0.6.0",

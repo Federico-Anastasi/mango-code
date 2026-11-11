@@ -11,6 +11,8 @@ chooses**, and leaves it written down as a profile. You work from outside, as an
 
 **Result:** a profile (`profiles/<id>.json`, format in `references/mango-code.md`) and a short report with the measurements. Nothing else stays on the PC: the trial work is removed.
 
+To install the skill, copy this folder (or link it with `mklink /J`) to `.claude/skills/optimize/` in the project or to `~/.claude/skills/optimize/`, and ask Claude Code, with a frontier model: "Optimize Mango Code on my PC".
+
 ## Before you start
 
 1. Read `references/hygiene.md`: the rules you work by (consent for the GPUs, one heavy job per GPU, one change at a time, independent verification, cleanup). They matter as much as the optimizations.

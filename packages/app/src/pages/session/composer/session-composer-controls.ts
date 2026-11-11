@@ -4,6 +4,7 @@ import { useNavigate, useSearchParams } from "@solidjs/router"
 import { type Accessor, createMemo } from "solid-js"
 import type { PromptInputControls } from "@/components/prompt-input/contracts"
 import type { PromptProjectControls } from "@/components/prompt-project-selector"
+import { useProjectFolders } from "@/components/dialog-broad-folder"
 import { useDirectoryPicker } from "@/components/directory-picker"
 import { useNewProject } from "@/components/dialog-new-project"
 import { useGlobal } from "@/context/global"
@@ -70,6 +71,7 @@ export function createPromptProjectControls() {
   const tabs = useTabs()
   const global = useGlobal()
   const pickDirectory = useDirectoryPicker()
+  const projectFolders = useProjectFolders()
   const newProject = useNewProject()
   const [search] = useSearchParams<{ draftId?: string }>()
   const projectServer = () => serverSDK().server
@@ -119,8 +121,8 @@ export function createPromptProjectControls() {
       server: conn,
       title,
       onSelect: (result) => {
-        const directory = Array.isArray(result) ? result[0] : result
-        if (directory) selectProject(directory, serverKey)
+        const picked = Array.isArray(result) ? result[0] : result
+        if (picked) void projectFolders(conn, [picked]).then(([directory]) => directory && selectProject(directory, serverKey))
       },
     })
   }

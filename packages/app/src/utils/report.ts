@@ -57,10 +57,10 @@ async function findTarget(): Promise<ReportTarget | undefined> {
   return info && { info, send: (input) => bridge.reportProblem(input) }
 }
 
-let found: Promise<ReportTarget | undefined> | undefined
-/** Where a report goes from this page, asked once. */
-export function reportTarget() {
-  return (found ??= findTarget())
+let found: ReportTarget | undefined
+/** Where a report goes from this page. Only an answer is kept: a failed look (the phone's network dropped) is repeated by the next caller. */
+export async function reportTarget() {
+  return (found ??= await findTarget())
 }
 
 type Refusal = { kind: "file" | "total"; name: string; size: number }

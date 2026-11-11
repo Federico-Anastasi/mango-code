@@ -1,6 +1,6 @@
 //! The app's two languages, Italian and English.
 //!
-//! The choice lives in `<data>\settings.json` (`"language": "it"` or `"en"`), the same file the terminal and the
+//! The choice lives in `<data>\settings.json` (`"language": "it"` or `"en"`), the same file the
 //! web UI read and write. Without it the app follows the Windows display language: Italian when Windows is in
 //! Italian, English otherwise.
 
@@ -12,7 +12,7 @@ pub enum Lang {
     En,
 }
 
-/// The language for the next message. Read at every call, so a change made in the web UI or in the terminal
+/// The language for the next message. Read at every call, so a change made in the web UI
 /// applies without restarting the app.
 pub fn lang() -> Lang {
     crate::data_dir().ok().and_then(|d| from_settings(&d.join("settings.json"))).unwrap_or_else(system_lang)

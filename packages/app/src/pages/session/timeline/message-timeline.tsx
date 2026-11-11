@@ -59,8 +59,9 @@ import { Popover as KobaltePopover } from "@kobalte/core/popover"
 import { normalize } from "@opencode-ai/session-ui/session-diff"
 import { useData } from "@opencode-ai/session-ui/context"
 import { ProjectFileMeta } from "@opencode-ai/session-ui/project-file-meta"
-import { isProjectFileCard } from "@opencode-ai/session-ui/project-file"
-import { summaryFiles } from "./produced-files"
+import { isProjectFileCard, previewKind } from "@opencode-ai/session-ui/project-file"
+import { lastWrittenPage, summaryFiles } from "./produced-files"
+import { phonePreview } from "@/utils/phone-preview"
 import { createElapsed } from "@opencode-ai/session-ui/live-now"
 import { formatDuration } from "@opencode-ai/session-ui/step-time"
 import { useFileComponent } from "@opencode-ai/ui/context/file"
@@ -140,7 +141,7 @@ const markBoundaryGesture = (input: {
 }
 
 // Placeholder of the name in the translated sentence: the sentence is split here to put the name as a link.
-const TITLE_SLOT = ""
+const TITLE_SLOT = "\uE000"
 
 function TimelineThinkingRow(props: { since: number; afterParts: boolean }) {
   const language = useLanguage()
@@ -267,7 +268,16 @@ function TimelineDiffSummaryRow(props: { diffs: SummaryDiff[]; produced: string[
               // file): a card with type, size and the buttons to open them.
               if (!diff || isProjectFileCard(item.file)) {
                 return (
-                  <div data-slot="session-turn-file-card">
+                  <div
+                    data-slot="session-turn-file-card"
+                    // A PDF or a picture is shown in the panel by a click anywhere on its card: the same as "Open".
+                    data-preview={!deleted && data.files && previewKind(item.file) ? "" : undefined}
+                    onClick={(event) => {
+                      const card = event.currentTarget
+                      if (card.hasAttribute("data-preview"))
+                        card.querySelector<HTMLElement>('[data-slot="project-file-action"]')?.click()
+                    }}
+                  >
                     <FileIcon node={{ path: item.file, type: "file" }} />
                     <span data-slot="session-turn-file-card-name">{getFilename(item.file)}</span>
                     <Show
@@ -403,7 +413,8 @@ export function MessageTimeline(props: {
   const titleValue = createMemo(() => info()?.title)
   const titleLabel = createMemo(() => sessionTitle(titleValue()))
   const shareUrl = createMemo(() => info()?.share?.url)
-  const shareEnabled = createMemo(() => sync().data.config.share !== "disabled")
+  // Session sharing was discontinued; keep the share menu and popover hidden.
+  const shareEnabled = () => false
   const parentID = createMemo(() => info()?.parentID)
   const parent = createMemo(() => {
     const id = parentID()
@@ -417,6 +428,17 @@ export function MessageTimeline(props: {
   })
   const parentTitle = createMemo(() => sessionTitle(parent()?.title) ?? language.t("command.session.new"))
   const getMsgParts = (msgId: string) => sync().data.part[msgId] ?? emptyParts
+  // The globe of the phone opens the last page this conversation wrote when the computer's panel has none.
+  createEffect(() => {
+    const id = sessionID()
+    if (!id) return
+    const page = lastWrittenPage(
+      sessionMessages()
+        .filter((message) => message.role === "assistant")
+        .flatMap((message) => getMsgParts(message.id)),
+    )
+    phonePreview.rememberPage(id, page ? { directory: sdk().directory, path: page } : undefined)
+  })
   const getMsgPart = (messageID: string, partID: string) => getMsgParts(messageID).find((part) => part.id === partID)
   const childTaskDescription = createMemo(() => {
     const id = sessionID()
@@ -882,6 +904,7 @@ export function MessageTimeline(props: {
   }
 
   const saveTitleEditor = () => {
+    if (!title.editing) return
     const id = sessionID()
     if (!id) return
     if (titleMutation.isPending) return
@@ -1336,7 +1359,7 @@ export function MessageTimeline(props: {
           <TimelineRowFrame row={errorRow}>
             <div data-slot="session-turn-message-container" class="w-full px-4 md:px-5">
               <Card variant="error" class="error-card">
-                {errorRow().text}
+                {errorRow().overflow ? language.t("ui.error.contextOverflow") : errorRow().text}
               </Card>
             </div>
           </TimelineRowFrame>
@@ -1923,6 +1946,7 @@ export function MessageTimeline(props: {
                         onInput={(event) => setTitle("draft", event.currentTarget.value)}
                         onKeyDown={(event) => {
                           event.stopPropagation()
+                          if (event.isComposing || event.keyCode === 229) return
                           if (event.key === "Enter") {
                             event.preventDefault()
                             void saveTitleEditor()
@@ -1933,7 +1957,7 @@ export function MessageTimeline(props: {
                             closeTitleEditor()
                           }
                         }}
-                        onBlur={closeTitleEditor}
+                        onBlur={saveTitleEditor}
                       />
                     </Show>
                   </Show>

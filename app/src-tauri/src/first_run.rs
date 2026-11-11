@@ -3,7 +3,7 @@
 //! that touches the computer or the network goes through the `System` trait (`system.rs`).
 
 use anyhow::{bail, Context, Result};
-use engine_cfg::Placement;
+use engine_cfg::{Placement, Speed};
 use mango_common::tr;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -95,6 +95,9 @@ pub struct Recommendation {
     /// Only on request: in the list, never the one proposed.
     #[serde(default)]
     pub on_request: bool,
+    /// How fast it writes, when it runs on the processor.
+    #[serde(default)]
+    pub speed: Option<Speed>,
 }
 
 /// The computer and the disk, seen from outside: the part that the tests replace.
@@ -137,6 +140,8 @@ pub struct Model {
     pub fallback: bool,
     /// See `Recommendation::on_request`.
     pub on_request: bool,
+    /// See `Recommendation::speed`.
+    pub speed: Option<Speed>,
 }
 
 impl Model {
@@ -198,6 +203,7 @@ pub fn assess(s: &dyn System) -> Result<Assessment> {
             recommended: false,
             fallback: c.fallback,
             on_request: c.on_request,
+            speed: c.speed,
         });
     }
     // The first one to download that fits on the GPUs; on the CPU only if none fits on the GPUs. A model for small
@@ -336,9 +342,8 @@ fn choice_file(data: &Path) -> PathBuf {
 /// download resumes by itself with the same models.
 pub fn remember_choice(data: &Path, chosen: &[String]) -> Result<()> {
     let f = choice_file(data);
-    let tmp = f.with_extension("json.tmp");
-    std::fs::write(&tmp, serde_json::to_string_pretty(&Remembered { chosen: chosen.to_vec() })?)?;
-    std::fs::rename(&tmp, &f).with_context(|| tr!("scrittura di {}", "writing {}", f.display()))
+    mango_common::write_atomic(&f, serde_json::to_string_pretty(&Remembered { chosen: chosen.to_vec() })?)
+        .with_context(|| tr!("scrittura di {}", "writing {}", f.display()))
 }
 
 pub fn remembered_choice(data: &Path) -> Option<Vec<String>> {
@@ -387,7 +392,7 @@ mod tests {
 
     fn advice(key: &str, fits: bool) -> Recommendation {
         let (placement, reason) = if fits { (Some(Placement::Gpu), String::new()) } else { (None, "too big".into()) };
-        Recommendation { model: key.into(), placement, context: 32768, reason, bytes: 1000, user: false, fastest: false, fallback: false, on_request: false }
+        Recommendation { model: key.into(), placement, context: 32768, reason, bytes: 1000, user: false, fastest: false, fallback: false, on_request: false, speed: None }
     }
 
     /// Three models (a, b, c): c does not fit. Nothing on disk, general engine to download.

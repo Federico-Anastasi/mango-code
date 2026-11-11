@@ -2,7 +2,7 @@ import { afterEach, describe, expect } from "bun:test"
 import path from "path"
 import fs from "fs/promises"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
-import { Cause, Deferred, Effect, Exit, Fiber, Layer } from "effect"
+import { Cause, Deferred, Effect, Exit, Fiber } from "effect"
 import { EditTool } from "../../src/tool/edit"
 import { disposeAllInstances, TestInstance } from "../fixture/fixture"
 import { LSP } from "@/lsp/lsp"
@@ -204,6 +204,57 @@ describe("tool.edit", () => {
 
         expect(yield* fail({ filePath: filepath, oldString: "not in file", newString: "replacement" })).toBeInstanceOf(
           Error,
+        )
+      }),
+    )
+
+    it.instance("shows the closest lines when oldString differs only in spacing and punctuation", () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const filepath = path.join(test.directory, "sum.ts")
+        const original = ["// sum", "function sum(a, b) {", "  const total = a + b", "  return total", "}"].join("\n")
+        yield* put(filepath, original)
+
+        const message = (yield* fail({
+          filePath: filepath,
+          oldString: ["function sum(a,b) {", "  const total = a+b", "  return total;", "}"].join("\n"),
+          newString: "function sum(a, b) { return a + b }",
+        })).message
+
+        expect(message).toContain("Could not find oldString")
+        expect(message).toContain("The closest lines in the file:\n2: function sum(a, b) {\n3:   const total = a + b")
+        expect(message).not.toContain("// sum")
+        expect(yield* load(filepath)).toBe(original)
+      }),
+    )
+
+    it.instance("says so when newString is already in the file", () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const filepath = path.join(test.directory, "done.ts")
+        yield* put(filepath, "export const greeting = 'hello world'\nexport const answer = 42\n")
+
+        const message = (yield* fail({
+          filePath: filepath,
+          oldString: "export const greeting = 'hi'",
+          newString: "export const greeting = 'hello world'",
+        })).message
+
+        expect(message).toContain("already in the file")
+      }),
+    )
+
+    it.instance("adds no hint when nothing in the file resembles oldString", () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const filepath = path.join(test.directory, "other.ts")
+        yield* put(filepath, "alpha\nbeta\ngamma\n")
+
+        const message = (yield* fail({ filePath: filepath, oldString: "delta epsilon", newString: "zeta eta theta" }))
+          .message
+
+        expect(message).toBe(
+          "Could not find oldString in the file. It must match exactly, including whitespace, indentation, and line endings.",
         )
       }),
     )

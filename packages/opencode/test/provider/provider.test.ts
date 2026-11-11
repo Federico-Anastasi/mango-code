@@ -3,7 +3,7 @@ import { mkdir, unlink } from "fs/promises"
 import path from "path"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { AppNodeBuilder } from "@opencode-ai/core/effect/app-node-builder"
-import { Effect, Layer } from "effect"
+import { Effect } from "effect"
 import { ModelsDev } from "@opencode-ai/core/models-dev"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
@@ -579,6 +579,33 @@ it.instance(
     config: {
       provider: {
         openai: { models: { "custom-gpt-chat": { id: "gpt-5-chat-latest", name: "Custom GPT Chat" } } },
+      },
+    },
+  },
+)
+
+it.instance(
+  "model config reasoning options replace catalog variants under configured variants",
+  Effect.gen(function* () {
+    yield* set("ANTHROPIC_API_KEY", "test-api-key")
+    const providers = yield* list
+    const models = providers[ProviderV2.ID.anthropic].models
+    expect(Object.keys(models["claude-sonnet-4-6"].variants ?? {})).toEqual(["low", "high"])
+    expect(models["claude-sonnet-4-6"].variants?.high).toMatchObject({ effort: "high", extra: true })
+    expect(models["claude-fixed"].variants).toEqual({})
+  }),
+  {
+    config: {
+      provider: {
+        anthropic: {
+          models: {
+            "claude-sonnet-4-6": {
+              reasoning_options: [{ type: "effort", values: ["low", "high"] }],
+              variants: { high: { extra: true } },
+            },
+            "claude-fixed": { id: "claude-sonnet-4-6", reasoning: true, reasoning_options: [] },
+          },
+        },
       },
     },
   },
@@ -1599,6 +1626,20 @@ test("public provider info omits invalid models", () => {
 
   expect(result.models.valid).toBeDefined()
   expect(result.models.invalid).toBeUndefined()
+})
+
+test("what a client of the server is told about a provider never carries its key", () => {
+  const provider = Provider.fromModelsDevProvider({ id: "test", name: "Test", env: [], models: {} } as unknown as ModelsDev.Provider)
+  provider.key = "secret-key-of-the-provider"
+  provider.options = { apiKey: "secret-key-of-the-provider", baseURL: "http://192.168.1.20:47098/v1", headerTimeout: 900000 }
+
+  const result = Provider.toClientInfo(provider)
+
+  expect(JSON.stringify(result)).not.toContain("secret-key-of-the-provider")
+  expect(result.options).toEqual({ baseURL: "http://192.168.1.20:47098/v1", headerTimeout: 900000 })
+  expect(result.id).toBe(provider.id)
+  // The provider itself, which the server uses, keeps its key.
+  expect(provider.options.apiKey).toBe("secret-key-of-the-provider")
 })
 
 it.instance("model variants are generated for reasoning models", () =>

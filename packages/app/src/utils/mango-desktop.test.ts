@@ -62,6 +62,20 @@ describe("mangoPlatform", () => {
     expect(await files.reveal!("C:\P\a.docx").catch((e) => e)).toEqual({ code: "not_found", message: "x" })
   })
 
+  test("a PDF or a picture opens in the preview panel, the other documents in their Windows program", async () => {
+    const shown: string[] = []
+    const preview = { openFile: async (path: string) => void shown.push(path) } as unknown as MangoDesktop["preview"]
+    const { value, opened } = bridge({ preview })
+    const files = mangoPlatform(value).projectFiles!
+    for (const name of ["a.pdf", "b.PNG", "c.svg"]) await files.open(`C:\\P\\${name}`)
+    await files.open("C:\\P\\d.docx")
+    expect(shown).toEqual(["C:\\P\\a.pdf", "C:\\P\\b.PNG", "C:\\P\\c.svg"])
+    expect(opened).toEqual(["C:\\P\\d.docx"])
+    // a panel that refuses says why: the card shows it
+    const refusing = bridge({ preview: { openFile: async () => Promise.reject({ code: "too_large", message: "x" }) } as unknown as MangoDesktop["preview"] })
+    expect(await mangoPlatform(refusing.value).projectFiles!.open("C:\\P\\big.pdf").catch((e) => e)).toEqual({ code: "too_large", message: "x" })
+  })
+
   test("external links: only http, https and mailto go through the bridge", () => {
     const { value, opened } = bridge()
     const platform = mangoPlatform(value)

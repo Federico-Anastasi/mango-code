@@ -16,14 +16,14 @@ use anyhow::{Context, Result};
 use mango_common::{tr, Build};
 use nvml_wrapper::error::NvmlError;
 use nvml_wrapper::Nvml;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use windows::Win32::Graphics::Dxgi::{CreateDXGIFactory1, IDXGIFactory1, DXGI_ADAPTER_FLAG_SOFTWARE};
 use windows::Win32::System::SystemInformation::{
     GetLogicalProcessorInformationEx, GlobalMemoryStatusEx, RelationProcessorCore, MEMORYSTATUSEX,
     SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX,
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Vendor {
     Nvidia,
@@ -32,7 +32,7 @@ pub enum Vendor {
     Other,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Gpu {
     /// NVIDIA: position in PCI order (that of `CUDA_VISIBLE_DEVICES`). The others: the position after the NVIDIA ones.
     pub index: u32,
@@ -46,7 +46,7 @@ pub struct Gpu {
     pub cc: Option<(u32, u32)>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Cpu {
     pub name: String,
     /// Physical cores (not threads).
@@ -55,8 +55,7 @@ pub struct Cpu {
     pub avx512: bool,
 }
 
-/// Also as a JSON file: `mango-launch --hardware` reads it to show the plan of a PC that isn't this one.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Hardware {
     pub gpus: Vec<Gpu>,
     pub cpu: Cpu,

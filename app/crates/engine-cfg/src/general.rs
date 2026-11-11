@@ -15,6 +15,7 @@
 
 use crate::catalog::{load_models, model_cfg, setup_for, ModelCfg, ModelsFile, Origin, Setup, GENERAL_ENGINE};
 use crate::hardware::{choose_build, Hardware, Vendor, Gpu};
+use crate::speed::{cpu_speed, Speed};
 use crate::split::MIN_CTX;
 use anyhow::{anyhow, bail, Result};
 use mango_common::i18n::{lang, Lang};
@@ -305,6 +306,8 @@ pub struct Recommendation {
     pub fallback: bool,
     /// Only on request (catalog `on_request`): never preselected nor the fastest.
     pub on_request: bool,
+    /// How fast it writes, when it runs on the processor (`speed.rs`).
+    pub speed: Option<Speed>,
 }
 
 /// The catalog's local models, in its order, each with the verdict for `hw`: with the profile if there is one,
@@ -345,7 +348,8 @@ pub fn recommended(paths: &Paths, hw: &Hardware) -> Result<Vec<Recommendation>> 
             },
             Err(e) => (0, None, format!("{e:#}")),
         };
-        read.push(cfg.read_per_token(cfg.engine_with(&setup)));
+        let read_per_token = cfg.read_per_token(cfg.engine_with(&setup));
+        read.push(read_per_token);
         v.push(Recommendation {
             model: key.to_string(),
             placement,
@@ -357,6 +361,7 @@ pub fn recommended(paths: &Paths, hw: &Hardware) -> Result<Vec<Recommendation>> 
             fastest: false,
             fallback: cfg.fallback,
             on_request: cfg.on_request,
+            speed: (placement == Some(Placement::Cpu)).then(|| cpu_speed(read_per_token)),
         });
     }
     mark_fastest(&mut v, &read);

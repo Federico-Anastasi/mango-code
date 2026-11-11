@@ -47,7 +47,7 @@ function SessionTabSlot(props: {
       data-titlebar-tab-slot
       data-tab-key={props.id}
       data-active={props.active()}
-      class="relative flex w-56 min-w-7 max-w-56 flex-shrink"
+      class="relative flex w-56 min-w-36 max-w-56 flex-shrink"
     >
       <TabNavItem
         ref={(el) => {
@@ -187,7 +187,7 @@ function DraftTabSlot(props: {
       data-titlebar-tab-slot
       data-tab-key={props.id}
       data-active={props.active()}
-      class="relative flex w-56 min-w-7 max-w-56 flex-shrink"
+      class="relative flex w-56 min-w-36 max-w-56 flex-shrink"
     >
       <DraftTabItem
         ref={(el) => {
@@ -219,6 +219,12 @@ export function TitlebarTabStrip(props: {
   const [visibility, setVisibility] = createStore<Record<string, boolean>>({})
   const visibleTabs = createMemo(() => props.tabs.filter((tab) => tab.type === "draft" || visibility[tabKey(tab)]))
   const visibleTabIds = () => visibleTabs().map(tabKey)
+
+  // The tabs keep a width that reads; when they do not fit the strip scrolls and the tab in use stays in view.
+  createEffect(() => {
+    props.currentTab()
+    queueMicrotask(() => scrollRef.querySelector('[data-active="true"]')?.scrollIntoView({ block: "nearest", inline: "nearest" }))
+  })
 
   command.register("titlebar-tab-cycle", () => [
     {

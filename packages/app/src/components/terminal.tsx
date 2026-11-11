@@ -338,13 +338,6 @@ export const Terminal = (props: TerminalProps) => {
     setOptionIfSupported(term, "colorScheme", mode)
   })
 
-  createEffect(() => {
-    const font = terminalFontFamily(settings.appearance.terminalFont())
-    if (!term) return
-    setOptionIfSupported(term, "fontFamily", font)
-    scheduleFit()
-  })
-
   let zoom = platform.webviewZoom?.()
   createEffect(() => {
     const next = platform.webviewZoom?.()
@@ -403,7 +396,7 @@ export const Terminal = (props: TerminalProps) => {
         cols: restoreSize?.cols,
         rows: restoreSize?.rows,
         fontSize: 14,
-        fontFamily: terminalFontFamily(settings.appearance.terminalFont()),
+        fontFamily: terminalFontFamily,
         allowTransparency: false,
         convertEol: false,
         theme: terminalColors(),

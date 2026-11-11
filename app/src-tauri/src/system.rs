@@ -30,6 +30,17 @@ impl Real {
     }
 }
 
+/// The computer as the page lists it: the graphics cards a model can use. Integrated graphics with a few hundred MiB
+/// (`Hardware::usable`) never run a model and would only look like a card that is not used.
+fn computer_of(hw: &Hardware) -> Computer {
+    Computer {
+        gpus: hw.usable().map(|s| Gpu { name: s.name.clone(), memory_mib: s.memory_mib }).collect(),
+        cpu: hw.cpu.name.clone(),
+        cores: hw.cpu.cores,
+        ram_mib: hw.ram_mib,
+    }
+}
+
 /// "cuda-12", as in the catalogs and profiles.
 fn build_to_text(b: Build) -> String {
     serde_json::to_value(b).ok().and_then(|v| v.as_str().map(String::from)).expect("Build is written as text")
@@ -41,12 +52,7 @@ fn build_from_text(t: &str) -> Result<Build> {
 
 impl System for Real {
     fn computer(&self) -> Result<Computer> {
-        Ok(Computer {
-            gpus: self.hw.gpus.iter().map(|s| Gpu { name: s.name.clone(), memory_mib: s.memory_mib }).collect(),
-            cpu: self.hw.cpu.name.clone(),
-            cores: self.hw.cpu.cores,
-            ram_mib: self.hw.ram_mib,
-        })
+        Ok(computer_of(&self.hw))
     }
 
     fn catalog(&self) -> Result<Vec<CatalogEntry>> {
@@ -67,6 +73,7 @@ impl System for Real {
                 fastest: c.fastest,
                 fallback: c.fallback,
                 on_request: c.on_request,
+                speed: c.speed,
             })
             .collect())
     }
@@ -104,4 +111,25 @@ pub fn choose(paths: &Paths) -> Result<Box<dyn System>> {
         return Ok(Box::new(crate::fake::FakeSystem::from_file(std::path::Path::new(&f), paths)?));
     }
     Ok(Box::new(Real::new(paths)?))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use engine_cfg::{Cpu, Gpu as Card, Vendor};
+
+    #[test]
+    fn integrated_graphics_under_2_gib_is_not_listed_among_the_cards() {
+        let card = |index, name: &str, vendor, memory_mib| Card { index, name: name.into(), vendor, memory_mib, cuda_driver: None, cc: None };
+        let hw = Hardware {
+            gpus: vec![card(0, "NVIDIA GeForce GTX 1660 SUPER", Vendor::Nvidia, 6144), card(1, "Intel(R) UHD Graphics 630", Vendor::Intel, 128)],
+            cpu: Cpu { name: "Intel Core i7".into(), cores: 8, avx2: true, avx512: false },
+            ram_mib: 16384,
+        };
+        let c = computer_of(&hw);
+        assert_eq!(c.gpus.iter().map(|g| (g.name.as_str(), g.memory_mib)).collect::<Vec<_>>(), [("NVIDIA GeForce GTX 1660 SUPER", 6144)]);
+        // a PC with only the integrated one lists no card: the page says there is none and the processor is used
+        let only = Hardware { gpus: vec![card(0, "Intel(R) UHD Graphics 630", Vendor::Intel, 128)], ..hw };
+        assert!(computer_of(&only).gpus.is_empty());
+    }
 }

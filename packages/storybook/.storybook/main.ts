@@ -43,7 +43,6 @@ export default defineMain({
           { find: /^@\/context\/sync$/, replacement: path.resolve(mocks, "app/context/sync.ts") },
           { find: /^@\/context\/comments$/, replacement: path.resolve(mocks, "app/context/comments.ts") },
           { find: /^@\/context\/command$/, replacement: path.resolve(mocks, "app/context/command.ts") },
-          { find: /^@\/context\/permission$/, replacement: path.resolve(mocks, "app/context/permission.ts") },
           { find: /^@\/context\/language$/, replacement: path.resolve(mocks, "app/context/language.ts") },
           { find: /^@\/context\/platform$/, replacement: path.resolve(mocks, "app/context/platform.ts") },
           { find: /^@\/context\/global-sync$/, replacement: path.resolve(mocks, "app/context/global-sync.ts") },

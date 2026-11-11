@@ -844,7 +844,7 @@
     display: flex;
     flex-shrink: 0;
     align-items: center;
-    gap: 4px;
+    gap: 12px;
     min-height: 56px;
     padding: 6px 8px;
     border-bottom: 1px solid var(--v2-border-border-base);

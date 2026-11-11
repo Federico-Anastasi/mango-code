@@ -36,14 +36,14 @@ pub fn read_choice() -> Choice {
 
 pub fn write_choice(s: &Choice) -> anyhow::Result<()> {
     let f = choice_file()?;
-    std::fs::write(&f, serde_json::to_string(s)?).map_err(|e| anyhow::anyhow!("{}: {e}", f.display()))
+    mango_common::write_atomic(&f, serde_json::to_string(s)?).map_err(|e| anyhow::anyhow!("{}: {e}", f.display()))
 }
 
 /// Where Windows installs Chrome (for everyone, for the user, 32-bit).
 fn executables() -> Vec<PathBuf> {
     ["ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA"]
         .iter()
-        .filter_map(|v| std::env::var_os(v))
+        .filter_map(std::env::var_os)
         .map(|base| PathBuf::from(base).join("Google").join("Chrome").join("Application").join("chrome.exe"))
         .collect()
 }

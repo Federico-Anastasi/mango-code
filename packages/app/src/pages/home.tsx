@@ -20,8 +20,8 @@ export function NewHome() {
   const scroll = createHomeScrollController(sessions.data.groups)
   const phone = createMediaQuery("(max-width: 767px)")
 
-  // mango-code: `?project=<folder>` opens that folder as a project (the launcher passes it with
-  // -Web -Dir), so there is no need to browse the disk from the picker. The parameter disappears from the URL.
+  // mango-code: `?project=<folder>` opens that folder as a project (the app passes it when a folder is
+  // opened from File Explorer), so there is no need to browse the disk from the picker. The parameter disappears from the URL.
   // On Windows the server stores sessions and projects with the native path (C:\...): with the / slashes the page
   // kept the project under another key and lost the session at the first refresh.
   const raw = new URLSearchParams(location.search).get("project")

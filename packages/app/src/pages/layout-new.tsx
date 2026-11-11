@@ -57,6 +57,7 @@ function useMissingProjectCleanup() {
 export default function NewLayout(props: ParentProps) {
   const platform = usePlatform()
   const preview = usePreview()
+  preview.follow(useLayout().route)
   const [state, setState] = createStore({ debugTools: true })
 
   createEffect(() => setV2Toast(true))
@@ -77,7 +78,7 @@ export default function NewLayout(props: ParentProps) {
 
   // From a phone the browser panel of the computer can be seen (see `utils/phone-preview.ts`); a link to a page of the computer opens there.
   onMount(() => {
-    void phonePreview.detect()
+    onCleanup(phonePreview.watch())
     onCleanup(
       openLocalLinks((url) => void phonePreview.openPage({ url }).catch(previewFailed(language.t("preview.phone.failed")))),
     )

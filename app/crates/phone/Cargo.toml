@@ -10,10 +10,8 @@ anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 chrono = "0.4"
-getrandom = "0.2"
 sha2 = "0.10"
 qrcodegen = "1.8"
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_NetworkManagement_IpHelper", "Win32_NetworkManagement_Ndis", "Win32_Networking_WinSock"] }
 
 [dev-dependencies]
 tempfile = "3.27.0"

@@ -23,7 +23,7 @@ in the tag you build):
 | `-DGGML_BACKEND_DL=ON -DGGML_CPU_ALL_VARIANTS=ON` | a CPU binary that picks the right variant at startup (this is how the official releases are made) |
 | `-DLLAMA_CURL=OFF -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_EXAMPLES=OFF`, targets `llama-server llama-bench` | shorter build |
 
-How we do it on Windows: `launcher/setup.ps1` (detects the architectures, generates with Visual Studio or Ninja+clang,
+How we do it on Windows: `app/scripts/build-engines.ps1` (detects the architectures, generates with Visual Studio or Ninja+clang,
 `-j 8`). Few processes: several builds together have filled disk C: down to zero bytes. The first build from scratch is long
 (tens of minutes): launch it detached and look at the disk first.
 

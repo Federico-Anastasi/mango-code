@@ -2211,6 +2211,33 @@ noLLMServer.instance(
 )
 
 noLLMServer.instance(
+  "a long text attachment sent as a plain data URL is kept whole in the project too",
+  () =>
+    Effect.gen(function* () {
+      const { directory: dir } = yield* TestInstance
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const session = yield* sessions.create({})
+
+      const long = "test line\n".repeat(5000)
+      yield* prompt.prompt({
+        sessionID: session.id,
+        agent: "build",
+        noReply: true,
+        parts: [
+          { type: "text", text: "read" },
+          { type: "file", mime: "text/plain", filename: "plain.csv", url: "data:text/plain," + encodeURIComponent(long) },
+        ],
+      })
+
+      expect(fs.readFileSync(path.join(dir, "Attachments", "plain.csv")).toString()).toBe(long)
+
+      yield* sessions.remove(session.id)
+    }),
+  { config: cfg },
+)
+
+noLLMServer.instance(
   "a long text attachment is cut for the model and kept whole in the project",
   () =>
     Effect.gen(function* () {

@@ -370,11 +370,6 @@ const DRAW: Record<ProjectFruit, () => string> = {
 
 const cache = new Map<ProjectFruit, string>()
 
-/** The complete SVG of a fruit. */
-export function projectFruitSvg(fruit: ProjectFruit) {
-  return DRAW[fruit]()
-}
-
 /** The fruit as a data URI, ready for `<img src>`. */
 export function projectFruitSrc(fruit: ProjectFruit) {
   const cached = cache.get(fruit)

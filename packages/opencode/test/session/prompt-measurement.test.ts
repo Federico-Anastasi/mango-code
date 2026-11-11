@@ -74,6 +74,21 @@ describe("token measurement of the prompt items", () => {
     expect(PromptMeasurement.tokens("C:\\Projects\\e", "fake", "tools", "bash")).toBeUndefined()
   })
 
+  test("on the engine of another PC the engine is not asked: its network door does not count tokens, and the item stays unmeasured", async () => {
+    const before = calls
+    process.env.MANGO_ENGINE_KEY = "0123456789abcdef0123456789abcdef0123456789abcdef"
+    try {
+      const r = await PromptMeasurement.measure("C:\Projects\f", "fake", [{ kind: "tools", name: "bash", text: "one two" }])
+      expect(calls).toBe(before)
+      expect(r.errors).toHaveLength(1)
+      expect(r.errors[0]).toMatch(/another PC|altro PC/)
+      expect(r.errors[0]).not.toContain(process.env.MANGO_ENGINE_KEY)
+      expect(PromptMeasurement.tokens("C:\Projects\f", "fake", "tools", "bash")).toBeUndefined()
+    } finally {
+      delete process.env.MANGO_ENGINE_KEY
+    }
+  })
+
   test("what a plugin adds to a message comes back per conversation, only once", () => {
     PromptMeasurement.recordPlugin("ses_1", "mango-discipline", ["reminder one", "two"])
     PromptMeasurement.recordPlugin("ses_1", "mango-discipline", [])

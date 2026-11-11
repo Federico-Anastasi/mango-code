@@ -438,8 +438,10 @@ const reset = Effect.fn("TestLLMServer.reset")(function* (item: Sse) {
     res.writeHead(200, { "content-type": "text/event-stream" })
     for (const part of item.head) res.write(line(part))
     for (const part of item.tail) res.write(line(part))
-    res.destroy(new Error("connection reset"))
   })
+  // The client reads what was sent before the connection dies, as it does in the middle of a real answer.
+  yield* Effect.sleep("50 millis")
+  res.destroy(new Error("connection reset"))
   return yield* Effect.never
 })
 

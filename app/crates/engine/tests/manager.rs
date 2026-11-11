@@ -7,8 +7,12 @@ use mango_common::{tr, ProcSpec};
 use engine::{http, Phase, EngineManager};
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader};
+use std::os::windows::process::CommandExt;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
+
+#[allow(dead_code)] // each test file uses a part of it
+mod support;
 
 const FAKE: &str = env!("CARGO_BIN_EXE_fake-engine");
 
@@ -23,6 +27,8 @@ fn planner(log: PathBuf, save: bool, chunk_ms: u64, start_ms: u64, save_ms: u64)
         let gpus: Vec<u32> = match key {
             "a" => vec![0, 2],
             "b" => vec![0, 1, 2],
+            // The plan is fine, the program is not there: it does not start.
+            "broken" => vec![1],
             // It splits itself over the GPUs that remain.
             "c" => [0, 1, 2].into_iter().filter(|i| !excluded.contains(i)).collect(),
             k => bail!("The requested model is not among Mango Code's («{k}»)"),
@@ -39,7 +45,7 @@ fn planner(log: PathBuf, save: bool, chunk_ms: u64, start_ms: u64, save_ms: u64)
             key: key.into(),
             spec: ProcSpec {
                 name: format!("engine-{key}"),
-                exe: FAKE.into(),
+                exe: if key == "broken" { r"C:\does\not\exist.exe".into() } else { FAKE.into() },
                 args: vec![
                     "-m".into(),
                     format!(r"C:\fake\{key}.gguf"),
@@ -71,9 +77,7 @@ fn planner(log: PathBuf, save: bool, chunk_ms: u64, start_ms: u64, save_ms: u64)
     })
 }
 
-fn json_of(r: ureq::Response) -> Value {
-    serde_json::from_reader(r.into_reader()).unwrap()
-}
+use support::{code_of, content_type, get, json_of, ok, post, text_of};
 
 struct Fixture {
     m: EngineManager,
@@ -122,14 +126,15 @@ impl Fixture {
 
     /// A streaming conversation with model `key`: the text pieces, each with the instant it arrived.
     fn ask(&self, key: &str) -> Vec<(Instant, String)> {
-        let r = ureq::post(&self.url("/v1/chat/completions"))
-            .set("Content-Type", "application/json")
-            .send_string(&json!({ "model": key, "stream": true, "messages": [{ "role": "user", "content": "who are you?" }] }).to_string())
-            .unwrap();
-        assert_eq!(r.header("Content-Type"), Some("text/event-stream"));
+        let r = ok(post(
+            &self.url("/v1/chat/completions"),
+            &[("Content-Type", "application/json")],
+            &json!({ "model": key, "stream": true, "messages": [{ "role": "user", "content": "who are you?" }] }).to_string(),
+        ));
+        assert_eq!(content_type(&r), Some("text/event-stream"));
         let mut pieces = Vec::new();
         // A cut reply (the engine stopped halfway) ends the reading: the pieces that arrived stay.
-        for line in BufReader::new(r.into_reader()).lines() {
+        for line in BufReader::new(r.into_body().into_reader()).lines() {
             let Ok(line) = line else { break };
             let Some(data) = line.strip_prefix("data: ") else { continue };
             if data == "[DONE]" {
@@ -148,12 +153,8 @@ impl Fixture {
     }
 
     fn control(&self, p: &str, body: Value) -> (u16, Value) {
-        let r = match ureq::post(&self.url(p)).set("Content-Type", "application/json").send_string(&body.to_string()) {
-            Ok(r) => r,
-            Err(ureq::Error::Status(_, r)) => r,
-            Err(e) => panic!("{e}"),
-        };
-        (r.status(), json_of(r))
+        let r = post(&self.url(p), &[("Content-Type", "application/json")], &body.to_string());
+        (code_of(&r), json_of(r))
     }
 
     fn routes_to_engine(&self) -> Vec<String> {
@@ -178,7 +179,7 @@ fn the_client_closing_stops_the_engine() {
     b.text("a"); // started
     let mut s = std::net::TcpStream::connect(("127.0.0.1", b.port)).unwrap();
     let body = json!({ "model": "a", "stream": true, "messages": [] }).to_string();
-    write!(s, "POST /v1/chat/completions HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}", body.len()).unwrap();
+    write!(s, "POST /v1/chat/completions HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}", body.len()).unwrap();
     let mut buf = [0u8; 4096];
     let n = s.read(&mut buf).unwrap();
     assert!(n > 0);
@@ -228,10 +229,9 @@ fn unknown_model_and_routes_without_an_engine() {
     let (status, v) = b.control("/v1/chat/completions", json!({ "model": "xyz", "messages": [] }));
     assert_eq!(status, 422);
     assert!(v["error"]["message"].as_str().unwrap().contains("xyz"), "{v}");
-    let r = ureq::get(&b.url("/health")).call();
-    assert!(matches!(r, Err(ureq::Error::Status(503, _))));
+    assert_eq!(code_of(&get(&b.url("/health"), &[])), 503);
     b.text("a");
-    assert_eq!(json_of(ureq::get(&b.url("/props")).call().unwrap())["model_path"], json!(r"C:\fake\a.gguf"));
+    assert_eq!(json_of(ok(get(&b.url("/props"), &[])))["model_path"], json!(r"C:\fake\a.gguf"));
 }
 
 #[test]
@@ -244,7 +244,7 @@ fn releasing_a_gpu_the_model_does_not_use_does_not_stop_it() {
     assert_eq!(b.text("a"), "I am the engine a");
     // «b» needs GPU 1: it doesn't start until resumed.
     let (status, v) = b.control("/engine/model", json!({ "model": "b" }));
-    assert_eq!(status, 500);
+    assert_eq!(status, 422);
     assert!(v["error"]["message"].as_str().unwrap().contains("released"), "{v}");
 }
 
@@ -285,19 +285,34 @@ fn the_model_switch_waits_for_the_in_flight_request() {
     assert!(start_b > end_a, "«b» started while «a» was still answering");
 }
 
+/// A page that reaches the port through a name of its own pointing to 127.0.0.1 (DNS rebinding) sends no `Origin` on a
+/// `GET`, but its `Host` is not ours: refused, the state stays unreadable.
+#[test]
+fn a_foreign_host_is_rejected() {
+    use std::io::{Read, Write};
+    let b = fixture();
+    let ask = |host: &str| {
+        let mut c = std::net::TcpStream::connect(("127.0.0.1", b.port)).unwrap();
+        write!(c, "GET /engine HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n").unwrap();
+        let mut r = String::new();
+        c.read_to_string(&mut r).unwrap();
+        r.split(' ').nth(1).unwrap_or("").to_string()
+    };
+    assert_eq!(ask("rebind.example.com:8080"), "403");
+    assert_eq!(ask("127.0.0.1.rebind.example.com"), "403");
+    assert_eq!(ask(&format!("127.0.0.1:{}", b.port)), "200");
+    assert_eq!(ask(&format!("localhost:{}", b.port)), "200");
+}
+
 #[test]
 fn every_route_rejects_web_pages() {
     let b = fixture();
-    let r = ureq::get(&b.url("/engine")).set("Origin", "https://example.com").call();
-    assert!(matches!(r, Err(ureq::Error::Status(403, _))));
+    assert_eq!(code_of(&get(&b.url("/engine"), &[("Origin", "https://example.com")])), 403);
     // The model too: a page sends a "simple" request (text/plain) that CORS doesn't stop.
-    let r = ureq::post(&b.url("/v1/chat/completions"))
-        .set("Origin", "https://example.com")
-        .set("Content-Type", "text/plain")
-        .send_string(&json!({ "model": "a", "messages": [] }).to_string());
-    assert!(matches!(r, Err(ureq::Error::Status(403, _))));
+    let r = post(&b.url("/v1/chat/completions"), &[("Origin", "https://example.com"), ("Content-Type", "text/plain")], &json!({ "model": "a", "messages": [] }).to_string());
+    assert_eq!(code_of(&r), 403);
     assert_eq!(b.m.state().phase, Phase::Stopped, "the rejected request must not start the engine");
-    let v = json_of(ureq::get(&b.url("/engine")).call().unwrap());
+    let v = json_of(ok(get(&b.url("/engine"), &[])));
     assert_eq!(v["phase"], json!("stopped"));
 }
 
@@ -321,6 +336,22 @@ fn releasing_a_gpu_does_not_wait_for_the_model_to_restart() {
     // «resume» gives the GPU back: the model returns to all of them.
     b.control("/engine/resume", json!({}));
     assert_eq!(b.m.state().gpus.iter().map(|x| x.index).collect::<Vec<_>>(), [0, 1, 2]);
+}
+
+/// A model that fails to start on the GPUs that remain (the program does not open, the port is taken) is not «it does
+/// not fit»: the request gets the real error at once instead of waiting for a `resume` that would not help.
+#[test]
+fn a_start_error_with_released_gpus_is_told_not_waited_for() {
+    let b = fixture();
+    b.text("c");
+    b.control("/engine/release", json!({ "gpus": [0] }));
+    let t0 = Instant::now();
+    let r = post(&b.url("/v1/chat/completions"), &[("Content-Type", "application/json")], &json!({ "model": "broken", "messages": [] }).to_string());
+    let code = code_of(&r);
+    let body = text_of(r);
+    assert!(t0.elapsed() < Duration::from_secs(10), "it waited: {:?}", t0.elapsed());
+    assert_eq!(code, 503, "{body}");
+    assert!(body.contains("exist.exe") && !body.contains("resume"), "the real cause, not the sentence about the released cards: {body}");
 }
 
 /// If the model doesn't fit without the GPU, requests wait for `resume` and the state says why.
@@ -354,7 +385,7 @@ fn release_waits_for_the_generation_in_progress_to_end() {
         let t0 = Instant::now();
         let release = sc.spawn(|| b.control("/engine/release", json!({})));
         std::thread::sleep(Duration::from_millis(300));
-        let s = json_of(ureq::get(&b.url("/engine")).call().unwrap());
+        let s = json_of(ok(get(&b.url("/engine"), &[])));
         assert_eq!((s["phase"].as_str(), s["requests_in_flight"].as_u64()), (Some("releasing"), Some(1)), "{s}");
         // The reply in progress arrives whole.
         assert_eq!(generation.join().unwrap(), "I am the engine a");
@@ -387,16 +418,12 @@ fn release_cuts_the_generation_that_does_not_finish_in_the_maximum_time() {
 fn every_control_call_leaves_a_line_in_the_log() {
     let b = fixture();
     let call = |p: &str, body: Value| {
-        let r = ureq::post(&b.url(p)).set("Content-Type", "application/json").set("User-Agent", "attached-test/1.0").send_string(&body.to_string());
-        match r {
-            Ok(r) | Err(ureq::Error::Status(_, r)) => r.status(),
-            Err(e) => panic!("{e}"),
-        }
+        code_of(&post(&b.url(p), &[("Content-Type", "application/json"), ("User-Agent", "attached-test/1.0")], &body.to_string()))
     };
     assert_eq!(call("/engine/model", json!({ "model": "a" })), 200);
     assert_eq!(call("/engine/release", json!({ "gpus": [1] })), 200);
-    assert_eq!(call("/engine/model", json!({ "model": "xyz" })), 500);
-    json_of(ureq::get(&b.url("/engine")).call().unwrap()); // reads aren't logged
+    assert_eq!(call("/engine/model", json!({ "model": "xyz" })), 422);
+    json_of(ok(get(&b.url("/engine"), &[]))); // reads aren't logged
 
     let lines: Vec<Value> = std::fs::read_to_string(b._dir.path().join("manager.log"))
         .unwrap()
@@ -406,7 +433,7 @@ fn every_control_call_leaves_a_line_in_the_log() {
         .collect();
     assert_eq!(lines.len(), 3, "{lines:?}");
     assert_eq!(lines.iter().map(|r| r["route"].as_str().unwrap()).collect::<Vec<_>>(), ["/engine/model", "/engine/release", "/engine/model"]);
-    assert_eq!(lines.iter().map(|r| r["status"].as_u64().unwrap()).collect::<Vec<_>>(), [200, 200, 500]);
+    assert_eq!(lines.iter().map(|r| r["status"].as_u64().unwrap()).collect::<Vec<_>>(), [200, 200, 422]);
     assert_eq!(lines[1]["body"], json!(r#"{"gpus":[1]}"#));
     assert!(lines[2]["error"].as_str().unwrap().contains("xyz"), "{:?}", lines[2]);
     for r in &lines {
@@ -423,7 +450,7 @@ fn a_model_that_does_not_start_does_not_stop_the_running_one() {
     let b = fixture();
     b.text("a");
     let (status, v) = b.control("/engine/model", json!({ "model": "xyz" }));
-    assert_eq!(status, 500, "{v}");
+    assert_eq!(status, 422, "{v}");
     let s = b.m.state();
     assert_eq!((s.phase, s.model.as_deref()), (Phase::Running, Some("a")), "{s:?}");
     assert!(s.error.as_deref().is_some_and(|e| e.contains("xyz")), "{:?}", s.error);
@@ -433,7 +460,16 @@ fn a_model_that_does_not_start_does_not_stop_the_running_one() {
 
 /// A process that stays alive until the test closes it: whoever takes the GPUs on loan.
 fn spawn_process() -> std::process::Child {
-    std::process::Command::new("ping").args(["-n", "60", "127.0.0.1"]).stdout(std::process::Stdio::null()).spawn().unwrap()
+    std::process::Command::new("ping")
+        .args(["-n", "60", "127.0.0.1"])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        // DETACHED_PROCESS: no console at all. With CREATE_NO_WINDOW Windows still starts one, and killing the process while it starts leaves a
+        // terminal window open on the screen with an error (the same as in `loan.rs`).
+        .creation_flags(0x0000_0008)
+        .spawn()
+        .unwrap()
 }
 
 /// The loan is tied to the process that asks for it: when that process closes without having called `resume` (a
@@ -467,8 +503,7 @@ fn the_loan_ends_when_whoever_asked_for_it_closes() {
 fn the_loan_belongs_to_the_calling_process() {
     let b = fixture();
     b.text("a");
-    let r = ureq::post(&b.url("/engine/release")).set("User-Agent", "loan-test/1.0").send_string("{}").unwrap();
-    let v = json_of(r);
+    let v = json_of(ok(post(&b.url("/engine/release"), &[("User-Agent", "loan-test/1.0")], "{}")));
     let p = &v["loans"][0];
     assert_eq!((p["pid"].as_u64(), p["who"].as_str()), (Some(std::process::id() as u64), Some("loan-test/1.0")), "{v}");
     assert!(p["since"].as_str().unwrap().starts_with("20"), "{v}");
@@ -486,6 +521,7 @@ fn whoever_asks_for_the_gpus_and_then_exits_gives_them_back() {
     b.text("a");
     let st = std::process::Command::new("curl")
         .args(["-s", "-o", "NUL", "-X", "POST", "-d", "{}", &b.url("/engine/release")])
+        .creation_flags(mango_common::CREATE_NO_WINDOW)
         .status()
         .unwrap();
     assert!(st.success());
@@ -506,7 +542,7 @@ fn whoever_asks_for_the_gpus_and_then_exits_gives_them_back() {
 fn a_crashed_engine_restarts_at_the_next_request() {
     let b = fixture();
     b.text("a");
-    let _ = ureq::post(&b.url("/test/crash")).call(); // the fake engine exits with code 3
+    let _ = post(&b.url("/test/crash"), &[], ""); // the fake engine exits with code 3
     std::thread::sleep(Duration::from_millis(300));
     assert_eq!(b.text("a"), "I am the engine a");
     let lines = std::fs::read_to_string(b._dir.path().join("manager.log")).unwrap();
@@ -553,12 +589,8 @@ fn the_memory_is_saved_and_restored_at_every_step() {
 #[test]
 fn the_warmup_request_reaches_the_engine_as_such() {
     let b = fixture();
-    let r = ureq::post(&b.url("/v1/chat/completions"))
-        .set("Content-Type", "application/json")
-        .set("x-mango-warmup", "1")
-        .send_string(&json!({ "model": "a", "messages": [] }).to_string())
-        .unwrap();
-    assert_eq!(r.status(), 200);
+    let r = ok(post(&b.url("/v1/chat/completions"), &[("Content-Type", "application/json"), ("x-mango-warmup", "1")], &json!({ "model": "a", "messages": [] }).to_string()));
+    assert_eq!(code_of(&r), 200);
     let lines = std::fs::read_to_string(&b.log).unwrap();
     let chat = lines.lines().map(|l| serde_json::from_str::<Value>(l).unwrap()).find(|v| v["route"] == "/v1/chat/completions").unwrap();
     assert_eq!(chat["headers"]["x-mango-warmup"], json!("1"), "{chat}");
@@ -578,12 +610,9 @@ fn the_engine_starts_in_the_logs_folder() {
 fn the_token_count_goes_through_the_manager_and_in_the_fake_one_word_is_one_token() {
     let b = fixture();
     b.text("a");
-    let r = ureq::post(&b.url("/tokenize"))
-        .set("Content-Type", "application/json")
-        .send_string(&json!({ "content": "a  sentence of\nfive words" }).to_string())
-        .unwrap();
+    let r = ok(post(&b.url("/tokenize"), &[("Content-Type", "application/json")], &json!({ "content": "a  sentence of\nfive words" }).to_string()));
     assert_eq!(json_of(r)["tokens"].as_array().unwrap().len(), 5);
-    let empty = ureq::post(&b.url("/tokenize")).set("Content-Type", "application/json").send_string(&json!({ "content": "" }).to_string()).unwrap();
+    let empty = ok(post(&b.url("/tokenize"), &[("Content-Type", "application/json")], &json!({ "content": "" }).to_string()));
     assert!(json_of(empty)["tokens"].as_array().unwrap().is_empty());
 }
 
@@ -594,8 +623,8 @@ fn the_token_count_goes_through_the_manager_and_in_the_fake_one_word_is_one_toke
 fn the_forwarded_reply_says_the_connection_closes() {
     let b = fixture();
     b.text("a");
-    let r = ureq::post(&b.url("/tokenize")).set("Content-Type", "application/json").send_string(&json!({ "content": "a b" }).to_string()).unwrap();
-    assert_eq!(r.header("connection").map(str::to_ascii_lowercase).as_deref(), Some("close"));
+    let r = ok(post(&b.url("/tokenize"), &[("Content-Type", "application/json")], &json!({ "content": "a b" }).to_string()));
+    assert_eq!(r.headers().get("connection").map(|v| v.to_str().unwrap().to_ascii_lowercase()).as_deref(), Some("close"));
     assert_eq!(json_of(r)["tokens"].as_array().unwrap().len(), 2);
 }
 
@@ -668,7 +697,7 @@ fn release_rejects_bodies_it_does_not_understand_instead_of_releasing_everything
     }
     let r = raw_request(
         &b,
-        "POST /engine/release HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\ne\r\n{\"gpus\":[1]}\r\n0\r\n\r\n",
+        "POST /engine/release HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\ne\r\n{\"gpus\":[1]}\r\n0\r\n\r\n",
     );
     assert!(r.starts_with("HTTP/1.1 400"), "{r}");
     let s = b.m.state();

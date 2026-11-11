@@ -22,6 +22,13 @@ describe("safeName", () => {
     expect(safeName("end. ")).toBe("end")
   })
 
+  test("a name Windows reserves for a device (with or without extension) is not used as it is", () => {
+    for (const name of ["nul", "CON.txt", "aux.tar.gz", "Com1.pdf", "lpt9"]) expect(safeName(name)).toBe(`_${name}`)
+    // only the whole first part is reserved
+    expect(safeName("console.log")).toBe("console.log")
+    expect(safeName("nullable.txt")).toBe("nullable.txt")
+  })
+
   test("without a usable name it gives one", () => {
     expect(safeName(undefined)).toBe("attachment")
     expect(safeName("...")).toBe("attachment")

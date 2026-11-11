@@ -32,7 +32,7 @@ fn write(file: &Path, zoom: f64) -> std::io::Result<()> {
             _ => Ok(()),
         };
     }
-    std::fs::write(file, zoom.to_string())
+    mango_common::write_atomic(file, zoom.to_string())
 }
 
 /// The web UI saw its scale change: it remembers the zoom for the next start.

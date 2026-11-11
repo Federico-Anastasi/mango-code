@@ -20,9 +20,10 @@ import {
   type VoiceFailure,
   type VoiceFailureKind,
 } from "./dictation"
-import { inMangoDesktop } from "@/utils/mango-desktop"
+import { dictationState, showDictationHint } from "@/utils/dictation-state"
+import { inMangoDesktop, type MangoDictationState } from "@/utils/mango-desktop"
+import { useSettingsDialog } from "@/components/settings-dialog"
 
-export const VOICE_TRANSCRIBE_PATH = "/mango/voice/transcribe"
 export const VOICE_LIVE_START_PATH = "/mango/voice/live/start"
 export const VOICE_LIVE_PCM_PATH = "/mango/voice/live/pcm"
 export const VOICE_LIVE_END_PATH = "/mango/voice/live/end"
@@ -37,10 +38,10 @@ export type VoiceState = "idle" | "starting" | "listening" | "ending"
 
 export type VoiceEvent = { type: string; text?: string; message?: string }
 
-/** Float32 [-1,1] → 16-bit little-endian PCM, as the service wants it. */
 /** Below this peak (about -46 dBFS) the microphone sent silence: muted, or not the one Windows uses. */
 const SILENT_PEAK = 0.005
 
+/** Float32 [-1,1] → 16-bit little-endian PCM, as the service wants it. */
 function toPcm16(samples: Float32Array): Uint8Array {
   const bytes = new Uint8Array(samples.length * 2)
   const view = new DataView(bytes.buffer)
@@ -73,6 +74,8 @@ export function createVoiceDictation(input: {
   let id: string | undefined
   let buffered: Uint8Array[] = []
   let sending = false
+  // The last send failed: the audio waits for the next one and the failure is reported only once.
+  let failing = false
   let disposed = false
   // Whether this recording produced any text, and the loudest sample the microphone sent: at the end, a recording
   // without text says why (silence from the microphone, or no words recognized) instead of ending in nothing.
@@ -94,18 +97,21 @@ export function createVoiceDictation(input: {
   const flush = async () => {
     if (!id || sending || buffered.length === 0) return
     sending = true
-    const size = buffered.reduce((total, chunk) => total + chunk.length, 0)
-    const audio = new Uint8Array(size)
+    const chunks = buffered
+    buffered = []
+    const audio = new Uint8Array(chunks.reduce((total, chunk) => total + chunk.length, 0))
     let at = 0
-    for (const chunk of buffered) {
+    for (const chunk of chunks) {
       audio.set(chunk, at)
       at += chunk.length
     }
-    buffered = []
     try {
       handle(await input.pcm(id, audio.buffer))
+      failing = false
     } catch {
-      input.onError({ kind: "service" })
+      buffered = [...chunks, ...buffered].slice(-MAX_BUFFERED)
+      if (!failing) input.onError({ kind: "service" })
+      failing = true
     } finally {
       sending = false
     }
@@ -146,14 +152,21 @@ export function createVoiceDictation(input: {
       release()
       return
     }
+    let session: string
     try {
-      id = await input.start()
+      session = await input.start()
     } catch {
       release()
       setState("idle")
       input.onError({ kind: "service" })
       return
     }
+    if (disposed) {
+      // the page closed while the service was starting: the cleanup had no session to close yet
+      void input.end(session).catch(() => {})
+      return
+    }
+    id = session
 
     // At 16 kHz the browser resamples by itself: the service does not have to.
     context = new AudioContext({ sampleRate: SAMPLE_RATE })
@@ -312,7 +325,21 @@ export function PromptVoiceButton(props: {
       if (event.key === " ") event.preventDefault()
     },
   }
+  // In the app the dictation is the user's choice: until it is ready the button leads to where it is turned on, and says so.
+  const settings = useSettingsDialog("general")
+  const dictation = dictationState()
+  const notReady = () => {
+    const current = dictation()
+    return current?.status === "ready" ? undefined : current
+  }
+  const explain = (current: MangoDictationState) =>
+    current.status === "off"
+      ? language.t("prompt.voice.off")
+      : current.status === "error"
+        ? language.t("prompt.voice.failed")
+        : language.t("prompt.voice.downloading")
   const label = () => {
+    if (notReady()) return language.t("prompt.voice.turnOn")
     if (voice.state() === "listening") return language.t("prompt.voice.stop")
     if (voice.state() === "starting") return language.t("prompt.voice.starting")
     return language.t("prompt.voice.start")
@@ -325,7 +352,7 @@ export function PromptVoiceButton(props: {
         fallback={
           <IconButtonV2
             data-action="prompt-voice"
-            data-state-voice={voice.state()}
+            data-state-voice={notReady() ? "off" : voice.state()}
             type="button"
             variant="ghost-muted"
             size="large"
@@ -336,7 +363,10 @@ export function PromptVoiceButton(props: {
             {...guard}
             onClick={(event: MouseEvent) => {
               event.preventDefault()
-              voice.toggle()
+              const current = notReady()
+              if (!current) return voice.toggle()
+              showDictationHint(explain(current))
+              settings()
             }}
           />
         }

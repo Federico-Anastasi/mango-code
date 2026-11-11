@@ -17,9 +17,12 @@ import { SettingsListV2 } from "./parts/list"
 import { SettingsRowV2 } from "./parts/row"
 import "./settings-v2.css"
 
+const SITE = "https://ciaomango.com/mango-code"
+
 export const SettingsHelpV2: Component = () => {
   const language = useLanguage()
-  const updater = usePlatform().updater
+  const platform = usePlatform()
+  const updater = platform.updater
   // What the update row says, from the state of the app's updater.
   const updateText = () => {
     const state = updater?.state() ?? { status: "idle" as const }
@@ -100,6 +103,19 @@ export const SettingsHelpV2: Component = () => {
             </div>
           )}
         </Show>
+
+        <div class="settings-v2-section">
+          <SettingsListV2>
+            <SettingsRowV2
+              title={language.t("settings.help.site.title")}
+              description={language.t("settings.help.site.description")}
+            >
+              <ButtonV2 variant="neutral" onClick={() => platform.openExternal(SITE)}>
+                {language.t("settings.help.site.open")}
+              </ButtonV2>
+            </SettingsRowV2>
+          </SettingsListV2>
+        </div>
 
         <Show when={target()}>
           <div class="settings-v2-section">

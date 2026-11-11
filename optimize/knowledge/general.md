@@ -1,7 +1,7 @@
 # What holds for anyone
 
 Class **G**: holds for whoever has that kind of hardware or engine. The numbers are from an RTX 3060 Ti + GTX 1080 + GTX 1660 SUPER
-(with an i7-10700K) and give the order of magnitude, not a forecast for another PC. Sources: abbreviations in [README.md](README.md).
+(with an i7-10700K) and give the order of magnitude, not a forecast for another PC. Abbreviations and how to read a number: [method.md](method.md).
 
 ## 1. What limits speed
 

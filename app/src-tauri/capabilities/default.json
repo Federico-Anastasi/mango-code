@@ -1,11 +1,8 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Only the web UI of the main window (local loading page and web UI served by the agent server on 127.0.0.1). Not `windows`: that would apply to every webview of the window, including the Preview panel, which shows arbitrary pages (even on 127.0.0.1) and must not be able to call the bridge.",
+  "description": "The local loading page of the main window (the web UI served by the agent has its own capability, added at startup in bridge.rs: its port can change). Not `windows`: that would apply to every webview of the window, including the Preview panel, which shows arbitrary pages (even on 127.0.0.1) and must not be able to call the bridge.",
   "webviews": ["main"],
-  "remote": {
-    "urls": ["http://127.0.0.1:*", "http://localhost:*"]
-  },
   "permissions": [
     "core:default",
     "dialog:default",

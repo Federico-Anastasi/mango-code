@@ -1,4 +1,5 @@
 import { createSignal } from "solid-js"
+import { previewKind } from "@opencode-ai/session-ui/project-file"
 import type { Platform } from "@/context/platform"
 import type { UpdaterPlatform, UpdaterState } from "@/updater"
 
@@ -41,10 +42,34 @@ export type MangoDesktop = {
   team?: MangoTeam
   /** "From your phone" in the settings: the service that brings the web UI to the phone. */
   phone?: MangoPhone
+  /** Dictation (the microphone in the chat), a choice of the user: its models download in the background when it is turned on. */
+  dictation?: MangoDictation
+}
+
+/** `waiting`: on, it downloads as soon as the app is ready. `ready`: the microphone works. */
+export type MangoDictationState = {
+  enabled: boolean
+  status: "off" | "waiting" | "downloading" | "ready" | "error"
+  doneMb: number
+  sizeMb: number
+  error: string | null
+}
+
+/** Changes arrive as the `mango-dictation` event on window. */
+export type MangoDictation = {
+  state(): Promise<MangoDictationState>
+  /** Saves the choice; off also deletes the models. */
+  setEnabled(enabled: boolean): Promise<MangoDictationState>
 }
 
 /** A link for the phone (with the key) and its QR as SVG. */
-export type MangoPhoneAccess = { address: string; link: string; qr: string }
+export type MangoPhoneAccess = {
+  address: string
+  link: string
+  qr: string
+  /** Windows calls this network public (a café's): the link travels in the clear for whoever is on it. */
+  public: boolean
+}
 
 export type MangoPhoneState = {
   enabled: boolean
@@ -66,7 +91,7 @@ export type MangoPhone = {
 }
 
 /** Address, title and loading state of the panel, as the webview engine sees them. */
-export type MangoPreviewState = { url: string; title: string; loading: boolean }
+export type MangoPreviewState = { url: string; title: string; loading: boolean; failed: string | null; visible: boolean }
 
 export type MangoPreview = {
   /** Rectangle of the placeholder in the page (CSS pixels) and zoom: the native panel overlaps it. */
@@ -76,6 +101,8 @@ export type MangoPreview = {
   state(): Promise<MangoPreviewState>
   /** The panel's page in the default Windows browser. */
   openExternal(): Promise<void>
+  /** A PDF or a picture of a project, by absolute path; rejects with { code, message } (not_found, forbidden, blocked_type, too_large, ...). */
+  openFile(path: string): Promise<void>
 }
 
 export type MangoChrome = {
@@ -141,7 +168,8 @@ export function mangoPlatform(
     createProjectFolder: (name, parent) => bridge.createProject(name, parent),
     projectFiles: {
       info: (path) => bridge.fileInfo(path),
-      open: (path) => bridge.openPath(path),
+      // a PDF or a picture opens in the panel; the other documents in their Windows program
+      open: (path) => (previewKind(path) && bridge.preview ? bridge.preview.openFile(path) : bridge.openPath(path)),
       reveal: (path) => bridge.revealPath(path),
     },
     async readClipboardImage() {

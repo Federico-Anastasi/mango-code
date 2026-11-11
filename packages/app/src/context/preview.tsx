@@ -2,6 +2,8 @@ import { createSignal, onCleanup, onMount } from "solid-js"
 import { createStore } from "solid-js/store"
 import { createSimpleContext } from "@opencode-ai/ui/context"
 import { persisted } from "@/utils/persist"
+import { rememberPerKey } from "@/utils/preview-scope"
+import type { LayoutRoute } from "@/context/layout"
 
 /** Format of the panel: the width of the frame decides how the page is laid out. */
 export type PreviewDevice = "desktop" | "tablet" | "phone"
@@ -19,7 +21,8 @@ const PREVIEW_DEFAULT_WIDTH = 520
  *
  * Width and format are kept between launches. Whether it is open is NOT: the page it showed is not
  * kept either (the native panel knows it, and the web UI asks it with `preview.state`), so at the
- * next launch it would reopen empty. It opens when the agent opens a page, or with its button.
+ * next launch it would reopen empty. It opens when the agent opens a page, or with its button, and only in the
+ * conversation it was opened from (`follow`).
  */
 export const { use: usePreview, provider: PreviewProvider } = createSimpleContext({
   name: "Preview",
@@ -49,6 +52,12 @@ export const { use: usePreview, provider: PreviewProvider } = createSimpleContex
       open: () => setOpened(true),
       close: () => setOpened(false),
       toggle: () => setOpened((open) => !open),
+      /** The layout tells which conversation is on screen; the panel is open only where it was opened. */
+      follow: (route: () => LayoutRoute) =>
+        rememberPerKey(opened, setOpened, () => {
+          const now = route()
+          return now.type === "session" ? now.sessionId : now.type === "draft" ? now.draftID : now.type
+        }),
       resize: (width: number) => setStore("width", Math.round(Math.max(PREVIEW_MIN_WIDTH, width))),
       setDevice: (device: PreviewDevice) => setStore("device", device),
     }

@@ -1,6 +1,5 @@
-//! Local dictation in Rust (whisper.cpp), in place of `mango-voice.py --serve`: the same HTTP protocol, so the agent
-//! server (route /mango/voice/transcribe) doesn't change. It runs inside the app's process, on a thread of its own.
-//!
+//! Local dictation in Rust (whisper.cpp): the HTTP service the agent server (routes /mango/voice/live) forwards the
+//! microphone's audio to. It runs inside the app's process, on a thread of its own.
 //!
 //! # Model
 //! `ggml-small.bin` (multilingual whisper `small`, f16, 465 MiB) plus `ggml-silero-v5.1.2.bin` (VAD, 0.9 MB), in
@@ -13,12 +12,13 @@
 //! * `libclang.dll` for bindgen: `LIBCLANG_PATH` = folder that contains it (LLVM, or the pip `libclang` wheel, which
 //!   brings it along).
 //! * `CMAKE_GENERATOR=Ninja`: the Visual Studio generator doesn't find cmake 4's compiler.
-//! * `GGML_AVX=ON GGML_AVX2=ON GGML_FMA=ON GGML_F16C=ON` in cargo's environment: with MSVC ggml doesn't detect the
-//!   processor by itself and without these flags it runs in SSE2, a third slower (the test `compiled_with_avx2`
-//!   checks it). As a consequence `start` refuses processors without AVX2.
+//! * `GGML_NATIVE=OFF GGML_AVX=ON GGML_AVX2=ON GGML_FMA=ON GGML_F16C=ON` in cargo's environment. Left to itself
+//!   (`GGML_NATIVE`), ggml with MSVC picks the instruction sets of the processor that builds: SSE2 where the probe
+//!   fails, a third slower, and AVX-512 on a processor that has it, which stops the app with an illegal instruction
+//!   everywhere else. The test `compiled_for_avx2_and_nothing_newer` checks both. As a consequence `start` refuses
+//!   processors without AVX2.
 //! * A `target` folder with a short path: under the 260 characters of MAX_PATH cmake can't launch anything.
 
-mod audio;
 mod download;
 mod engine;
 mod http;
@@ -115,7 +115,7 @@ pub fn start_with(settings: Settings, live: LiveConfig, port: u16) -> Result<Voi
 
 /// whisper.cpp is compiled with AVX2/FMA/F16C (see above): on a processor that doesn't have them it would stop with an
 /// illegal instruction, so better to say so beforehand.
-fn require_cpu_features() -> Result<()> {
+pub fn require_cpu_features() -> Result<()> {
     #[cfg(target_arch = "x86_64")]
     if !(is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma") && is_x86_feature_detected!("f16c")) {
         bail!("{}", tr!("il processore non ha AVX2/FMA: la dettatura locale non è disponibile", "the processor has no AVX2/FMA: local dictation is not available"));

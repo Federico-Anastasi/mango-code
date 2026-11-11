@@ -9,8 +9,9 @@
 //!
 //! The base depends on the folder: the system prompt contains the working folder, the project
 //! root, whether it is a git repository and the AGENTS.md / CLAUDE.md files found going up. So the
-//! folder of the last conversation opened is prepared (the one the window reopens); without it, the
-//! projects folder. A different folder has another base and its first conversation reads it.
+//! folder of the last conversation opened is prepared (the one the window reopens). Without it nothing is
+//! prepared: the first conversation will be in a folder that does not exist yet, and the projects folder is never
+//! handed to the agent (it would make a git repository of it, around every project made afterwards).
 
 use anyhow::{anyhow, Context, Result};
 use serde_json::Value;
@@ -79,12 +80,10 @@ pub fn with_progress<T: Send>(
     })
 }
 
-/// The folder to prepare: the one of the last conversation opened, otherwise the projects
-/// folder. `None` if neither exists (first install): there is nothing to prepare.
-pub fn folder_to_prepare(last_folder: Option<String>, projects_root: &Path) -> Option<String> {
-    last_folder
-        .filter(|c| Path::new(c).is_dir())
-        .or_else(|| projects_root.is_dir().then(|| projects_root.display().to_string()))
+/// The folder to prepare: the one of the last conversation opened, if it is still there. `None` otherwise (first
+/// install, folder removed): there is nothing to prepare. Never the projects folder: it is not a project.
+pub fn folder_to_prepare(last_folder: Option<String>) -> Option<String> {
+    last_folder.filter(|c| Path::new(c).is_dir())
 }
 
 /// Prepares the engine for `folder` by talking to the agent server. `notice` receives the seconds
@@ -92,13 +91,12 @@ pub fn folder_to_prepare(last_folder: Option<String>, projects_root: &Path) -> O
 pub fn prepare(agent_url: &str, folder: &str, notice: &mut dyn FnMut(u64)) -> Result<Outcome> {
     let url = format!("{}/mango/warmup", agent_url.trim_end_matches('/'));
     let call = move || -> Result<Outcome> {
-        let r = ureq::post(&url).query("directory", folder).timeout(TIME_MAX).send_string("");
-        match r {
-            Ok(r) => read_response(&r.into_string()?),
-            Err(ureq::Error::Status(code, r)) => {
-                Err(anyhow!("the server answered {code}: {}", r.into_string().unwrap_or_default()))
-            }
-            Err(e) => Err(e.into()),
+        // An error status is a reply to read: the server says in its body why it did not prepare.
+        let mut r = mango_common::internet::agent_with_replies(&url, TIME_MAX).post(&url).query("directory", folder).send("")?;
+        let text = r.body_mut().read_to_string().unwrap_or_default();
+        match r.status().as_u16() {
+            code if code >= 400 => Err(anyhow!("the server answered {code}: {text}")),
+            _ => read_response(&text),
         }
     };
     with_progress(call, VISIBLE_AFTER, STEP, notice)
@@ -150,19 +148,15 @@ mod tests {
     }
 
     #[test]
-    fn last_folder_or_projects() {
+    fn only_the_last_folder_never_the_projects_folder() {
         let base = std::env::temp_dir().join(format!("mango-prep-{}", std::process::id()));
         let last = base.join("last");
-        let root = base.join("Mango Code");
         std::fs::create_dir_all(&last).unwrap();
-        std::fs::create_dir_all(&root).unwrap();
         let u = last.display().to_string();
-        let r = root.display().to_string();
-        assert_eq!(folder_to_prepare(Some(u.clone()), &root), Some(u));
-        // the last conversation is in a folder that no longer exists: we fall back to the projects
-        assert_eq!(folder_to_prepare(Some(base.join("gone").display().to_string()), &root), Some(r.clone()));
-        assert_eq!(folder_to_prepare(None, &root), Some(r));
-        assert_eq!(folder_to_prepare(None, &base.join("does-not-exist")), None);
+        assert_eq!(folder_to_prepare(Some(u.clone())), Some(u));
+        // the last conversation is in a folder that no longer exists, or there is none yet: nothing to prepare
+        assert_eq!(folder_to_prepare(Some(base.join("gone").display().to_string())), None);
+        assert_eq!(folder_to_prepare(None), None);
         std::fs::remove_dir_all(&base).unwrap();
     }
 
@@ -187,7 +181,7 @@ mod tests {
         });
         let e = prepare(&format!("http://127.0.0.1:{port}"), r"C:\Users\Zoë\project one", &mut |_| {}).unwrap();
         assert_eq!(e, Outcome::AlreadyReady);
-        assert_eq!(h.join().unwrap(), "POST /mango/warmup?directory=C%3A%5CUsers%5CZo%C3%AB%5Cproject+one HTTP/1.1");
+        assert_eq!(h.join().unwrap(), "POST /mango/warmup?directory=C%3A%5CUsers%5CZo%C3%AB%5Cproject%20one HTTP/1.1");
     }
 
     #[test]

@@ -1,5 +1,16 @@
-import { describe, expect, test } from "bun:test"
-import { engineTimingsExtractor, liveTimings, parseReading, parseTimings, parseWait, savedTimings } from "@/provider/engine-timings"
+import { afterAll, beforeAll, describe, expect, test } from "bun:test"
+import {
+  engineIsRemote,
+  engineTimingsExtractor,
+  engineWait,
+  liveTimings,
+  parseReading,
+  parseTimings,
+  parseWait,
+  readingProgress,
+  savedTimings,
+  setEngineOrigin,
+} from "@/provider/engine-timings"
 
 // Final chunk as llama-server sends it (same numbers as its `eval time` log).
 const final = {
@@ -129,5 +140,43 @@ describe("engine wait", () => {
     expect(parseWait(engine({}))).toBeUndefined()
     expect(parseWait({ error: "x" })).toBeUndefined()
     expect(parseWait(undefined)).toBeUndefined()
+  })
+})
+
+describe("the engine of another PC", () => {
+  const KEY = "0123456789abcdef0123456789abcdef0123456789abcdef"
+  const seen: Record<string, string | null> = {}
+  let manager: ReturnType<typeof Bun.serve>
+
+  beforeAll(() => {
+    manager = Bun.serve({
+      port: 0,
+      fetch(req) {
+        const path = new URL(req.url).pathname
+        seen[path] = req.headers.get("authorization")
+        if (path === "/engine") return Response.json({ phase: "starting" })
+        return Response.json([{ is_processing: true, n_prompt_tokens: 100, n_past_prompt: 40, n_prompt_tokens_cache: 0, t_prompt_ms: 900 }])
+      },
+    })
+    setEngineOrigin(`http://127.0.0.1:${manager.port}/v1`)
+  })
+
+  afterAll(() => {
+    delete process.env.MANGO_ENGINE_KEY
+    manager.stop(true)
+  })
+
+  test("the two reads of the manager carry the key when the engine is another PC's, and nothing on this PC", async () => {
+    delete process.env.MANGO_ENGINE_KEY
+    expect(engineIsRemote()).toBe(false)
+    expect(await engineWait()).toEqual({ kind: "loading" })
+    expect(await readingProgress()).toBeDefined()
+    expect(seen).toEqual({ "/engine": null, "/slots": null })
+
+    process.env.MANGO_ENGINE_KEY = KEY
+    expect(engineIsRemote()).toBe(true)
+    expect(await engineWait()).toEqual({ kind: "loading" })
+    expect(await readingProgress()).toEqual({ doneTokens: 40, totalTokens: 100, ms: 900 })
+    expect(seen).toEqual({ "/engine": `Bearer ${KEY}`, "/slots": `Bearer ${KEY}` })
   })
 })

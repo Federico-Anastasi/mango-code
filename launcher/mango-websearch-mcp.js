@@ -178,7 +178,7 @@ const TOOLS = [
     inputSchema: { type: "object", properties: {
       query: { type: "string", description: "search query" },
       max_results: { type: "number", description: "max results (default 8)" } }, required: ["query"] } },
-  { name: "search_images", description: "Image search (DuckDuckGo Images). Returns direct image URLs + thumbnails + source pages. To download: curl.exe -L --output <dest> \"<image_url>\". You are a vision model: Read the downloaded file to verify it.",
+  { name: "search_images", description: "Image search (DuckDuckGo Images). Returns direct image URLs + thumbnails + source pages. To download: curl.exe -L --output <dest> \"<image_url>\".",
     inputSchema: { type: "object", properties: {
       query: { type: "string", description: "image search query" },
       max_results: { type: "number", description: "max results (default 12)" } }, required: ["query"] } },

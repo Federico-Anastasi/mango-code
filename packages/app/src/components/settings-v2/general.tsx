@@ -5,7 +5,6 @@ import { SelectV2 } from "@opencode-ai/ui/v2/select-v2"
 import { Switch } from "@opencode-ai/ui/v2/switch-v2"
 import { TextInputV2 } from "@opencode-ai/ui/v2/text-input-v2"
 import { Icon as IconV2 } from "@opencode-ai/ui/v2/icon"
-import { useDialog } from "@opencode-ai/ui/context/dialog"
 import { useLanguage } from "@/context/language"
 import { usePlatform } from "@/context/platform"
 import { useUpdaterAction } from "../updater-action"
@@ -13,18 +12,14 @@ import { useSettings } from "@/context/settings"
 import { inMangoDesktop, mangoDesktopError } from "@/utils/mango-desktop"
 import { SettingsListV2 } from "./parts/list"
 import { SettingsRowV2 } from "./parts/row"
+import { DictationSection } from "./dictation"
 import { PhoneSection } from "./phone"
 import { LayoutRetirementNotice, LayoutTransitionToggle } from "./interface-transition"
 import {
   createAppearanceSettingsController,
-  createPermissionScopeController,
-  createShellOptions,
-  createShellSettingsController,
   createSoundSettingsController,
   soundOptions,
   type AppearanceSettingsController,
-  type PermissionScopeController,
-  type ShellSettingsController,
   type SoundSettingsController,
 } from "./general-controllers"
 import "./settings-v2.css"
@@ -45,13 +40,6 @@ const fontSettings = {
     font: "code",
     input: "setCode",
   },
-  terminal: {
-    action: "settings-terminal-font",
-    title: "settings.general.row.terminalFont.title",
-    description: "settings.general.row.terminalFont.description",
-    font: "terminal",
-    input: "setTerminal",
-  },
 } as const
 const soundSettings = {
   agent: {
@@ -70,24 +58,6 @@ const soundSettings = {
     description: "settings.general.sounds.errors.description",
   },
 } as const
-
-const PermissionScopeSetting: Component<{ controller: PermissionScopeController }> = (props) => {
-  const language = useLanguage()
-  return (
-    <SettingsRowV2
-      title={language.t("command.permissions.autoaccept.enable")}
-      description={language.t("toast.permissions.autoaccept.on.description")}
-    >
-      <div data-action="settings-auto-accept-permissions">
-        <Switch
-          checked={props.controller.accepting()}
-          disabled={!props.controller.enabled()}
-          onChange={props.controller.set}
-        />
-      </div>
-    </SettingsRowV2>
-  )
-}
 
 // "Use my Chrome": the agent drives the user's Chrome (their profile, their logins) instead of the
 // Preview panel. The item shows only if Chrome is there; turning it on requires remote debugging, which
@@ -135,38 +105,6 @@ const BrowserRow: Component = () => {
         </div>
       </SettingsRowV2>
     </Show>
-  )
-}
-
-const ShellSetting: Component<{ controller: ShellSettingsController }> = (props) => {
-  const language = useLanguage()
-  const options = createMemo(() =>
-    createShellOptions({
-      shells: props.controller.shells(),
-      current: props.controller.current(),
-    }),
-  )
-  return (
-    <SettingsRowV2
-      title={language.t("settings.general.row.shell.title")}
-      description={language.t("settings.general.row.shell.description")}
-    >
-      <SelectV2
-        appearance="inline"
-        data-action="settings-shell"
-        options={options()}
-        current={options().find((option) => option.value === props.controller.current()) ?? options()[0]}
-        placement="bottom-end"
-        gutter={6}
-        value={(option) => option.id}
-        label={(option) => {
-          if (option.id === "auto") return language.t("settings.general.row.shell.autoDefault")
-          if (!option.terminalOnly) return option.name
-          return `${option.name} (${language.t("settings.general.row.shell.terminalOnly")})`
-        }}
-        onSelect={(option) => option && props.controller.select(option.value)}
-      />
-    </SettingsRowV2>
   )
 }
 
@@ -225,7 +163,6 @@ const FontSettings: Component<{ fonts: AppearanceSettingsController["fonts"] }> 
   <>
     <FontSetting kind="ui" fonts={props.fonts} />
     <FontSetting kind="code" fonts={props.fonts} />
-    <FontSetting kind="terminal" fonts={props.fonts} />
   </>
 )
 
@@ -250,7 +187,7 @@ const CollapsedSection: Component<{ title: string; children: JSX.Element }> = (p
 }
 
 const FontSetting: Component<{
-  kind: "ui" | "code" | "terminal"
+  kind: "ui" | "code"
   fonts: AppearanceSettingsController["fonts"]
 }> = (props) => {
   const language = useLanguage()
@@ -343,21 +280,15 @@ const LanguageSetting = () => {
   )
 }
 
-export const SettingsGeneralV2: Component<{
-  sessionID?: string
-}> = (props) => {
+export const SettingsGeneralV2: Component = () => {
   const language = useLanguage()
   const platform = usePlatform()
-  const dialog = useDialog()
   const settings = useSettings()
   const mobile = createMediaQuery("(max-width: 767px)")
   const updater = useUpdaterAction()
-  const permissionScope = createPermissionScopeController(() => props.sessionID)
-  const shell = createShellSettingsController()
   const appearance = createAppearanceSettingsController()
   const sounds = createSoundSettingsController()
   const desktop = createMemo(() => platform.platform === "desktop")
-  // inside the Mango Code app the technical items are in "Advanced", closed
   const mango = inMangoDesktop()
 
   const [pinchZoom, { mutate: setPinchZoom }] = createResource(
@@ -379,13 +310,7 @@ export const SettingsGeneralV2: Component<{
       badge={language.t("settings.general.row.newInterface.badge")}
       description={language.t("settings.general.row.newInterface.description")}
       checked={settings.general.newLayoutDesigns()}
-      onChange={(checked) => {
-        settings.general.setNewLayoutDesigns(checked)
-        if (checked) return
-        void import("@/components/dialog-settings").then((module) => {
-          void dialog.show(() => <module.DialogSettings />)
-        })
-      }}
+      onChange={(checked) => settings.general.setNewLayoutDesigns(checked)}
     />
   )
 
@@ -431,12 +356,6 @@ export const SettingsGeneralV2: Component<{
       <SettingsListV2>
         <LanguageSetting />
 
-        <PermissionScopeSetting controller={permissionScope} />
-
-        <Show when={!mango}>
-          <ShellSetting controller={shell} />
-        </Show>
-
         <SettingsRowV2
           title={language.t("settings.general.row.reasoningSummaries.title")}
           description={language.t("settings.general.row.reasoningSummaries.description")}
@@ -470,77 +389,15 @@ export const SettingsGeneralV2: Component<{
     </div>
   )
 
-  const AdvancedRows = () => (
-    <SettingsListV2>
-      <Show when={mango}>
-        <ShellSetting controller={shell} />
-        <BrowserRow />
-        <ToolPartsRows />
-        <FontSettings fonts={appearance.fonts} />
-      </Show>
-
-      <SettingsRowV2
-        title={language.t("settings.general.row.showFileTree.title")}
-        description={language.t("settings.general.row.showFileTree.description")}
-      >
-        <div data-action="settings-show-file-tree">
-          <Switch
-            checked={settings.general.showFileTree()}
-            onChange={(checked) => settings.general.setShowFileTree(checked)}
-          />
-        </div>
-      </SettingsRowV2>
-
-      <SettingsRowV2
-        title={language.t("settings.general.row.showSearch.title")}
-        description={language.t("settings.general.row.showSearch.description")}
-      >
-        <div data-action="settings-show-search">
-          <Switch
-            checked={settings.general.showSearch()}
-            onChange={(checked) => settings.general.setShowSearch(checked)}
-          />
-        </div>
-      </SettingsRowV2>
-
-      <SettingsRowV2
-        title={language.t("settings.general.row.showStatus.title")}
-        description={language.t("settings.general.row.showStatus.description")}
-      >
-        <div data-action="settings-show-status">
-          <Switch
-            checked={settings.general.showStatus()}
-            onChange={(checked) => settings.general.setShowStatus(checked)}
-          />
-        </div>
-      </SettingsRowV2>
-
-      <SettingsRowV2
-        title={language.t("settings.general.row.showCustomAgents.title")}
-        description={language.t("settings.general.row.showCustomAgents.description")}
-      >
-        <div data-action="settings-show-custom-agents">
-          <Switch
-            checked={settings.general.showCustomAgents()}
-            onChange={(checked) => settings.general.setShowCustomAgents(checked)}
-          />
-        </div>
-      </SettingsRowV2>
-    </SettingsListV2>
-  )
-
+  // inside the Mango Code app the technical items are in "Advanced", closed
   const AdvancedSection = () => (
-    <Show
-      when={mango}
-      fallback={
-        <div class="settings-v2-section">
-          <h3 class="settings-v2-section-title">{language.t("settings.general.section.advanced")}</h3>
-          <AdvancedRows />
-        </div>
-      }
-    >
+    <Show when={mango}>
       <CollapsedSection title={language.t("settings.general.section.advanced")}>
-        <AdvancedRows />
+        <SettingsListV2>
+          <BrowserRow />
+          <ToolPartsRows />
+          <FontSettings fonts={appearance.fonts} />
+        </SettingsListV2>
       </CollapsedSection>
     </Show>
   )
@@ -654,6 +511,8 @@ export const SettingsGeneralV2: Component<{
         </Show>
 
         <GeneralSection />
+
+        <DictationSection />
 
         <PhoneSection />
 

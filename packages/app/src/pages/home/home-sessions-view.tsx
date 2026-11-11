@@ -655,7 +655,7 @@ function HomeSessionsEmpty(props: { onNewSession?: () => void; language: ReturnT
           text-v2-text-text-muted [font-weight:440]
         `}
       >
-        {props.language.t("home.sessions.empty.description")}
+        {props.language.t(props.onNewSession ? "home.sessions.empty.description" : "home.sessions.empty.noProject")}
       </p>
       <Show when={props.onNewSession}>
         {(onNewSession) => (

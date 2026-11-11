@@ -57,7 +57,7 @@ const fakeComputer = () => ({
   ],
   recommendations: [
     { model: "fake", placement: "gpu", context: 16384, reason: "Sta tutto nella memoria della scheda video.", bytes: 24 * MIB, fastest: true },
-    { model: "second", placement: "cpu", context: 32768, reason: "Nelle schede video non ci sta: gira sul processore, più lento.", bytes: 12 * MIB },
+    { model: "second", placement: "cpu", context: 32768, reason: "Nelle schede video non ci sta: gira sul processore, più lento.", bytes: 12 * MIB, speed: "slow" },
     { model: "huge", placement: null, context: 0, reason: "servono 43 GB di memoria e le schede ne hanno 6.", bytes: 41 * GIB },
   ],
 });
@@ -65,6 +65,16 @@ const fakeComputer = () => ({
 const screenshot = async (p: Page, name: string) => {
   const r = await p.send("Page.captureScreenshot", { format: "png" });
   fs.writeFileSync(path.join(os.tmpdir(), `mango-first-run-${name}.png`), Buffer.from(r.result.data, "base64"));
+  // With `MC_PHOTOS=<folder>` the choice page is also saved at 860 px and 390 px wide.
+  if (!process.env.MC_PHOTOS || name !== "1-choice") return;
+  fs.mkdirSync(process.env.MC_PHOTOS, { recursive: true });
+  for (const [width, height] of [[860, 1100], [390, 1400]]) {
+    await p.send("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: 1, mobile: false });
+    await Bun.sleep(600);
+    const shot = await p.send("Page.captureScreenshot", { format: "png" });
+    fs.writeFileSync(path.join(process.env.MC_PHOTOS, `pagina-modelli-${width}.png`), Buffer.from(shot.result.data, "base64"));
+  }
+  await p.send("Emulation.clearDeviceMetricsOverride");
 };
 
 async function waitUntil(condition: () => Promise<boolean> | boolean, what: string, ms = 60_000) {
@@ -130,7 +140,9 @@ test("without engine or models the window shows the choice: the computer, where 
   expect(text).toContain("Ottimizzato");
   expect(text).toContain("Non ci sta in questo computer: servono 43 GB di memoria e le schede ne hanno 6.");
   expect(text).toContain("Sulla scheda video · 16k di contesto");
-  expect(text).toContain("Sul processore · più lento · 32k di contesto");
+  // on the processor the page says how slow, in words of a user and not in tokens
+  expect(text).toContain("Sul processore · lento: una o due parole al secondo · 32k di contesto");
+  expect(text).not.toContain("token");
   expect(text).toContain("Probabilmente il più veloce");
   expect(text).toContain("Per ottimizzare Mango Code su questo computer, usa un'AI di frontiera (per esempio Claude Code) con la skill di ottimizzazione inclusa");
   expect(await p.evaluate(`document.getElementById('optimize-folder').innerText`)).toMatch(/optimize$/);
@@ -152,11 +164,49 @@ test("without engine or models the window shows the choice: the computer, where 
   expect(await p.evaluate(`document.getElementById('start-download').disabled`)).toBe(false);
 }, 120_000);
 
+test("the versions of a model found online are small, medium or large, with the speed on the processor; their names are in the technical details", async () => {
+  // what the app says about a repository with three quantizations on this fake computer (no network)
+  const analysis = {
+    name: "Llama-3.3-70B", source: "hugging-face", gated: false, warnings: [],
+    variants: [
+      { name: "IQ1_M", key: "a", bytes: 16 * GIB, placement: "cpu", speed: "very_slow", reason: "Ci sta nella RAM.", recommended: false },
+      { name: "IQ3_M", key: "b", bytes: 29 * GIB, placement: "cpu", speed: "very_slow", reason: "Ci sta nella RAM.", recommended: true },
+      { name: "Q8_0", key: "c", bytes: 70 * GIB, placement: null, speed: null, reason: "non ci sta", recommended: false },
+    ],
+  };
+  await p.evaluate(`showAnalysis(${JSON.stringify(analysis)}, "unsloth/Llama-3.3-70B-GGUF")`);
+  const rows: string[] = await p.evaluate(`[...document.querySelectorAll('#other-variants li')].map((li) => li.textContent)`);
+  expect(rows[0]).toContain("piccolo");
+  expect(rows[1]).toContain("medio");
+  expect(rows[2]).toContain("grande");
+  expect(rows[1]).toContain("Sul processore · molto lento: meno di una parola al secondo");
+  expect(rows[2]).toContain("Non ci sta in questo computer");
+  // the names of the versions are not in the list, only in the technical details
+  for (const name of ["IQ1_M", "IQ3_M", "Q8_0"]) expect(rows.join(" "), name).not.toContain(name);
+  const details = await p.evaluate(`document.getElementById('other-quants').textContent`);
+  expect(details).toContain("IQ3_M");
+  expect(await p.evaluate(`document.getElementById('other-quants').open`)).toBe(false);
+  if (process.env.MC_PHOTOS) {
+    await p.evaluate(`document.getElementById('other-detail').scrollIntoView()`);
+    for (const [width, height] of [[860, 900], [390, 1100]]) {
+      await p.send("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: 1, mobile: false });
+      await Bun.sleep(600);
+      await p.evaluate(`document.getElementById('other-detail').scrollIntoView()`);
+      const shot = await p.send("Page.captureScreenshot", { format: "png" });
+      fs.writeFileSync(path.join(process.env.MC_PHOTOS, `altri-modelli-${width}.png`), Buffer.from(shot.result.data, "base64"));
+    }
+    await p.send("Emulation.clearDeviceMetricsOverride");
+  }
+  await p.evaluate(`closeAnalysis()`);
+}, 60_000);
+
 test("it downloads with progress, then the app starts as usual", async () => {
   await p.evaluate(`document.getElementById('start-download').click()`);
   await waitUntil(() => p.evaluate(visible("download")), "the download page");
   expect(await p.evaluate(`document.getElementById('download-title').innerText`)).toBe("Scarico quello che serve");
   await waitUntil(() => p.evaluate(`document.getElementById('download-steps').innerText.includes('%')`), "the progress in percent");
+  // A few seconds in, the speed and the time left (the fake server sends about 5 MB/s).
+  await waitUntil(() => p.evaluate(`/ MB\\/s · (meno di un minuto|circa)/.test(document.getElementById('download-steps').innerText)`), "the speed and the time left");
   const steps: string = await p.evaluate(`document.getElementById('download-steps').innerText`);
   expect(steps).toContain("Motore: llama.cpp per le schede NVIDIA (CUDA 12)");
   expect(steps).toContain("Fake model");

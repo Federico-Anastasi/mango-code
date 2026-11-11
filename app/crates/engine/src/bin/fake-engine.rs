@@ -163,7 +163,7 @@ fn main() {
                             // `{"if": "...", "text": "...", "token": {...}}` answers the requests in which that text appears
                             // (usually the summary, after it has entered the conversation).
                             let (special, steps): (Vec<&Value>, Vec<&Value>) = c.iter().partition(|p| p["summary"].is_string() || p["if"].is_string());
-                            let no_tools = v["tools"].as_array().map_or(true, |t| t.is_empty());
+                            let no_tools = v["tools"].as_array().is_none_or(|t| t.is_empty());
                             let messages = v["messages"].to_string();
                             let special = special.into_iter().find(|p| match (p["summary"].as_str(), p["if"].as_str()) {
                                 (Some(_), _) => no_tools,

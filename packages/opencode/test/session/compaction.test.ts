@@ -43,6 +43,9 @@ const summary = Layer.succeed(
   }),
 )
 
+/** How long an interrupted compaction may take to end: the retry it interrupts would wait 10 s. Far above what it takes, so a busy computer is not a failure. */
+const INTERRUPT_LIMIT_MS = 3000
+
 const ref = {
   providerID: ProviderV2.ID.make("test"),
   modelID: ModelV2.ID.make("test-model"),
@@ -1259,12 +1262,14 @@ describe("session.compaction.process", () => {
         yield* Deferred.await(ready).pipe(Effect.timeout("5 seconds"))
         const start = Date.now()
         yield* Fiber.interrupt(fiber)
-        const exit = yield* Fiber.await(fiber).pipe(Effect.timeout("250 millis"))
+        // The retry waits 10 s (retry-after-ms above): an interrupt that did not cut the wait short would take that long. The bound is a
+        // fraction of it, not a speed requirement, so a busy computer does not fail the test.
+        const exit = yield* Fiber.await(fiber).pipe(Effect.timeout(INTERRUPT_LIMIT_MS))
 
         expect(Exit.isFailure(exit)).toBe(true)
         if (Exit.isFailure(exit)) {
           expect(Cause.hasInterrupts(exit.cause)).toBe(true)
-          expect(Date.now() - start).toBeLessThan(250)
+          expect(Date.now() - start).toBeLessThan(INTERRUPT_LIMIT_MS)
         }
       }).pipe(withCompaction({ llm: stub.llmLayer }))
     },
@@ -1291,9 +1296,9 @@ describe("session.compaction.process", () => {
             })
             .pipe(Effect.forkChild)
 
-          yield* Deferred.await(ready).pipe(Effect.timeout("1 second"))
+          yield* Deferred.await(ready).pipe(Effect.timeout("5 seconds"))
           yield* Fiber.interrupt(fiber)
-          const exit = yield* Fiber.await(fiber).pipe(Effect.timeout("250 millis"))
+          const exit = yield* Fiber.await(fiber).pipe(Effect.timeout(INTERRUPT_LIMIT_MS))
           const all = yield* ssn.messages({ sessionID: session.id })
 
           expect(Exit.isFailure(exit)).toBe(true)

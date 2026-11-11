@@ -4,7 +4,7 @@
 //! - `ui_log`: the web UI writes here (see `INIT_SCRIPT` in `bridge.rs`) its uncaught errors, its `console.error`
 //!   and the calls to the app that take more than a second. They end up in `logs\ui.log`, next to the logs of the
 //!   agent and the engine.
-//! - `report_problem` ("Report a problem"): one click. With a Sentry address in the build (`MANGO_SENTRY_DSN`) the
+//! - `report_problem` ("Report a problem"): one click. With a Sentry address in the build (`MANGO_CODE_SENTRY_DSN`) the
 //!   report is sent there: an event with what the user wrote, the error and the computer as separate fields, and
 //!   attachments: `report.txt` (summary and the end of every log), `screenshot.png` (only if the user leaves the box
 //!   ticked) and the files the user chose or pasted, which go as they are, untouched. Without the address (a build of
@@ -26,14 +26,15 @@ use serde_json::json;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::sync::LazyLock;
+use std::sync::{LazyLock, Mutex};
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Manager, Url};
 use tauri_plugin_opener::OpenerExt;
 
 /// Where the reports go: the Sentry project `mango-code` of the `mango-o6` organization (data in the EU). A DSN only
 /// lets one send events, it does not read them: it can stay in the source, as in every app that uses Sentry. A build
-/// can send elsewhere with `MANGO_SENTRY_DSN`, or nowhere with `MANGO_SENTRY_DSN=off` (then: file and GitHub issue).
-const SENTRY_DSN: Option<&str> = match option_env!("MANGO_SENTRY_DSN") {
+/// can send elsewhere with `MANGO_CODE_SENTRY_DSN`, or nowhere with `MANGO_CODE_SENTRY_DSN=off` (then: file and GitHub issue).
+const SENTRY_DSN: Option<&str> = match option_env!("MANGO_CODE_SENTRY_DSN") {
     Some(d) if d.is_empty() || d.eq_ignore_ascii_case("off") => None,
     Some(d) => Some(d),
     None => Some("https://55ae6f1d9f48b7c1d18c1ff540c0e46a@o4510993915314176.ingest.de.sentry.io/4512397165068368"),
@@ -41,11 +42,13 @@ const SENTRY_DSN: Option<&str> = match option_env!("MANGO_SENTRY_DSN") {
 const NEW_ISSUE: &str = "https://github.com/Federico-Anastasi/mango-code/issues/new";
 /// Above this, `ui.log` becomes `ui.1.log` (the previous one is dropped).
 const UI_LOG_MAX: u64 = 2 * 1024 * 1024;
+/// The most lines `ui.log` takes in a minute: the page (a broken one, or the phone's) is not trusted to count.
+const UI_LOG_LINES_PER_MINUTE: usize = 100;
 /// How much of the end of each log goes into the report.
 const TAIL: u64 = 256 * 1024;
-/// The error in the issue address: the whole of it is in the file, and an address that is too long is cut by the browser.
-const ERROR_IN_ISSUE: usize = 1500;
-const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+/// The most characters of the report text that go in the issue's address: the whole of it is in the file on the Desktop,
+/// and an address that is too long is cut by the browser.
+const ISSUE_BODY_MAX: usize = 6000;
 /// What Sentry takes for a request (bytes). The envelope goes out uncompressed.
 const ENVELOPE_MAX: usize = 40_000_000;
 /// What the user's files may add up to (bytes): `ENVELOPE_MAX` minus room for `report.txt` (the end of up to a dozen logs)
@@ -58,9 +61,37 @@ fn megabytes(bytes: usize) -> String {
     format!("{:.1} MB", bytes as f64 / 1_000_000.0)
 }
 
-/// One line (or one indented block) in `logs\ui.log`.
+/// The lines `ui.log` took in the current minute, and how many it left out.
+struct LineCap {
+    since: Option<Instant>,
+    taken: usize,
+    left_out: usize,
+}
+
+impl LineCap {
+    /// Whether the line at `now` goes in, and how many lines the minute before left out (to be said once).
+    fn ask(&mut self, now: Instant) -> Option<usize> {
+        if self.since.is_some_and(|since| now.duration_since(since) < Duration::from_secs(60)) {
+            if self.taken >= UI_LOG_LINES_PER_MINUTE {
+                self.left_out += 1;
+                return None;
+            }
+            self.taken += 1;
+            return Some(0);
+        }
+        (self.since, self.taken) = (Some(now), 1);
+        Some(std::mem::take(&mut self.left_out))
+    }
+}
+
+static UI_LOG_CAP: Mutex<LineCap> = Mutex::new(LineCap { since: None, taken: 0, left_out: 0 });
+
+/// One line (or one indented block) in `logs\ui.log`, at most `UI_LOG_LINES_PER_MINUTE` a minute.
 #[tauri::command]
 pub fn ui_log(level: String, text: String, page: Option<String>) -> Result<(), BridgeError> {
+    let Some(left_out) = UI_LOG_CAP.lock().unwrap_or_else(|e| e.into_inner()).ask(Instant::now()) else {
+        return Ok(());
+    };
     let logs = mango_common::data_dir().map_err(|e| err("io", e.to_string()))?.join("logs");
     let file = logs.join("ui.log");
     if std::fs::metadata(&file).map(|m| m.len() > UI_LOG_MAX).unwrap_or(false) {
@@ -72,6 +103,9 @@ pub fn ui_log(level: String, text: String, page: Option<String>) -> Result<(), B
         .open(&file)
         .map_err(|e| err("io", format!("{}: {e}", file.display())))?;
     let time = chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f");
+    if left_out > 0 {
+        writeln!(out, "{time} [ui.log] {left_out} lines left out in the minute before (cap of {UI_LOG_LINES_PER_MINUTE} a minute)").map_err(|e| err("io", format!("{}: {e}", file.display())))?;
+    }
     let page = page.map(|p| format!(" {p}")).unwrap_or_default();
     let text = text.trim_end().replace('\n', "\n    ");
     writeln!(out, "{time} [{level}]{page} {text}").map_err(|e| err("io", format!("{}: {e}", file.display())))
@@ -408,12 +442,15 @@ impl Report {
         let body = self.envelope(&dsn, version, png.as_deref(), files)?;
         let key = dsn.username();
         // 30 s and 3 more for every MB: the files of a report can be tens of MB over a slow line
-        ureq::post(&endpoint)
-            .timeout(std::time::Duration::from_secs(30 + 3 * (body.len() / 1_000_000) as u64))
-            .set("Content-Type", "application/x-sentry-envelope")
-            .set("X-Sentry-Auth", &format!("Sentry sentry_version=7, sentry_client=mango-code/{version}, sentry_key={key}"))
-            .send_bytes(&body)
-            .map_err(|e| err("unavailable", tr!("invio della segnalazione non riuscito: {e}", "the report could not be sent: {e}")))?;
+        mango_common::internet::agent(&endpoint, std::time::Duration::from_secs(30 + 3 * (body.len() / 1_000_000) as u64))
+            .post(&endpoint)
+            .header("Content-Type", "application/x-sentry-envelope")
+            .header("X-Sentry-Auth", format!("Sentry sentry_version=7, sentry_client=mango-code/{version}, sentry_key={key}"))
+            .send(&body)
+            .map_err(|e| {
+                let e = mango_common::internet::explain(&e, &endpoint).unwrap_or_else(|| e.to_string());
+                err("unavailable", tr!("invio della segnalazione non riuscito: {e}", "the report could not be sent: {e}"))
+            })?;
         Ok(())
     }
 
@@ -452,7 +489,7 @@ fn issue_url(computer: &str, file: &Path) -> Url {
             "**Logs**: drag here the file `{file_name}`, just opened in File Explorer (it is on the Desktop)."
         )
     );
-    let body: String = body.chars().take(ERROR_IN_ISSUE * 4).collect();
+    let body: String = body.chars().take(ISSUE_BODY_MAX).collect();
     let mut url = Url::parse(NEW_ISSUE).expect("valid address");
     url.query_pairs_mut().append_pair("title", &tr!("Problema: ", "Problem: ")).append_pair("body", &body);
     url
@@ -462,7 +499,7 @@ fn issue_url(computer: &str, file: &Path) -> Url {
 fn computer(data: &Path) -> Computer {
     let windows = std::process::Command::new("cmd")
         .args(["/c", "ver"])
-        .creation_flags(CREATE_NO_WINDOW)
+        .creation_flags(mango_common::CREATE_NO_WINDOW)
         .output()
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
         .unwrap_or_default();
@@ -517,17 +554,28 @@ fn tail(path: &Path) -> String {
 struct Who {
     /// The account name and the profile folder's name: with a Microsoft account they differ (`alice.smith`, `Alice`).
     users: Vec<String>,
-    computer: String,
+    /// The PC's name and the Windows domain's (the same when the PC is not in a company).
+    computer: Vec<String>,
+    /// The profile folder, when it is not under `Users` (there the account's name is already taken out).
+    profile: Option<String>,
 }
 
 impl Who {
     fn current() -> Who {
         let folder = std::env::var("USERPROFILE").ok().and_then(|p| Some(std::path::Path::new(&p).file_name()?.to_string_lossy().into_owned()));
         let users = std::env::var("USERNAME").ok().into_iter().chain(folder).collect();
-        Who { users, computer: std::env::var("COMPUTERNAME").unwrap_or_default() }
+        let profile = std::env::var("USERPROFILE").ok().filter(|p| !p.to_lowercase().replace('/', "\\").contains("\\users\\"));
+        let computer = ["COMPUTERNAME", "USERDOMAIN"].iter().filter_map(|v| std::env::var(v).ok()).collect();
+        Who { users, computer, profile }
     }
 }
 
+/// A company's OneDrive folder carries the company's name: `OneDrive - Name`.
+static ONEDRIVE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"(?i)\b(OneDrive - )[^\\/"'\r\n]+"#).unwrap());
+/// A complete IPv6 address (eight groups) or abbreviated with `::` (at least one group before it): a time like `12:34:56` is not one.
+static IPV6: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)\b(?:[0-9a-f]{1,4}:){7}[0-9a-f]{1,4}\b|\b(?:[0-9a-f]{1,4}:){1,6}:(?:[0-9a-f]{1,4}(?::[0-9a-f]{1,4}){0,5})?").unwrap()
+});
 static EMAIL: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}").unwrap());
 /// IPv4 addresses, except loopback and "any" (`127.x`, `0.0.0.0`), which say nothing about the user.
 static IPV4: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\b(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})\b").unwrap());
@@ -541,8 +589,8 @@ static KEY_FIELD: LazyLock<Regex> = LazyLock::new(|| {
 });
 static URL_KEY: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)([?&](?:k|key|token|access_token|api_key|apikey|password)=)[^&\s\x22']+").unwrap());
 
-/// Takes the user's personal data out of a text: the account name in paths (`C:\Users\<user>`), the PC's name,
-/// emails, network addresses, keys and tokens. What a report is for (errors, versions, timings) stays.
+/// Takes the user's personal data out of a text: the account name in paths (`C:\Users\<user>`), a profile folder
+/// elsewhere, the PC's and the domain's name, a company's OneDrive folder, emails, network addresses, keys and tokens. What a report is for (errors, versions, timings) stays.
 fn anonymize(text: &str, who: &Who) -> String {
     let mut s = text.to_string();
     // In paths only: as a plain word the name could be an ordinary word ("Mango").
@@ -553,18 +601,25 @@ fn anonymize(text: &str, who: &Who) -> String {
         let user = Regex::new(&format!(r"(?i)(users[\\/]+){}\b", regex::escape(name))).unwrap();
         s = user.replace_all(&s, "${1}<user>").into_owned();
     }
-    if who.computer.len() >= 4 {
-        let pc = Regex::new(&format!(r"(?i)\b{}\b", regex::escape(&who.computer))).unwrap();
+    if let Some(profile) = &who.profile {
+        let parts: Vec<String> = profile.split(['\\', '/']).filter(|c| !c.is_empty()).map(regex::escape).collect();
+        let folder = Regex::new(&format!(r"(?i){}\b", parts.join(r"[\\\/]+"))).unwrap();
+        s = folder.replace_all(&s, "<profile>").into_owned();
+    }
+    for name in who.computer.iter().filter(|n| n.len() >= 4) {
+        let pc = Regex::new(&format!(r"(?i)\b{}\b", regex::escape(name))).unwrap();
         s = pc.replace_all(&s, "<pc>").into_owned();
     }
+    s = ONEDRIVE.replace_all(&s, "${1}<org>").into_owned();
     s = EMAIL.replace_all(&s, "<email>").into_owned();
+    s = IPV6.replace_all(&s, "<ip>").into_owned();
     s = SECRET.replace_all(&s, "<secret>").into_owned();
     s = BEARER.replace_all(&s, "$1 <secret>").into_owned();
     s = KEY_FIELD.replace_all(&s, "${1}<secret>").into_owned();
     s = URL_KEY.replace_all(&s, "${1}<secret>").into_owned();
     IPV4.replace_all(&s, |c: &regex::Captures| {
         let all = &c[0];
-        if c[1].parse::<u16>().map_or(true, |n| n > 255) || all.starts_with("127.") || all == "0.0.0.0" {
+        if (1..=4).any(|i| c[i].parse::<u16>().map_or(true, |n| n > 255)) || all.starts_with("127.") || all == "0.0.0.0" {
             all.to_string()
         } else {
             "<ip>".to_string()
@@ -624,7 +679,7 @@ fn window_png(window: &tauri::WebviewWindow) -> anyhow::Result<Vec<u8>> {
         ReleaseDC(HWND::default(), screen);
         anyhow::ensure!(printed && rows == h, "PrintWindow {printed}, rows {rows} of {h}");
     }
-    for px in bgra.chunks_exact_mut(4) {
+    for px in bgra.as_chunks_mut::<4>().0 {
         px.swap(0, 2);
         px[3] = 255;
     }
@@ -639,7 +694,74 @@ mod tests {
     use super::*;
 
     fn who() -> Who {
-        Who { users: vec!["alice.smith".into(), "Alice".into()], computer: "DESKTOP-7Q2K".into() }
+        Who { users: vec!["alice.smith".into(), "Alice".into()], computer: vec!["DESKTOP-7Q2K".into()], profile: None }
+    }
+
+    /// A profile folder that is not under `Users`, and a work domain.
+    fn who_with_a_profile_elsewhere() -> Who {
+        Who { users: vec!["anna".into()], computer: vec!["DESKTOP-7Q2K".into(), "AZIENDA".into()], profile: Some(r"D:\Profili\anna".into()) }
+    }
+
+    /// One rule per row: the text as it is in the logs and as it leaves.
+    #[test]
+    fn each_rule_removes_its_datum_and_leaves_the_rest() {
+        let rules: [(&str, &str, &str); 9] = [
+            ("profile folder outside Users", r"loading D:\Profili\anna\Desktop\x.json", r"loading <profile>\Desktop\x.json"),
+            ("the same, escaped as in JSON", r#"{"dir":"D:\\Profili\\anna\\Documents"}"#, r#"{"dir":"<profile>\\Documents"}"#),
+            ("the same, with forward slashes and other case", "file:///d:/profili/ANNA/x", "file:///<profile>/x"),
+            ("a similar folder is not the profile", r"D:\Profili\anna2\x and D:\Profili\annabella", r"D:\Profili\anna2\x and D:\Profili\annabella"),
+            ("work domain", r"AZIENDA\anna in session", r"<pc>\anna in session"),
+            ("work OneDrive", r"C:\Users\anna\OneDrive - Rossi Srl\Video\a.mp4", r"C:\Users\<user>\OneDrive - <org>\Video\a.mp4"),
+            ("IPv6, abbreviated and complete", "fe80::1c2d:3e4f:5a6b:7c8d and 2001:0db8:85a3:0000:0000:8a2e:0370:7334", "<ip> and <ip>"),
+            ("a time and IPv6 loopback stay", "at 12:34:56 on ::1", "at 12:34:56 on ::1"),
+            ("the account name outside paths stays", "anna opened Anna Studio", "anna opened Anna Studio"),
+        ];
+        for (name, before, after) in rules {
+            assert_eq!(anonymize(before, &who_with_a_profile_elsewhere()), after, "rule: {name}");
+        }
+    }
+
+    /// One rule per row, invented data: what each rule takes out and what it must leave.
+    #[test]
+    fn every_rule_has_its_row() {
+        let rules: [(&str, &str, &str); 22] = [
+            ("user in a path", r"C:\Users\alice.smith\Desktop\a.txt", r"C:\Users\<user>\Desktop\a.txt"),
+            ("user in a path, JSON-escaped", r#"{"p":"C:\\Users\\Alice\\x"}"#, r#"{"p":"C:\\Users\\<user>\\x"}"#),
+            ("user in a path, forward slashes", "C:/Users/alice/x", "C:/Users/<user>/x"),
+            ("the user's name as a plain word stays", "Alice asked", "Alice asked"),
+            ("computer name", "host DESKTOP-7Q2K ready", "host <pc> ready"),
+            ("email", "write to alice@example.com now", "write to <email> now"),
+            ("IPv4 of a home network", "phone at 192.168.1.50:4097", "phone at <ip>:4097"),
+            ("IPv4, public", "peer 203.0.113.9", "peer <ip>"),
+            ("loopback and any-address stay", "on 127.0.0.1:8080 and 0.0.0.0", "on 127.0.0.1:8080 and 0.0.0.0"),
+            ("a version of four numbers is not an address", "Windows 10.0.19045.1", "Windows 10.0.19045.1"),
+            ("a number over 255 anywhere in the four is not an address", "build 10.0.5.300", "build 10.0.5.300"),
+            ("sk- key", "key sk-or-v1-0123456789abcdef0123 end", "key <secret> end"),
+            ("hf_ token", "hf_abcdefghijklmnopqrstu", "<secret>"),
+            ("GitHub token", "ghp_0123456789abcdefABCDEF0123", "<secret>"),
+            ("GitHub fine-grained token", "github_pat_11ABCDEFG0123456789_xyz", "<secret>"),
+            ("Bearer header", "Authorization: Bearer eyJabc.def12345", "Authorization: Bearer <secret>"),
+            ("password in a log line", "password: hunter2 ok", "password: <secret> ok"),
+            ("token in a log line", "token=tok987zyx&x=1", "token=<secret>&x=1"),
+            ("key in JSON", r#"{"api_key":"zz11yy22"}"#, r#"{"api_key":"<secret>"}"#),
+            ("key in an address", "http://x/?k=abc123def&x=1", "http://x/?k=<secret>&x=1"),
+            ("an ordinary word is not a key", "task: ready, passwords are checked", "task: ready, passwords are checked"),
+            ("a time is not an IPv6 address", "at 12:34:56", "at 12:34:56"),
+        ];
+        for (name, before, after) in rules {
+            assert_eq!(anonymize(before, &who()), after, "rule: {name}");
+        }
+    }
+
+    #[test]
+    fn ui_log_takes_a_hundred_lines_a_minute_and_says_how_many_it_left_out() {
+        let mut cap = LineCap { since: None, taken: 0, left_out: 0 };
+        let start = Instant::now();
+        assert_eq!((0..UI_LOG_LINES_PER_MINUTE).filter(|_| cap.ask(start) == Some(0)).count(), UI_LOG_LINES_PER_MINUTE);
+        assert_eq!(cap.ask(start + Duration::from_secs(30)), None);
+        assert_eq!(cap.ask(start + Duration::from_secs(59)), None);
+        assert_eq!(cap.ask(start + Duration::from_secs(61)), Some(2));
+        assert_eq!(cap.ask(start + Duration::from_secs(62)), Some(0));
     }
 
     #[test]
@@ -649,12 +771,12 @@ host DESKTOP-7Q2K, mail alice@example.com, phone http://192.168.1.50:4097/?k=abc
 key sk-or-v1-0123456789abcdef0123 hf_abcdefghijklmnopqrstu Authorization: Bearer eyJabc.def
 gh ghp_0123456789abcdefABCDEF0123 github_pat_11ABCDEFG0123456789_xyz token=tok987zyx password: hunter2 {"api_key":"zz11yy22"}
 profile C:\Users\alice.smith\x
-engine on http://127.0.0.1:8080, listening 0.0.0.0, Mango Code 0.1.0, version 10.0.26200.9711"#;
+engine on http://127.0.0.1:8080, listening 0.0.0.0, Mango Code 0.1.0, version 10.0.19045.1"#;
         let s = anonymize(text, &who());
         for gone in ["Alice\\", "alice/", "DESKTOP-7Q2K", "alice@", "192.168.1.50", "abc123def", "sk-or-v1", "hf_abc", "eyJabc", "ghp_01", "github_pat_11", "tok987zyx", "hunter2", "zz11yy22", "alice.smith"] {
             assert!(!s.contains(gone), "{gone} still in:\n{s}");
         }
-        for kept in ["Users\\\\<user>\\\\AppData", "C:/Users/<user>/x", "<pc>", "<email>", "<ip>", "127.0.0.1:8080", "0.0.0.0", "Mango Code 0.1.0", "10.0.26200.9711"] {
+        for kept in ["Users\\\\<user>\\\\AppData", "C:/Users/<user>/x", "<pc>", "<email>", "<ip>", "127.0.0.1:8080", "0.0.0.0", "Mango Code 0.1.0", "10.0.19045.1"] {
             assert!(s.contains(kept), "{kept} missing in:\n{s}");
         }
     }
@@ -750,6 +872,22 @@ engine on http://127.0.0.1:8080, listening 0.0.0.0, Mango Code 0.1.0, version 10
         let e = a_report().envelope(&dsn, "0.1.0", Some(&vec![0; 11_000_000]), &big).err().unwrap();
         assert_eq!(e.code, "too_large");
         assert!(e.message.contains("40.0 MB"), "{}", e.message);
+    }
+
+    #[path = "../../../../crates/mango-common/src/internet/fake_proxy.rs"]
+    mod fake_proxy;
+
+    #[test]
+    fn behind_a_company_filter_with_an_unknown_certificate_the_report_says_what_to_do() {
+        let proxy = fake_proxy::FakeProxy::start(fake_proxy::Mode::Inspect);
+        // The one test of this file that touches the environment: the other tests only call this computer, which no proxy sees.
+        std::env::set_var("HTTPS_PROXY", &proxy.address);
+        let result = a_report().send("https://key@o1.ingest.de.sentry.io/2", "0.1.0", None, &[]);
+        std::env::remove_var("HTTPS_PROXY");
+        let e = result.unwrap_err();
+        assert_eq!(e.code, "unavailable");
+        assert!(e.message.contains(&mango_common::internet::certificate_message()), "{}", e.message);
+        assert_eq!(proxy.seen(), ["CONNECT o1.ingest.de.sentry.io:443 HTTP/1.1"]);
     }
 
     #[test]

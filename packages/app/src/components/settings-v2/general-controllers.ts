@@ -1,9 +1,6 @@
-import { createMemo, createResource, onMount, type Accessor } from "solid-js"
+import { createMemo, onMount, type Accessor } from "solid-js"
 import type { ColorScheme } from "@opencode-ai/ui/theme/context"
 import { useTheme } from "@opencode-ai/ui/theme/context"
-import { usePermission } from "@/context/permission"
-import { useServerSDK } from "@/context/server-sdk"
-import { useServerSync } from "@/context/server-sync"
 import {
   monoDefault,
   monoFontFamily,
@@ -11,66 +8,10 @@ import {
   sansDefault,
   sansFontFamily,
   sansInput,
-  terminalDefault,
-  terminalFontFamily,
-  terminalInput,
   useSettings,
 } from "@/context/settings"
 import { playSoundById, SOUND_OPTIONS } from "@/utils/sound"
-import { createSoundPreviewController, type ShellOption } from "./general-controller-behavior"
-
-export { createShellOptions, createSoundPreviewController } from "./general-controller-behavior"
-export type { ShellOption, ShellSelectOption } from "./general-controller-behavior"
-
-export function createPermissionScopeController(sessionID: Accessor<string | undefined>) {
-  const permission = usePermission()
-  const serverSync = useServerSync()
-  const directory = createMemo(() => {
-    const id = sessionID()
-    if (!id) return undefined
-    return serverSync().session.lineage.peek(id)?.session.directory
-  })
-
-  return {
-    accepting: createMemo(() => {
-      const id = sessionID()
-      const dir = directory()
-      if (!id || !dir) return false
-      return permission.isAutoAccepting(id, dir)
-    }),
-    enabled: createMemo(() => !!directory()),
-    set: (checked: boolean) => {
-      const id = sessionID()
-      const dir = directory()
-      if (!id || !dir) return
-      if (checked) return permission.enableAutoAccept(id, dir)
-      permission.disableAutoAccept(id, dir)
-    },
-  }
-}
-
-export function createShellSettingsController() {
-  const serverSdk = useServerSDK()
-  const serverSync = useServerSync()
-  const [shells] = createResource(
-    async () => {
-      const sdk = serverSdk()
-      if ((await sdk.protocol) === "v1") return (await sdk.client.pty.shells()).data ?? []
-      return [] as ShellOption[]
-    },
-    { initialValue: [] as ShellOption[] },
-  )
-  const current = createMemo(() => serverSync().data.config.shell ?? "")
-
-  return {
-    shells: () => shells.latest,
-    current,
-    select: (value: string) => {
-      if (value === current()) return
-      void serverSync().updateConfig({ shell: value })
-    },
-  }
-}
+import { createSoundPreviewController } from "./general-controller-behavior"
 
 export function createAppearanceSettingsController() {
   const settings = useSettings()
@@ -100,14 +41,8 @@ export function createAppearanceSettingsController() {
         family: monoFontFamily(settings.appearance.font()),
         placeholder: monoDefault,
       })),
-      terminal: createMemo(() => ({
-        value: terminalInput(settings.appearance.terminalFont()),
-        family: terminalFontFamily(settings.appearance.terminalFont()),
-        placeholder: terminalDefault,
-      })),
       setUI: (value: string) => settings.appearance.setUIFont(value),
       setCode: (value: string) => settings.appearance.setFont(value),
-      setTerminal: (value: string) => settings.appearance.setTerminalFont(value),
     },
   }
 }
@@ -167,7 +102,5 @@ export function createSoundSettingsController() {
   }
 }
 
-export type PermissionScopeController = ReturnType<typeof createPermissionScopeController>
-export type ShellSettingsController = ReturnType<typeof createShellSettingsController>
 export type AppearanceSettingsController = ReturnType<typeof createAppearanceSettingsController>
 export type SoundSettingsController = ReturnType<typeof createSoundSettingsController>

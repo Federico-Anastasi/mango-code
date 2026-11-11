@@ -1,8 +1,10 @@
 //! Mango Code from the phone: the agent's web UI over the network, from the home Wi-Fi or from outside with Tailscale.
 //!
-//! **Off by default.** When on, it listens on a port of its own (`0.0.0.0:<port>`) and forwards the requests to the
-//! agent's server, which stays on `127.0.0.1` and doesn't change for whoever uses it from the PC. Next to it a second
-//! port, for the pages of the computer's browser panel (`site.rs`). When off, neither port is open.
+//! **Off by default.** When on, it listens on a port of its own on the addresses the links show, the home network's and
+//! Tailscale's, never on all the networks (`Inner::reconcile` follows them as the Wi-Fi changes), and forwards the requests
+//! to the agent's server, which stays on `127.0.0.1` and doesn't change for whoever uses it from the PC. Next to it a second
+//! port, for the pages of the computer's browser panel (`site.rs`). When off, neither port is open. If Windows calls the home
+//! network public, the link says so (`Access::public`).
 //!
 //! * You get in with the link that carries the key (`GET /phone?key=…`, 24 random bytes, compared in constant time):
 //!   the reply sets the `mango_phone` cookie (a random value of one session, never the key, `HttpOnly;
@@ -21,12 +23,11 @@
 
 mod files;
 mod http;
-mod network;
 mod qr;
 mod site;
 
 use anyhow::{Context, Result};
-use mango_common::tr;
+use mango_common::{equal_ct, hex, network, random_hex, tr};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
@@ -34,11 +35,17 @@ use std::net::TcpStream;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 /// How long a session is worth: the cookie isn't renewed, afterwards you get back in with the link.
 const SESSION_DURATION_S: u64 = 90 * 24 * 3600;
 const MAX_SESSIONS: usize = 20;
+/// Above this size `phone.log` becomes `phone.1.log` (the previous one is dropped).
+const LOG_MAX: u64 = 1024 * 1024;
+/// The path of a request in the log is cut to this many characters: whoever calls chooses it.
+const PATH_LOGGED: usize = 200;
+/// Refusals written to the log in a minute (counted from the first one): the rest is one line that says so.
+const REFUSALS_PER_MINUTE: usize = 60;
 
 /// What the app does for the problem reports that come from the phone (`GET` and `POST /phone/report`).
 pub trait Reports: Send + Sync {
@@ -86,8 +93,8 @@ pub struct Phone {
 struct Inner {
     file: PathBuf,
     log: PathBuf,
-    /// Where the port is opened: `0.0.0.0` (all networks); tests use `127.0.0.1`.
-    listen_on: std::net::Ipv4Addr,
+    /// Tests: only `127.0.0.1`, so no network is touched and Windows asks nothing.
+    only_here: bool,
     port: u16,
     /// The second port, for the browser panel's pages.
     preview_port: u16,
@@ -96,14 +103,18 @@ struct Inner {
     computer: Arc<dyn Computer>,
     saved: Mutex<Saved>,
     listener: Mutex<Option<http::Listener>>,
-    /// The error of the last start (the port in use), until it is retried.
+    /// The addresses with an open port.
+    bound: Mutex<Vec<std::net::Ipv4Addr>>,
+    /// Why a port is not open though on (the port in use), until the next try.
     error: Mutex<Option<String>>,
     /// The connections open from the phone: turning off and remaking the key close them, ongoing events too.
     connections: Mutex<HashMap<u64, TcpStream>>,
     next_id: AtomicU64,
+    /// When the current minute of refusals began and how many it has already had.
+    refusals: Mutex<(Option<Instant>, usize)>,
 }
 
-#[derive(Serialize, Deserialize, Default)]
+#[derive(Serialize, Deserialize, Default, Clone)]
 struct Saved {
     enabled: bool,
     key: Option<String>,
@@ -138,15 +149,18 @@ pub struct Access {
     pub link: String,
     /// The link's QR, as SVG.
     pub qr: String,
+    /// Windows calls this network public (a café's): the link travels in the clear for whoever is on it.
+    pub public: bool,
 }
 
 impl Phone {
     /// Reads the state from `<data>\phone.json` (if it's not there, off) and, if it was on, reopens the port on
-    /// `listen_on:port`.
+    /// the addresses of the links (`only_here`: `127.0.0.1`, for the tests).
+    #[allow(clippy::too_many_arguments)] // the service's ports, files and the two things it asks of the app
     pub fn new(
         data: &Path,
         logs: &Path,
-        listen_on: std::net::Ipv4Addr,
+        only_here: bool,
         port: u16,
         preview_port: u16,
         agent_port: u16,
@@ -164,7 +178,7 @@ impl Phone {
             d: Arc::new(Inner {
                 file,
                 log: logs.join("phone.log"),
-                listen_on,
+                only_here,
                 port,
                 preview_port,
                 agent_port,
@@ -172,9 +186,11 @@ impl Phone {
                 computer,
                 saved: Mutex::new(saved),
                 listener: Mutex::new(None),
+                bound: Mutex::new(Vec::new()),
                 error: Mutex::new(None),
                 connections: Mutex::new(HashMap::new()),
                 next_id: AtomicU64::new(0),
+                refusals: Mutex::new((None, 0)),
             }),
         };
         if t.d.saved.lock().unwrap().enabled {
@@ -188,15 +204,16 @@ impl Phone {
             let s = self.d.saved.lock().unwrap();
             (s.enabled, s.key.clone())
         };
-        let listening = self.d.listener.lock().unwrap().is_some();
+        let listening = !self.d.bound.lock().unwrap().is_empty();
         let (home, away) = match key.filter(|_| enabled) {
             Some(k) => {
                 let addresses = network::addresses();
-                let access = |ip: std::net::Ipv4Addr| {
+                let access = |ip: std::net::Ipv4Addr, public: bool| {
                     let link = format!("http://{ip}:{}/phone?key={k}", self.d.port);
-                    Access { address: ip.to_string(), qr: qr::svg(&link), link }
+                    Access { address: ip.to_string(), qr: qr::svg(&link), link, public }
                 };
-                (addresses.home.map(access), addresses.away.map(access))
+                // Tailscale encrypts what it carries: only the home network can be a café's.
+                (addresses.home.map(|ip| access(ip, network::is_public(ip))), addresses.away.map(|ip| access(ip, false)))
             }
             None => (None, None),
         };
@@ -218,13 +235,15 @@ impl Phone {
             self.d.log(serde_json::json!({ "event": "on" }));
             return Ok(self.state());
         }
+        // The file first: if it cannot be written the service stays as it is, and the user is told.
+        self.d.write(&Saved::default())?;
         if let Some(a) = self.d.listener.lock().unwrap().take() {
             a.close();
         }
         *self.d.error.lock().unwrap() = None;
+        self.d.bound.lock().unwrap().clear();
         *self.d.saved.lock().unwrap() = Saved::default();
         self.d.close_connections();
-        self.d.save()?;
         self.d.log(serde_json::json!({ "event": "off" }));
         Ok(self.state())
     }
@@ -234,26 +253,23 @@ impl Phone {
         {
             let mut s = self.d.saved.lock().unwrap();
             anyhow::ensure!(s.enabled, "{}", tr!("il servizio per il telefono è spento", "the phone service is off"));
-            s.key = Some(random_hex(24));
-            s.sessions.clear();
+            let next = Saved { key: Some(random_hex(24)), sessions: Vec::new(), ..s.clone() };
+            self.d.write(&next)?;
+            *s = next;
         }
         self.d.close_connections();
-        self.d.save()?;
         self.d.log(serde_json::json!({ "event": "new key" }));
         Ok(self.state())
     }
 
-    /// Opens the ports if they aren't already open; if one doesn't open, neither does, and the error stays in the state.
+    /// Opens the ports if they aren't already open; one that doesn't open stays in the state as an error and is tried again.
     fn open(&self) {
         let mut listener = self.d.listener.lock().unwrap();
         if listener.is_some() {
             return;
         }
         match http::listen(self.d.clone()) {
-            Ok(a) => {
-                *listener = Some(a);
-                *self.d.error.lock().unwrap() = None;
-            }
+            Ok(a) => *listener = Some(a),
             Err(e) => {
                 self.d.log(serde_json::json!({ "event": "port not open", "reason": format!("{e:#}") }));
                 *self.d.error.lock().unwrap() = Some(format!("{e:#}"));
@@ -263,14 +279,37 @@ impl Phone {
 }
 
 impl Inner {
+    /// The addresses to listen on: the home network's and Tailscale's.
+    fn places(&self) -> Vec<std::net::Ipv4Addr> {
+        if self.only_here {
+            return vec![std::net::Ipv4Addr::LOCALHOST];
+        }
+        network::addresses().all()
+    }
+
+    /// Opens the ports on the addresses that have none, closes those of addresses that are gone. The two ports go together:
+    /// on an address where one does not open, the other is closed too, and the error says which.
+    fn reconcile(&self, ports: &mut [http::Port; 2]) {
+        let wanted = self.places();
+        let error = ports.iter_mut().filter_map(|p| network::reconcile(&mut p.listeners, &wanted, p.number)).next();
+        let both: Vec<std::net::Ipv4Addr> = ports[0].listeners.iter().map(|(ip, _)| *ip).filter(|ip| ports[1].listeners.iter().any(|(x, _)| x == ip)).collect();
+        for p in ports.iter_mut() {
+            p.listeners.retain(|(ip, _)| both.contains(ip));
+        }
+        *self.error.lock().unwrap() = error;
+        *self.bound.lock().unwrap() = both;
+    }
+
     fn save(&self) -> Result<()> {
-        let text = serde_json::to_string_pretty(&*self.saved.lock().unwrap())?;
+        self.write(&self.saved.lock().unwrap())
+    }
+
+    fn write(&self, saved: &Saved) -> Result<()> {
+        let text = serde_json::to_string_pretty(saved)?;
         if let Some(folder) = self.file.parent() {
             std::fs::create_dir_all(folder)?;
         }
-        let tmp = self.file.with_extension("json.tmp");
-        std::fs::write(&tmp, text)?;
-        std::fs::rename(&tmp, &self.file).with_context(|| tr!("scrittura di {}", "writing {}", self.file.display()))
+        mango_common::write_atomic(&self.file, text).with_context(|| tr!("scrittura di {}", "writing {}", self.file.display()))
     }
 
     /// True if it's the current key. The hashes are compared, in constant time.
@@ -322,31 +361,39 @@ impl Inner {
         }
     }
 
-    /// A JSON line in `phone.log`, with local time.
+    /// A JSON line in `phone.log`, with local time. Anyone on the network can cause refusals, so the file is bounded:
+    /// the path is cut, the refusals of a minute are limited and the file is rotated.
     fn log(&self, mut line: serde_json::Value) {
+        if line["event"] == "refused" {
+            let (began, count) = &mut *self.refusals.lock().unwrap();
+            if began.is_none_or(|t| t.elapsed() >= Duration::from_secs(60)) {
+                (*began, *count) = (Some(Instant::now()), 0);
+            }
+            *count += 1;
+            if *count > REFUSALS_PER_MINUTE {
+                if *count == REFUSALS_PER_MINUTE + 1 {
+                    self.append(serde_json::json!({ "event": "log limit", "reason": "more refusals not written this minute" }));
+                }
+                return;
+            }
+        }
+        if let Some(path) = line["path"].as_str().filter(|p| p.chars().count() > PATH_LOGGED) {
+            line["path"] = path.chars().take(PATH_LOGGED).collect::<String>().into();
+        }
+        self.append(line);
+    }
+
+    fn append(&self, mut line: serde_json::Value) {
         use std::io::Write;
         line["time"] = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string().into();
+        if std::fs::metadata(&self.log).is_ok_and(|m| m.len() > LOG_MAX) {
+            let _ = std::fs::rename(&self.log, self.log.with_file_name("phone.1.log"));
+        }
         let outcome = std::fs::OpenOptions::new().create(true).append(true).open(&self.log).and_then(|mut f| writeln!(f, "{line}"));
         if let Err(e) = outcome {
             eprintln!("phone.log not written ({}): {e}", self.log.display());
         }
     }
-}
-
-/// Constant-time comparison (at equal length: the hashes' lengths are fixed and known).
-fn equal_ct(a: &[u8], b: &[u8]) -> bool {
-    a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
-}
-
-/// `n` random bytes from the system, in hex.
-fn random_hex(n: usize) -> String {
-    let mut b = vec![0u8; n];
-    getrandom::getrandom(&mut b).expect("system random generator");
-    hex(&b)
-}
-
-fn hex(b: &[u8]) -> String {
-    b.iter().map(|x| format!("{x:02x}")).collect()
 }
 
 fn now_secs() -> u64 {

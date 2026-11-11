@@ -25,7 +25,7 @@
   <a href="#license">License</a>
 </p>
 
-Mango Code is a desktop app for Windows, a terminal command and an HTTP interface for other apps. The agent is a fork of
+Mango Code is a desktop app for Windows, with an HTTP interface and a one-shot command for other programs. The agent is a fork of
 [opencode](https://github.com/anomalyco/opencode); the models run on [llama.cpp](https://github.com/ggml-org/llama.cpp)
 and on two engines of our own derived from it. The app is in English and Italian.
 
@@ -38,8 +38,8 @@ and on two engines of our own derived from it. The app is in English and Italian
 ## Features
 
 **Local models, set up for your PC**
-- At first run the app looks at your graphics cards, processor and memory, tells you which models fit and how fast
-  they are likely to be, then downloads the right engine (CUDA for NVIDIA, Vulkan for AMD and Intel, or the processor
+- At first run the app looks at your graphics cards, processor and memory, tells you which models fit and, for those that
+  would run on the processor, how slow in words ("a word or two a second"), then downloads the right engine (CUDA for NVIDIA, Vulkan for AMD and Intel, or the processor
   alone) and the models you choose, with resume and checksum. A model runs entirely on the graphics cards, with the
   largest context that fits, or entirely on the processor.
 - **Recommended models**, each with arguments tuned for it: Qwen3.6-35B-A3B (the default), Qwen3.8-27B, Ternary
@@ -54,18 +54,27 @@ and on two engines of our own derived from it. The app is in English and Italian
 - **You decide what goes in the prompt.** Every built-in tool, MCP server, skill, instruction file and plugin can be
   turned on or off, for all folders or for one, and the settings page shows how many tokens each one costs.
 - **Projects are git repositories**: a folder you open becomes one if it isn't (with an empty first commit), so every
-  change the agent makes can be seen and undone.
+  change the agent makes can be seen and undone. Never in a folder too broad to be a project (your user folder,
+  Desktop, Documents, Downloads, OneDrive, a drive root: the app says so and offers a subfolder), nor in a folder that
+  holds other repositories.
 - **Built-in tools**: a browser the agent drives in the app's preview panel (or in your own Chrome), web search, Word,
-  Excel, PowerPoint and PDF documents, voice dictation, and a set of skills for disciplined work (tests first,
+  Excel, PowerPoint and PDF documents (a click on the card of a PDF or a picture shows it in that panel, also on the
+  phone), voice dictation, and a set of skills for disciplined work (tests first,
   systematic debugging, verification before claiming success).
 
 **Wherever you work**
 - **Projects like a desktop app.** Open a folder, create a new project anywhere, or right-click a folder in File
-  Explorer and choose "Open with Mango Code".
+  Explorer and choose "Open with Mango Code". Or just start writing: with no project yet, "New conversation" opens one
+  in a "Conversations" folder ("Conversazioni" in Italian) inside Documents\Mango Code, a project like the others.
 - **Team mode.** A cloud manager (DeepSeek V4.1 Flash through [OpenRouter](https://openrouter.ai), with your key) plans
   and checks, a local model does the hands-on work, and the manager can open up to four more cloud agents.
 - **From your phone.** The same interface on your phone, over your Wi-Fi or from outside with
   [Tailscale](https://tailscale.com). Off by default; when you turn it on, access needs a random key.
+- **The engine of another PC.** A PC with graphics cards can share its models with your other PCs, at home or with
+  Tailscale: off by default, with a random key in a code you copy ("Share the engine with my PCs", on the "Models and
+  engine" page). On the other PC, even a laptop without a graphics card, you paste the code in "Use the engine of another PC
+  of mine" (the first thing the first start offers): no model and no engine to download, and the way back to the engine of that
+  PC is one button.
 - **For other apps.** A documented HTTP contract and a TypeScript client let another app start conversations, follow
   their events, answer permissions and borrow the graphics cards from the model when they need them:
   [`docs/INTEGRATION.md`](docs/INTEGRATION.md).
@@ -100,7 +109,7 @@ starting point for PCs with the same cards.
 ## Tune it for your PC
 
 Out of the box, Mango Code runs each model with a general plan that works on any PC but is not tuned for yours. The
-[`optimize`](optimize/README.md) skill closes that gap. Give it to a frontier coding agent (for example Claude Code) and
+[`optimize`](optimize/SKILL.md) skill closes that gap. Give it to a frontier coding agent (for example Claude Code) and
 ask: "Optimize Mango Code on my PC". The agent asks which models you use and for permission to use your graphics cards,
 then measures each model as the app starts it, changes one setting at a time, keeps only what is faster within the
 measured noise and writes a profile for your hardware, which the app uses from then on.
@@ -132,20 +141,23 @@ The models run on your computer: your files, your prompts and the model's answer
 - **"Report a problem"**, only when you click Send: the logs, the PC details and, if you leave the switch on, a
   screenshot of the window. Your user name, PC name, emails, network addresses and keys are removed before sending.
 
-Access from your phone is off by default. What the app protects, and what it does not: [SECURITY.md](SECURITY.md).
+Access from your phone and sharing the engine with your other PCs are off by default. What the app protects, and what it does not: [SECURITY.md](SECURITY.md).
 
 ## Build from source
 
-Requirements: Windows, git, Bun 1.4.2 or later, Rust, Node.js; to build the engines also CMake, Ninja, Visual Studio
-with the C++ tools, the CUDA 12 toolkit and clang-cl.
+Requirements: Windows, git, Bun 1.4.4 or later, Rust and Node.js.
 
 ```powershell
-cd launcher; .\setup.ps1          # engines, agent, models, dependencies and the mango-code command
-..\app\scripts\build.ps1          # the desktop app's installer
+npm ci --prefix launcher; npm ci --prefix launcher/opencode-home   # the node packages of the resources
+app\scripts\build-agent.ps1       # the agent
+app\scripts\build.ps1             # the desktop app's installer
 ```
 
-`setup.ps1` also works in parts (`-Only llama-prism|llama-toq|opencode|models|npm|config|command`). Details:
-[`launcher/MANGO-CODE.md`](launcher/MANGO-CODE.md) for the terminal, [`app/README.md`](app/README.md) for the app.
+The engines and the models are not part of the build (the models alone are ~60 GB): the app's first run downloads what a
+model needs. Building our two engine forks from source is only for whoever works on them
+(`app\scripts\build-engines.ps1 prism|toq`, which also needs CMake, Ninja, Visual Studio with the C++ tools, the CUDA 12
+toolkit and clang-cl). Details: [`app/README.md`](app/README.md) for the app, [`launcher/MANGO-CODE.md`](launcher/MANGO-CODE.md)
+for what it installs as resources.
 How to contribute and run the tests: [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Repository
@@ -153,7 +165,7 @@ How to contribute and run the tests: [CONTRIBUTING.md](CONTRIBUTING.md).
 ```
 mango-code/
 ├── app/          the desktop app (Rust, Tauri): engine manager, first run, settings, voice, phone access
-├── launcher/     the terminal, and what the app installs as resources: model catalog, profiles, agent plugins
+├── launcher/     what the app installs as resources: model catalog, profiles, agent plugins
 │                 and instructions, MCP servers, skills
 ├── packages/     the agent: opencode with Mango Code's changes
 ├── integration/  the client for other apps (TypeScript), examples and end-to-end tests

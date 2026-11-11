@@ -64,7 +64,7 @@ pub fn team_info(app: AppHandle) -> Result<TeamInfo, BridgeError> {
 
 /// Saves the key in the Credential Manager and restarts the agent, which receives it in the environment.
 #[tauri::command]
-pub fn team_set_key(app: AppHandle, key: String) -> Result<(), BridgeError> {
+pub async fn team_set_key(app: AppHandle, key: String) -> Result<(), BridgeError> {
     let key = clean_key(&key)
         .ok_or_else(|| err("invalid_key", tr!("la chiave è vuota o contiene spazi", "the key is empty or contains spaces")))?;
     credentials::save(team::CREDENTIAL, key).map_err(io)?;
@@ -73,7 +73,7 @@ pub fn team_set_key(app: AppHandle, key: String) -> Result<(), BridgeError> {
 }
 
 #[tauri::command]
-pub fn team_remove_key(app: AppHandle) -> Result<(), BridgeError> {
+pub async fn team_remove_key(app: AppHandle) -> Result<(), BridgeError> {
     credentials::remove(team::CREDENTIAL).map_err(io)?;
     crate::restart(&app, Mode::Startup { interactive: true });
     Ok(())
@@ -81,7 +81,7 @@ pub fn team_remove_key(app: AppHandle) -> Result<(), BridgeError> {
 
 /// Saves how many agents and which models; if the Team is on (there is a key) it restarts the agent to apply them.
 #[tauri::command]
-pub fn team_save(app: AppHandle, agents: u8, manager: String, agent: String) -> Result<(), BridgeError> {
+pub async fn team_save(app: AppHandle, agents: u8, manager: String, agent: String) -> Result<(), BridgeError> {
     team::write_choices(&paths(&app)?, &Choices { agents, manager, agent }).map_err(|e| err("invalid_choices", format!("{e:#}")))?;
     if credentials::read(team::CREDENTIAL).map_err(io)?.is_some() {
         crate::restart(&app, Mode::Startup { interactive: true });

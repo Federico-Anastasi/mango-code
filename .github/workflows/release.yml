@@ -1,5 +1,7 @@
-# Builds, signs and publishes the Windows installer when a tag v<version> is pushed (app/README.md, "Automatic
-# updates"). The signing key lives in the `release` environment, which waits for the maintainer's approval.
+# Tests, builds, signs and publishes the Windows installer when a tag v<version> is pushed (app/README.md, "Automatic
+# updates"). The signing key lives in the `release` environment, which waits for the maintainer's approval, and only
+# the step "Sign the installer" reads it: a failed test, the build and the packages' scripts all run before and without it.
+# The release is created as a draft, checked, and published last: users never see a release with files missing.
 name: release
 
 on:
@@ -25,25 +27,26 @@ jobs:
       run:
         shell: pwsh
     steps:
-      - uses: actions/checkout@v4
-
-      - name: The tag is the app's version
-        run: |
-          $version = (Get-Content app/src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
-          if ($env:TAG -ne "v$version") { throw "tag $env:TAG, but tauri.conf.json says $version" }
-          if (-not (Select-String -Path app/Cargo.toml -SimpleMatch "version = `"$version`"" -Quiet)) { throw "app/Cargo.toml is not at $version" }
-          if (-not (Test-Path "app/release-notes/$env:TAG.md")) { throw "app/release-notes/$env:TAG.md is missing" }
-
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          workspaces: app
-      - uses: oven-sh/setup-bun@v2
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master, 2026-10-16
         with:
-          bun-version: 1.4.2
-      - uses: actions/setup-node@v4
+          toolchain: 1.98.1
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 24
+
+      - name: The tag is the app's version
+        run: node app/scripts/check-version.mjs --tag $env:TAG
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: app
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.4
 
       - name: Tauri CLI
         run: cargo install tauri-cli --version 2.11.4 --locked
@@ -57,22 +60,47 @@ jobs:
             Pop-Location
           }
 
-      - name: The agent
-        run: ./launcher/setup.ps1 -Only opencode
+      # The tests that need neither a graphics card nor the network, before anything is built or signed. Left out: the
+      # end-to-end tests of integration/ and the web interface's (they install the whole monorepo and start the
+      # agent), and the engines' own, which need the models.
+      - name: Tests
+        run: |
+          # tauri-build wants the staging folder to exist; build.ps1 fills it later
+          New-Item -ItemType Directory -Force app/scripts/staging/resources | Out-Null
+          Push-Location app
+          cargo test --workspace --locked
+          if ($LASTEXITCODE) { throw "cargo test failed" }
+          Pop-Location
+          # the release scripts, and the list of Rust crates in LICENSES/ against Cargo.lock
+          node --test "app/scripts/*.test.mjs"
+          if ($LASTEXITCODE) { throw "the release scripts' tests failed" }
+          Push-Location launcher/mango-documents
+          bun test
+          if ($LASTEXITCODE) { throw "the document tools' tests failed" }
+          Pop-Location
 
-      - name: Installer, signed
+      - name: The agent
+        run: ./app/scripts/build-agent.ps1
+
+      - name: Installer
+        run: ./app/scripts/build.ps1 -Phase Build
+
+      - name: Sign the installer
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
           if (-not $env:TAURI_SIGNING_PRIVATE_KEY) { throw "the release environment has no signing key" }
-          ./app/scripts/build.ps1
+          ./app/scripts/build.ps1 -Phase Sign
 
       - name: Signature check
-        run: node app/scripts/verify-signature.mjs
+        run: |
+          $exe = (Get-Item "app/target/release/bundle/nsis/*-setup.exe").FullName
+          node app/scripts/verify-signature.mjs $exe "$exe.sig" app/src-tauri/tauri.conf.json
+          if ($LASTEXITCODE) { throw "the signature does not match the public key" }
 
       - name: latest.json
-        run: node app/scripts/update-manifest.mjs --notes "Mango Code $($env:TAG.Substring(1))"
+        run: node app/scripts/update-manifest.mjs --notes-file "app/release-notes/$env:TAG.md"
 
       - name: Release
         env:
@@ -80,10 +108,25 @@ jobs:
         run: |
           $nsis = "app/target/release/bundle/nsis"
           $exe = Get-Item "$nsis/*-setup.exe"
+          $files = @($exe.FullName, "$($exe.FullName).sig", "$nsis/latest.json")
           $sha = (Get-FileHash $exe -Algorithm SHA256).Hash.ToLower()
           $notes = (Get-Content "app/release-notes/$env:TAG.md" -Raw).TrimEnd() + "`n`nSHA-256 of the installer: ``$sha``"
           Set-Content -Path notes.md -Value $notes -Encoding utf8
-          $arguments = @($env:TAG, "--title", "Mango Code $($env:TAG.Substring(1))", "--notes-file", "notes.md")
-          if ($env:TAG.Contains("-")) { $arguments += "--prerelease" }
-          gh release create @arguments $exe.FullName "$($exe.FullName).sig" "$nsis/latest.json"
+          $arguments = @($env:TAG, "--draft", "--title", "Mango Code $($env:TAG.Substring(1))", "--notes-file", "notes.md")
+          $stable = -not $env:TAG.Contains("-")
+          if (-not $stable) { $arguments += "--prerelease" }
+          gh release create @arguments @files
           if ($LASTEXITCODE) { throw "gh release create failed" }
+
+          # Published only when every file is there with the size it has here (GitHub turns spaces into dots in the names).
+          $view = gh release view $env:TAG --json assets
+          if ($LASTEXITCODE) { throw "gh release view failed" }
+          $uploaded = @((($view | ConvertFrom-Json).assets | Where-Object state -eq "uploaded") | ForEach-Object { "$($_.name) $($_.size)" })
+          foreach ($file in $files) {
+            $expected = "$((Split-Path $file -Leaf).Replace(' ', '.')) $((Get-Item $file).Length)"
+            if ($uploaded -notcontains $expected) { throw "the draft does not have $expected (has: $($uploaded -join '; '))" }
+          }
+          $publish = @($env:TAG, "--draft=false")
+          if ($stable) { $publish += "--latest" }
+          gh release edit @publish
+          if ($LASTEXITCODE) { throw "gh release edit failed" }

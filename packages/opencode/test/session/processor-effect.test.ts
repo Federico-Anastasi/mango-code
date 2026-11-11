@@ -560,6 +560,52 @@ it.live("session.processor effect tests reset reasoning state across retries", (
   ),
 )
 
+it.live("session.processor effect tests discard the unfinished text of an attempt that failed", () =>
+  provideTmpdirServer(
+    ({ dir, llm }) =>
+      Effect.gen(function* () {
+        const { processors, session, provider } = yield* boot()
+
+        yield* llm.push(reply().text("one").reset(), reply().text("two").stop())
+
+        const chat = yield* session.create({})
+        const parent = yield* user(chat.id, "story")
+        const msg = yield* assistant(chat.id, parent.id, path.resolve(dir))
+        const mdl = yield* provider.getModel(ref.providerID, ref.modelID)
+        const handle = yield* processors.create({
+          assistantMessage: msg,
+          sessionID: chat.id,
+          model: mdl,
+        })
+
+        const value = yield* handle.process({
+          user: {
+            id: parent.id,
+            sessionID: chat.id,
+            role: "user",
+            time: parent.time,
+            agent: parent.agent,
+            model: { providerID: ref.providerID, modelID: ref.modelID },
+          } satisfies SessionV1.User,
+          sessionID: chat.id,
+          model: mdl,
+          agent: agent(),
+          system: [],
+          messages: [{ role: "user", content: "story" }],
+          tools: {},
+        })
+
+        const parts = yield* MessageV2.parts(msg.id)
+        const texts = parts.filter((part): part is SessionV1.TextPart => part.type === "text").map((part) => part.text)
+
+        expect(value).toBe("continue")
+        expect(yield* llm.calls).toBe(2)
+        expect(texts).toEqual(["two"])
+      }),
+    { config: (url) => providerCfg(url) },
+  ),
+)
+
 it.live("session.processor effect tests do not retry unknown json errors", () =>
   provideTmpdirServer(
     ({ dir, llm }) =>

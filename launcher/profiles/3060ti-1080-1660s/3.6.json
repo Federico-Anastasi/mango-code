@@ -4,43 +4,17 @@
   "engine": "prism",
   "build": "cuda-12",
   "hardware": {
-    "gpus": [
-      "NVIDIA GeForce RTX 3060 Ti",
-      "NVIDIA GeForce GTX 1080",
-      "NVIDIA GeForce GTX 1660 SUPER"
-    ]
+    "gpus": ["NVIDIA GeForce RTX 3060 Ti", "NVIDIA GeForce GTX 1080", "NVIDIA GeForce GTX 1660 SUPER"]
   },
   "env": {
     "GGML_CUDA_CLOCK_KEEPER": "1",
     "LLAMA_MTP_UBATCH": "32"
   },
-  "args": [
-    "-ngl",
-    "999",
-    "-fa",
-    "1",
-    "-ctk",
-    "q8_0",
-    "-ctv",
-    "q8_0",
-    "--fit",
-    "off",
-    "--spec-type",
-    "draft-mtp",
-    "--spec-draft-n-max",
-    "2",
-    "-ctkd",
-    "f16",
-    "-ctvd",
-    "f16",
-    "--no-mmproj-offload",
-    "--image-min-tokens",
-    "1024"
-  ],
+  "args": ["-ngl", "999", "-fa", "1", "-ctk", "q8_0", "-ctv", "q8_0", "--fit", "off", "--spec-type", "draft-mtp", "--spec-draft-n-max", "2", "-ctkd", "f16", "-ctvd", "f16", "--no-mmproj-offload", "--image-min-tokens", "1024"],
   "ctx": 131072,
   "ts": "16,16,10",
   "measurements": {
     "date": "2026-10-26",
-    "note": "[engine] Only prism has the clock keeper and the line that fixes the draft's ubatch (fork mango-prism, common/speculative.cpp).\n[env] Clock keeper: see bonsai2, +27-39% decode on the 3.6. LLAMA_MTP_UBATCH: the draft's context copied the model's ubatch and reserved a full-model compute buffer (432 MiB at 128k); at 32 it is 294, and that is what makes the draft fit at 128k.\n[spec] MTP draft, lossless. MEASURED 2026-10-26 from the server (dev-playground/bonsai-prove/qwen36-gpu, banco.py: summary and code, temperature 0, 256 tokens), same config without draft -> with draft: idle decode 50 -> 59-60, at 64k 28-29 -> 35/43, at 118k 21 -> 31/29. Drafts accepted 65-83%. n-max 3 wins on code (+8-10%) and loses on prose (-4-12%): 2 is the most balanced. It costs prefill: 716 -> 466 tok/s at 64k (the head rereads the prompt, and -ts 16,16,10 puts one layer on the 1080, which is slow at prefill).\n[kv] Model q8_0, draft f16. With more tokens at a time (prompt prefill, draft verification) flash attention converts the whole KV of a layer to f16, and the compute buffer reserves that copy: 256 MiB per GPU at 128k. For the model (3-4 attention layers per GPU) q8_0 is still better than f16; for the draft (one layer) f16 costs less: 272 MiB against 136+256.\n[fit] --fit is on by default on prism and would move weights to RAM without saying so: here an OOM must stay an OOM.\n[why] MoE: 35B of weights at rest but only 3B active per token. MEASURED 2026-10-26 at 128k: VRAM 7543/7519/5373 MiB, the margin is small (at 128k the three GPUs have ~1 GB of real memory left, not the 3 that CUDA reports as free). Before (mango engine, no draft): 50.6/39.2 idle, 26.4/22.9 at 64k, 16.7/14.4 at 118k. --no-mmproj-offload keeps the vision encoder in RAM. 256k goes OOM.\n[ub] No -ub: with the default 512 pipeline parallelism does not fit and llama.cpp falls back to running without it by itself (it is like this without the draft too). -ub 256 would make it fit and leave the draft without space; measured, the pipeline does not help prefill on these GPUs.\n[ts] In LAYERS (42 = 40 + MTP + output). The automatic split (16/15/11) puts the last layer, the output and the whole draft on the 1660S: OOM. One layer moves to the 1080, which at 128k had 774 MiB free."
+    "note": "[engine] Only prism has the clock keeper and the line that fixes the draft's ubatch (fork mango-prism, common/speculative.cpp).\n[env] Clock keeper: see bonsai2, +27-39% decode on the 3.6. LLAMA_MTP_UBATCH: the draft's context copied the model's ubatch and reserved a full-model compute buffer (432 MiB at 128k); at 32 it is 294, and that is what makes the draft fit at 128k.\n[spec] MTP draft, lossless. MEASURED 2026-10-26 from the server (summary and code, temperature 0, 256 tokens), same config without draft -> with draft: idle decode 50 -> 59-60, at 64k 28-29 -> 35/43, at 118k 21 -> 31/29. Drafts accepted 65-83%. n-max 3 wins on code (+8-10%) and loses on prose (-4-12%): 2 is the most balanced. It costs prefill: 716 -> 466 tok/s at 64k (the head rereads the prompt, and -ts 16,16,10 puts one layer on the 1080, which is slow at prefill).\n[kv] Model q8_0, draft f16. With more tokens at a time (prompt prefill, draft verification) flash attention converts the whole KV of a layer to f16, and the compute buffer reserves that copy: 256 MiB per GPU at 128k. For the model (3-4 attention layers per GPU) q8_0 is still better than f16; for the draft (one layer) f16 costs less: 272 MiB against 136+256.\n[fit] --fit is on by default on prism and would move weights to RAM without saying so: here an OOM must stay an OOM.\n[why] MoE: 35B of weights at rest but only 3B active per token. MEASURED 2026-10-26 at 128k: VRAM 7543/7519/5373 MiB, the margin is small (at 128k the three GPUs have ~1 GB of real memory left, not the 3 that CUDA reports as free). Before (mango engine, no draft): 50.6/39.2 idle, 26.4/22.9 at 64k, 16.7/14.4 at 118k. --no-mmproj-offload keeps the vision encoder in RAM. 256k goes OOM.\n[ub] No -ub: with the default 512 pipeline parallelism does not fit and llama.cpp falls back to running without it by itself (it is like this without the draft too). -ub 256 would make it fit and leave the draft without space; measured, the pipeline does not help prefill on these GPUs.\n[ts] In LAYERS (42 = 40 + MTP + output). The automatic split (16/15/11) puts the last layer, the output and the whole draft on the 1660S: OOM. One layer moves to the 1080, which at 128k had 774 MiB free."
   }
 }

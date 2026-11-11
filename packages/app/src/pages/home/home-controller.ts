@@ -1,8 +1,10 @@
+import { useProjectFolders } from "@/components/dialog-broad-folder"
 import { useGlobal } from "@/context/global"
 import { type HomeProjectSelection, useLayout } from "@/context/layout"
 import { ServerConnection, useServer } from "@/context/server"
 import { useServerSync } from "@/context/server-sync"
 import { useTabs } from "@/context/tabs"
+import { useDefaultProject } from "@/hooks/use-default-project"
 import { toggleHomeProjectSelection } from "@/pages/layout/helpers"
 import { isDirectoryMissingError, reportMissingDirectory } from "@/utils/missing-directory"
 import { createEffect, createMemo } from "solid-js"
@@ -13,6 +15,8 @@ export function createHomeController() {
   const server = useServer()
   const global = useGlobal()
   const tabs = useTabs()
+  const projectFolders = useProjectFolders()
+  const defaultProject = useDefaultProject()
   const selection = layout.home.selection
   const focusedServer = createMemo(
     () => global.servers.list().find((conn) => ServerConnection.key(conn) === selection().server) ?? server.current,
@@ -90,6 +94,8 @@ export function createHomeController() {
       homedir,
       selected: selectedProject,
       newSession: newSessionProject,
+      // inside the app a conversation can start with no project at all: it goes to the default folder
+      canStartSession: createMemo(() => !!newSessionProject() || !!defaultProject),
       forServer: (conn: ServerConnection.Any) => global.ensureServerCtx(conn).projects.list(),
       select: (conn: ServerConnection.Any, directory: string) => {
         const key = ServerConnection.key(conn)
@@ -104,7 +110,8 @@ export function createHomeController() {
         setSelection(toggleHomeProjectSelection(selection(), key, directory))
         void directoryMissing(conn, directory)
       },
-      add: (conn: ServerConnection.Any, directories: string[]) => {
+      add: async (conn: ServerConnection.Any, chosen: string[]) => {
+        const directories = await projectFolders(conn, chosen)
         const directory = directories[0]
         if (!directory) return
         const ctx = global.ensureServerCtx(conn)
@@ -125,11 +132,13 @@ export function createHomeController() {
         ctx.projects.touch(directory)
         setSelection({ server: ServerConnection.key(conn), directory })
       },
-      openNewSession: () => {
+      openNewSession: async () => {
         const conn = focusedServer()
+        if (!conn) return
         const project = newSessionProject()
-        if (!conn || !project) return
-        openProjectNewSession(conn, project.worktree)
+        if (project) return openProjectNewSession(conn, project.worktree)
+        const directory = await defaultProject?.()
+        if (directory) return openProjectNewSession(conn, directory)
       },
       openProjectNewSession,
     },

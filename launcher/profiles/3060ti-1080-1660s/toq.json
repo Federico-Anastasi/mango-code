@@ -4,11 +4,7 @@
   "engine": "toq",
   "build": "cuda-12",
   "hardware": {
-    "gpus": [
-      "NVIDIA GeForce RTX 3060 Ti",
-      "NVIDIA GeForce GTX 1080",
-      "NVIDIA GeForce GTX 1660 SUPER"
-    ]
+    "gpus": ["NVIDIA GeForce RTX 3060 Ti", "NVIDIA GeForce GTX 1080", "NVIDIA GeForce GTX 1660 SUPER"]
   },
   "env": {
     "CUDA_VISIBLE_DEVICES": "0,2,1",
@@ -18,28 +14,13 @@
     "LLAMA_PREFILL_MAIN_MIN": "16",
     "FA_Q8_PREFILL": "1"
   },
-  "args": [
-    "-ngl",
-    "999",
-    "-fa",
-    "1",
-    "-wgt",
-    "1",
-    "-sm",
-    "layer",
-    "-ctk",
-    "q8_0",
-    "-ctv",
-    "q8_0",
-    "--image-min-tokens",
-    "1024"
-  ],
+  "args": ["-ngl", "999", "-fa", "1", "-wgt", "1", "-sm", "layer", "-ctk", "q8_0", "-ctv", "q8_0", "--image-min-tokens", "1024"],
   "ctx": 122880,
   "split": true,
   "ub": 512,
   "mtp": 2,
   "measurements": {
     "date": "2026-10-30",
-    "note": "[engine] Our ik_llama.cpp fork mango-toq (tag toq_build): types TRL2_M/TRL3_M, prefill on the main GPU, MTP. Stock llama.cpp does not read the trellis weights.\n[images] The encoder sits on the 1080 (CUDA2, MTMD_BACKEND_DEVICE), which TOQ otherwise leaves free: at 120k there is no memory for it on the 3060 Ti, and with this engine on the CPU it produces random text. The engine keeps the encoder on that GPU even when it is not reading images.\n[env] 3060 Ti + 1660 S (CUDA_VISIBLE_DEVICES in PCI order, then the 1080 for the encoder). Layer map from projects/bench-trellis/motore/mappa_strati.py 0: full attention on the 3060, DeltaNet on the 1660, prompt prefill on the 3060 (the last entry is the MTP layer). CUDA graph below Ampere too; no clock keeper (measured 29/10: decode 15.6 with the keeper and no graphs, 27.4 without the keeper and with graphs). FA_Q8_PREFILL: prefill attention on q8 cache, measured with the MTP (configuration B' of the bench).\n[split] The engine (trellis fork) reads LLAMA_LAYER_DEVICES: with the GPUs written above removed, the app splits the layers by itself across the GPUs it finds (engine-cfg/split.rs). On this PC the measured map wins: the automatic split with the MTP would choose the 1080 instead of the 1660 S.\n[args] -wgt 1: the reserve graph is sized on 1 token (without it, the 3060's compute buffer asks for 1465 MiB more and the engine goes OOM at 120k); -sm layer: whole layers per GPU, needed by the LLAMA_LAYER_DEVICES map. The distillation LoRA (step 48) is INSIDE the GGUF as tensors: no --lora (with the adapter on top the correction would count twice).\n[ctx] 120k: configuration A of the bench (motore/README.md), measured at 120k on 3060 + 1660.\n[mtp] Two tokens ahead from the model's MTP layer, verified together by the engine: the answer does not change and decode goes up (configuration B' of the bench: 28.6 / 30.3 / 24.2 / 21.1 at 1k / 32k / 64k / 120k). Long-prompt prefill goes down (508 -> 393 at 120k), but with the on-disk memory the app rarely rereads the base: the gain is where the user waits, that is decode. With 0 or the key absent the MTP stays off."
+    "note": "[engine] Our ik_llama.cpp fork mango-toq (tag in mango-engines.json): types TRL2_M/TRL3_M, prefill on the main GPU, MTP. Stock llama.cpp does not read the trellis weights.\n[images] The encoder sits on the 1080 (CUDA2, MTMD_BACKEND_DEVICE), which TOQ otherwise leaves free: at 120k there is no memory for it on the 3060 Ti, and with this engine on the CPU it produces random text. The engine keeps the encoder on that GPU even when it is not reading images.\n[env] 3060 Ti + 1660 S (CUDA_VISIBLE_DEVICES in PCI order, then the 1080 for the encoder). Layer map (configuration A of the bench): full attention on the 3060, DeltaNet on the 1660, prompt prefill on the 3060 (the last entry is the MTP layer). CUDA graph below Ampere too; no clock keeper (measured 29/10: decode 15.6 with the keeper and no graphs, 27.4 without the keeper and with graphs). FA_Q8_PREFILL: prefill attention on q8 cache, measured with the MTP (configuration B' of the bench).\n[split] The engine (trellis fork) reads LLAMA_LAYER_DEVICES: with the GPUs written above removed, the app splits the layers by itself across the GPUs it finds (engine-cfg/split.rs). On this PC the measured map wins: the automatic split with the MTP would choose the 1080 instead of the 1660 S.\n[args] -wgt 1: the reserve graph is sized on 1 token (without it, the 3060's compute buffer asks for 1465 MiB more and the engine goes OOM at 120k); -sm layer: whole layers per GPU, needed by the LLAMA_LAYER_DEVICES map. The distillation LoRA (step 48) is INSIDE the GGUF as tensors: no --lora (with the adapter on top the correction would count twice).\n[ctx] 120k: configuration A of the bench, measured at 120k on 3060 + 1660.\n[mtp] Two tokens ahead from the model's MTP layer, verified together by the engine: the answer does not change and decode goes up (configuration B' of the bench: 28.6 / 30.3 / 24.2 / 21.1 at 1k / 32k / 64k / 120k). Long-prompt prefill goes down (508 -> 393 at 120k), but with the on-disk memory the app rarely rereads the base: the gain is where the user waits, that is decode. With 0 or the key absent the MTP stays off."
   }
 }

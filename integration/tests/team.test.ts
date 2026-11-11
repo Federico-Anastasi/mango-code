@@ -19,6 +19,9 @@ const TEAM = path.join(ROOT, "team");
 const PROJECT = path.join(ROOT, "project");
 const FAKE = path.join(ROOT, "opencode-fake.exe");
 const KEY = "sk-or-v1-test-key";
+/** The manager's environment in the app: its agent and the file that says how to start dev and agents. */
+const MINIMAL_LAUNCH = path.join(ROOT, "launch-minimal.json");
+const MANAGER = { MANGO_TEAM_ROLE: "manager", MANGO_TEAM_AGENT: "team", MANGO_TEAM_LAUNCH: MINIMAL_LAUNCH };
 
 const VARIABLES = ["MANGO_TEAM_ROLE", "MANGO_TEAM_AGENT", "MANGO_TEAM_DIR", "MANGO_TEAM_LAUNCH", "MANGO_AGENT_MAX", "MANGO_AGENT_DIR", "MANGO_AGENT_ID", "MANGO_HOME", "MANGO_OPENROUTER_KEY"];
 let loads = 0;
@@ -51,6 +54,7 @@ async function freePort() {
 
 beforeAll(() => {
   fs.mkdirSync(PROJECT, { recursive: true });
+  fs.writeFileSync(MINIMAL_LAUNCH, JSON.stringify({ exe: FAKE, dev: { port: 1, config: "", xdg: "" }, agents: [] }));
   const r = spawnSync("bun", ["build", "--compile", path.join(import.meta.dir, "fake-opencode.ts"), "--outfile", FAKE], { encoding: "utf8" });
   if (r.status !== 0) throw new Error(`the fake opencode does not compile: ${r.stderr}`);
 });
@@ -69,7 +73,7 @@ afterAll(() => {
 
 describe("the manager is an agent of the app's server", () => {
   test("only the conversations of the team agent belong to the team", async () => {
-    const p = await plugin({ MANGO_TEAM_ROLE: "manager", MANGO_TEAM_AGENT: "team" });
+    const p = await plugin(MANAGER);
     const model = { providerID: "openrouter", modelID: "deepseek/x" };
 
     await p["chat.message"]({ sessionID: "normal", agent: "build", model: { providerID: "mango", modelID: "toq" } });
@@ -88,20 +92,18 @@ describe("the manager is an agent of the app's server", () => {
     expect(other.system).toEqual(["base"]);
   });
 
-  test("without a team agent (the terminal) every conversation is the manager's and the instructions come from instructions", async () => {
-    fs.rmSync(path.join(TEAM, "team-link-manager.json"), { force: true });
-    const p = await plugin({ MANGO_TEAM_ROLE: "manager" });
-    await p["chat.message"]({ sessionID: "only", agent: "build" });
-    expect(link("team-link-manager.json").sessionID).toBe("only");
-    const out = { system: ["base"] };
-    await p["experimental.chat.system.transform"]({ sessionID: "only" }, out);
-    expect(out.system).toEqual(["base"]);
+  test("the manager does not start without its agent and the launch file, and nobody starts without the Team's folder", async () => {
+    await expect(plugin({ MANGO_TEAM_ROLE: "manager" })).rejects.toThrow("MANGO_TEAM_AGENT");
+    await expect(plugin({ MANGO_TEAM_ROLE: "manager", MANGO_TEAM_AGENT: "team" })).rejects.toThrow("MANGO_TEAM_LAUNCH");
+    for (const role of ["manager", "dev", "agent"]) {
+      await expect(plugin({ ...MANAGER, MANGO_TEAM_ROLE: role, MANGO_TEAM_DIR: "" })).rejects.toThrow("MANGO_TEAM_DIR");
+    }
   });
 
   test("the number of agents decides which tools the manager has", async () => {
     const base = ["ask_dev", "read_todos"];
     const agents = ["launch_agent", "ask_agent", "list_agents", "close_agent"];
-    const names = async (env: Record<string, string>) => Object.keys((await plugin({ MANGO_TEAM_ROLE: "manager", ...env })).tool).sort();
+    const names = async (env: Record<string, string>) => Object.keys((await plugin({ ...MANAGER, ...env })).tool).sort();
     expect(await names({ MANGO_AGENT_MAX: "0" })).toEqual([...base].sort());
     expect(await names({ MANGO_AGENT_MAX: "2" })).toEqual([...base, ...agents].sort());
     expect(await names({})).toEqual([...base, ...agents].sort());

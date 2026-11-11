@@ -1,8 +1,10 @@
 import { createEffect, createMemo, createSignal, onCleanup, Show, type Ref } from "solid-js"
+import { createStore } from "solid-js/store"
 import { makeEventListener } from "@solid-primitives/event-listener"
 import { createMutation } from "@tanstack/solid-query"
 import { IconButtonV2 } from "@opencode-ai/ui/v2/icon-button-v2"
 import { Icon as IconV2 } from "@opencode-ai/ui/v2/icon"
+import { MenuV2 } from "@opencode-ai/ui/v2/menu-v2"
 import { useGlobal } from "@/context/global"
 import { useLanguage } from "@/context/language"
 import { ServerConnection, serverName } from "@/context/server"
@@ -32,6 +34,8 @@ export function TabNavItem(props: {
   pressed?: boolean
   hidden?: boolean
 }) {
+  const language = useLanguage()
+  const [menu, setMenu] = createStore({ open: false, rename: false })
   const [editing, setEditing] = createSignal(false)
   let tabRoot!: HTMLDivElement
   let titleEl!: HTMLSpanElement
@@ -43,7 +47,6 @@ export function TabNavItem(props: {
     props.onClose()
   }
   const global = useGlobal()
-  const language = useLanguage()
   const serverCtx = createMemo(() => {
     const conn = global.servers.list().find((item) => ServerConnection.key(item) === props.server)
     if (conn) return global.ensureServerCtx(conn)
@@ -76,7 +79,7 @@ export function TabNavItem(props: {
   })
 
   const [popoverOpen, setPopoverOpen] = createSignal(false)
-  const previewBlocked = () => !!props.dragging || editing() || !!props.pressed || !props.session()
+  const previewBlocked = () => !!props.dragging || editing() || menu.open || !!props.pressed || !props.session()
 
   const selectTitle = () => {
     const range = document.createRange()
@@ -110,9 +113,9 @@ export function TabNavItem(props: {
     titleEl.textContent = value
   })
 
-  const openRename = (event: MouseEvent) => {
-    event.preventDefault()
-    event.stopPropagation()
+  const openRename = (event?: MouseEvent) => {
+    event?.preventDefault()
+    event?.stopPropagation()
     if (!canOpenTabRename(props.dragging, editing(), rename.isPending)) return
     const session = props.session()
     if (!session) return
@@ -143,7 +146,7 @@ export function TabNavItem(props: {
     onCleanup(cleanup)
   })
 
-  const tab = (
+  const tab = () => (
     <div
       ref={(el) => {
         tabRoot = el
@@ -167,7 +170,11 @@ export function TabNavItem(props: {
         closeTab(event)
       }}
     >
-      <a
+      <MenuV2.Context.Trigger
+        as="a"
+        disabled={editing() || props.dragging}
+        aria-haspopup="menu"
+        aria-expanded={menu.open}
         data-slot="tab-link"
         data-titlebar-tab-link
         href={props.href}
@@ -247,7 +254,7 @@ export function TabNavItem(props: {
             event.preventDefault()
           }}
         />
-      </a>
+      </MenuV2.Context.Trigger>
 
       <div data-slot="tab-close">
         <IconButtonV2
@@ -267,20 +274,42 @@ export function TabNavItem(props: {
   )
 
   return (
-    <TabPreviewPopover
-      trigger={tab}
-      open={popoverOpen() && !previewBlocked()}
-      onOpenChange={(value) => {
-        if (value && previewBlocked()) return
-        setPopoverOpen(value)
+    <MenuV2.Context
+      onOpenChange={(open) => {
+        setMenu("open", open)
+        if (open) setPopoverOpen(false)
       }}
-      data={{
-        projectName: projectName(),
-        title: title(),
-        path: previewPath(),
-        serverName: serverLabel(),
-      }}
-    />
+    >
+      <TabPreviewPopover
+        trigger={tab()}
+        open={popoverOpen() && !previewBlocked()}
+        onOpenChange={(value) => {
+          if (value && previewBlocked()) return
+          setPopoverOpen(value)
+        }}
+        data={{
+          projectName: projectName(),
+          title: title(),
+          path: previewPath(),
+          serverName: serverLabel(),
+        }}
+      />
+      <MenuV2.Context.Portal>
+        <MenuV2.Context.Content
+          onCloseAutoFocus={(event) => {
+            if (!menu.rename) return
+            event.preventDefault()
+            setMenu("rename", false)
+            openRename()
+          }}
+        >
+          <MenuV2.Item disabled={!props.session() || rename.isPending} onSelect={() => setMenu("rename", true)}>
+            {language.t("common.rename")}
+          </MenuV2.Item>
+          <MenuV2.Item onSelect={props.onClose}>{language.t("common.closeTab")}</MenuV2.Item>
+        </MenuV2.Context.Content>
+      </MenuV2.Context.Portal>
+    </MenuV2.Context>
   )
 }
 

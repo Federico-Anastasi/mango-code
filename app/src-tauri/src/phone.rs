@@ -18,20 +18,16 @@ pub fn install(app: &AppHandle) {
         .and_then(|data| {
             let reports = std::sync::Arc::new(crate::report::PhoneReports(app.clone()));
             let computer = std::sync::Arc::new(PhoneComputer(app.clone()));
-            Phone::new(&data, &data.join("logs"), listen_on(), crate::phone_port(), crate::phone_preview_port(), crate::agent_port(), reports, computer)
+            Phone::new(&data, &data.join("logs"), only_here(), crate::phone_port(), crate::phone_preview_port(), crate::agent_port(), reports, computer)
         })
         .map_err(|e| format!("{e:#}"));
     app.manage(Service(service));
 }
 
-/// All networks. In development builds `MANGO_PHONE_PC_ONLY` keeps it on 127.0.0.1: the tests drive the
-/// phone page from the PC without Windows asking to open the port.
-fn listen_on() -> std::net::Ipv4Addr {
-    #[cfg(debug_assertions)]
-    if std::env::var_os("MANGO_PHONE_PC_ONLY").is_some() {
-        return std::net::Ipv4Addr::LOCALHOST;
-    }
-    std::net::Ipv4Addr::UNSPECIFIED
+/// In development builds `MANGO_PHONE_PC_ONLY` keeps it on 127.0.0.1: the tests drive the phone page from the PC without
+/// Windows asking to open the port.
+fn only_here() -> bool {
+    cfg!(debug_assertions) && std::env::var_os("MANGO_PHONE_PC_ONLY").is_some()
 }
 
 fn service(app: &AppHandle) -> Result<&Phone, BridgeError> {

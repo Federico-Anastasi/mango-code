@@ -1,7 +1,7 @@
 # Roads tried that do not pay, and why
 
 Class **F**. A road listed here is not forbidden: it cost a measurement, and repeating it needs a new reason (another
-architecture, another engine). Where the reason is the specific hardware, it says so. Sources: abbreviations in [README.md](README.md).
+architecture, another engine). Where the reason is the specific hardware, it says so. Abbreviations and how to read a number: [method.md](method.md).
 
 ## Memory and cache
 

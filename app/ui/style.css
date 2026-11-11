@@ -158,6 +158,8 @@ details {
 }
 summary { cursor: pointer; font-weight: 550; color: var(--text-2); }
 summary:hover { color: var(--text); }
+details.quants { margin: 10px 0; }
+details.quants ul { margin: 8px 0 0; padding-left: 18px; color: var(--text-2); font-size: 13px; }
 
 pre {
   margin: 10px 0 8px;
@@ -173,7 +175,7 @@ pre {
   cursor: text;
 }
 
-.actions { display: flex; gap: 10px; justify-content: center; }
+.actions { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; }
 
 button {
   font: inherit;
@@ -294,6 +296,20 @@ main[data-view="choice"] h1, main[data-view="download"] h1 { font-size: 22px; ma
 .screenshot { display: block; margin: 12px 0 0; text-align: center; color: var(--text-2); font-size: 13px; }
 #other-token { margin: 14px 0 0; }
 #other-token .note { margin: 8px 0 10px; text-align: left; }
+
+/* --- The engine of another PC, and the sharing of this one --- */
+.card { margin-top: 18px; padding: 2px 16px 16px; background: var(--panel); border: 1px solid var(--border); border-radius: 14px; }
+.card .note { margin: 4px 0 12px; text-align: left; }
+.card .meta { margin: 0 0 12px; font-size: 13px; color: var(--text-2); }
+#choice .card .status { margin-top: 8px; text-align: left; }
+#remote-using-text { margin: 4px 0 2px; font-weight: 600; }
+#remote-using .actions { justify-content: flex-start; margin-bottom: 14px; }
+.switch { display: flex; gap: 10px; align-items: center; margin: 4px 0; font-weight: 600; cursor: pointer; }
+.switch input { width: 18px; height: 18px; accent-color: var(--accent); }
+.places { display: flex; flex-wrap: wrap; gap: 8px 28px; margin: 4px 0 8px; }
+.place { display: grid; gap: 6px; justify-items: start; width: 240px; }
+.place .name { font-weight: 600; }
+.place .meta { margin: 0; user-select: text; overflow-wrap: anywhere; }
 
 /* The summary and the buttons stay in view at the bottom of the window even with many models. */
 .controls { position: sticky; bottom: 0; margin-top: 12px; padding: 12px 0 14px; background: var(--background); border-top: 1px solid var(--border); }

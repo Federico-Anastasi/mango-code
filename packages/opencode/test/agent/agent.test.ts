@@ -1,6 +1,6 @@
 import { afterEach, expect } from "bun:test"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
-import { Cause, Effect, Exit, Layer } from "effect"
+import { Cause, Effect, Exit } from "effect"
 import path from "path"
 import { disposeAllInstances, TestInstance } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
@@ -53,7 +53,8 @@ it.instance("returns default native agents when no config", () =>
     expect(names).toContain("general")
     expect(names).toContain("explore")
     expect(names).toContain("compaction")
-    expect(names).toContain("title")
+    // the title comes from the first words of the message (session/title-text.ts): no agent writes it
+    expect(names).not.toContain("title")
     expect(names).toContain("summary")
   }),
 )

@@ -716,6 +716,32 @@ describe("session HttpApi", () => {
     { git: true, config: { formatter: false, lsp: false } },
   )
 
+  // mango-code: in the app a folder too broad to be a project (here, the OneDrive folder) gets no conversation.
+  it.instance(
+    "refuses to create a session in a folder too broad to be a project",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const headers = { "x-opencode-directory": test.directory, "content-type": "application/json" }
+        const before = { git: process.env.MANGO_PROJECTS_GIT, oneDrive: process.env.OneDrive }
+        process.env.MANGO_PROJECTS_GIT = "1"
+        process.env.OneDrive = test.directory
+        try {
+          const refused = yield* request(SessionPaths.create, { method: "POST", headers })
+          expect(refused.status).toBe(400)
+          delete process.env.OneDrive
+          const allowed = yield* request(SessionPaths.create, { method: "POST", headers })
+          expect(allowed.status).toBe(200)
+        } finally {
+          for (const [name, value] of [["MANGO_PROJECTS_GIT", before.git], ["OneDrive", before.oneDrive]] as const) {
+            if (value === undefined) delete process.env[name]
+            else process.env[name] = value
+          }
+        }
+      }),
+    { git: true, config: { formatter: false, lsp: false } },
+  )
+
   it.instance(
     "serves lifecycle mutation routes",
     () =>

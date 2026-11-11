@@ -70,7 +70,7 @@ pub(crate) fn target(shown: &Shown) -> Target {
 /// A request on the preview port, already checked (address, origin, session, method, body).
 pub(crate) fn serve(c: &TcpStream, d: &Inner, head: &Head, rest: Vec<u8>, length: u64) {
     let Some(shown) = d.computer.shown() else {
-        return notice(c, 404, tr!("Nessuna pagina", "No page"), tr!("Il browser del computer non sta mostrando nessuna pagina.", "The browser on the computer is not showing a page."));
+        return notice(c, 404, tr!("Nessuna pagina", "No page"), tr!("Il browser del computer non sta mostrando nessuna pagina. Per vederne una tocca «Apri» sulla scheda del file nella conversazione.", "The browser on the computer is not showing a page. To see one, tap “Open” on the file card in the conversation."));
     };
     match target(&shown) {
         Target::Http { host, port, .. } => {

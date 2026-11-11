@@ -5,6 +5,7 @@
 
 use crate::catalog::{load_models, ModelCfg, ModelsFile};
 use crate::general::{evaluate, Placement};
+use crate::speed::{cpu_speed, Speed};
 use crate::gguf::{ends_too_early, model_memory, parse_header, GgufHeader, GgufMemory};
 use crate::hardware::{choose_build, Hardware};
 use crate::user;
@@ -196,6 +197,9 @@ pub struct Proposal {
     pub bytes: u64,
     /// Where it would run on the PC; `None` if it doesn't fit.
     pub placement: Option<Placement>,
+    /// How fast it would write, if it runs on the processor. The model is taken as dense: all its weights are read for each
+    /// token, so a MoE from outside the catalog is said slower than it is.
+    pub speed: Option<Speed>,
     pub reason: String,
     /// The one to propose: Q4_K_M if it fits, otherwise the largest that fits.
     pub recommended: bool,
@@ -209,6 +213,7 @@ pub struct Proposal {
 pub struct WithImages {
     pub bytes: u64,
     pub placement: Option<Placement>,
+    pub speed: Option<Speed>,
     pub reason: String,
     pub entry: Value,
 }
@@ -267,10 +272,10 @@ fn analyze_repo(paths: &Paths, hw: &Hardware, repo: &Repo, start: &dyn Fn(&HfFil
             Some(e) => {
                 let entry = hf_entry(repo, &name, v, Some(e), &info);
                 let (placement, reason) = verdict(&catalog, hw, &key, &entry)?;
-                Some(WithImages { bytes: v.bytes() + e.size, placement, reason, entry })
+                Some(WithImages { bytes: v.bytes() + e.size, placement, speed: speed_on(placement, v.bytes()), reason, entry })
             }
         };
-        proposals.push(Proposal { name: v.name.clone(), key, bytes: v.bytes(), placement, reason, recommended: false, entry, with_images });
+        proposals.push(Proposal { name: v.name.clone(), key, bytes: v.bytes(), placement, speed: speed_on(placement, v.bytes()), reason, recommended: false, entry, with_images });
     }
     // They are from the smallest: the last one that fits is the largest.
     let recommended = proposals.iter().position(|p| p.placement.is_some() && p.name.eq_ignore_ascii_case("Q4_K_M")).or_else(|| proposals.iter().rposition(|p| p.placement.is_some()));
@@ -331,7 +336,7 @@ pub fn analyze_local(paths: &Paths, hw: &Hardware, path: &Path) -> Result<Analys
         entry["ctx"] = c.into();
     }
     let (placement, reason) = verdict(&load_models(paths)?, hw, &key, &entry)?;
-    let proposal = Proposal { name: name.clone(), key, bytes: size, placement, reason, recommended: true, entry, with_images: None };
+    let proposal = Proposal { name: name.clone(), key, bytes: size, placement, speed: speed_on(placement, size), reason, recommended: true, entry, with_images: None };
     Ok(Analysis { name, source: "local".into(), gated: false, variants: vec![proposal], warnings: check_template(info.template.as_deref()) })
 }
 
@@ -343,6 +348,11 @@ pub fn add(paths: &Paths, key: &str, entry: Value) -> Result<()> {
         bail!("{}", user(&not_valid(), "the files or the memory it asks for are missing"));
     }
     mango_common::catalog::add_user(paths, key, entry)
+}
+
+/// The band of a model of `weights` bytes, if it runs on the processor.
+fn speed_on(placement: Option<Placement>, weights: u64) -> Option<Speed> {
+    (placement == Some(Placement::Cpu)).then(|| cpu_speed(weights))
 }
 
 /// Whether the model `entry` fits `hw`, where, and why.
@@ -568,6 +578,8 @@ mod tests {
         assert_eq!(a.variants.iter().map(|v| v.recommended).collect::<Vec<_>>(), [true, false, false]);
         let q4 = &a.variants[0];
         assert!(q4.reason.contains(&tr!("nella RAM", "in RAM")), "{q4:?}");
+        // on the processor it says how fast it writes (a model from outside the catalog is taken as dense); where it fits nowhere, nothing
+        assert_eq!(a.variants.iter().map(|v| v.speed.is_some()).collect::<Vec<_>>(), [true, false, false], "{:#?}", a.variants);
         assert!(a.variants[2].reason.contains(&tr!("non ci sta", "doesn't fit")), "{}", a.variants[2].reason);
         assert_eq!(a.warnings, [], "the test template holds");
     }

@@ -1,114 +1,181 @@
-//! What the terminal asks of the app's logic: the same engine plan (the PC's profile if it applies, otherwise
-//! official llama.cpp with the arguments computed from the hardware), the same model list, the same downloads. The
-//! terminal starts the process and decides nothing.
+//! `mango-launch -p "request"`: Mango Code from a script, the way `claude -p` is used. It finds the running app or
+//! starts it without a window, then runs the agent against the app's own agent server (`run --attach`) in the
+//! given folder, with the app's models and engine. The answer goes to stdout, what the agent does (the tools it calls)
+//! to stderr. The app's configuration asks for no permission; if a project's own rules do, the agent refuses it, as
+//! there is nobody to answer.
 //!
 //! ```text
-//! mango-launch plan --model <key> [--port 8080] [--hardware <file.json>]
-//! mango-launch models [--hardware <file.json>]
-//! mango-launch install --model <key> [--hardware <file.json>]
+//! mango-launch -p <request> [--model <key>] [--dir <folder>]
 //! ```
 //!
-//! Distribution and data are the app's (`MANGO_DIST`, `MANGO_DATA`). `--hardware` describes a PC that isn't this
-//! one (`engine_cfg::Hardware` as JSON): it's for seeing the plan elsewhere. A JSON object on stdout; errors (and
-//! `install` progress) on stderr, with exit code 1.
+//! Exit code: the agent's (0 when the request was answered); 2 for a wrong command line; 3 when Mango Code cannot be
+//! used (not installed next to this program, not ready, or it does not start). See docs/INTEGRATION.md.
 
 use anyhow::{bail, Context, Result};
-use engine_cfg::Hardware;
-use mango_common::download::{install_model, install_engine};
-use mango_common::{tr, Paths};
-use serde_json::{json, Value};
-use std::io::Write;
+use engine::loan::Process;
+use mango_common::{tr, Paths, CREATE_NO_WINDOW};
+use std::os::windows::process::CommandExt;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
-const DEFAULT_PORT: u16 = 8080;
+const START_WAIT: Duration = Duration::from_secs(300);
+const DETACHED_PROCESS: u32 = 0x0000_0008;
+
+struct Request {
+    text: String,
+    model: Option<String>,
+    dir: PathBuf,
+}
 
 fn main() {
-    if let Err(e) = run() {
-        eprintln!("{e:#}");
-        std::process::exit(1);
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let Some(request) = parse(&args) else {
+        eprintln!("{}", tr!(
+            "uso: mango-launch -p <richiesta> [--model <chiave>] [--dir <cartella>]",
+            "usage: mango-launch -p <request> [--model <key>] [--dir <folder>]"
+        ));
+        std::process::exit(2);
+    };
+    match run(&request) {
+        Ok(code) => std::process::exit(code),
+        Err(e) => {
+            eprintln!("{e:#}");
+            std::process::exit(3);
+        }
     }
 }
 
-fn usage() -> String {
-    tr!(
-        "uso: mango-launch plan --model <chiave> [--port N] | models | install --model <chiave>  (ciascuno con [--hardware <file.json>])",
-        "usage: mango-launch plan --model <key> [--port N] | models | install --model <key>  (each with [--hardware <file.json>])"
-    )
+fn parse(args: &[String]) -> Option<Request> {
+    let value = |names: &[&str]| args.windows(2).find(|w| names.contains(&w[0].as_str())).map(|w| w[1].clone());
+    Some(Request {
+        text: value(&["-p", "--print"])?,
+        model: value(&["--model"]),
+        dir: value(&["--dir"]).map(PathBuf::from).or_else(|| std::env::current_dir().ok())?,
+    })
 }
 
-fn run() -> Result<()> {
-    let args: Vec<String> = std::env::args().skip(1).collect();
-    let command = args.first().with_context(usage)?;
-    let value = |name: &str| args.windows(2).find(|w| w[0] == name).map(|w| w[1].as_str());
+fn run(request: &Request) -> Result<i32> {
     let paths = Paths::discover()?;
-    let hw = match value("--hardware") {
-        Some(f) => serde_json::from_str::<Hardware>(&std::fs::read_to_string(f).with_context(|| format!("--hardware {f}"))?)
-            .with_context(|| tr!("{f} non descrive un hardware", "{f} does not describe hardware"))?,
-        None => engine_cfg::detect()?,
-    };
-    let model = || value("--model").with_context(|| tr!("manca --model", "--model is missing"));
-    let output = match command.as_str() {
-        "plan" => plan(&paths, &hw, model()?, value("--port").map_or(Ok(DEFAULT_PORT), str::parse).context("--port")?)?,
-        "models" => models(&paths, &hw)?,
-        "install" => install(&paths, &hw, model()?)?,
-        _ => bail!(usage()),
-    };
-    println!("{output}");
-    Ok(())
+    let agent = ready(&paths.data)?;
+    let exe = paths.opencode.join("web").join("mango-code.exe");
+    let mut command = Command::new(&exe);
+    command.args(["run", "--attach", &agent, "--dir"]).arg(&request.dir);
+    if let Some(model) = &request.model {
+        command.args(["--model", &format!("mango/{model}")]);
+    }
+    command.arg("--").arg(&request.text);
+    // The agent keeps its state in the app's data, not in the user's home (as the app starts it).
+    for (variable, folder) in [("XDG_DATA_HOME", "data"), ("XDG_CONFIG_HOME", "config"), ("XDG_CACHE_HOME", "cache"), ("XDG_STATE_HOME", "state")] {
+        command.env(variable, paths.data.join("agent").join(folder));
+    }
+    let status = command.status().with_context(|| tr!("non riesco ad avviare {}", "cannot start {}", exe.display()))?;
+    Ok(status.code().unwrap_or(1))
 }
 
-/// What is needed to start the model: the process (executable, arguments, environment, working dir) and the two
-/// calls to the engine that save and restore the conversation.
-fn plan(paths: &Paths, hw: &Hardware, model: &str, port: u16) -> Result<Value> {
-    let p = engine_cfg::plan_for(paths, Some(model), port, hw, &[])?;
-    let call = |c: &Option<mango_common::PostCall>| c.as_ref().map(|c| json!({ "url": c.url, "body": c.body, "timeout_s": c.timeout_s }));
-    Ok(json!({
-        "model": p.key,
-        "label": p.label,
-        "context": p.ctx,
-        "images": p.images,
-        "placement": p.placement(),
-        "gpus": p.gpus_used.len(),
-        "url": p.url,
-        "executable": p.spec.exe,
-        "args": p.spec.args,
-        "env": p.spec.env.iter().cloned().collect::<std::collections::BTreeMap<String, String>>(),
-        "workdir": p.spec.cwd.clone().unwrap_or_else(|| paths.logs()),
-        "wait_s": p.spec.ready_timeout_s,
-        "shutdown": call(&p.spec.shutdown_post),
-        "startup": call(&p.spec.startup_post),
-    }))
+enum State {
+    Ready(String),
+    /// The app is running and says why it cannot serve.
+    Stuck(String),
+    Absent,
 }
 
-/// The local models in catalog order, with where and with which context they run on this hardware (`placement` null:
-/// doesn't fit) and, for those that don't start, what's missing.
-fn models(paths: &Paths, hw: &Hardware) -> Result<Value> {
-    let (entries, default) = engine_cfg::catalog_for(paths, hw)?;
-    Ok(json!({
-        "default": default,
-        "models": entries.iter().map(|v| json!({ "model": v.key, "context": v.ctx, "placement": v.placement, "images": v.images, "missing": v.missing })).collect::<Vec<_>>(),
-    }))
-}
-
-/// Downloads the plan's engine and the model's weights, if they aren't already on disk.
-fn install(paths: &Paths, hw: &Hardware, model: &str) -> Result<Value> {
-    let (engine, build) = engine_cfg::engine_of(paths, model, hw)?;
-    eprintln!("{}", tr!("motore {engine} ({})", "engine {engine} ({})", build.as_str()));
-    let dir = install_engine(paths, &engine, build, &mut progress())?;
-    eprintln!("\n{}", tr!("modello {model}", "model {model}"));
-    install_model(paths, model, &engine, &mut progress())?;
-    eprintln!();
-    Ok(json!({ "engine": dir, "models": paths.models }))
-}
-
-/// A line that updates itself, at every whole percentage point.
-fn progress() -> impl FnMut(u64, u64) {
-    let mut last = u64::MAX;
-    move |done, total| {
-        let percent = (done * 100).checked_div(total).unwrap_or(0);
-        if percent != last {
-            last = percent;
-            eprint!("\r  {}", tr!("{percent}% ({} di {} MiB)", "{percent}% ({} of {} MiB)", done >> 20, total >> 20));
-            let _ = std::io::stderr().flush();
+/// What `service.json` says about the app, if its process is still there and, when ready, its agent answers.
+fn state(data: &Path) -> State {
+    let Ok(text) = std::fs::read_to_string(data.join("service.json")) else { return State::Absent };
+    let Ok(service) = serde_json::from_str::<serde_json::Value>(&text) else { return State::Absent };
+    let alive = service["pid"].as_u64().and_then(|pid| Process::open(pid as u32)).is_some_and(|p| p.alive());
+    if !alive {
+        return State::Absent;
+    }
+    if let Some(reason) = service["reason"].as_str() {
+        return State::Stuck(reason.to_string());
+    }
+    match service["agent"].as_str() {
+        Some(agent) if {
+            let url = format!("{agent}/global/health");
+            mango_common::internet::agent(&url, Duration::from_secs(3)).get(&url).call().is_ok()
+        } =>
+        {
+            State::Ready(agent.to_string())
         }
+        _ => State::Absent,
+    }
+}
+
+/// The app this program belongs to: `mango-code.exe` in its folder (a build: both are in `targetdebug`) or in the one above it (installed:
+/// this program is in `resources`, the app one level up).
+fn app_beside(exe: &Path) -> Option<PathBuf> {
+    exe.ancestors().skip(1).take(2).map(|a| a.join("mango-code.exe")).find(|f| f.is_file())
+}
+
+/// The address of the agent server: of the app that is already running, or of one started here without a window,
+/// which is left running (it is the same app, in the tray) for the next request.
+fn ready(data: &Path) -> Result<String> {
+    let settled = |state: State| match state {
+        State::Ready(agent) => Ok(Some(agent)),
+        State::Stuck(reason) => bail!("{}", tr!("Mango Code è aperto ma non è pronto: {reason}", "Mango Code is open but not ready: {reason}")),
+        State::Absent => Ok(None),
+    };
+    if let Some(agent) = settled(state(data))? {
+        return Ok(agent);
+    }
+    let exe = std::env::current_exe()?;
+    let Some(app) = app_beside(&exe) else {
+        bail!("{}", tr!(
+            "Mango Code non è installato: non trovo mango-code.exe accanto a {}",
+            "Mango Code is not installed: mango-code.exe is not next to {}",
+            exe.display()
+        ));
+    };
+    Command::new(&app)
+        .arg("--service")
+        .creation_flags(DETACHED_PROCESS | CREATE_NO_WINDOW)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .with_context(|| tr!("non riesco ad avviare {}", "cannot start {}", app.display()))?;
+    let started = Instant::now();
+    while started.elapsed() < START_WAIT {
+        std::thread::sleep(Duration::from_millis(500));
+        if let Some(agent) = settled(state(data))? {
+            return Ok(agent);
+        }
+    }
+    bail!("{}", tr!(
+        "Mango Code non è pronto dopo {} s (log in {})",
+        "Mango Code is not ready after {} s (log in {})",
+        START_WAIT.as_secs(),
+        data.join("logs").display()
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_app_is_found_in_the_installed_layout_and_in_a_build() {
+        let dir = tempfile::tempdir().unwrap();
+        let touch = |p: &Path| {
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, "x").unwrap();
+        };
+        // installed: <install>mango-code.exe and <install>esourcesmango-launch.exe
+        let installed = dir.path().join("installed");
+        touch(&installed.join("mango-code.exe"));
+        touch(&installed.join("resources").join("mango-launch.exe"));
+        assert_eq!(app_beside(&installed.join("resources").join("mango-launch.exe")), Some(installed.join("mango-code.exe")));
+        // a build: both in the same folder
+        let build = dir.path().join("target").join("debug");
+        touch(&build.join("mango-code.exe"));
+        touch(&build.join("mango-launch.exe"));
+        assert_eq!(app_beside(&build.join("mango-launch.exe")), Some(build.join("mango-code.exe")));
+        // no app, however far up one looks: nothing (and an app three folders up is too far)
+        let lonely = dir.path().join("lonely");
+        touch(&lonely.join("a").join("b").join("c").join("mango-launch.exe"));
+        touch(&lonely.join("mango-code.exe"));
+        assert_eq!(app_beside(&lonely.join("a").join("b").join("c").join("mango-launch.exe")), None);
     }
 }

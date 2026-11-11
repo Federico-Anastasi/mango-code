@@ -10,8 +10,8 @@ import { uuid } from "@/utils/uuid"
 import { SessionTabsRemovedDetail } from "@/components/titlebar-session-events"
 import { sessionHref } from "@/utils/session-route"
 import { createTabMemory } from "./tab-memory"
-import { nextTabAfterClose, pushClosedTab, removeClosedTabs, takeClosedTab, type ClosedTab } from "./closed-tabs"
-import { createDraftPromptSession, type PromptModel } from "./prompt-state"
+import { leftEmptyDraft, nextTabAfterClose, pushClosedTab, removeClosedTabs, takeClosedTab, type ClosedTab } from "./closed-tabs"
+import { createDraftPromptSession, type PromptModel, type PromptSession } from "./prompt-state"
 import { migrateTabs } from "./tab-migration"
 
 export type SessionTab = {
@@ -357,7 +357,14 @@ export const { use: useTabs, provider: TabsProvider } = createSimpleContext({
       select: navigateTab,
       remember(tab: Tab) {
         const key = tabKey(tab)
-        if (recentKey() !== key) setRecentKey(key)
+        if (recentKey() === key) return
+        // a "New conversation" tab left without a word closes by itself
+        const left = leftEmptyDraft(store, recentKey(), (draft) => {
+          const prompt = memory.get<PromptSession>(tabKey(draft), "prompt")
+          return !!prompt && prompt.ready() && !prompt.dirty() && prompt.context.items().length === 0
+        })
+        setRecentKey(key)
+        if (left !== -1) removeTab(left)
       },
       toggleHome(input: { home: boolean; current?: Tab }) {
         if (input.home) {

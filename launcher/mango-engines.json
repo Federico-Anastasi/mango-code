@@ -1,6 +1,6 @@
 {
   "llamacpp": {
-    "_note": "Official llama.cpp builds for Windows x64. The stable release is v0.9.0 (4/11/2026): it has no files, it points to build b12110, which is the one downloaded here. Hash and size are of these files, computed after downloading them. The CUDA builds are 12.4 and 13.4; 'runtime' is their libraries (cudart, cuBLAS), which are added only if the PC lacks them. Changing version = recomputing every line.",
+    "_note": "Official llama.cpp builds (b12110) for Windows x64. Hash and size are of these files, computed after downloading them. The CUDA builds are 12.4 and 13.4; 'runtime' is their libraries (cudart, cuBLAS), added only if the PC lacks them. Changing version = recomputing every line.",
     "version": "b12110",
     "build": {
       "cpu": {
@@ -36,7 +36,7 @@
     }
   },
   "prism": {
-    "_note": "Our fork mango-prism (PrismML's llama.cpp plus the mango branch; prism_build in mango-models.json), built by the fork's workflow with mango-ci/build.ps1: the release of tag 'prism-b10709-9a9394a' carries the zips 'prism-b10709-9a9394a-win-<build>.zip' (cpu, vulkan, cuda-12) and, in its notes, the size and sha256 of each. The CUDA runtime is llama.cpp's.",
+    "_note": "Our fork mango-prism (PrismML's llama.cpp plus the mango branch), built by the fork's workflow with mango-ci/build.ps1: the release of tag 'prism-<version>' carries the zips 'prism-<version>-win-<build>.zip' (cpu, vulkan, cuda-12), with size and sha256 in its notes. The CUDA runtime is llama.cpp's. app/scripts/build-engines.ps1 prism builds the same tag from source.",
     "version": "b10709-9a9394a",
     "build": {
       "cpu": {
@@ -62,7 +62,7 @@
     }
   },
   "toq": {
-    "_note": "Our fork mango-toq (ik_llama.cpp plus the mango branch; toq_build in mango-models.json), built like prism: the release of tag 'toq-35e7256' carries 'toq-35e7256-win-<build>.zip' with size and sha256 in its notes. The engine has no --list-devices (it exits with an error): 'gpu_check' false, for CUDA the app only checks that it starts.",
+    "_note": "Our fork mango-toq (ik_llama.cpp plus the mango branch), built like prism: the release of tag 'toq-<version>' carries 'toq-<version>-win-<build>.zip' with size and sha256 in its notes. The engine has no --list-devices (it exits with an error): 'gpu_check' false, for CUDA the app only checks that it starts.",
     "version": "35e7256",
     "gpu_check": false,
     "build": {

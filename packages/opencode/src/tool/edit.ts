@@ -721,11 +721,65 @@ export function replace(content: string, oldString: string, newString: string, r
   }
 
   if (notFound) {
+    const hint = missHint(content, oldString, newString)
     throw new Error(
-      "Could not find oldString in the file. It must match exactly, including whitespace, indentation, and line endings.",
+      "Could not find oldString in the file. It must match exactly, including whitespace, indentation, and line endings." +
+        (hint ? `\n\n${hint}` : ""),
     )
   }
   throw new Error("Found multiple matches for oldString. Provide more surrounding context to make the match unique.")
+}
+
+const HINT_LINES = 12
+const HINT_LINE_LENGTH = 200
+
+/**
+ * A short hint for an oldString miss, so the next attempt can succeed without reading the file again: newString is
+ * already there (the edit was probably applied), or the lines closest to oldString, numbered. Lines that match
+ * ignoring all whitespace vote for where oldString starts; at least half must agree. Only the span from the first to
+ * the last matching line is shown, so padding oldString cannot reveal the lines around it.
+ */
+function missHint(content: string, oldString: string, newString: string): string | undefined {
+  const squash = (text: string) => text.replace(/\s+/g, "")
+  const distinct = (key: string) => /[\p{L}\p{N}]/u.test(key)
+  const lines = normalizeLineEndings(content).split("\n")
+  if (squash(newString).length >= 20 && squash(lines.join("")).includes(squash(newString))) {
+    return "newString is already in the file, so this edit may already be applied."
+  }
+
+  const positions = new Map<string, number[]>()
+  lines.forEach((line, index) => {
+    const key = squash(line)
+    if (distinct(key)) positions.set(key, [...(positions.get(key) ?? []), index])
+  })
+  const search = normalizeLineEndings(oldString).split("\n")
+  const votes = new Map<number, number>()
+  let wanted = 0
+  search.forEach((line, offset) => {
+    const key = squash(line)
+    if (!distinct(key)) return
+    wanted++
+    for (const index of positions.get(key) ?? []) votes.set(index - offset, (votes.get(index - offset) ?? 0) + 1)
+  })
+  let start = 0
+  let count = 0
+  for (const [candidate, total] of votes) if (total > count) [start, count] = [candidate, total]
+  if (count === 0 || count * 2 < wanted) return
+
+  const matched = search.flatMap((line, offset) => {
+    const key = squash(line)
+    return key !== "" && lines[start + offset] !== undefined && squash(lines[start + offset]) === key
+      ? [start + offset]
+      : []
+  })
+  const from = matched[0]
+  const to = Math.min(matched[matched.length - 1] + 1, from + HINT_LINES)
+  return [
+    "The closest lines in the file:",
+    ...lines
+      .slice(from, to)
+      .map((line, index) => `${from + index + 1}: ${line.length > HINT_LINE_LENGTH ? line.slice(0, HINT_LINE_LENGTH) + "…" : line}`),
+  ].join("\n")
 }
 
 function isDisproportionateMatch(search: string, oldString: string) {

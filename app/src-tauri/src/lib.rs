@@ -1,7 +1,7 @@
-//! Mango Code, desktop app: one window, no terminal.
+//! Mango Code, desktop app: one window.
 //!
-//! At startup the window shows the loading page (`ui/`); meanwhile a thread starts the engine,
-//! dictation and the agent server, then moves the window to the web UI the server serves.
+//! At startup the window shows the loading page (`ui/`); meanwhile a thread starts the engine and the agent server,
+//! then moves the window to the web UI the server serves. Dictation, if the user wants it, comes after (`dictation.rs`).
 //! The startup state is read with the `startup_status` command and arrives as the
 //! `mango://status` event.
 
@@ -9,6 +9,7 @@ mod other_models;
 mod bridge;
 mod folder;
 mod chrome;
+mod dictation;
 #[cfg(debug_assertions)]
 mod fake;
 mod mcp;
@@ -20,6 +21,8 @@ mod system;
 mod supervisor;
 mod team;
 mod phone;
+mod engine_share;
+mod engine_remote;
 mod tray;
 mod report;
 mod updater;
@@ -38,8 +41,6 @@ use tauri::{AppHandle, Emitter, Manager, RunEvent, WebviewUrl, WebviewWindowBuil
 /// Port of the agent server. Fixed on purpose: the web UI saves projects and preferences
 /// per origin (http://127.0.0.1:<port>), a different port at every start would lose them.
 const AGENT_PORT: u16 = 4096;
-/// Port of the engine manager: the agent and the apps that integrate talk to it.
-const ENGINE_PORT: u16 = 8080;
 const VOICE_PORT: u16 = 4097;
 /// Port of the phone service (off by default, see `phone.rs`). Fixed: it is in the link and the QR.
 const PHONE_PORT: u16 = 47096;
@@ -54,7 +55,7 @@ pub(crate) fn agent_port() -> u16 {
     port_from_env("MANGO_AGENT_PORT", AGENT_PORT)
 }
 fn engine_port() -> u16 {
-    port_from_env("MANGO_ENGINE_PORT", ENGINE_PORT)
+    port_from_env("MANGO_ENGINE_PORT", mango_common::ENGINE_PORT)
 }
 pub(crate) fn phone_port() -> u16 {
     port_from_env("MANGO_PHONE_PORT", PHONE_PORT)
@@ -73,7 +74,7 @@ const MCP_WAIT_MAX: std::time::Duration = std::time::Duration::from_secs(90);
 
 #[derive(Clone, Serialize, Default)]
 pub struct Status {
-    /// "startup" | "choice" | "download" | "engine" | "voice" | "agent" | "preparing" | "ready" | "error"
+    /// "startup" | "choice" | "download" | "engine" | "agent" | "preparing" | "ready" | "error"
     pub stage: String,
     /// Text for the user, one line.
     pub detail: String,
@@ -90,6 +91,17 @@ pub struct ErrorInfo {
     pub message: String,
     /// Logs folder, for the "Open the logs" button.
     pub logs: Option<String>,
+    /// This PC uses the engine of another: the page offers the way back to this PC's engine.
+    pub remote: bool,
+}
+
+/// The engine the agent works with: this PC's (the manager on its port) or another PC's (its address and key).
+pub(crate) struct EngineUse {
+    pub url: String,
+    /// The key of another PC's engine; none for this PC's.
+    pub key: Option<String>,
+    pub models: Vec<agent_cfg::AgentModel>,
+    pub default_model: String,
 }
 
 #[derive(Default)]
@@ -99,12 +111,17 @@ struct AppState {
     /// The engine manager: lives as long as the app, across "Retry" attempts.
     engine: OnceLock<EngineManager>,
     paths: OnceLock<Paths>,
-    voice: Mutex<Option<voice::VoiceServer>>,
+    /// The microphone in the chat, off until the user turns it on.
+    dictation: OnceLock<dictation::Dictation>,
     /// The window created at startup. The reference is kept instead of looking it up by label at
     /// the end of startup: the Preview panel adds a child webview to the same window, and there
     /// the lookup by label is not reliable (the app stayed on "main window gone" while the window
     /// was alive on screen).
     main: OnceLock<tauri::WebviewWindow>,
+    /// Sharing the engine with the user's other PCs, born with the engine manager.
+    share: OnceLock<engine::share::Share>,
+    /// The PC whose engine is in use, when it is another PC's (`engine_remote.rs`).
+    remote: Mutex<Option<engine_remote::Info>>,
     /// The address of the app's own page (loading, model choice), to come back to it from the web UI.
     app_page: OnceLock<tauri::Url>,
     /// Who waits for the answer to the choice page.
@@ -133,7 +150,6 @@ pub(crate) fn set_status(app: &AppHandle, stage: &str, detail: impl Into<String>
 }
 
 pub(crate) fn set_error(app: &AppHandle, title: &str, err: &anyhow::Error) {
-    write_reason(&format!("{title}: {err:#}"));
     let st = app.state::<AppState>();
     let logs = st.paths.get().map(|p| p.logs().display().to_string());
     // The error also goes to the log file: the screen shows it, but on narrow windows the box is
@@ -149,12 +165,19 @@ pub(crate) fn set_error(app: &AppHandle, title: &str, err: &anyhow::Error) {
             let _ = writeln!(file, "{title}: {err:#}");
         }
     }
+    // after the log: whoever sees the reason (other apps, the tests) finds the log already written
+    write_reason(&format!("{title}: {err:#}"));
     publish(
         app,
         Status {
             stage: "error".into(),
             detail: title.into(),
-            error: Some(ErrorInfo { title: title.into(), message: format!("{err:#}"), logs }),
+            error: Some(ErrorInfo {
+                title: title.into(),
+                message: format!("{err:#}"),
+                logs,
+                remote: st.paths.get().is_some_and(|p| engine::remote::file(&p.data).is_file()),
+            }),
             ..Default::default()
         },
     );
@@ -177,13 +200,34 @@ fn retry_startup(app: AppHandle) {
     restart(&app, Mode::Startup { interactive: true });
 }
 
-/// Stops the agent and dictation, removes the service file (the app is no longer ready) and starts again.
-pub(crate) fn restart(app: &AppHandle, mode: Mode) {
+/// The agent first (its running request drops and releases the engine), then the engine, which saves the open
+/// conversation (up to a minute).
+pub(crate) fn stop_children(app: &AppHandle) {
     let st = app.state::<AppState>();
     if let Some(s) = st.sup.get() {
         s.shutdown();
     }
-    st.voice.lock().unwrap().take();
+    if let Some(m) = st.engine.get() {
+        m.stop();
+    }
+    if let Some(d) = st.dictation.get() {
+        d.shutdown();
+    }
+}
+
+/// Stops the agent, removes the service file (the app is no longer ready) and starts again.
+pub(crate) fn restart(app: &AppHandle, mode: Mode) {
+    let st = app.state::<AppState>();
+    // From the web UI of the agent about to stop, back to the loading page: it says what is happening.
+    if st.status.lock().unwrap().stage == "ready" {
+        if let (Some(window), Some(page)) = (st.main.get(), st.app_page.get()) {
+            set_status(app, "startup", tr!("Preparazione", "Preparing"));
+            let _ = window.navigate(page.clone());
+        }
+    }
+    if let Some(s) = st.sup.get() {
+        s.shutdown();
+    }
     st.agent.lock().unwrap().take();
     if let Ok(f) = mango_common::service_file() {
         let _ = std::fs::remove_file(f);
@@ -203,6 +247,11 @@ fn startup(app: &AppHandle, mode: Mode) -> Result<()> {
     set_status(app, "startup", tr!("Preparazione", "Preparing"));
     let paths = Paths::discover().with_context(|| tr!("Impossibile trovare i file di Mango Code", "Cannot find the Mango Code files"))?;
     let paths = st.paths.get_or_init(|| paths).clone();
+    // Dictation, the microphone in the chat: off until the user turns it on (the first start page asks), then it downloads
+    // and starts by itself once the app is ready (`dictation.rs`). The agent only needs to know where the service will be.
+    if st.dictation.get().is_none() {
+        dictation::install(app, &paths, free_port(VOICE_PORT).unwrap_or(VOICE_PORT));
+    }
     let sup = match st.sup.get() {
         Some(s) => s,
         None => {
@@ -212,13 +261,6 @@ fn startup(app: &AppHandle, mode: Mode) -> Result<()> {
         }
     };
 
-    // Engine and models for this computer: if missing, choice and download before starting.
-    {
-        let system = system::choose(&paths)?;
-        choice::ensure(app, &paths, &*system, mode)?;
-        set_status(app, "startup", tr!("Preparazione", "Preparing"));
-    }
-
     // The PC's development tools are detected while the engine loads the model (tens of
     // seconds), so they cost nothing at startup. They are awaited right before the agent config.
     let tools = {
@@ -226,9 +268,111 @@ fn startup(app: &AppHandle, mode: Mode) -> Result<()> {
         std::thread::spawn(move || agent_cfg::tools::update(&data))
     };
 
+    // --- engine: the one of another PC if the user chose it, otherwise this computer's (choice and download first)
+    let used = match engine_remote::start(app, &paths)? {
+        Some(used) => used,
+        None => match local_engine(app, &paths, mode)? {
+            Some(used) => used,
+            // The choice page was answered with the engine of another PC.
+            None => engine_remote::start(app, &paths)?.with_context(|| tr!("Il codice dell'altro PC non c'è più", "The code of the other PC is gone"))?,
+        },
+    };
+    let remote = used.key.is_some();
+
+    // --- agent server
+    set_status(app, "agent", tr!("Avvio dell'agente", "Starting the agent"));
+    // The agent's browser is the Preview panel: its port changes at every start and lives only in
+    // the process environment. If the panel was not created (0) the browser server falls back to
+    // the external browser, as it did before.
+    let browser = agent_cfg::BrowserInputs {
+        preview_port: app.try_state::<preview::Panel>().map(|p| p.cdp_port).unwrap_or(0),
+        choice: chrome::choice_file().with_context(|| tr!("Percorso della scelta del browser", "Browser choice path"))?,
+    };
+    let port = agent_port();
+    if port_busy(port) {
+        anyhow::bail!(
+            "{}",
+            tr!(
+                "La porta {port} è occupata: probabilmente un altro programma la sta usando. \
+                 Chiudilo e riapri l'app.",
+                "Port {port} is busy: another program is probably using it. \
+                 Close it and reopen the app."
+            )
+        );
+    }
+    let mut agent_plan = agent_cfg::plan(
+        &paths,
+        &agent_cfg::AgentInputs {
+            engine_url: used.url.clone(),
+            engine_key: used.key.clone(),
+            models: used.models,
+            default_model: used.default_model,
+            port,
+            voice_url: st.dictation.get().map(|d| d.url.clone()),
+            tools: tools.join().unwrap_or_else(|_| {
+                // It should not happen (every check has its own time limit): the agent starts
+                // with an empty list, which is better than not starting.
+                eprintln!("PC tools: detection failed");
+                Default::default()
+            }),
+            browser,
+            team: agent_cfg::team::team_inputs(&paths, team_key())
+                .with_context(|| tr!("Configurazione del Team", "Team configuration"))?,
+        },
+    )
+    .with_context(|| tr!("Configurazione dell'agente", "Agent configuration"))?;
+    // Bun and the servers the agent starts do not read Windows' proxy: they get it as variables, with the engine left out of it.
+    agent_plan.spec.env.extend(mango_common::internet::child_proxy_env(&used.url));
+    sup.spawn(&agent_plan.spec)?;
+    sup.wait_ready(&agent_plan.spec, |_| {}).with_context(|| tr!("L'agente non è partito", "The agent did not start"))?;
+    connect_tools(app, &agent_plan.url);
+    // The engine of another PC reads the base of the prompt where it is: there is nothing to prepare on this PC.
+    if !remote {
+        prepare_model(app, &agent_plan.url);
+    }
+
+    // --- the window moves to the web UI, and the other apps can find it
+    set_status(app, "ready", tr!("Pronto", "Ready"));
+    if let Some(d) = st.dictation.get() {
+        d.arm();
+    }
+    // Under the folder lock: a folder that arrives now either finds it here, or navigates by itself (`folder::open`).
+    let requested = {
+        let mut waiting = st.folder.lock().unwrap();
+        *st.agent.lock().unwrap() = Some(agent_plan.url.clone());
+        waiting.take()
+    };
+    write_service_file(&agent_plan.url, (!remote).then_some(used.url.as_str()))?;
+    let win = app
+        .state::<AppState>()
+        .main
+        .get()
+        .cloned()
+        .with_context(|| tr!("finestra principale sparita", "main window gone"))?;
+    let page = match requested {
+        Some(folder) => folder::page(&agent_plan.url, &folder)?,
+        None => start_page(&agent_plan.url).parse().with_context(|| tr!("URL dell'agente", "Agent URL"))?,
+    };
+    win.navigate(page)?;
+    Ok(())
+}
+
+/// This computer's engine: the choice and download of what is missing, the manager on its port, and the model the last time (or the
+/// default). `None` if the choice page was answered with the engine of another PC.
+fn local_engine(app: &AppHandle, paths: &Paths, mode: Mode) -> Result<Option<EngineUse>> {
+    let st = app.state::<AppState>();
+    {
+        let system = system::choose(paths)?;
+        if let choice::Outcome::Switched = choice::ensure(app, paths, &*system, mode)? {
+            return Ok(None);
+        }
+        set_status(app, "startup", tr!("Preparazione", "Preparing"));
+    }
+    *st.remote.lock().unwrap() = None;
+
     // --- engine: the manager on the fixed port, which starts the model the conversations ask for
     set_status(app, "engine", tr!("Avvio del motore", "Starting the engine"));
-    let (catalog, default_model) = engine_cfg::catalog(&paths).with_context(|| tr!("Elenco dei modelli", "Model list"))?;
+    let (catalog, default_model) = engine_cfg::catalog(paths).with_context(|| tr!("Elenco dei modelli", "Model list"))?;
     let available: Vec<&engine_cfg::ModelEntry> = catalog.iter().filter(|v| v.missing.is_none()).collect();
     for v in catalog.iter().filter(|v| v.missing.is_some()) {
         eprintln!("model {} not available: {}", v.key, v.missing.as_deref().unwrap_or(""));
@@ -252,10 +396,10 @@ fn startup(app: &AppHandle, mode: Mode) -> Result<()> {
                 anyhow::bail!(
                     "{}",
                     tr!(
-                        "La porta {manager_port} del motore è occupata: probabilmente un modello è acceso da un \
-                         terminale (mango-code). Spegnilo e riapri l'app.",
-                        "Engine port {manager_port} is busy: a model is probably running from a \
-                         terminal (mango-code). Stop it and reopen the app."
+                        "La porta {manager_port} del motore è occupata: probabilmente la sta usando un altro programma, per esempio un motore già \
+                         acceso. Spegnilo e riapri l'app.",
+                        "Engine port {manager_port} is busy: another program is probably using it, for example an engine \
+                         that is already running. Stop it and reopen the app."
                     )
                 );
             }
@@ -268,9 +412,18 @@ fn startup(app: &AppHandle, mode: Mode) -> Result<()> {
             );
             engine::http::serve(m.clone(), manager_port).with_context(|| tr!("Porta del motore", "Engine port"))?;
             let _ = st.engine.set(m.clone());
+            engine_share::install(app, &paths.data, m.clone()).with_context(|| tr!("Condivisione del motore", "Engine sharing"))?;
             m
         }
     };
+    engine_share::offer(
+        app,
+        available
+            .iter()
+            .filter(|v| v.placement.is_some())
+            .map(|v| engine::share::SharedModel { key: v.key.clone(), label: v.label.clone(), context: v.ctx, images: v.images })
+            .collect(),
+    );
     // The model of the last time, if it is still there and fits; otherwise the default, otherwise the first that fits.
     let ready = |k: &str| available.iter().any(|v| v.key == k && v.placement.is_some());
     let initial = engine
@@ -300,124 +453,48 @@ fn startup(app: &AppHandle, mode: Mode) -> Result<()> {
     let engine_plan = engine
         .running_plan()
         .with_context(|| tr!("il motore si è spento subito dopo l'avvio", "the engine stopped right after starting"))?;
-
-    // --- dictation. Its models (about 490 MB) are downloaded here the first time, with the progress on this page;
-    // without network the app starts anyway, without dictation, and tries again at the next start.
-    let voice_url = {
-        let dir = voice::models_dir(&paths);
-        let missing = voice::missing_files(&dir);
-        if !missing.is_empty() {
-            if let Err(e) = download_voice(app, &dir, &missing) {
-                eprintln!("dictation off: {e:#}");
-            }
-        }
-        let model = voice::model_path(&paths);
-        if voice::missing_files(&dir).is_empty() {
-            set_status(app, "voice", tr!("Avvio della dettatura", "Starting dictation"));
-            match voice::start(&model, free_port(VOICE_PORT)?) {
-                Ok(v) => {
-                    let url = v.url.clone();
-                    *st.voice.lock().unwrap() = Some(v);
-                    Some(url)
-                }
-                Err(e) => {
-                    eprintln!("dictation off: {e:#}");
-                    None
-                }
-            }
-        } else {
-            None
-        }
-    };
-
-    // --- agent server
-    set_status(app, "agent", tr!("Avvio dell'agente", "Starting the agent"));
-    // The agent's browser is the Preview panel: its port changes at every start and lives only in
-    // the process environment. If the panel was not created (0) the browser server falls back to
-    // the external browser, as it did before.
-    let browser = agent_cfg::BrowserInputs {
-        preview_port: app.try_state::<preview::Panel>().map(|p| p.cdp_port).unwrap_or(0),
-        choice: chrome::choice_file().with_context(|| tr!("Percorso della scelta del browser", "Browser choice path"))?,
-    };
-    let port = agent_port();
-    if port_busy(port) {
-        anyhow::bail!(
-            "{}",
-            tr!(
-                "La porta {port} è occupata: probabilmente Mango Code è già aperto da un terminale. \
-                 Chiudilo e riapri l'app.",
-                "Port {port} is busy: Mango Code is probably already open in a terminal. \
-                 Close it and reopen the app."
-            )
-        );
-    }
-    let agent_plan = agent_cfg::plan(
-        &paths,
-        &agent_cfg::AgentInputs {
-            engine_url: format!("http://127.0.0.1:{}", engine_port()),
-            // The context of the running model is the one of its plan (the split can reduce it);
-            // for the others the declared one applies. In the web UI selector the name says where the model runs
-            // when it is not on the GPUs: whoever picks it reads that before waiting.
-            models: available
-                .iter()
-                .map(|v| agent_cfg::AgentModel {
-                    key: v.key.clone(),
-                    label: match v.placement {
-                        Some(engine_cfg::Placement::Gpu) => v.label.clone(),
-                        Some(engine_cfg::Placement::Cpu) => tr!("{} · sul processore, più lento", "{} · on the processor, slower", v.label),
-                        None => tr!("{} · non ci sta in questo computer", "{} · does not fit in this computer", v.label),
+    Ok(Some(EngineUse {
+        url: format!("http://127.0.0.1:{}", engine_port()),
+        key: None,
+        // The context of the running model is the one of its plan (the split can reduce it); for the others the declared one
+        // applies. In the web UI selector the name says where the model runs when it is not on the GPUs: whoever picks it
+        // reads that before waiting.
+        models: available
+            .iter()
+            .map(|v| agent_cfg::AgentModel {
+                key: v.key.clone(),
+                label: v.label.clone(),
+                ctx: if v.key == engine_plan.key { engine_plan.ctx } else { v.ctx },
+                images: v.images,
+                info: agent_cfg::ModelInfo {
+                    bytes: Some(v.bytes),
+                    place: match v.placement {
+                        Some(engine_cfg::Placement::Gpu) => "gpu",
+                        Some(engine_cfg::Placement::Cpu) => "cpu",
+                        None => "none",
                     },
-                    ctx: if v.key == engine_plan.key { engine_plan.ctx } else { v.ctx },
-                    images: v.images,
-                })
-                .collect(),
-            default_model: engine_plan.key.clone(),
-            port,
-            voice_url,
-            tools: tools.join().unwrap_or_else(|_| {
-                // It should not happen (every check has its own time limit): the agent starts
-                // with an empty list, which is better than not starting.
-                eprintln!("PC tools: detection failed");
-                Default::default()
-            }),
-            browser,
-            // The key is in the Credential Manager; without it, the Team does not start (the page says so).
-            team: agent_cfg::team::team_inputs(&paths, mango_common::credentials::read(agent_cfg::team::CREDENTIAL)?)
-                .with_context(|| tr!("Configurazione del Team", "Team configuration"))?,
-        },
-    )
-    .with_context(|| tr!("Configurazione dell'agente", "Agent configuration"))?;
-    sup.spawn(&agent_plan.spec)?;
-    sup.wait_ready(&agent_plan.spec, |_| {}).with_context(|| tr!("L'agente non è partito", "The agent did not start"))?;
-    connect_tools(app, &agent_plan.url);
-    prepare_model(app, &agent_plan.url);
+                    speed: v.speed.map(|s| s.as_str().to_string()),
+                    weak: v.on_request,
+                },
+            })
+            .collect(),
+        default_model: engine_plan.key.clone(),
+    }))
+}
 
-    // --- the window moves to the web UI, and the other apps can find it
-    set_status(app, "ready", tr!("Pronto", "Ready"));
-    // Under the folder lock: a folder that arrives now either finds it here, or navigates by itself (`folder::open`).
-    let requested = {
-        let mut waiting = st.folder.lock().unwrap();
-        *st.agent.lock().unwrap() = Some(agent_plan.url.clone());
-        waiting.take()
-    };
-    write_service_file(&agent_plan.url, &format!("http://127.0.0.1:{}", engine_port()))?;
-    let win = app
-        .state::<AppState>()
-        .main
-        .get()
-        .cloned()
-        .with_context(|| tr!("finestra principale sparita", "main window gone"))?;
-    let page = match requested {
-        Some(folder) => folder::page(&agent_plan.url, &folder)?,
-        None => start_page(&agent_plan.url).parse().with_context(|| tr!("URL dell'agente", "Agent URL"))?,
-    };
-    win.navigate(page)?;
-    Ok(())
+/// The Team's key, from the Credential Manager. Without it, or if the Manager does not answer, the Team does not start
+/// (the Team page says so and shows the error), and the rest of the app does.
+fn team_key() -> Option<String> {
+    mango_common::credentials::read(agent_cfg::team::CREDENTIAL).unwrap_or_else(|e| {
+        eprintln!("Team off: the Credential Manager does not answer: {e:#}");
+        None
+    })
 }
 
 /// `service.json`: where the agent and the engine are, and the process that holds them (docs/INTEGRATION.md). It is
-/// written at "ready" and removed on exit: an app that finds it with a live process knows it can talk.
-fn write_service_file(agent: &str, engine: &str) -> Result<()> {
+/// written at "ready" and removed on exit: an app that finds it with a live process knows it can talk. Without an engine
+/// manager on this PC (the engine is another PC's) `engine` is `null`.
+fn write_service_file(agent: &str, engine: Option<&str>) -> Result<()> {
     let f = mango_common::service_file()?;
     let v = serde_json::json!({
         "version": 1,
@@ -426,9 +503,7 @@ fn write_service_file(agent: &str, engine: &str) -> Result<()> {
         "engine": engine,
         "window": !service_mode(),
     });
-    let tmp = f.with_extension("json.tmp");
-    std::fs::write(&tmp, serde_json::to_string_pretty(&v)?)?;
-    std::fs::rename(&tmp, &f).with_context(|| tr!("scrittura di {}", "writing {}", f.display()))
+    mango_common::write_atomic(&f, serde_json::to_string_pretty(&v)?).with_context(|| tr!("scrittura di {}", "writing {}", f.display()))
 }
 
 /// While the app is not ready: why, where the other apps read it (`reason` in `service.json`, see
@@ -443,9 +518,7 @@ pub(crate) fn write_reason(reason: &str) {
         return;
     }
     let v = serde_json::json!({ "version": 1, "pid": std::process::id(), "reason": reason, "window": !service_mode() });
-    let tmp = f.with_extension("json.tmp");
-    let outcome = std::fs::write(&tmp, serde_json::to_string_pretty(&v).unwrap_or_default()).and_then(|_| std::fs::rename(&tmp, &f));
-    if let Err(e) = outcome {
+    if let Err(e) = mango_common::write_atomic(&f, serde_json::to_string_pretty(&v).unwrap_or_default()) {
         eprintln!("service.json not written ({}): {e}", f.display());
     }
 }
@@ -475,40 +548,12 @@ fn connect_tools(app: &AppHandle, agent_url: &str) {
     std::thread::sleep(std::time::Duration::from_secs(4));
 }
 
-/// Downloads the dictation models that are missing, showing the megabytes on the loading page.
-fn download_voice(app: &AppHandle, dir: &std::path::Path, missing: &[&voice::ModelFile]) -> Result<()> {
-    std::fs::create_dir_all(dir).with_context(|| dir.display().to_string())?;
-    let total: u64 = missing.iter().map(|f| f.size).sum();
-    let mut before = 0;
-    for f in missing {
-        let mut shown = u64::MAX;
-        voice::download(f, dir, &mut |done, _| {
-            let mb = (before + done) / 1_000_000;
-            if mb / 10 != shown / 10 {
-                shown = mb;
-                let all = total / 1_000_000;
-                set_status(app, "voice", tr!("Scarico il modello della dettatura ({mb} di {all} MB)", "Downloading the dictation model ({mb} of {all} MB)"));
-            }
-        })
-        .with_context(|| f.name)?;
-        before += f.size;
-    }
-    Ok(())
-}
-
 /// Before "ready": the engine reads the system prompt and the tools of the conversation the user
 /// will open and saves its base (see `preparation.rs`). If the base is already there it costs nothing and
 /// the page does not show it; if the read fails the app starts anyway (the first conversation
 /// will wait for the read, as before) and the reason goes to the log.
 fn prepare_model(app: &AppHandle, agent_url: &str) {
-    let root = match bridge::projects_root(app) {
-        Ok(r) => r,
-        Err(e) => {
-            eprintln!("model preparation: projects folder not found: {e:?}");
-            return;
-        }
-    };
-    let Some(folder) = preparation::folder_to_prepare(mcp::last_session_dir(agent_url), &root) else {
+    let Some(folder) = preparation::folder_to_prepare(mcp::last_session_dir(agent_url)) else {
         eprintln!("model preparation: no working folder yet, nothing to prepare");
         return;
     };
@@ -569,10 +614,8 @@ fn saved_session(url: &str) -> Option<(String, Option<String>)> {
 
 fn session_exists(agent_url: &str, id: &str, query: Option<&str>) -> bool {
     let q = query.map(|d| format!("?{d}")).unwrap_or_default();
-    ureq::get(&format!("{}/session/{id}{q}", agent_url.trim_end_matches('/')))
-        .timeout(std::time::Duration::from_secs(5))
-        .call()
-        .is_ok()
+    let url = format!("{}/session/{id}{q}", agent_url.trim_end_matches('/'));
+    mango_common::internet::agent(&url, std::time::Duration::from_secs(5)).get(&url).call().is_ok()
 }
 
 fn spawn_startup(app: AppHandle, mode: Mode) {
@@ -625,6 +668,8 @@ pub fn run() {
                 // The Windows title bar follows the window theme: dark like the app, instead of
                 // the system white that clashes with the dark interface.
                 .theme(Some(tauri::Theme::Dark))
+                // What shows where the page does not reach (a window being resized, a page changing): the dark of the app, not white.
+                .background_color(tauri::window::Color(21, 23, 31, 255))
                 .inner_size(1360.0, 880.0)
                 .min_inner_size(900.0, 600.0)
                 // Ctrl+ / Ctrl- / Ctrl+0: the browser's own zoom (`zoom.rs` remembers it)
@@ -644,6 +689,7 @@ pub fn run() {
                 ));
             }
             let main = bridge::window(window, app.handle()).build()?;
+            allow_microphone(&main);
             if let Some(zoom) = mango_common::zoom_file().ok().and_then(|f| zoom::read(&f)) {
                 let _ = main.set_zoom(zoom);
             }
@@ -680,21 +726,42 @@ pub fn run() {
                 }
             }
             RunEvent::Exit => {
-                // The agent first (its running request drops and releases the engine), then the engine,
-                // which saves the open conversation.
-                let st = app.state::<AppState>();
                 if let Ok(f) = mango_common::service_file() {
                     let _ = std::fs::remove_file(f);
                 }
-                if let Some(s) = st.sup.get() {
-                    s.shutdown();
-                }
-                if let Some(m) = st.engine.get() {
-                    m.stop();
-                }
+                stop_children(app);
             }
             _ => {}
         });
+}
+
+/// The dictation asks the window for the microphone. Edge's own question ("127.0.0.1:4196 wants to use your microphones")
+/// means nothing to who dictates and, answered "Block", leaves a refusal the message does not explain: the window
+/// says yes for the microphone, and only for that. Windows' own privacy switch still decides.
+fn allow_microphone(window: &tauri::WebviewWindow) {
+    use webview2_com::Microsoft::Web::WebView2::Win32::{
+        COREWEBVIEW2_PERMISSION_KIND, COREWEBVIEW2_PERMISSION_KIND_MICROPHONE, COREWEBVIEW2_PERMISSION_STATE_ALLOW,
+    };
+    let result = window.with_webview(|webview| unsafe {
+        let Ok(core) = webview.controller().CoreWebView2() else { return };
+        let handler = webview2_com::PermissionRequestedEventHandler::create(Box::new(|_, args| {
+            if let Some(args) = args {
+                let mut kind = COREWEBVIEW2_PERMISSION_KIND::default();
+                args.PermissionKind(&mut kind)?;
+                if kind == COREWEBVIEW2_PERMISSION_KIND_MICROPHONE {
+                    args.SetState(COREWEBVIEW2_PERMISSION_STATE_ALLOW)?;
+                }
+            }
+            Ok(())
+        }));
+        let mut token = 0;
+        if let Err(e) = core.add_PermissionRequested(&handler, &mut token) {
+            eprintln!("Microphone permission handler not installed: {e}");
+        }
+    });
+    if let Err(e) = result {
+        eprintln!("Microphone permission handler not installed: {e}");
+    }
 }
 
 #[cfg(test)]

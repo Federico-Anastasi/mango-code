@@ -18,9 +18,8 @@ $candidates = @($env:MANGO_DIST, (Join-Path $app "resources"), $app)
 if ($Repo) { $candidates += (Join-Path $Repo "launcher") }
 foreach ($c in $candidates) { if ($c -and (Test-Path (Join-Path $c "mango-models.json"))) { $dist = $c; break } }
 
-$enginesDir = $null; $modelsDir = Join-Path $dataDir "models"
+$enginesDir = Join-Path $dataDir "engine"; $modelsDir = Join-Path $dataDir "models"
 if ($dist) {
-    $enginesDir = Join-Path $dist "engine"
     $pathsFile = Join-Path $dist "mango-paths.json"
     if (Test-Path $pathsFile) {
         $paths = Get-Content $pathsFile -Raw | ConvertFrom-Json

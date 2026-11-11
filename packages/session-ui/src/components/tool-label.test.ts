@@ -68,6 +68,19 @@ describe("toolLabel", () => {
     })
   })
 
+  test("the document tools say what they do to the document", () => {
+    const input = { file: "C:\\Projects\\report.docx" }
+    expect(toolLabel({ tool: "documents_read", input, active: true }, tIt)).toEqual({
+      title: "Leggo il documento",
+      subtitle: "report.docx",
+    })
+    expect(toolLabel({ tool: "documents_edit", input, active: false }, tIt)).toEqual({
+      title: "Ho modificato il documento",
+      subtitle: "report.docx",
+    })
+    expect(toolLabel({ tool: "documents_convert", input, active: false }, tEn).title).toBe("Created a document")
+  })
+
   test("the closed card says what the command does: the description, or the shortened command", () => {
     expect(toolLabel({ tool: "bash", input: { command: "rm -rf x" }, active: false }, tIt)).toEqual({
       title: "Ho eseguito un comando",
@@ -182,6 +195,11 @@ describe("toolErrorMessage", () => {
       "Non ho trovato il punto da modificare",
     )
     expect(toolErrorMessage("bash", "The user rejected permission to use this", tEn)).toBe("This wasn't allowed")
+    const offline = "ERROR: all engines failed: ddg: FAILED (fetch failed) · brave: FAILED (fetch failed)"
+    expect(toolErrorMessage("web-search_search", offline, tIt)).toBe("Nessuna connessione a internet")
+    expect(toolErrorMessage("web-search_read_url", "ERROR: getaddrinfo ENOTFOUND example.com", tEn)).toBe(
+      "No internet connection",
+    )
   })
 
   test("unknown error: generic message, never the technical text", () => {

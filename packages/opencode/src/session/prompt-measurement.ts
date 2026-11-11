@@ -5,7 +5,8 @@
 // instructions, skills and servers change from folder to folder.
 
 import path from "node:path"
-import { engineOriginUrl } from "@/provider/engine-timings"
+import { engineIsRemote, engineOriginUrl } from "@/provider/engine-timings"
+import { tr } from "@/util/mango-language"
 
 /** An item with the text it adds to the prompt; without text (a server that is not connected) it cannot be measured. */
 export type Item = { kind: string; name: string; text?: string }
@@ -28,6 +29,8 @@ export function tokens(directory: string, model: string, kind: string, name: str
 }
 
 async function count(text: string): Promise<number> {
+  // The network door of another PC's engine does not count tokens: the item stays "not measured", without a refused request each.
+  if (engineIsRemote()) throw new Error(tr("il motore di un altro PC non conta i token", "the engine of another PC does not count tokens"))
   const origin = engineOriginUrl()
   if (!origin) throw new Error("the engine address is not known: no request to the local model yet")
   const response = await fetch(`${origin}/tokenize`, {

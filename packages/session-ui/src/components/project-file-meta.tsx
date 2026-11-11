@@ -3,6 +3,14 @@ import { useI18n } from "@opencode-ai/ui/context/i18n"
 import { useData } from "../context"
 import { formatFileSize, projectFileKind, projectFileKindKey, projectFileProblem } from "./project-file"
 
+const PROBLEM_TEXT = {
+  missing: "ui.file.missing",
+  blocked: "ui.file.blocked",
+  large: "ui.file.tooLarge",
+  unreadable: "ui.file.unreadable",
+  failed: "ui.file.openFailed",
+} as const
+
 type Info = { size: number } | { problem: ReturnType<typeof projectFileProblem> }
 
 /**
@@ -80,7 +88,7 @@ export function ProjectFileMeta(props: { path: string; details?: boolean }) {
           <Show when={problem()}>
             {(why) => (
               <span data-slot="project-file-problem">
-                {i18n.t(why() === "blocked" ? "ui.file.blocked" : "ui.file.openFailed")}
+                {i18n.t(PROBLEM_TEXT[why()])}
               </span>
             )}
           </Show>

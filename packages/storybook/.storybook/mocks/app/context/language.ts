@@ -94,8 +94,6 @@ const dict: Record<string, string> = {
   "command.model.variant.cycle": "Cycle model variant",
   "command.prompt.mode.shell": "Switch to shell mode",
   "command.prompt.mode.normal": "Switch to prompt mode",
-  "command.permissions.autoaccept.enable": "Enable auto-accept",
-  "command.permissions.autoaccept.disable": "Disable auto-accept",
   "prompt.example.1": "Refactor this function and keep behavior the same",
   "prompt.example.2": "Find the root cause of this error",
   "prompt.example.3": "Write tests for this module",

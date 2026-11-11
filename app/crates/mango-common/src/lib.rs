@@ -6,6 +6,8 @@ pub mod catalog;
 pub mod credentials;
 pub mod download;
 pub mod i18n;
+pub mod internet;
+pub mod network;
 
 pub use engine_build::Build;
 
@@ -16,6 +18,11 @@ use std::path::{Path, PathBuf};
 /// An error for a non-technical user, with the detail after it.
 pub fn user_error(msg: &str, detail: impl std::fmt::Display) -> anyhow::Error {
     anyhow::anyhow!("{msg} {}", tr!("(dettaglio tecnico: {detail})", "(technical detail: {detail})"))
+}
+
+/// The error for a connection that does not work, the same text wherever the app reaches the internet.
+pub fn network_error(detail: impl std::fmt::Display) -> anyhow::Error {
+    user_error(&tr!("Non riesco a collegarmi a internet. Controlla la connessione e riprova.", "Can't reach the internet. Check your connection and try again."), detail)
 }
 
 /// A process to start, described but not yet launched.
@@ -51,11 +58,7 @@ pub struct PostCall {
 impl PostCall {
     /// Sends the POST and returns the JSON reply; an error status from the process is an error, with its message.
     pub fn send(&self) -> Result<serde_json::Value> {
-        let agent: ureq::Agent = ureq::Agent::config_builder()
-            .timeout_global(Some(std::time::Duration::from_secs(self.timeout_s)))
-            .http_status_as_error(false)
-            .build()
-            .into();
+        let agent = internet::agent_with_replies(&self.url, std::time::Duration::from_secs(self.timeout_s));
         let mut r = if self.body.is_empty() {
             agent.post(&self.url).send_empty()
         } else {
@@ -188,17 +191,127 @@ fn find_dist() -> Result<PathBuf> {
     )
 }
 
+/// A path as the engine's command line can carry it. The engines (the forks above all) read it in the ANSI code page
+/// and do not open a file whose path has other letters, such as a user called José: its short name (8.3) is plain
+/// ASCII and opens the same file. An ASCII path, or one on a volume without short names, stays as it is.
+pub fn engine_path(p: &Path) -> String {
+    use std::os::windows::ffi::OsStrExt;
+    let long = p.display().to_string();
+    if long.is_ascii() {
+        return long;
+    }
+    let wide: Vec<u16> = p.as_os_str().encode_wide().chain([0]).collect();
+    let mut short = vec![0u16; 1024];
+    // SAFETY: `wide` ends with 0 and `short` is as long as the length passed.
+    let n = unsafe { windows_sys::Win32::Storage::FileSystem::GetShortPathNameW(wide.as_ptr(), short.as_mut_ptr(), short.len() as u32) } as usize;
+    match String::from_utf16(&short[..n.min(short.len())]) {
+        Ok(s) if n > 0 && n < short.len() && s.is_ascii() => s,
+        _ => long,
+    }
+}
+
+/// Writes a file whole or not at all: to `<file>.tmp` first, then renamed over the old one. A write cut short (power,
+/// disk full) leaves the old file, not a broken one that the next start refuses.
+pub fn write_atomic(file: &Path, contents: impl AsRef<[u8]>) -> std::io::Result<()> {
+    let mut tmp = file.as_os_str().to_owned();
+    tmp.push(".tmp");
+    let tmp = PathBuf::from(tmp);
+    std::fs::write(&tmp, contents)?;
+    std::fs::rename(&tmp, file)
+}
+
+/// True if the `Host` header names this computer by the loopback address: `127.0.0.1` or `localhost`, with or without a
+/// port. The services on the local ports answer only these: a web page that reaches them through a name of its own
+/// pointing to 127.0.0.1 (DNS rebinding) sends another `Host`.
+pub fn loopback_host(host: &str) -> bool {
+    let name = host.rsplit_once(':').map_or(host, |(name, port)| if port.bytes().all(|b| b.is_ascii_digit()) { name } else { host });
+    name == "127.0.0.1" || name.eq_ignore_ascii_case("localhost")
+}
+
+/// The engine manager's port: the agent and the apps that integrate talk to it.
+pub const ENGINE_PORT: u16 = 8080;
+/// `CreateProcess` flag: the program starts without a console window.
+pub const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+/// A free TCP port on 127.0.0.1 chosen by the system.
+pub fn random_port() -> std::io::Result<u16> {
+    Ok(std::net::TcpListener::bind(("127.0.0.1", 0))?.local_addr()?.port())
+}
+
 /// A free TCP port on 127.0.0.1, preferring `preferred`.
 pub fn free_port(preferred: u16) -> Result<u16> {
-    use std::net::TcpListener;
-    if TcpListener::bind(("127.0.0.1", preferred)).is_ok() {
+    if std::net::TcpListener::bind(("127.0.0.1", preferred)).is_ok() {
         return Ok(preferred);
     }
-    let l = TcpListener::bind(("127.0.0.1", 0))?;
-    Ok(l.local_addr()?.port())
+    Ok(random_port()?)
+}
+
+/// Last `n` non-empty lines of a log, for the error messages.
+pub fn tail(path: &Path, n: usize) -> String {
+    let txt = std::fs::read(path).map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default();
+    let lines: Vec<&str> = txt.lines().filter(|l| !l.trim().is_empty()).collect();
+    lines[lines.len().saturating_sub(n)..].join("\n")
 }
 
 /// `true` if someone is already listening on 127.0.0.1:`port`.
 pub fn port_busy(port: u16) -> bool {
     std::net::TcpListener::bind(("127.0.0.1", port)).is_err()
+}
+
+/// Constant-time comparison (at equal length: the lengths of keys and hashes are fixed and known).
+pub fn equal_ct(a: &[u8], b: &[u8]) -> bool {
+    a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+}
+
+/// `n` random bytes from the system, in hex.
+pub fn random_hex(n: usize) -> String {
+    let mut b = vec![0u8; n];
+    getrandom::getrandom(&mut b).expect("system random generator");
+    hex(&b)
+}
+
+pub fn hex(b: &[u8]) -> String {
+    b.iter().map(|x| format!("{x:02x}")).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_the_loopback_names_are_this_computer() {
+        for yes in ["127.0.0.1", "127.0.0.1:8080", "localhost", "LocalHost:4097"] {
+            assert!(loopback_host(yes), "{yes}");
+        }
+        for no in ["", "evil.example", "evil.example:8080", "127.0.0.1.evil.example", "localhost.evil.example:80", "127.0.0.2", "192.168.1.5:8080", "[::1]:8080", "localhost:x"] {
+            assert!(!loopback_host(no), "{no}");
+        }
+    }
+
+    #[test]
+    fn write_atomic_replaces_the_file_whole_and_leaves_no_temporary() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = dir.path().join("a.json");
+        write_atomic(&f, "one").unwrap();
+        write_atomic(&f, "two").unwrap();
+        assert_eq!(std::fs::read_to_string(&f).unwrap(), "two");
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+        // a temporary that cannot be written leaves the old file as it was
+        std::fs::create_dir(dir.path().join("b.json.tmp")).unwrap();
+        std::fs::write(dir.path().join("b.json"), "old").unwrap();
+        assert!(write_atomic(&dir.path().join("b.json"), "new").is_err());
+        assert_eq!(std::fs::read_to_string(dir.path().join("b.json")).unwrap(), "old");
+    }
+
+    #[test]
+    fn a_path_with_accents_goes_to_the_engine_by_its_short_ascii_name() {
+        let dir = tempfile::Builder::new().prefix("José Łukasz ").tempdir().unwrap();
+        let file = dir.path().join("modello è.gguf");
+        std::fs::write(&file, b"x").unwrap();
+        let given = engine_path(&file);
+        assert!(given.is_ascii(), "{given}");
+        assert_eq!(std::fs::canonicalize(&given).unwrap(), std::fs::canonicalize(&file).unwrap());
+        // what is already ASCII does not change
+        assert_eq!(engine_path(Path::new(r"C:\models\a.gguf")), r"C:\models\a.gguf");
+    }
 }

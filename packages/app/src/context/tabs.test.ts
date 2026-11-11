@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test"
 import { createRoot, getOwner, onCleanup } from "solid-js"
 import { createTabMemory } from "./tab-memory"
-import { nextTabAfterClose, pushClosedTab, removeClosedTabs, takeClosedTab, type ClosedTab } from "./closed-tabs"
-import type { SessionTab, Tab } from "./tabs"
+import { leftEmptyDraft, nextTabAfterClose, pushClosedTab, removeClosedTabs, takeClosedTab, type ClosedTab } from "./closed-tabs"
+import { tabKey, type DraftTab, type SessionTab, type Tab } from "./tabs"
 import { migrateTabs } from "./tab-migration"
 import type { ServerConnection } from "./server"
 
@@ -49,6 +49,27 @@ describe("tab memory", () => {
       expect(memory.ensure("tab", "prompt", () => ({ value: "new" }))).not.toBe(first)
       dispose()
     })
+  })
+})
+
+describe("a new conversation left empty", () => {
+  const draft = (draftID: string): DraftTab => ({ type: "draft", draftID, server, directory: "C:/progetti/sito" })
+
+  test("is closed when the user goes to another tab", () => {
+    const tabs: Tab[] = [sessionTab("a"), draft("one"), sessionTab("b")]
+    expect(leftEmptyDraft(tabs, "draft:one", () => true)).toBe(1)
+  })
+
+  test("stays if something was written in it, or if nobody knows what it holds", () => {
+    const tabs: Tab[] = [draft("one")]
+    expect(leftEmptyDraft(tabs, "draft:one", () => false)).toBe(-1)
+  })
+
+  test("a conversation that has a title is never closed by itself, nor a tab that is gone", () => {
+    const tabs: Tab[] = [sessionTab("a"), draft("one")]
+    expect(leftEmptyDraft(tabs, tabKey(sessionTab("a")), () => true)).toBe(-1)
+    expect(leftEmptyDraft(tabs, undefined, () => true)).toBe(-1)
+    expect(leftEmptyDraft(tabs, "draft:missing", () => true)).toBe(-1)
   })
 })
 

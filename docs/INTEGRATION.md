@@ -1,9 +1,33 @@
-# Attaching: using Mango Code from another app
+# Using Mango Code from another program
 
-Another app uses Mango Code the way it would use Claude Code: it opens sessions on its own
+Another program uses Mango Code the way it would use Claude Code, in two ways: **one request from a script**
+(`mango-launch -p`, next section), or **a session of its own** over HTTP: it opens sessions on its own
 folder, receives the text as it arrives, sees the tools being called, answers permissions and questions, passes its own
 MCP servers and instructions, and picks the model. The TypeScript client is `integration/client/mango-code.ts` (no
 dependencies, Bun or Node 18+); the automated test `integration/tests/integration.test.ts` shows every piece at work.
+
+## One request from a script: `mango-launch -p`
+
+```
+mango-launch -p "Which files are here?" [--model <key>] [--dir <folder>]
+```
+
+`mango-launch.exe` comes with the app, in its `resources` folder (`%LOCALAPPDATA%\Mango Code\resources`). It needs nothing
+else: it uses the models and the engine of the app, in the way `claude -p` uses Claude.
+
+- It uses the Mango Code that is open or, if none is, starts it without a window (the tray icon shows it; the first
+  start loads the model, tens of seconds) and leaves it open for the next request.
+- The agent works in `--dir` (default: the folder the command runs from). Its answer goes to stdout; the tools it calls and
+  the rest of what it does, to stderr. The conversation is saved among the folder's sessions, and the app lists it.
+- `--model` is a key of `launcher/mango-models.json`; without it, the app's default.
+- Nobody is there to answer: the app's configuration asks for no permission, and one that a project's own rules ask for is
+  refused. Use the HTTP session below when the program has to decide.
+- Exit code: `0` answered; `1` the agent could not answer (the reason is on stderr); `2` wrong command line; `3` Mango Code
+  cannot be used (not installed next to the program, open but waiting for a choice in its window, or it does not start),
+  with the sentence on stderr.
+
+The request goes through the same agent server as the HTTP interface below, so a session opened this way can also be read
+with it.
 
 Names on the wire are English. The engine manager (section 6) uses `snake_case` JSON fields; the agent routes use
 single-word fields, and the opencode ones they extend (`sessionID`, `providerID`, `time.completed`) keep their own style.
@@ -18,6 +42,9 @@ When it is ready, Mango Code writes `%LOCALAPPDATA%\MangoCode\service.json`, and
 { "version": 1, "pid": 12345, "agent": "http://127.0.0.1:4096", "engine": "http://127.0.0.1:8080", "window": true }
 ```
 
+`engine` is `null` when this Mango Code uses the engine of another PC (see "The engine of another PC" below): there is no engine
+manager on this PC, so there is nothing to release, resume or load; the agent works as always.
+
 - It is running if the file exists, the `pid` process is alive and `GET <agent>/global/health` answers 200 (`find()`).
 - If the app is running but cannot be ready, the file is there all the same, with `reason` (a readable sentence) instead
   of `agent` and `engine`: startup failed, or at first run the engine or models are missing and the choice of what to
@@ -31,7 +58,8 @@ When it is ready, Mango Code writes `%LOCALAPPDATA%\MangoCode\service.json`, and
 
 Both servers listen on 127.0.0.1 only. There is no key: whoever can read `service.json` is already the PC's user. Web
 pages cannot use either one: a request with an `Origin` is refused (403) unless it comes from the web UI of the same
-server or from the app. A client on the PC sends no `Origin`. The web UI on the phone goes through a separate port, off by
+server or from the app. The agent also refuses (403), whatever the `Origin`, a `Host` that is not `127.0.0.1`, `localhost`
+or `[::1]`: a page whose name was made to resolve to 127.0.0.1 does not get in. A client on the PC sends no `Origin`. The web UI on the phone goes through a separate port, off by
 default, with its own key, and does not reach the engine (`app/README.md`, "From your phone": entry `GET /phone?key=…`, cookie
 `mango_phone`).
 
@@ -43,6 +71,29 @@ Environment variables an app can set when it starts Mango Code (tests, a second 
 | `MANGO_AGENT_PORT` | port of the agent server (default 4096) |
 | `MANGO_ENGINE_PORT` | port of the engine manager (default 8080) |
 | `MANGO_PHONE_PORT` | port of the phone service (default 47096) |
+| `MANGO_SHARE_PORT` | port of the shared engine (default 47098) |
+
+### The engine of another PC
+
+A PC can share its engine with the user's other PCs ("Share the engine with my PCs"). Off by default, on a port of its own
+(47098) opened only on the home network's address and on Tailscale's, never on all the networks. The user copies a **code**,
+`mango://<ip>:<port>/<key>` (the key is 48 hex characters); the client splits it into address and key and sends the key on
+every request: `Authorization: Bearer <key>`, `Host` the numeric address, no `Origin`. To use that engine, an agent's
+provider has `baseURL` `http://<ip>:<port>/v1` and the key as its `apiKey`. Mango Code itself does this from "Use the engine of
+another PC of mine" (`app/README.md`): it keeps the code in `<data>\remote-engine.json`, starts the agent with the key in the
+environment variable `MANGO_ENGINE_KEY` (the config reads it as `{env:MANGO_ENGINE_KEY}`) and the agent sends it to the engine on
+`/v1`, `/engine` and `/slots`.
+
+| request | answer |
+|---|---|
+| `GET /mango/models` | `200` `{"models": [{"key", "label", "context", "images"}], "running": "<key>"|null}`: the models that are on that PC and fit, and the one that is running. **This is also how the key is checked**: `200` the code is right, `401` the key is wrong (a new one was made, or it is off), `403` the address was not numeric or an `Origin` was sent; a connection that is refused or times out means the PC is off, Mango Code is not open there or sharing is off |
+| `POST /v1/chat/completions` (and the other `/v1/*`) | as on the PC's own engine: `"model"` is one of the keys above, the reply streams. A model that is not on that PC: `422` with the sentence; another app holds the cards: `503` |
+| `GET /health`, `/props`, `/metrics`, `/slots`, `/engine` | the reads of the engine and of the manager (`/engine`: phase, loans) |
+| anything else (`/engine/release`, `/engine/resume`, `/engine/model`, `POST /slots`, `POST /props`, a path with `..` or `%`) | `403`: the cards and the engine's writes stay for the apps on that PC |
+
+The key is checked before the body is read, is not passed on to `llama-server`, and a client that does not finish its
+head in 10 s or that is the 33rd open connection is closed. If two PCs ask for different models, the engine reloads at each
+change.
 
 ## 2. Sessions
 
@@ -92,13 +143,13 @@ folder; each event has `type` and `properties.sessionID`. Open it **before** sen
 | `session.status` | `status.type`: `busy` while working (repeated at every step), `idle` when it stops |
 | `session.compacted` | Mango Code summarized the session: the context used dropped (see "Context used") |
 | `session.error` | an error of the turn (`error`); it can arrive more than once |
-| `session.idle` | the session is back to idle: the turn is over. It fires at **every** pass to idle, and that pass happens from several places (end of the turn, error, `abort`, even on a session that was already idle): so it can arrive more than once for the same turn. Close the turn at the first and ignore the others until you send another message |
+| `session.idle` | the session is back to idle: the turn is over. It fires at **every** pass to idle, and that pass happens from several places (end of the turn, error, `abort`, even on a session that was already idle): so it can arrive more than once for the same turn. Close the turn at the first and ignore the others until you send another message. The client's `turn()` also ignores one that arrives before the session is `busy` or its user message has arrived |
 
 Other events (`session.updated`, `session.diff`, `plugin.added`, `catalog.updated`, …) describe the agent's internal state
 and are ignored. The events of a folder do not always carry `sessionID`: whoever listens for a single session discards
 those of another.
 
-The client's `turn()` translates them into steps: `text`, `reasoning`, `tool`, `permission`, `question`, `error`, `end`.
+The client's `turn()` translates them into steps: `text`, `reasoning`, `tool`, `permission`, `question`, `error`, `end`. It sends the message once the stream has said `server.connected`; if the stream cannot be opened in 10 s, is refused or drops, the steps end with an `error` and then `end`.
 
 ### Context used
 
@@ -139,7 +190,9 @@ The app's sessions work on their own. An app that wants to approve actions says 
 Like Claude Code, Mango Code reads the context of the open folder (and of the folders above it, up to the root of the git
 repository if there is one): `CLAUDE.md`, `CLAUDE.local.md`, `AGENTS.md`, `.claude/rules/*.md`, the skills in
 `.claude/skills/<name>/SKILL.md`, the MCP servers in `.mcp.json` (`mcpServers`, over stdio or http), which start in the
-file's folder. It reads nothing of what is on the PC (`~/.claude`, global skills).
+file's folder. When the agent is started by Mango Code (the app) it reads nothing of what is on the
+PC (`~/.claude`, global skills): the app sets `OPENCODE_DISABLE_CLAUDE_CODE`, `OPENCODE_DISABLE_EXTERNAL_SKILLS` and
+`OPENCODE_DISABLE_BUILTIN_COMMANDS`. An agent started by hand without them reads them like opencode does.
 
 **Rules by path.** A `.claude/rules/*.md` rule with `paths:` in the frontmatter (a list of globs, relative to the folder that
 contains `.claude/`, e.g. `src/**/*.ts`) is not in the prompt: it is appended to the result of `read`, `edit` or `write` on a
@@ -206,8 +259,9 @@ that is off does not reach the model and weighs no tokens, from the next message
   `.claude/rules/style.md`), with the name alone if it is Mango Code's (`MANGO.md`), with the full path if it is from an
   extra folder.
 - **Apps only add.** The server of `POST /mcp` and the folders of `PUT /mango/extra-folders` become entries like the
-  others, on: the app switches nothing off. Settings are changed only from the page: `PUT /mango/settings` answers 403 to
-  whoever sends no `Origin`, that is to every client on the PC.
+  others, on: the app switches nothing off. Settings are changed from the page: `PUT /mango/settings` answers 403 to
+  a request without `Origin`, which is every client of an app. This is a rule between apps, not a barrier: a process on
+  the PC could send an `Origin` of its own, and it already has the agent's shell.
 - `GET /mango/settings?directory=<working folder>` → `{ directory, model, file: { default, folder }, items: [{ type, name,
   tokens, enabled, source }] }`. `type`: `tools`, `mcp`, `skills`, `instructions`, `plugins`, and `base` (the base prompt,
   which cannot be switched off). `source`: `default` or `folder`, from which file the value comes. `PUT` with `{ type, name,
@@ -221,14 +275,13 @@ that is off does not reach the model and weighs no tokens, from the next message
   first request of the next session.
 - A plugin that is off no longer runs its hooks; what it put in the config when the instance started (the instructions,
   skills and servers of the project) stays, and is switched off with its entries.
-- The terminal does not have the file for all folders: it reads only the folder's.
 - Tests: `integration/tests/settings.test.ts` (the request to the model without and with the entries),
   `settings-page.test.ts` (the page in the window).
 
 ### Language
 
 Mango Code speaks Italian and English. The current language is the `language` key (`"it"` or `"en"`) of
-`<data>\settings.json`, the same file as the prompt settings: the app, the terminal and the web UI all read it, and without
+`<data>\settings.json`, the same file as the prompt settings: the app and the web UI both read it, and without
 it they follow the Windows display language (Italian if Windows is Italian, English otherwise). The texts the user reads
 follow it, including the `error` texts of the agent's routes (which, as said above, are not part of the contract).
 
@@ -238,6 +291,28 @@ follow it, including the `error` texts of the agent's routes (which, as said abo
   `prompt`) stay as they are. It applies from the next message and to the web UI the next time it loads.
 - Unlike `PUT /mango/settings`, it does not need an `Origin`: an app can set the language too.
 - Test: `integration/tests/language.test.ts`.
+
+### Folders that cannot be projects
+
+A project is a folder with its own git repository, where the agent works and takes snapshots. The agent refuses to make one
+(`MANGO_PROJECTS_GIT=1`, set by the app) of a folder that is too broad: a drive root, `C:\Users`, the user's folder, Desktop,
+Documents, Downloads, Pictures, Music, Videos, Public, OneDrive (the folders as Windows names them, so also when OneDrive moved them, and
+the `OneDrive` variables of the environment). In them `git init` is never run, `POST /session` answers 400 and `project.initGit`
+changes nothing. Existing sessions keep working.
+
+- `GET /mango/folder?directory=<folder>` → `{ "broad": true | false }`: the web UI asks it before it adds a folder to the projects,
+  and says «this folder is too broad to be a project: choose or create a subfolder».
+- `POST /mango/folder` `{ "parent", "name" }` → `{ "directory" }`: creates the folder `name` inside `parent` (a name Windows accepts; 400 with
+  `{ error }` in the user's language if not, or if it exists).
+- Tests: `packages/opencode/test/project/broad-folder.test.ts`, `ensure-git.test.ts`, `test/server/mango-project-folder.test.ts`.
+
+### What the model menu says about each model
+
+- `GET /mango/models/info` (on the agent's address, not the engine's `/mango/models`) → `{ "<model key>": { "bytes", "place", "speed", "weak" } }`:
+  the weight of the model's files, where it runs (`gpu`, `cpu`, `remote` for a model of another PC, `none` if it does not fit),
+  how fast it writes on the processor (`very_slow`, `slow`, `fair`, `quick`: a band, not a number), and
+  `weak` when the catalog marks the model `on_request` (not trusted as an agent). The app starts the agent with the object in
+  `MANGO_MODELS_INFO`; an agent started by hand answers `{}`. Test: `test/server/mango-models.test.ts`.
 
 ## 6. The engine and the GPUs
 
@@ -302,7 +377,7 @@ wait up to 30 minutes, then fail with an error that says to call `resume`; when 
 resumes where it was and the engine rereads only the new tokens. GPU indexes are the PCI ones
 (`CUDA_DEVICE_ORDER=PCI_BUS_ID`), the same as `nvidia-smi`.
 
-On an RTX 3060 Ti + GTX 1080 + GTX 1660 SUPER (Qwen3.6 on the three GPUs, a conversation of 109 thousand tokens, 5/11): **release** 4.7 s, saving 1.65 GiB
+On an RTX 3060 Ti + GTX 1080 + GTX 1660 SUPER (Qwen3.6 on the three GPUs, a conversation of 109 thousand tokens): **release** 4.7 s, saving 1.65 GiB
 included; **resume** 16.9 s, reload included (2.9 s); the next message rereads 34 tokens and the answer starts 2.9 s after
 sending (without the memory: 6-8 minutes of rereading).
 

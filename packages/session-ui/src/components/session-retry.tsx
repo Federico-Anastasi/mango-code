@@ -31,6 +31,9 @@ export function SessionRetry(props: { status: SessionStatus; show?: boolean }) {
     if (current.message.includes("exceeded your current quota") && current.message.includes("gemini")) {
       return i18n.t("ui.sessionTurn.retry.geminiHot")
     }
+    // a dropped connection (the engine stopped, the network went away): in plain words, not the system's text
+    if (/terminated|fetch failed|econn|socket|connection/i.test(current.message))
+      return i18n.t("ui.sessionTurn.retry.connection")
     if (current.message.length > 80) return current.message.slice(0, 80) + "..."
     return current.message
   })

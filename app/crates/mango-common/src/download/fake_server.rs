@@ -20,11 +20,13 @@ pub struct Route {
     pub stall_at: Option<usize>,
     /// Always replies with the whole file and 200, even to a request with `Range`.
     pub ignore_range: bool,
+    /// A request with `Range` gets a 206 from this byte, whatever it asked for, saying so in `Content-Range`.
+    pub resume_from: Option<usize>,
 }
 
 impl Route {
     pub fn file(body: Vec<u8>) -> Route {
-        Route { body, interrupt_at: None, stall_at: None, ignore_range: false }
+        Route { body, interrupt_at: None, stall_at: None, ignore_range: false, resume_from: None }
     }
 }
 
@@ -118,7 +120,7 @@ fn reply(rq: tiny_http::Request, v: Route, range: Option<String>, released: &Arc
         .and_then(|r| r.strip_prefix("bytes="))
         .and_then(|r| r.strip_suffix('-'))
         .and_then(|n| n.parse::<usize>().ok());
-    match from {
+    match from.map(|asked| v.resume_from.unwrap_or(asked)) {
         Some(from) => {
             let h = Header::from_bytes("Content-Range", format!("bytes {from}-{}/{total}", total - 1)).unwrap();
             let rest = v.body[from..].to_vec();

@@ -1,10 +1,9 @@
-//! Configuration of the agent server (`opencode serve` with the web UI built in): a Rust port of the `-Web` branch of
-//! `mango-code.ps1` (config generated from the templates, environment variables, MCP, plugins). It starts nothing:
+//! Configuration of the agent server (`opencode serve` with the web UI built in): config generated from the templates,
+//! environment variables, MCP, plugins. It starts nothing:
 //! it produces a `ProcSpec`.
 //!
 //! The generated config lives in `<data>/opencode-home` (OPENCODE_CONFIG_DIR). The distribution (`paths.dist`) is
-//! read-only and shared with the terminal launcher, which rewrites its own `opencode-home/opencode.json` at every
-//! start: the app never writes there.
+//! read-only: the app never writes there.
 //!
 //! Static files: plugins are COPIED (opencode only discovers them if they are in `<config>/plugin/`); instructions,
 //! skills and MCP scripts are REFERENCED by their path in `dist` (as the launcher does): they are big or have
@@ -15,17 +14,20 @@ pub mod team;
 
 use anyhow::{bail, Context, Result};
 use mango_common::{tr, Paths, ProcSpec};
+use serde::Serialize;
 use serde_json::{json, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
 
 /// Provider of the local models in the config: the app's web UI always uses the local engine.
 const PROVIDER: &str = "mango";
+/// The environment variable that carries the key of another PC's engine to the agent, which reads it as `{env:…}` in its config
+/// and sends it to that engine.
+pub const ENGINE_KEY_VAR: &str = "MANGO_ENGINE_KEY";
 
-/// Launcher plugins needed in the web UI, copied to the config folder. The other two in `opencode-home/plugin` stay
-/// out: `mango-team.js` imports npm packages, so it isn't copied but declared with its path in the distribution, where
-/// `node_modules` sits next to it (only with the Team); `mango-speed.js` writes the t/s in the terminal title, which
-/// isn't here.
+/// Plugins of `opencode-home/plugin` copied to the config folder. The other one, `mango-team.js`, imports npm packages,
+/// so it isn't copied but declared with its path in the distribution, where `node_modules` sits next to it (only with
+/// the Team).
 const PLUGINS: &[&str] = &["mango-discipline.js", "mango-web-diet.js", "mango-documents.js", "mango-project.js"];
 
 /// Template placeholders that concern the cloud provider: the `openrouter` block is discarded, but as long as it is
@@ -43,12 +45,33 @@ pub struct AgentModel {
     pub label: String,
     pub ctx: u32,
     pub images: bool,
+    pub info: ModelInfo,
 }
+
+/// What the model menu says about a model besides its name and what the config already holds (context, images). It reaches the
+/// web UI through the agent's `/mango/models`, from the environment variable `MANGO_MODELS_INFO`.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct ModelInfo {
+    /// What its files weigh; `None` for a model of another PC, which does not say.
+    pub bytes: Option<u64>,
+    /// "gpu", "cpu", "remote" (a model of another PC, whose name already says which) or "none" (it does not fit here); empty if
+    /// nobody knows.
+    pub place: &'static str,
+    /// On the processor, how fast it writes: "very_slow", "slow", "fair" or "quick".
+    pub speed: Option<String>,
+    /// The catalog says it is not reliable as an agent (`on_request`): the menu warns before it is chosen.
+    pub weak: bool,
+}
+
+/// The environment variable that carries the models' `ModelInfo`, as a JSON object by model key.
+pub const MODELS_INFO_VAR: &str = "MANGO_MODELS_INFO";
 
 #[derive(Debug, Clone)]
 pub struct AgentInputs {
     /// The engine's URL (the app's engine manager), e.g. "http://127.0.0.1:8080".
     pub engine_url: String,
+    /// The key of the engine, when it is another PC's (`engine::remote`). It goes to the agent in the environment only.
+    pub engine_key: Option<String>,
     /// The models to offer (at least one).
     pub models: Vec<AgentModel>,
     /// Key of the model of new conversations (and of the engine warm-up).
@@ -138,8 +161,7 @@ pub fn plan(paths: &Paths, inp: &AgentInputs) -> Result<AgentPlan> {
         env(tools::BUN_VAR, &exe.to_string_lossy()),
         // The ids of the models that see images: the plugins choose the conversation's reminders accordingly.
         env("MANGO_IMAGE_MODELS", &images(inp)),
-        // The agent's browser is the app's panel: without this port the browser server would use the terminal
-        // launcher's guest Chrome, which doesn't exist in the app.
+        // The agent's browser is the app's panel: without this port the browser server would not find the panel.
         env("MANGO_PANEL_CDP", &inp.browser.preview_port.to_string()),
         env("MANGO_BROWSER_CHOICE", &inp.browser.choice.to_string_lossy()),
         // Every folder the agent works in becomes a git repository (project.ts, ensureGit): projects, diffs and the
@@ -162,7 +184,7 @@ pub fn plan(paths: &Paths, inp: &AgentInputs) -> Result<AgentPlan> {
         // No built-in opencode commands and skills (/init, /review, customize-opencode): only the product's. The
         // project's context (CLAUDE.md, .claude/, .mcp.json) is added by mango-project.js.
         env("OPENCODE_DISABLE_BUILTIN_COMMANDS", "1"),
-        // Two additions only for the web UI (the TUI gets them from --auto): doom_loop is the only permission that
+        // Two additions: doom_loop is the only permission that
         // stays "ask" and in the browser it would stop the agent waiting for a click; enabled_providers leaves only
         // the running model in the selector.
         env(
@@ -170,6 +192,8 @@ pub fn plan(paths: &Paths, inp: &AgentInputs) -> Result<AgentPlan> {
             &json!({"enabled_providers": providers(inp), "permission": {"doom_loop": "allow"}}).to_string(),
         ),
     ];
+    let info: serde_json::Map<String, Value> = inp.models.iter().map(|m| (m.key.clone(), json!(m.info))).collect();
+    spec_env.push(env(MODELS_INFO_VAR, &Value::Object(info).to_string()));
     if let Some(team) = &inp.team {
         spec_env.extend(team_env(paths, team));
     }
@@ -179,6 +203,12 @@ pub fn plan(paths: &Paths, inp: &AgentInputs) -> Result<AgentPlan> {
     // app was launched (from Git Bash it would become bash, from the Start menu PowerShell).
     // A different system prompt also means a different base in the engine's memory.
     let mut env_remove = vec!["OPENCODE_SERVER_PASSWORD".to_string(), "OPENCODE_SERVER_USERNAME".to_string(), "SHELL".to_string()];
+    // The key of another PC's engine goes only in the process environment (the config reads it from there), like the Team's.
+    match &inp.engine_key {
+        Some(k) => spec_env.push(env(ENGINE_KEY_VAR, k)),
+        // A value inherited from outside is not this engine's key.
+        None => env_remove.push(ENGINE_KEY_VAR.to_string()),
+    }
     match &inp.voice_url {
         Some(u) => spec_env.push(env("MANGO_VOICE_URL", u)),
         // A value inherited from outside would point to a dictation that isn't this one.
@@ -330,6 +360,9 @@ fn render_config(paths: &Paths, inp: &AgentInputs, exe: &Path, pc_md: &Path, rol
         v["modalities"]["input"] = serde_json::from_str(modalities(m.images))?;
         v["limit"] = json!({ "context": m.ctx, "output": output_ceiling(m.ctx) });
         models.insert(m.key.clone(), v);
+    }
+    if inp.engine_key.is_some() {
+        root["provider"][PROVIDER]["options"]["apiKey"] = json!(format!("{{env:{ENGINE_KEY_VAR}}}"));
     }
     // Without the Team the app uses no cloud models: the block (with a fake key and an openrouter.ai address) is
     // useless, and `enabled_providers` would exclude it anyway.

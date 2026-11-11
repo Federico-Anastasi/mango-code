@@ -78,6 +78,17 @@ export const ReadTool = Tool.define<
     const miss = Effect.fn("ReadTool.miss")(function* (filepath: string) {
       const dir = path.dirname(filepath)
       const base = path.basename(filepath)
+      if (!(yield* fs.isDir(dir))) {
+        // The folder is wrong, not the file: name the first folder that is missing and the closest one that exists.
+        let missing = dir
+        while (path.dirname(missing) !== missing && !(yield* fs.isDir(path.dirname(missing)))) missing = path.dirname(missing)
+        const existing = path.dirname(missing)
+        return yield* Effect.fail(
+          new Error(
+            `File not found: ${filepath}\nThe folder ${missing} does not exist. The closest existing folder is ${existing}.`,
+          ),
+        )
+      }
       const items = yield* fs.readDirectory(dir).pipe(
         Effect.map((items) =>
           items

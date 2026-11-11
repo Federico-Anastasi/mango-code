@@ -19,6 +19,7 @@ use std::ffi::OsString;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 /// A file to download. `size` and `sha256` come from the catalog and are valid for that version of the file
@@ -83,10 +84,27 @@ fn free_space(dir: &Path) -> Result<u64> {
 /// the network stays, to be resumed.
 /// `progress(downloaded, total)` starts from the point already reached and ends with `(size, size)`.
 pub fn download(f: &RemoteFile, dest: &Path, progress: &mut dyn FnMut(u64, u64)) -> Result<()> {
-    download_with_timeout(f, dest, MAX_WAIT, progress)
+    download_stoppable(f, dest, &AtomicBool::new(false), progress)
 }
 
-fn download_with_timeout(f: &RemoteFile, dest: &Path, max_wait: Duration, progress: &mut dyn FnMut(u64, u64)) -> Result<()> {
+/// The error of a download that `stop` ended: the `.part` stays, for whoever stopped it to resume or delete.
+#[derive(Debug)]
+pub struct Stopped;
+
+impl std::fmt::Display for Stopped {
+    fn fmt(&self, out: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        out.write_str(&tr!("scaricamento interrotto", "download stopped"))
+    }
+}
+
+impl std::error::Error for Stopped {}
+
+/// Like `download`, but when `stop` becomes true it ends between two blocks with `Stopped`.
+pub fn download_stoppable(f: &RemoteFile, dest: &Path, stop: &AtomicBool, progress: &mut dyn FnMut(u64, u64)) -> Result<()> {
+    download_with_timeout(f, dest, MAX_WAIT, stop, progress)
+}
+
+fn download_with_timeout(f: &RemoteFile, dest: &Path, max_wait: Duration, stop: &AtomicBool, progress: &mut dyn FnMut(u64, u64)) -> Result<()> {
     let name = dest.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     let expected = f.sha256.to_ascii_lowercase();
     if expected.len() != 64 || !expected.bytes().all(|b| b.is_ascii_hexdigit()) {
@@ -122,8 +140,18 @@ fn download_with_timeout(f: &RemoteFile, dest: &Path, max_wait: Duration, progre
         if let Some(dir) = dest.parent() {
             enough_space(f.size - done, free_space(dir)?, dir)?;
         }
-        let resp = request(f, done, max_wait)
-            .with_context(|| tr!("{name}: scaricamento da {} fallito", "{name}: download from {} failed", f.url))?;
+        let ask = |from: u64| {
+            request(f, from, max_wait).with_context(|| tr!("{name}: scaricamento da {} fallito", "{name}: download from {} failed", f.url))
+        };
+        let mut resp = ask(done)?;
+        // A 206 that starts from another byte than `done` would put bytes in the wrong place: start over.
+        if done > 0 && resp.status().as_u16() == 206 && range_start(&resp) != Some(done) {
+            fs::remove_file(&part)?;
+            (done, hasher) = (0, Sha256::new());
+            progress(0, f.size);
+            drop(resp);
+            resp = ask(0)?;
+        }
         // 206 = the server resumes from `done`; 200 = it ignores the range and sends everything again
         let resumes = done > 0 && resp.status().as_u16() == 206;
         let mut out = if resumes {
@@ -137,6 +165,10 @@ fn download_with_timeout(f: &RemoteFile, dest: &Path, max_wait: Duration, progre
         let mut buf = vec![0u8; 256 * 1024];
         let mut last = Instant::now();
         loop {
+            if stop.load(Ordering::Relaxed) {
+                out.flush()?;
+                return Err(Stopped.into());
+            }
             let n = match body.read(&mut buf) {
                 Ok(0) => break,
                 Ok(n) => n,
@@ -257,7 +289,7 @@ fn hash_first_bytes(path: &Path, count: u64, hasher: &mut Sha256) -> Result<()> 
 
 /// The HTTP request, with the range if resuming; status errors made readable.
 fn request(f: &RemoteFile, from: u64, max_wait: Duration) -> Result<ureq::http::Response<ureq::Body>> {
-    let mut req = http_agent(Some(max_wait)).get(&f.url);
+    let mut req = http_agent(&f.url, Some(max_wait)).get(&f.url);
     if from > 0 {
         req = req.header("Range", format!("bytes={from}-"));
     }
@@ -276,14 +308,20 @@ fn request(f: &RemoteFile, from: u64, max_wait: Duration) -> Result<ureq::http::
             )
         ),
         Err(ureq::Error::StatusCode(c)) => bail!("{}", tr!("il server risponde {c}", "the server answers {c}")),
-        Err(e) => bail!("{}", tr!("rete: {e}", "network: {e}")),
+        Err(e) => Err(crate::internet::network_failure(e, &f.url)),
     }
+}
+
+/// The first byte of the part a 206 reply carries (`Content-Range: bytes 1000-1999/2000`).
+fn range_start(resp: &ureq::http::Response<ureq::Body>) -> Option<u64> {
+    let value = resp.headers().get("content-range")?.to_str().ok()?;
+    value.strip_prefix("bytes ")?.split('-').next()?.parse().ok()
 }
 
 /// The HTTP client for downloads and Hugging Face calls. `max_wait`: how long the server may stay silent between
 /// one block and the next (an 18 GB file has no sensible total time).
-fn http_agent(max_wait: Option<Duration>) -> ureq::Agent {
-    ureq::Agent::config_builder()
+fn http_agent(url: &str, max_wait: Option<Duration>) -> ureq::Agent {
+    crate::internet::config(url)
         .timeout_connect(Some(Duration::from_secs(30)))
         .timeout_recv_response(Some(Duration::from_secs(60)))
         .timeout_per_read(max_wait)
@@ -389,6 +427,61 @@ mod tests {
     }
 
     #[test]
+    fn behind_a_proxy_the_download_goes_through_the_proxy_and_resumes_where_it_stopped() {
+        use crate::internet::{fake_proxy::{FakeProxy, Mode}, with_system_proxy};
+        let d = data(1_500_000);
+        let mut v = Route::file(d.clone());
+        v.interrupt_at = Some(600_000);
+        let s = FakeServer::start([("/f.bin", v)]);
+        let port = s.url.rsplit(':').next().unwrap();
+        let proxy = FakeProxy::start(Mode::Forward(format!("127.0.0.1:{port}").parse().unwrap()));
+        // For the app the server is at an external address: it is reached only because the proxy can.
+        let f = RemoteFile { url: format!("http://downloads.example.test:{port}/f.bin"), size: d.len() as u64, sha256: sha(&d) };
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("f.bin");
+
+        with_system_proxy(&proxy.address, || {
+            assert!(download(&f, &dest, &mut |_, _| {}).is_err());
+            assert_eq!(fs::metadata(part_path(&dest)).unwrap().len(), 600_000);
+            s.set("/f.bin", Route::file(d.clone()));
+            download(&f, &dest, &mut |_, _| {}).unwrap();
+        });
+
+        assert_eq!(fs::read(&dest).unwrap(), d);
+        assert_eq!(proxy.seen(), vec![format!("CONNECT downloads.example.test:{port} HTTP/1.1"); 2]);
+        assert_eq!(s.requests().last().unwrap().range.as_deref(), Some("bytes=600000-"));
+    }
+
+    #[test]
+    fn a_company_filter_with_an_unknown_certificate_ends_the_download_with_the_sentence_that_says_what_to_do() {
+        use crate::internet::{fake_proxy::{FakeProxy, Mode}, with_system_proxy};
+        let proxy = FakeProxy::start(Mode::Inspect);
+        let d = data(1_000);
+        let f = RemoteFile { url: "https://downloads.example.test/f.bin".into(), size: d.len() as u64, sha256: sha(&d) };
+        let tmp = tempfile::tempdir().unwrap();
+        let err = with_system_proxy(&proxy.address, || download(&f, &tmp.path().join("f.bin"), &mut |_, _| {})).unwrap_err();
+        assert!(format!("{err:#}").contains(&crate::internet::certificate_message()), "{err:#}");
+        assert_eq!(proxy.seen().len(), 1);
+    }
+
+    #[test]
+    fn a_download_that_is_stopped_ends_with_stopped_and_can_be_resumed() {
+        let d = data(3_000_000);
+        let s = FakeServer::start([("/f.bin", Route::file(d.clone()))]);
+        let f = remote(&s, "/f.bin", &d);
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("f.bin");
+
+        let stop = AtomicBool::new(false);
+        let err = download_stoppable(&f, &dest, &stop, &mut |_, _| stop.store(true, Ordering::Relaxed)).unwrap_err();
+
+        assert!(err.downcast_ref::<Stopped>().is_some(), "{err:#}");
+        assert!(!dest.exists());
+        download(&f, &dest, &mut |_, _| {}).unwrap();
+        assert_eq!(fs::read(&dest).unwrap(), d);
+    }
+
+    #[test]
     fn a_stalled_network_does_not_block_and_the_resume_restarts_from_the_point_reached() {
         let d = data(2_000_000);
         let mut v = Route::file(d.clone());
@@ -399,7 +492,7 @@ mod tests {
         let dest = tmp.path().join("f.bin");
 
         // the server neither closes nor sends more: only the maximum wait can end the call
-        let err = download_with_timeout(&f, &dest, Duration::from_secs(1), &mut |_, _| {}).unwrap_err().to_string();
+        let err = download_with_timeout(&f, &dest, Duration::from_secs(1), &AtomicBool::new(false), &mut |_, _| {}).unwrap_err().to_string();
 
         // the server holds back the last piece until it closes: the partial is at most 700000
         let partial = fs::metadata(part_path(&dest)).unwrap().len();
@@ -483,6 +576,24 @@ mod tests {
     }
 
     #[test]
+    fn a_server_that_resumes_from_another_byte_makes_the_download_start_over() {
+        let d = data(900_000);
+        let mut v = Route::file(d.clone());
+        v.resume_from = Some(0);
+        let s = FakeServer::start([("/f.bin", v)]);
+        let f = remote(&s, "/f.bin", &d);
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("f.bin");
+        fs::write(part_path(&dest), &d[..300_000]).unwrap();
+
+        download(&f, &dest, &mut |_, _| {}).unwrap();
+
+        assert_eq!(fs::read(&dest).unwrap(), d);
+        let ranges: Vec<_> = s.requests().into_iter().map(|r| r.range).collect();
+        assert_eq!(ranges, [Some("bytes=300000-".to_string()), None], "it asks again from the start");
+    }
+
+    #[test]
     fn size_different_from_the_catalog() {
         let d = data(600_000);
         let s = FakeServer::start([("/f.bin", Route::file(d.clone()))]);
@@ -518,7 +629,7 @@ mod tests {
         // nobody is listening: a network error, not an 'empty file'
         let closed_port = RemoteFile { url: "http://127.0.0.1:1/x.bin".into(), size: 1000, sha256: sha(&d) };
         let err = format!("{:#}", download(&closed_port, &dest, &mut |_, _| {}).unwrap_err());
-        assert!(err.contains(&tr!("rete", "network")), "{err}");
+        assert!(err.contains(&tr!("Controlla la connessione", "Check your connection")), "{err}");
     }
 
     #[test]

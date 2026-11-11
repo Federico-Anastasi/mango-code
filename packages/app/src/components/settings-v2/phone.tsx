@@ -105,6 +105,11 @@ const PhoneAccess: Component<{ label: string; access: MangoPhoneAccess | null; m
               src={`data:image/svg+xml;charset=utf-8,${encodeURIComponent(access().qr)}`}
             />
             <div class="text-[12px] text-text-weak select-text break-all">{access().address}</div>
+            <Show when={access().public}>
+              <p data-slot="settings-phone-public" class="settings-v2-prompt-error">
+                {language.t("settings.phone.public")}
+              </p>
+            </Show>
             <div>
               <ButtonV2 size="normal" variant="neutral" onClick={() => void copy(access().link)}>
                 {language.t(copied() ? "settings.phone.copied" : "settings.phone.copy")}

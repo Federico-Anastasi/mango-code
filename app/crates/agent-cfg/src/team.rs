@@ -1,4 +1,4 @@
-//! The Team in the app: the same as the terminal's (`mango-code -Team`), with the same roles and the same plugin
+//! The Team in the app: a manager, a dev and agents, with the same roles and the same plugin
 //! (`launcher/opencode-home/plugin/mango-team.js`). A MANAGER (cloud model) is the `team` agent of the conversation in
 //! the app; the DEV (the local model) and up to 4 cloud AGENTS are hidden `opencode serve` processes that the manager
 //! starts when needed, described by `launch.json`.
@@ -22,7 +22,7 @@ pub const PROVIDER_CLOUD: &str = "openrouter";
 pub const KEY_VAR: &str = "MANGO_OPENROUTER_KEY";
 /// The name of the opencode agent that holds the conversation with the Team on.
 pub const AGENT: &str = "team";
-/// Like the terminal: the dev on 4090, the agents from 4092 (4091 is the terminal manager's).
+/// The dev on 4090, the agents from 4092.
 pub const DEV_PORT: u16 = 4090;
 pub const AGENT_PORTS: [u16; AGENTS_MAX as usize] = [4092, 4093, 4094, 4095];
 /// The manager's tools (`mango-team.js`): the conversation without Team doesn't see them.
@@ -75,7 +75,7 @@ pub fn read_choices(paths: &Paths) -> Result<Choices> {
 pub fn write_choices(paths: &Paths, choices: &Choices) -> Result<()> {
     choices.check(&mango_common::catalog::read(paths)?.root)?;
     let f = paths.data.join(CHOICES_FILE);
-    std::fs::write(&f, serde_json::to_string_pretty(choices)?).with_context(|| tr!("impossibile scrivere {}", "cannot write {}", f.display()))
+    mango_common::write_atomic(&f, serde_json::to_string_pretty(choices)?).with_context(|| tr!("impossibile scrivere {}", "cannot write {}", f.display()))
 }
 
 /// A catalog cloud model, with the numbers opencode's config asks for.

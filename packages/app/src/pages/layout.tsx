@@ -39,7 +39,6 @@ import { normalizeProjectInfo } from "@/context/global-sync/utils"
 import { clearWorkspaceTerminals } from "@/context/terminal"
 import { pickSessionCacheEvictions } from "@/context/global-sync/session-cache"
 import { useNotification } from "@/context/notification"
-import { usePermission } from "@/context/permission"
 import { usePreview } from "@/context/preview"
 import { Binary } from "@opencode-ai/core/util/binary"
 import { retry } from "@opencode-ai/core/util/retry"
@@ -116,7 +115,6 @@ export default function LegacyLayout(props: ParentProps) {
   const settings = useSettings()
   const server = useServer()
   const notification = useNotification()
-  const permission = usePermission()
   const navigate = useNavigate()
   const providers = useProviders(() => undefined)
   const dialog = useDialog()
@@ -124,6 +122,7 @@ export default function LegacyLayout(props: ParentProps) {
   const theme = useTheme()
   const language = useLanguage()
   const preview = usePreview()
+  preview.follow(layout.route)
   createEffect(() => setV2Toast(false))
   const initialDirectory = decode64(params.dir)
   const route = createMemo(() => {
@@ -425,7 +424,6 @@ export default function LegacyLayout(props: ParentProps) {
         const icon = e.details.type === "permission.asked" ? ("checklist" as const) : ("bubble-5" as const)
         const directory = e.name
         const props = e.details.properties
-        if (e.details.type === "permission.asked" && permission.autoResponds(e.details.properties, directory)) return
 
         const [store] = serverSync().child(directory, { bootstrap: false })
         const session = store.session.find((s) => s.id === props.sessionID)
@@ -1104,10 +1102,7 @@ export default function LegacyLayout(props: ParentProps) {
 
   function openSettings() {
     const run = ++dialogRun
-    const module = settings.general.newLayoutDesigns()
-      ? import("@/components/settings-v2")
-      : import("@/components/dialog-settings")
-    void module.then((x) => {
+    void import("@/components/settings-v2").then((x) => {
       if (dialogDead || dialogRun !== run) return
       dialog.show(() => <x.DialogSettings />)
     })

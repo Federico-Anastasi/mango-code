@@ -11,7 +11,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 license = "AGPL-3.0-or-later"
 
@@ -26,6 +26,8 @@ anyhow = "1"
 serde = { version = "1", features = ["derive"] }
 # preserve_order: the agent's config lists the models in the catalog's order, not alphabetically
 serde_json = { version = "1", features = ["preserve_order"] }
+# One HTTP client, with the certificates of Windows (`mango_common::internet` builds every agent)
+ureq = { version = "3.5", default-features = false, features = ["rustls", "platform-verifier", "gzip"] }
 
 [profile.release]
 lto = "thin"

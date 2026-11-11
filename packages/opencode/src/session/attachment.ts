@@ -12,7 +12,9 @@ export const MAX_ATTACHMENT_CONVERT_BYTES = 25 * 1024 * 1024
 export function safeName(filename: string | undefined) {
   const base = path.basename((filename ?? "").replace(/\\/g, "/")).replace(/[<>:"/\\|?*\u0000-\u001f]/g, "_")
   const name = base.trim().replace(/^\.+/, "").replace(/[. ]+$/, "").slice(0, 120)
-  return name || "attachment"
+  if (!name) return "attachment"
+  // opening nul.txt or con.pdf on Windows opens the device, not a file
+  return /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i.test(name.split(".")[0]) ? `_${name}` : name
 }
 
 /**

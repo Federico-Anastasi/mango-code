@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { addAttachments, formatSize, reportBody } from "./report"
+import { addAttachments, formatSize, reportBody, reportTarget } from "./report"
 
 const file = (name: string, size: number) => new File([new Uint8Array(size)], name, { type: "application/octet-stream" })
 
@@ -51,5 +51,19 @@ describe("reportBody", () => {
       files: [{ name: "screen.png", type: "image/png", size: 3 }],
     })
     expect([...bytes.slice(4 + length)]).toEqual([1, 2, 3])
+  })
+})
+
+describe("reportTarget", () => {
+  test("a failed look from the phone is not kept: the next one asks again", async () => {
+    const realFetch = globalThis.fetch
+    globalThis.fetch = (async (_url: string): Promise<Response> => {
+      throw new TypeError("Failed to fetch")
+    }) as typeof fetch
+    expect(await reportTarget()).toBeUndefined()
+    globalThis.fetch = (async (_url: string) =>
+      Response.json({ maxBytes: 1000, attachments: true, screenshot: false })) as typeof fetch
+    expect((await reportTarget())?.info.maxBytes).toBe(1000)
+    globalThis.fetch = realFetch
   })
 })

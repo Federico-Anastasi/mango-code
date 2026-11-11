@@ -1,5 +1,8 @@
 # Build whisper.cpp (crate voice) with the AVX2 instructions: without them, ggml stays on SSE2
 # and is about a third slower. The app refuses dictation on processors without AVX2.
+# GGML_NATIVE is on by default and, with MSVC, runs test programs on the processor that builds: on one with AVX-512
+# ggml is compiled for AVX-512 and the app stops with an illegal instruction on every processor without it (0.1.0,
+# built on such a runner). Off, the instruction sets are the ones listed here and nothing else.
 # libclang (for bindgen) is a machine choice: LIBCLANG_PATH goes in the environment
 # or in ~/.cargo/config.toml, not here.
 #
@@ -9,6 +12,7 @@
 [env]
 CMAKE_C_FLAGS_RELEASE = "-nologo -MD -Brepro -W0 /O2 /Ob2 /DNDEBUG"
 CMAKE_CXX_FLAGS_RELEASE = "/utf-8 -nologo -MD -Brepro -W0 /O2 /Ob2 /DNDEBUG"
+GGML_NATIVE = "OFF"
 GGML_AVX = "ON"
 GGML_AVX2 = "ON"
 GGML_FMA = "ON"

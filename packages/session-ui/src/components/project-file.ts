@@ -50,6 +50,15 @@ export function isProjectFileCard(name: string) {
   return CARD_KINDS.has(projectFileKind(name))
 }
 
+/** What the preview shows of a file: a PDF, or a picture (an SVG too, drawn as a picture and never run as a page). */
+export function previewKind(name: string): "pdf" | "image" | undefined {
+  const kind = projectFileKind(name)
+  return kind === "pdf" || kind === "image" ? kind : undefined
+}
+
+/** The most the preview opens (desktop panel and phone), in bytes: a bigger file says so and is opened from the folder. */
+export const PREVIEW_MAX_BYTES = 50 * 1024 * 1024
+
 export function projectFileKindKey(kind: ProjectFileKind) {
   return `ui.file.kind.${kind}` as UiI18nKey
 }
@@ -77,10 +86,12 @@ export function formatFileSize(bytes: number, locale?: string) {
 }
 
 /** The app bridge rejects with `{ code }`: the code chooses the text to show. */
-export function projectFileProblem(cause: unknown): "missing" | "blocked" | "failed" {
+export function projectFileProblem(cause: unknown): "missing" | "blocked" | "large" | "unreadable" | "failed" {
   const code = cause && typeof cause === "object" && "code" in cause ? (cause as { code: unknown }).code : undefined
   if (code === "not_found") return "missing"
   if (code === "blocked_type") return "blocked"
+  if (code === "too_large") return "large"
+  if (code === "unreadable") return "unreadable"
   return "failed"
 }
 

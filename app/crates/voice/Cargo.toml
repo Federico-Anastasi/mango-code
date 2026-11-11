@@ -9,10 +9,7 @@ mango-common.workspace = true
 anyhow.workspace = true
 serde_json.workspace = true
 whisper-rs = "0.16"
-# Only the containers the browser produces (webm from Chrome/Edge, ogg from Firefox) plus wav.
-symphonia = { version = "0.6", default-features = false, features = ["mkv", "ogg", "wav", "pcm"] }
-opus-decoder = "0.1"
 tiny_http = "0.12"
 
 [dev-dependencies]
-ureq = "3"
+ureq.workspace = true

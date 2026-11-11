@@ -61,3 +61,90 @@ describe("the project's files from a phone", () => {
     expect(clicked).toEqual([{ href: "/phone/file?directory=C%3A%5Cp&path=C%3A%5Cp%5CRelazione.docx", download: "" }])
   })
 })
+
+describe("a PDF or a picture from a phone", () => {
+  const file = (size: number, type = "image/png") =>
+    (async (url: string) =>
+      url.includes("info=1") ? new Response(JSON.stringify({ size, isDir: false })) : new Response(new Uint8Array([1, 2, 3]), { headers: { "content-type": type } })) as unknown as typeof fetch
+
+  test("a picture is shown inside the app, as a picture", async () => {
+    await onThePhone()
+    globalThis.fetch = file(3)
+    await phoneProjectFiles("C:\\p")!.open("C:\\p\\Logo.png")
+    const view = phonePreview.view()!
+    expect(view).toMatchObject({ kind: "image", title: "Logo.png" })
+    expect(view.src.startsWith("blob:")).toBe(true)
+  })
+
+  test("an SVG is a picture too: it is drawn by an image element, never opened as a page that can run", async () => {
+    await onThePhone()
+    globalThis.fetch = file(3, "image/svg+xml")
+    await phoneProjectFiles("C:\\p")!.open("C:\\p\\drawing.svg")
+    expect(phonePreview.view()).toMatchObject({ kind: "image", title: "drawing.svg" })
+  })
+
+  test("a file over the limit says so and is not fetched", async () => {
+    await onThePhone()
+    const asked: string[] = []
+    globalThis.fetch = (async (url: string) => {
+      asked.push(url)
+      return new Response(JSON.stringify({ size: 51 * 1024 * 1024, isDir: false }))
+    }) as unknown as typeof fetch
+    const refused = await phoneProjectFiles("C:\\p")!.open("C:\\p\\big.png").catch((cause) => cause)
+    expect(refused).toMatchObject({ code: "too_large" })
+    expect(asked).toHaveLength(1)
+    expect(phonePreview.view()).toBeUndefined()
+  })
+
+  test("a file the phone port does not find says so", async () => {
+    await onThePhone()
+    globalThis.fetch = (async () => new Response("{}", { status: 404 })) as unknown as typeof fetch
+    expect(await phoneProjectFiles("C:\\p")!.open("C:\\p\\gone.png").catch((cause) => cause)).toMatchObject({ code: "not_found" })
+  })
+
+  test("a PDF opens inside the app where the browser has a PDF viewer, otherwise it is taken as a download", async () => {
+    await onThePhone()
+    globalThis.fetch = file(3, "application/pdf")
+    const original = Object.getOwnPropertyDescriptor(navigator, "pdfViewerEnabled")
+    try {
+      Object.defineProperty(navigator, "pdfViewerEnabled", { value: true, configurable: true })
+      await phoneProjectFiles("C:\\p")!.open("C:\\p\\Report.pdf")
+      expect(phonePreview.view()).toMatchObject({ kind: "pdf", title: "Report.pdf" })
+      phonePreview.close()
+
+      Object.defineProperty(navigator, "pdfViewerEnabled", { value: false, configurable: true })
+      const clicked: string[] = []
+      const click = HTMLAnchorElement.prototype.click
+      HTMLAnchorElement.prototype.click = function () {
+        clicked.push(this.getAttribute("href") ?? "")
+      }
+      try {
+        await phoneProjectFiles("C:\\p")!.open("C:\\p\\Report.pdf")
+      } finally {
+        HTMLAnchorElement.prototype.click = click
+      }
+      expect(clicked).toEqual(["/phone/file?directory=C%3A%5Cp&path=C%3A%5Cp%5CReport.pdf"])
+      expect(phonePreview.view()).toBeUndefined()
+    } finally {
+      if (original) Object.defineProperty(navigator, "pdfViewerEnabled", original)
+      else delete (navigator as { pdfViewerEnabled?: boolean }).pdfViewerEnabled
+    }
+  })
+
+  test("closing the view frees the file", async () => {
+    await onThePhone()
+    globalThis.fetch = file(3)
+    await phoneProjectFiles("C:\\p")!.open("C:\\p\\Logo.png")
+    const revoked: string[] = []
+    const revoke = URL.revokeObjectURL
+    URL.revokeObjectURL = (url: string) => void revoked.push(url)
+    try {
+      const src = phonePreview.view()!.src
+      phonePreview.close()
+      expect(revoked).toEqual([src])
+    } finally {
+      URL.revokeObjectURL = revoke
+    }
+    expect(phonePreview.view()).toBeUndefined()
+  })
+})

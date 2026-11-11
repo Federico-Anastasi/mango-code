@@ -1,6 +1,7 @@
 import type { Part } from "@opencode-ai/sdk/v2"
 import {
   producedFilePath,
+  projectFileKind,
   projectFilePath,
   projectRelativePath,
   samePathKey,
@@ -17,6 +18,17 @@ export function producedFiles(parts: Part[]) {
     seen.add(samePathKey(path))
     return [path]
   })
+}
+
+/** The last HTML page the tools wrote in the conversation (the globe of the phone opens it when the computer's panel has none). */
+export function lastWrittenPage(parts: Part[]) {
+  return parts
+    .flatMap((part) => {
+      if (part.type !== "tool" || part.state.status !== "completed") return []
+      const path = producedFilePath(part.tool, part.state.input, part.state.output)
+      return path && projectFileKind(path) === "web" ? [path] : []
+    })
+    .at(-1)
 }
 
 export type SummaryFile = { file: string; path: string; diff?: SummaryDiff }

@@ -15,31 +15,15 @@
 //   1. THE PREVIEW PANEL of the desktop app: a webview inside the window, next to the chat.
 //      Its own profile, no banner, no Chrome needed. It is the agent's default browser.
 //
-//   2. THE MANGO-CODE BROWSER on 9333, if already running (terminal launcher). Its own profile in
-//      runtime\chrome-profile, and no consent banner: we started it ourselves.
-//
-//   3. THE MANGO-CODE BROWSER, started by us now - but only if its profile is SEEDED, that is if
-//      the .mango-seeded marker is there. Seeded means your logins are inside (mango-cookie-import.mjs
-//      brings them, via CDP). This is the branch that makes the browser AUTONOMOUS: our own
-//      profile, so zero banners, and logged in, so useful.
-//
-//   4. YOUR CHROME, REAL PROFILE, if remote debugging is on from chrome://inspect. Needed as long
-//      as our profile is NOT seeded: it is the only place where the logins exist.
-//      The price is the "Allow remote debugging?" banner at EVERY connection - Chrome shows it on
-//      purpose on the default profile and it can't be turned off. A click is a human, so as long
-//      as we go through here the browser is not autonomous: seeding is the way out.
-//      MANGO_CHROME=real forces this branch even when the profile is seeded.
-//
-//   5. Fallback: our own, started now and LOGGED OUT. Better than nothing, but most of the useful
-//      web is behind a login: if you end up here, run `mango-code -Chrome -Sandbox`.
+//   2. Fallback, when neither is there: a browser of its own, started now with an empty profile (no logins).
 //
 // WHY A WRAPPER AND NOT FLAGS IN THE CONFIG. The flags are static, the choice is not: it depends on
 // what is running at that moment. And the MCP server with --browserUrl on a dead port doesn't fall
 // back, it dies - so the port must be checked BEFORE, not hoped for.
 //
 // NB: the main of chrome-devtools-mcp is loaded in the SAME process (parseArguments reads
-// process.argv). No spawn: one process less, and above all no cmd.exe in between - see
-// _perche_node_e_non_npx in opencode.template.json, it was the bug that killed the keyboard.
+// process.argv). No spawn: one process less, and no cmd.exe in between (see _why_node_not_npx in
+// opencode.template.json).
 
 import fs from "node:fs";
 import path from "node:path";
@@ -48,7 +32,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 const SELF = path.dirname(fileURLToPath(import.meta.url));
 const MAIN = path.join(SELF, "node_modules", "chrome-devtools-mcp", "build", "src", "bin", "chrome-devtools-mcp-main.js");
 // MANGO_RUNTIME: writable folder for the profile and the logs. The desktop app sets it, because it
-// installs the scripts in a program folder; from the terminal it is the runtime\ next to the script.
+// installs the scripts in a program folder; without it, the runtime\ next to the script.
 const RUNTIME = process.env.MANGO_RUNTIME || path.join(SELF, "runtime");
 const PROFILE = path.join(RUNTIME, "chrome-profile");
 const TRACE = path.join(RUNTIME, "mcp-chrome.log");
@@ -112,19 +96,15 @@ function realTarget() {
   }
 }
 
-// The marker is written by mango-cookie-import.mjs (or by the copy made with Chrome closed in
-// mango-code.ps1) and means one thing only: this profile holds real logins. It is the difference
-// between "our browser but useless" and "our browser and autonomous".
-const SEEDED = () => fs.existsSync(path.join(PROFILE, ".mango-seeded"));
 const MINE = () => ({
   flags: ["--userDataDir", PROFILE, "--viewport", "1280x800"],
-  mode: "mango-code browser, profile " + (SEEDED() ? "SEEDED (logged in, zero banners)" : "EMPTY (logged out)"),
+  mode: "mango-code browser, profile EMPTY (logged out)",
 });
 
 // THE PREVIEW PANEL. In the desktop app the agent's browser is a webview inside the window (the
 // preview panel): the user watches the work live, Chrome doesn't need to be installed and there is
 // no banner. The app turns on remote debugging on a random port and announces it here: 0 or
-// missing = no panel (terminal launcher), and the usual cascade applies.
+// missing = no panel, and the usual cascade applies.
 function panelPort() {
   const p = Number(process.env.MANGO_PANEL_CDP || 0);
   return Number.isInteger(p) && p > 0 ? p : 0;
@@ -160,12 +140,6 @@ async function showsMangoCode(port) {
 }
 
 async function decide() {
-  const choice = String(process.env.MANGO_CHROME || "").toLowerCase();
-  const forceReal = choice === "real";
-  // MANGO_CHROME=own: never the personal Chrome (branch 4). Set by the terminal launcher: the
-  // remote debugging banner would wait for a click nobody gives, and every tool would time out.
-  const ownOnly = choice === "own";
-
   // 0. "Use my Chrome": the user's explicit choice beats the panel. If Chrome's remote debugging
   //    no longer answers (Chrome restarted without it), fall back to the panel: a browser is
   //    better than none.
@@ -194,55 +168,17 @@ async function decide() {
     process.stderr.write("mango-chrome-mcp | port " + panel + " shows Mango Code's own window, not the panel: not used\n");
   }
 
-  // 2. already running: always the best choice, nothing to start.
-  if (!forceReal && (await hasHttpJson(9333)) && !(await showsMangoCode(9333))) {
-    return { flags: ["--browserUrl", "http://127.0.0.1:9333"], mode: "mango-code browser (9333)" };
-  }
-  // 3. seeded: ours beats yours, because it has the logins AND doesn't show the banner.
-  if (!forceReal && SEEDED()) return MINE();
-
-  // 4. your Chrome: until ours is seeded, it is the only one with logins inside.
-  const real = ownOnly ? null : realTarget();
-  if (real && (await alive(real.port))) {
-    // If the HTTP routes are there, prefer browserUrl: it survives a Chrome restart, while the
-    // WebSocket path changes at every start. If they aren't, wsEndpoint is the only way.
-    if (await hasHttpJson(real.port)) {
-      return { flags: ["--browserUrl", "http://127.0.0.1:" + real.port], mode: "REAL Chrome via HTTP (port " + real.port + ")" };
-    }
-    if (real.wsPath) {
-      return {
-        flags: ["--wsEndpoint", "ws://127.0.0.1:" + real.port + real.wsPath],
-        mode: "REAL Chrome via WebSocket (port " + real.port + ")",
-      };
-    }
-  }
-  if (forceReal) {
-    process.stderr.write("mango-chrome-mcp | MANGO_CHROME=real but remote debugging doesn't answer: turn it on from chrome://inspect#remote-debugging\n");
-  }
-  // 5. fallback.
+  // 2. fallback.
   fs.mkdirSync(PROFILE, { recursive: true });
   return MINE();
 }
 
 // --- THE TIMEOUT THAT MUST LOSE FIRST --------------------------------------------------------
-// MEASURED on 2026-08-26, session dead on LinkedIn. chrome-devtools-mcp serializes EVERY tool on a
-// global mutex (ToolHandler: `await this.toolMutex.acquire()`), and puppeteer waits for a CDP
-// answer up to protocolTimeout, which defaults to 180 s and no flag exposes. Our config gives the
-// MCP 120 s. The two numbers are in the wrong order: when a CDP call hangs, the client gives up at
-// 120 s but the server is still waiting until 180, holding the mutex; the model retries, the retry
-// queues behind the hung one and times out in turn. From then on EVERY tool returns -32001 at two
-// minutes each, forever - the logs had take_screenshot, take_snapshot, wait_for and three
-// list_pages, all at exactly 2 minutes, and the MCP process was still alive and still connected
-// to Chrome two hours later.
-//
-// The right rule is: the server must give up BEFORE the client. That way the hung call fails with a
-// real error, the mutex is released and the session goes on - the model reads "timeout" and
-// changes strategy, instead of banging against silence.
-// 20 s: above any healthy operation - measured in the field, a screenshot takes 130 ms, a
-// navigate 3.9 s, a snapshot 50 ms - and below the client's 30 s. The two numbers must be kept in
-// THIS order: if the client gives up first, the hung call keeps the mutex and the queue grows
-// faster than it empties. It was the first freeze of 2026-08-26. Change it with
-// MANGO_CHROME_PROTOCOL_TIMEOUT.
+// chrome-devtools-mcp serializes EVERY tool on a global mutex, and puppeteer waits for a CDP answer up to
+// protocolTimeout (180 s by default, no flag exposes it). The client gives the MCP 30 s. If the client gave up
+// first, a hung call would keep the mutex and every later call would queue behind it and time out in turn. So the
+// server must give up BEFORE the client: 20 s, above any healthy operation (a screenshot takes 130 ms, a navigate
+// 3.9 s) and below the client's 30 s. Keep the two numbers in this order. Change it with MANGO_CHROME_PROTOCOL_TIMEOUT.
 const PROTOCOL_TIMEOUT = Number(process.env.MANGO_CHROME_PROTOCOL_TIMEOUT || 20000);
 const TP = path.join(SELF, "node_modules", "chrome-devtools-mcp", "build", "src", "third_party", "index.js");
 try {
@@ -258,7 +194,7 @@ try {
   // asks for (the new_page tool) becomes a WINDOW of its own, outside the app window, and the
   // panel stays empty while the user looks at an external browser that has nothing to do with it.
   // When attached to the panel, new_page reuses its page: navigation ends up where the user sees
-  // it. Without a panel (terminal launcher) the original behaviour applies.
+  // it. Without a panel the original behaviour applies.
   if (Number(process.env.MANGO_PANEL_CDP || 0) > 0) {
     const origConnect = tp.puppeteer.connect;
     tp.puppeteer.connect = async (opts = {}) => {
@@ -283,18 +219,10 @@ try {
 // characters of schema for things that are never used here.
 const CUT = ["--no-category-performance", "--no-category-emulation"];
 
-// VISION. --experimentalVision adds ONE tool only, click_at(x,y): the model can click by looking
-// at a screenshot instead of reading the accessibility tree. It makes sense HERE and not elsewhere
-// because the model is natively VL and the engine always loads --mmproj; and the math is
-// pitiless: a LinkedIn tree is ~33,000 characters (~8k tokens), the same screen as an image costs
-// 1-2k. It doesn't replace the tree - it sits beside it: the tree stays the precise way to click,
-// the screenshot the cheap way to UNDERSTAND what is on screen (a cookie banner over the button, a
-// filter greyed out because disabled: things the tree doesn't say).
-// --image-min-tokens 1024 on the engine exists for this, it is Qwen-VL's recommendation for
-// grounding on screenshots.
-// jpeg/80 only affects the payload weight, not the tokens (those come from the resolution): no
-// --screenshotMaxWidth, because resizing the image while click_at reasons in coordinates is the
-// best way to make the model click ten pixels off.
+// VISION. --experimentalVision adds ONE tool, click_at(x,y): the model clicks by looking at a screenshot instead of
+// reading the accessibility tree (~8k tokens on a busy page, against 1-2k for the same screen as an image). It sits
+// beside the tree, which stays the precise way to click. No --screenshotMaxWidth: resizing the image while click_at
+// reasons in coordinates makes the model click off target.
 const VISION = ["--experimentalVision", "--screenshotFormat", "jpeg", "--screenshotQuality", "80"];
 
 const { flags: picked, mode } = await decide();
@@ -318,35 +246,12 @@ function trace(line) {
 // Which browser this server drives: without it, "the page doesn't show in the panel" can't be traced to anyone.
 trace("browser: " + mode);
 
-// --- THE BUG THAT KILLED FIVE SESSIONS -------------------------------------------------------
-// MEASURED on 2026-08-26 on pid 10100, still alive and frozen for 15 minutes while I looked at it:
-// CPU delta 0 s over 5 s, main thread in Wait, last trace line "-> navigate_page id=35" with no
-// answer and not even a heartbeat after it.
-//
-// THE CAUSE. On Windows process.stdout connected to a PIPE is BLOCKING - Node's doc says so:
-// "Pipes (and sockets): synchronous on Windows and Linux". When the client stops draining the pipe,
-// the next write NEVER returns: it freezes the whole event loop. From then on the server no longer
-// reads stdin, no longer fires a timer, no longer beats. It is alive and not running. The client
-// keeps sending calls into a pipe nobody reads and watches them expire one after the other, for
-// hours.
-//
-// It is the very same bug as the two earlier bug reports that looked different: in both, the trace
-// was silent ENTIRELY, heartbeat included. The conclusion back then - "the server is fine, the
-// channel is dead" - was wrong: the server was frozen in the middle of a write.
-// That is why none of the previous cures ever worked: protocolTimeout, client timeout and
-// heartbeat all take for granted that the server RUNS. It didn't.
-//
-// REPRODUCED in the lab, same machine, same Node: a child writing to stdout while the parent
-// doesn't read -> 4 heartbeats and then the freeze, forever. setBlocking(false) changes nothing
-// (tried: applied, and frozen all the same).
-//
-// THE CURE. fd 1 moves to a thread of its own (mango-mcp-stdout.cjs). If the pipe fills up, THAT
-// thread blocks; the main one keeps reading, answering and beating. Same experiment with the
-// worker: 28 heartbeats and the write reaches the end.
-// And since "never again" can't be proven, on top of it sits a guard (mango-mcp-watchdog.cjs) on a
-// third thread, which sees the main loop stop even when the main loop can no longer tell: if it
-// really stops, the process dies fast and hard, so the client sees EOF and SAYS so, instead of
-// silently collecting timeouts.
+// --- STDOUT ON A THREAD OF ITS OWN -----------------------------------------------------------
+// On Windows process.stdout connected to a PIPE is BLOCKING: when the client stops draining it, the next write never
+// returns and the whole event loop freezes (no stdin reads, no timers, no replies) while the process stays alive at
+// 0% CPU. setBlocking(false) does not help. The cure: fd 1 moves to a worker thread (mango-mcp-stdout.cjs), which
+// blocks instead of the loop, and a guard on a third thread (mango-mcp-watchdog.cjs) kills the process if the main
+// loop really stops, so the client sees EOF instead of silently collecting timeouts.
 {
   const sdk = path.join(SELF, "node_modules", "chrome-devtools-mcp", "build", "src", "third_party", "index.js");
   try {
@@ -403,12 +308,8 @@ trace("browser: " + mode);
     // talking to nobody: that is how orphan node.exe processes pile up.
     process.stdin.on("end", () => { trace("stdin closed by the client: the server exits"); process.exit(0); });
 
-    // --- THE TRACE (why it exists) -------------------------------------------------------------
-    // On 2026-08-26 this server hung and I diagnosed it twice by reasoning instead of measuring.
-    // The gap was that nobody timed THE SINGLE CALL. Now it does it here.
-    // It hooks onto the transport, not onto the single tools: it is the only point every request
-    // goes through, including those that never reach a handler because they stay queued on
-    // chrome-devtools-mcp's global mutex. And that queue is exactly the one worth watching.
+    // --- THE TRACE: every tool call is timed at the transport, the only point every request goes through (also those
+    // queued on chrome-devtools-mcp's mutex), and written to runtime\mcp-chrome.log with the pid.
     const inFlight = new Map();
     Object.defineProperty(proto, "onmessage", {
       configurable: true,
@@ -439,13 +340,8 @@ trace("browser: " + mode);
     };
     trace("=== start: " + mode + " | protocolTimeout " + PROTOCOL_TIMEOUT + "ms | stdout on a dedicated thread, watchdog active ===");
 
-    // THE HEARTBEAT. It now means one precise thing: the server is running and the client isn't
-    // sending anything. Before it was ambiguous - if the loop froze it went silent too, and
-    // "server dead" and "channel dead" were indistinguishable. A frozen loop is now seen by the
-    // watchdog, from outside, and written with that name.
-    // It is CHECKED every 15 s but WRITTEN only after 60 s of silence, and then once a minute:
-    // checking with the same period as the threshold pushed the first heartbeat to two minutes
-    // (measured).
+    // THE HEARTBEAT: one line a minute after 60 s without requests, checked every 15 s. It means the server runs and the
+    // client sends nothing; a frozen loop is seen by the watchdog from outside.
     let lastActivity = Date.now();
     let lastBeat = 0;
     proto.__mangoTouch = () => { lastActivity = Date.now(); };

@@ -3,6 +3,7 @@ import { Agent } from "@/agent/agent"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { Command } from "@/command"
+import { refusesBroadFolder } from "@/project/broad-folder"
 import { Permission } from "@/permission"
 import { SessionShare } from "@/share/session"
 import { Session } from "@/session/session"
@@ -153,6 +154,8 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     })
 
     const create = Effect.fn("SessionHttpApi.create")(function* (ctx: { payload?: Session.CreateInput }) {
+      // mango-code: a folder too broad to be a project gets no conversation (the web UI says why before getting here)
+      if (refusesBroadFolder(yield* InstanceState.directory)) return yield* new HttpApiError.BadRequest({})
       return yield* shareSvc.create(ctx.payload)
     })
 

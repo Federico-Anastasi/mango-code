@@ -366,7 +366,7 @@ mod tests {
     #[test]
     fn the_noise_is_measured_only_if_the_base_was_repeated() {
         let b = trial(1, base(), vec![point("1k", 100.0, 10.0)]);
-        assert_eq!(noise(&[b.clone()], &b), None);
+        assert_eq!(noise(std::slice::from_ref(&b), &b), None);
         let repeated = trial(2, base(), vec![point("1k", 96.0, 10.2)]);
         let other = trial(3, Tune { args: v("-c 1"), ..base() }, vec![point("1k", 10.0, 1.0)]);
         let r = noise(&[b.clone(), repeated, other], &b).unwrap();

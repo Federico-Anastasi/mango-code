@@ -1,10 +1,13 @@
 import { Show, createEffect, createMemo, createSignal, onCleanup, onMount } from "solid-js"
 import { ResizeHandle } from "@opencode-ai/ui/resize-handle"
+import { ButtonV2 } from "@opencode-ai/ui/v2/button-v2"
 import { Icon } from "@opencode-ai/ui/v2/icon"
 import { IconButtonV2 } from "@opencode-ai/ui/v2/icon-button-v2"
 import { TooltipV2 } from "@opencode-ai/ui/v2/tooltip-v2"
 import { useLanguage } from "@/context/language"
 import { PREVIEW_MIN_WIDTH, type PreviewDevice } from "@/context/preview"
+import { mangoDesktopError } from "@/utils/mango-desktop"
+import { showToast } from "@/utils/toast"
 
 /**
  * The "Preview" panel: the agent's browser inside the window.
@@ -20,6 +23,8 @@ const DEVICES: { id: PreviewDevice; icon: string; label: string; width?: number 
   { id: "desktop", icon: "monitor", label: "preview.device.desktop" },
 ]
 
+/** The most of the window the panel takes, for the CSS limit and for how far the handle goes: the same figure. */
+const MAX_SHARE = 0.55
 /** How often the panel is asked which page it is showing (back/forward included). */
 const SYNC_MS = 700
 
@@ -51,6 +56,7 @@ export function PreviewPanel(props: {
   const [url, setUrl] = createSignal("")
   const [title, setTitle] = createSignal("")
   const [loading, setLoading] = createSignal(false)
+  const [failed, setFailed] = createSignal("")
   let placeholder: HTMLDivElement | undefined
   let panel: HTMLElement | undefined
 
@@ -86,6 +92,7 @@ export function PreviewPanel(props: {
       setUrl(state.url)
       setTitle(state.title)
       setLoading(state.loading)
+      setFailed(state.failed ?? "")
       if (!editing()) setAddress(state.url)
       place()
     } catch {
@@ -127,7 +134,16 @@ export function PreviewPanel(props: {
     const value = address().trim()
     if (!bridge || !value) return
     setEditing(false)
-    void bridge.go(value).catch(() => {})
+    // an address the panel refuses (a scheme it does not open) says why instead of doing nothing
+    void bridge
+      .go(value)
+      .catch((error) => showToast({ title: language.t("common.requestFailed"), description: mangoDesktopError(error).message }))
+  }
+
+  const retry = () => {
+    const bridge = api()
+    const target = failed()
+    if (bridge && target) void bridge.go(target).catch(() => {})
   }
 
   const nav = (action: "back" | "forward" | "reload" | "stop") => {
@@ -140,7 +156,7 @@ export function PreviewPanel(props: {
       // Next to the chat, like the review panel, from 768 px (a laptop at 150% is ~860 px wide): never more than 55%
       // of the room, so the chat stays readable. Only below 768 px it covers the chat; its X or the globe bring it back.
       class="flex order-last shrink-0 h-full flex-col border-s border-border-weaker-base bg-background-base max-md:absolute max-md:inset-0 max-md:z-30 max-md:!w-full max-md:!max-w-none max-md:border-s-0"
-      style={{ width: `${props.width}px`, "max-width": "55%" }}
+      style={{ width: `${props.width}px`, "max-width": `${MAX_SHARE * 100}%` }}
       aria-label={language.t("preview.title")}
     >
       <div class="relative h-full min-h-0 flex flex-col">
@@ -150,7 +166,7 @@ export function PreviewPanel(props: {
             edge="start"
             size={props.width}
             min={PREVIEW_MIN_WIDTH}
-            max={typeof window === "undefined" ? 1200 : Math.max(PREVIEW_MIN_WIDTH, window.innerWidth * 0.7)}
+            max={typeof window === "undefined" ? 1200 : Math.max(PREVIEW_MIN_WIDTH, window.innerWidth * MAX_SHARE)}
             onResize={props.onResize}
           />
         </div>
@@ -246,7 +262,18 @@ export function PreviewPanel(props: {
             <Show when={!url()}>
               <div class="flex h-full flex-col items-center justify-center gap-3 px-8 text-center text-text-weak">
                 <Icon name="globe" size="large" />
-                <p class="max-w-[36ch] text-[13px] leading-relaxed">{language.t("preview.empty")}</p>
+                <p class="max-w-[36ch] text-[13px] leading-relaxed" data-slot="preview-status">
+                  {failed()
+                    ? language.t("preview.failed", { address: failed() })
+                    : loading()
+                      ? language.t("preview.loading")
+                      : language.t("preview.empty")}
+                </p>
+                <Show when={failed()}>
+                  <ButtonV2 type="button" variant="neutral" onClick={retry} data-action="preview-retry">
+                    {language.t("preview.retry")}
+                  </ButtonV2>
+                </Show>
               </div>
             </Show>
           </div>

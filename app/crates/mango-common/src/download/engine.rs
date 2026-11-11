@@ -47,7 +47,7 @@ fn engine_dir(paths: &Paths, engine: &str, m: &Engine, build: Build) -> PathBuf 
 }
 
 /// The folder with `llama-server.exe` for this engine and build, if it's already there: the downloaded one of the
-/// catalog's version, or (only for CUDA 12, as `setup.ps1` builds them) the old `<engines>\<engine>` of
+/// catalog's version, or (only for CUDA 12, as `build-engines.ps1` builds them) the old `<engines>\<engine>` of
 /// development from source.
 pub fn installed_engine(paths: &Paths, engine: &str, build: Build) -> Option<PathBuf> {
     if let Some(m) = catalog(paths).ok().and_then(|mut c| c.remove(engine)) {
@@ -144,9 +144,12 @@ fn install_with(
         })?;
         fs::rename(&temp, &dest).with_context(|| tr!("non riesco a creare {}", "can't create {}", dest.display()))
     })();
-    // the zips have done their job, either way; the half-built folder hasn't
+    // The zips have done their job, either way; the half-built folder hasn't. A zip that cannot be deleted (an antivirus
+    // holds it) does not replace the error of `r`.
     for (f, _) in &zips {
-        fs::remove_file(work.join(file_name(&f.url)?))?;
+        if let Ok(name) = file_name(&f.url) {
+            let _ = fs::remove_file(work.join(name));
+        }
     }
     let _ = fs::remove_dir(&work);
     if let Err(e) = r {
@@ -237,7 +240,7 @@ fn run(dir: &Path, arg: &str) -> Result<(String, String)> {
     let mut cmd = Command::new(&exe);
     cmd.arg(arg).current_dir(dir).stdin(Stdio::null()).stdout(File::create(&f_out)?).stderr(File::create(&f_err)?);
     #[cfg(windows)]
-    std::os::windows::process::CommandExt::creation_flags(&mut cmd, 0x0800_0000); // CREATE_NO_WINDOW
+    std::os::windows::process::CommandExt::creation_flags(&mut cmd, crate::CREATE_NO_WINDOW);
     let mut child = cmd.spawn().with_context(|| tr!("non riesco a lanciare {}", "can't launch {}", exe.display()))?;
     drop(cmd); // closes our handles on the output files, so they can be deleted
     let start = Instant::now();
@@ -445,6 +448,29 @@ mod tests {
         assert!(err.contains(&tr!("non è utilizzabile", "is not usable")) && err.contains("--version"), "{err}");
         assert_eq!(fs::read_dir(p.paths.engines.join("llamacpp")).unwrap().count(), 0);
         assert_eq!(installed_engine(&p.paths, "llamacpp", Build::Cpu), None);
+    }
+
+    /// An antivirus that holds the zip (here a handle that does not share deletion) must not hide why the engine
+    /// failed, nor leave the half-built folder.
+    #[test]
+    fn a_zip_that_cannot_be_deleted_does_not_hide_the_real_error() {
+        use std::os::windows::fs::OpenOptionsExt;
+        thread_local!(static HELD: std::cell::RefCell<Vec<fs::File>> = const { std::cell::RefCell::new(Vec::new()) });
+        fn lock_the_zips_and_fail(temp: &Path, _: Build, _: bool) -> Result<()> {
+            for zip in fs::read_dir(temp.parent().unwrap().join(".download")).unwrap().flatten() {
+                let held = fs::OpenOptions::new().read(true).share_mode(1).open(zip.path()).unwrap();
+                HELD.with(|h| h.borrow_mut().push(held));
+            }
+            anyhow::bail!("the engine says no")
+        }
+        let z = zip(&[("llama-server.exe", b"x")]);
+        let p = fixture(&[("/cpu.zip", &z)], &[("llamacpp", "cpu", "/cpu.zip", None)]);
+
+        let err = format!("{:#}", install_with(&p.paths, "llamacpp", Build::Cpu, &no_cuda(), lock_the_zips_and_fail, &mut |_, _| {}).unwrap_err());
+        HELD.with(|h| h.borrow_mut().clear());
+
+        assert!(err.contains("the engine says no"), "{err}");
+        assert!(!fs::read_dir(p.paths.engines.join("llamacpp")).unwrap().flatten().any(|e| e.file_name().to_string_lossy().ends_with(".tmp")));
     }
 
     #[test]

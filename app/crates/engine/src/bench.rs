@@ -64,18 +64,17 @@ pub fn repeat(tokens: &[Value], n: usize) -> Vec<Value> {
     tokens.iter().cycle().take(n).cloned().collect()
 }
 
-fn http_agent() -> ureq::Agent {
-    ureq::AgentBuilder::new().timeout_connect(Duration::from_secs(10)).build()
+fn http_agent(url: &str) -> ureq::Agent {
+    ureq::Agent::new_with_config(mango_common::internet::config(url).timeout_connect(Some(Duration::from_secs(10))).http_status_as_error(false).build())
 }
 
 fn post(url: &str, body: Value) -> Result<Value> {
-    let r = http_agent().post(url).set("Content-Type", "application/json").send_string(&body.to_string());
-    let r = match r {
-        Ok(r) => r,
-        Err(ureq::Error::Status(c, r)) => bail!("{c}: {}", r.into_string().unwrap_or_default()),
-        Err(e) => return Err(e.into()),
-    };
-    Ok(serde_json::from_reader(r.into_reader())?)
+    let mut r = http_agent(url).post(url).header("Content-Type", "application/json").send(body.to_string().as_str())?;
+    let status = r.status().as_u16();
+    if status >= 400 {
+        bail!("{status}: {}", r.body_mut().read_to_string().unwrap_or_default());
+    }
+    Ok(serde_json::from_reader(r.body_mut().as_reader())?)
 }
 
 pub fn tokenize(url: &str, text: &str) -> Result<Vec<Value>> {

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import type { Part } from "@opencode-ai/sdk/v2"
-import { producedFiles, summaryFiles } from "./produced-files"
+import { lastWrittenPage, producedFiles, summaryFiles } from "./produced-files"
 import type { SummaryDiff } from "./timeline-row"
 
 const tool = (name: string, input: Record<string, unknown>, output: string, status = "completed") =>
@@ -22,6 +22,25 @@ describe("producedFiles", () => {
 
   test("without tools there is nothing", () => {
     expect(producedFiles([{ type: "text", text: "hello" } as unknown as Part])).toEqual([])
+  })
+})
+
+describe("lastWrittenPage", () => {
+  test("the last HTML page a tool wrote, even if the same file was written before and other files came after", () => {
+    const parts = [
+      tool("write", { filePath: "C:\\P\\a.html" }, "ok"),
+      tool("write", { filePath: "C:\\P\\b.htm" }, "ok"),
+      tool("edit", { filePath: "C:\\P\\a.html" }, "ok"),
+      tool("write", { filePath: "C:\\P\\style.css" }, "ok"),
+      tool("documents_create", { file: "r.docx" }, "File created: C:\\P\\r.docx (10 KB)"),
+      tool("write", { filePath: "C:\\P\\c.html" }, "boom", "error"),
+    ]
+    expect(lastWrittenPage(parts)).toBe("C:\\P\\a.html")
+  })
+
+  test("without a page written there is none", () => {
+    expect(lastWrittenPage([tool("write", { filePath: "C:\\P\\a.css" }, "ok")])).toBeUndefined()
+    expect(lastWrittenPage([])).toBeUndefined()
   })
 })
 

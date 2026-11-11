@@ -1,6 +1,6 @@
 // mango-code: speed and timings of the local model.
-//  - EngineSpeedBar: under the composer, "Reads 650 tokens/s · Writes 21 tokens/s", always visible
-//    while the model works; when idle it shows the last measurements, faded.
+//  - EngineSpeedBar: under the composer, "Reads 650 tokens/s · Writes 21 tokens/s", only while the model works;
+//    at rest it is gone (the numbers stay under each answer).
 //  - SessionWorkTime: in the header, the time the model spent working.
 //  - TurnStats: under each answer, duration and tokens read/written.
 // The numbers are the engine's (the same as its log): live from the server route, at the end of a
@@ -137,11 +137,9 @@ export function EngineSpeedBar() {
   const rawEngine = createEngineLive(working)
   const turn = createEngineTurn(rawEngine, () => params.id)
   // The live numbers are the engine's, which works for one conversation at a time: if it is working
-  // for another one they are not this one's, and only the last measurements of this conversation
-  // stay here, grey as when idle. Hiding everything would remove a real and useful measurement.
-  const mine = () => ownsEngineNumbers(turn())
-  const engine = () => (mine() ? rawEngine() : {})
-  const live = () => working() && mine()
+  // for another one they are not this one's, and the bar is not shown.
+  const live = () => working() && ownsEngineNumbers(turn())
+  const engine = () => (live() ? rawEngine() : {})
   const measured = createMemo(() => lastMeasured(assistants()))
   const locale = () => language.intl()
 
@@ -161,7 +159,7 @@ export function EngineSpeedBar() {
 
   // The engine does not answer because the gpus are lent to another app or the model is loading: say so.
   const waitText = () => {
-    const wait = live() ? engine().wait : undefined
+    const wait = engine().wait
     return wait && waitLabel(wait, language.t, locale())
   }
 
@@ -177,7 +175,7 @@ export function EngineSpeedBar() {
   }
 
   return (
-    <Show when={readText() || writeText()}>
+    <Show when={live() && (readText() || writeText())}>
       <TooltipV2
         placement="top"
         value={
@@ -185,20 +183,12 @@ export function EngineSpeedBar() {
             <span>{language.t("engine.speed.tooltip.read")}</span>
             <span>{language.t("engine.speed.tooltip.write")}</span>
             <span class="text-v2-text-text-muted">{language.t("engine.speed.tooltip.unit")}</span>
-            <Show when={!mine()}>
-              <span class="text-v2-text-text-muted">{language.t("engine.speed.tooltip.other")}</span>
-            </Show>
           </div>
         }
       >
         <div
           data-component="engine-speed"
-          data-working={live() ? "" : undefined}
-          class="mt-1 flex w-fit mx-auto items-center gap-2 text-[12px] leading-4 tabular-nums transition-opacity duration-300 cursor-default select-none"
-          classList={{
-            "text-v2-text-text-muted": live(),
-            "text-v2-text-text-faint opacity-70": !live(),
-          }}
+          class="mt-1 flex w-fit mx-auto items-center gap-2 text-[12px] leading-4 tabular-nums text-v2-text-text-muted cursor-default select-none"
         >
           <Show when={readText()}>{(text) => <span>{text()}</span>}</Show>
           <Show when={readText() && writeText()}>

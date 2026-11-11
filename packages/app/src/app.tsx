@@ -49,7 +49,6 @@ import { LanguageProvider, type Locale, useLanguage } from "@/context/language"
 import { LayoutProvider } from "@/context/layout"
 import { ModelsProvider } from "@/context/models"
 import { NotificationProvider } from "@/context/notification"
-import { PermissionProvider } from "@/context/permission"
 import { PreviewProvider } from "@/context/preview"
 import { usePlatform } from "@/context/platform"
 import { PromptProvider } from "@/context/prompt"
@@ -592,15 +591,13 @@ export function AppInterface(props: {
                 component={props.router ?? Router}
                 root={(routerProps) => (
                   <TabsProvider>
-                    <PermissionProvider>
-                      <NotificationProvider>
-                        <ServerShell>
-                          <Show when={useSettings().general.newLayoutDesigns()} fallback={routerProps.children}>
-                            <NewAppLayout serverScoped={props.serverScoped}>{routerProps.children}</NewAppLayout>
-                          </Show>
-                        </ServerShell>
-                      </NotificationProvider>
-                    </PermissionProvider>
+                    <NotificationProvider>
+                      <ServerShell>
+                        <Show when={useSettings().general.newLayoutDesigns()} fallback={routerProps.children}>
+                          <NewAppLayout serverScoped={props.serverScoped}>{routerProps.children}</NewAppLayout>
+                        </Show>
+                      </ServerShell>
+                    </NotificationProvider>
                   </TabsProvider>
                 )}
               >

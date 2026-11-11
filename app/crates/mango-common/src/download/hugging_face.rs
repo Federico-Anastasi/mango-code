@@ -253,7 +253,7 @@ pub fn verify_token(token: &str) -> Result<()> {
 }
 
 fn verify_token_at(base: &str, token: &str) -> Result<()> {
-    match http_agent(Some(MAX_WAIT)).get(&format!("{base}/api/whoami-v2")).header("Authorization", format!("Bearer {token}")).call() {
+    match http_agent(base, Some(MAX_WAIT)).get(&format!("{base}/api/whoami-v2")).header("Authorization", format!("Bearer {token}")).call() {
         Ok(_) => Ok(()),
         Err(ureq::Error::StatusCode(401)) => bail!(
             "{}",
@@ -268,7 +268,7 @@ fn verify_token_at(base: &str, token: &str) -> Result<()> {
 
 /// GET of `url` with the Hugging Face token (if any) and, if needed, a range; status errors become sentences.
 fn get(url: &str, range: Option<&str>) -> Result<ureq::http::Response<ureq::Body>> {
-    let mut request = http_agent(Some(MAX_WAIT)).get(url);
+    let mut request = http_agent(url, Some(MAX_WAIT)).get(url);
     if let Some(i) = range {
         request = request.header("Range", i);
     }
@@ -293,7 +293,7 @@ fn get(url: &str, range: Option<&str>) -> Result<ureq::http::Response<ureq::Body
             tr!("Hugging Face chiede di rallentare (429): riprova fra un minuto", "Hugging Face asks to slow down (429): try again in a minute")
         ),
         Err(ureq::Error::StatusCode(c)) => bail!("{}", tr!("Hugging Face risponde {c} per {url}", "Hugging Face answers {c} for {url}")),
-        Err(e) => bail!("{}", tr!("rete: {e}", "network: {e}")),
+        Err(e) => Err(crate::internet::network_failure(e, url)),
     }
 }
 

@@ -13,11 +13,22 @@ type PhonePreviewState = { port: number; page: PhonePage | null }
 /** What the phone asks the panel to open: an address of the computer, or an HTML file of a project. */
 export type PhoneOpen = { url: string } | { directory: string; path: string }
 
-/** The page shown full screen: the address of the frame and the name over it. */
-export type PhoneView = { src: string; title: string }
+/**
+ * The page shown full screen: the address of the frame and the name over it. A file of the project (`kind`) is shown by
+ * itself, from the copy the phone fetched (`src` is its address in memory), not as a page of the computer.
+ */
+export type PhoneView = { src: string; title: string; kind?: "image" | "pdf" }
 
+const lastPages = new Map<string, PhoneOpen>()
 const [available, setAvailable] = createSignal(false)
 const [view, setView] = createSignal<PhoneView>()
+
+/** Shows `next`, freeing the file the previous view held. */
+function show(next: PhoneView | undefined) {
+  const before = view()
+  if (before?.kind) URL.revokeObjectURL(before.src)
+  setView(next)
+}
 
 async function ask(order?: PhoneOpen): Promise<PhonePreviewState | undefined> {
   const response = await fetch(
@@ -56,17 +67,47 @@ export const phonePreview = {
     const state = await ask().catch(() => undefined)
     setAvailable(typeof state?.port === "number")
   },
-  /** Shows the page the panel has now. Rejects with the sentence for the user. */
-  async open() {
-    const state = await ask()
-    if (state) setView(viewOf(state))
+  /**
+   * `detect` now and again each time the page comes back (visible, online) while the preview is not available: a drop
+   * of the phone's network at the start does not turn it off for the whole visit. Returns the way to stop.
+   */
+  watch() {
+    const check = () => {
+      if (!available() && document.visibilityState === "visible") void phonePreview.detect()
+    }
+    check()
+    document.addEventListener("visibilitychange", check)
+    window.addEventListener("online", check)
+    return () => {
+      document.removeEventListener("visibilitychange", check)
+      window.removeEventListener("online", check)
+    }
+  },
+  /** The last HTML page a conversation wrote: what the globe opens when the panel has no page. */
+  rememberPage(sessionID: string, order: PhoneOpen | undefined) {
+    if (order) lastPages.set(sessionID, order)
+    else lastPages.delete(sessionID)
+  },
+  /**
+   * Shows the page the panel has now; with none, the last one `sessionID` wrote, if it wrote one. Rejects with the sentence
+   * for the user.
+   */
+  async open(sessionID?: string) {
+    let state = await ask()
+    const fallback = sessionID && !state?.page ? lastPages.get(sessionID) : undefined
+    if (fallback) state = (await ask(fallback)) ?? state
+    if (state) show(viewOf(state))
   },
   /** Asks the panel to open a page first, then shows it. Rejects with the sentence for the user. */
   async openPage(order: PhoneOpen) {
     const state = await ask(order)
-    if (state) setView(viewOf(state))
+    if (state) show(viewOf(state))
   },
-  close: () => setView(undefined),
+  /** Shows a picture or a PDF the phone fetched from the computer. */
+  showFile(file: Blob, title: string, kind: "image" | "pdf") {
+    show({ src: URL.createObjectURL(file), title, kind })
+  },
+  close: () => show(undefined),
 }
 
 /** Links to a page of the computer open in the preview instead of on the phone. Returns the way to stop. */

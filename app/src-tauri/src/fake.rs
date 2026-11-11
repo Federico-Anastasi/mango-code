@@ -71,14 +71,15 @@ impl FakeSystem {
 
 /// Downloads `url` into `dest` through `dest.part`; `progress(done, total)` at every chunk.
 fn download(url: &str, dest: &PathBuf, progress: &mut dyn FnMut(u64, u64)) -> Result<()> {
-    let response = ureq::get(url).call().with_context(|| format!("GET {url}"))?;
-    let total: u64 = response.header("Content-Length").and_then(|v| v.parse().ok()).unwrap_or(0);
+    let response = mango_common::internet::config(url).build();
+    let response = ureq::Agent::new_with_config(response).get(url).call().with_context(|| format!("GET {url}"))?;
+    let total: u64 = response.headers().get("content-length").and_then(|v| v.to_str().ok()).and_then(|v| v.parse().ok()).unwrap_or(0);
     if let Some(folder) = dest.parent() {
         std::fs::create_dir_all(folder)?;
     }
     let partial = dest.with_extension("part");
     let mut file = std::fs::File::create(&partial)?;
-    let mut reader = response.into_reader();
+    let mut reader = response.into_body().into_reader();
     let mut buf = vec![0u8; 64 * 1024];
     let mut done = 0u64;
     loop {

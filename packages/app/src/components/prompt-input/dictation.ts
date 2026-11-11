@@ -12,8 +12,6 @@ export type VoiceFailureKind =
 
 /** A recording longer than this stops by itself and what was said up to that point is transcribed. */
 export const VOICE_MAX_RECORDING_SECONDS = 5 * 60
-/** Maximum wait for the transcription: beyond it, the page stops waiting (the server waits up to 11 minutes). */
-export const VOICE_TRANSCRIBE_TIMEOUT_MS = 4 * 60_000
 export type VoiceFailure = { kind: VoiceFailureKind; detail?: string }
 
 export function voiceFailureFromMediaError(error: unknown): VoiceFailure {

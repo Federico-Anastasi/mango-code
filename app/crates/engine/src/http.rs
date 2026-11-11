@@ -8,28 +8,38 @@
 //! * `POST /engine/release` `{"gpus": [0, 2], "pid"?: n}` (no body = all) → releases the GPUs; the loan belongs to
 //!   the calling process (or to `pid`, `0` = to nobody) and ends when that process closes.
 //! * `POST /engine/resume` → gives the GPUs back and restarts the model; replies when it's ready.
-//! * `POST /engine/model` `{"model": "toq"}` → starts that model; replies when it's ready.
+//! * `POST /engine/model` `{"model": "toq"}` → starts that model; replies when it's ready (422 if the plan refuses it).
 //!
 //! Forwarding is byte for byte: the request goes to the engine with `Connection: close` and the reply returns to
 //! the client as it arrives (the engine's headers and chunks), piece by piece. A thread watches the client's
 //! socket: if the client closes (the «Stop» button), the connection to the engine is closed at once too, and the
 //! engine cancels the task even while it is reading the prompt, when it has nothing to write yet.
 //!
-//! Every route rejects requests that come from a web page (`Origin` header): the engine is for the agent and for
-//! apps on the PC, which don't send it. Without this a site open in the browser could use the model or release the
-//! GPUs (a "simple" request doesn't go through CORS).
+//! Every route rejects requests that come from a web page (`Origin` header, or a `Host` that is not `127.0.0.1` or
+//! `localhost`: a name of the page's own pointing here): the engine is for the agent and for apps on the PC, which send
+//! neither. Without this a site open in the browser could use the model or release the GPUs (a "simple" request doesn't
+//! go through CORS). A request is read within bounded time and memory (`MAX_LINE`, `MAX_HEADERS`, `READ_TIMEOUT`).
 //! Errors have the shape of OpenAI's (`{"error": {"message", "type"}}`).
 
+use crate::share::Share;
 use crate::EngineManager;
 use anyhow::{bail, Context, Result};
 use mango_common::tr;
 use serde_json::{json, Value};
+use std::cell::Cell;
 use std::io::{BufRead, BufReader, Read, Write};
-use std::net::{Shutdown, TcpListener, TcpStream};
+use std::net::{Ipv4Addr, Shutdown, TcpListener, TcpStream};
 use std::time::{Duration, Instant};
 
 /// A request body larger than this (base64 images included) is an error.
 const MAX_BODY: usize = 256 * 1024 * 1024;
+/// The longest line of a request's head, and how many lines: a client that sends more is not an app of this computer.
+const MAX_LINE: usize = 16 * 1024;
+const MAX_HEADERS: usize = 100;
+/// How long a client may stay silent while it sends the request: the thread of a connection that stops is not held for ever.
+const READ_TIMEOUT: Duration = if cfg!(test) { Duration::from_secs(1) } else { Duration::from_secs(30) };
+/// The time a PC of the network has to send the head of its request, however slowly it comes.
+const HEAD_DEADLINE: Duration = if cfg!(test) { Duration::from_secs(1) } else { Duration::from_secs(10) };
 /// Request headers that pass on to the engine.
 const FORWARDED: &[&str] = &["content-type", "accept", "authorization", "x-mango-warmup"];
 
@@ -39,7 +49,7 @@ pub fn serve(m: EngineManager, port: u16) -> Result<()> {
     std::thread::Builder::new().name("engine-http".into()).spawn(move || {
         for c in l.incoming().flatten() {
             let m = m.clone();
-            let _ = std::thread::Builder::new().name("engine-request".into()).spawn(move || handle(c, &m));
+            let _ = std::thread::Builder::new().name("engine-request".into()).spawn(move || handle(c, &m, None));
         }
     })?;
     Ok(())
@@ -58,10 +68,104 @@ impl Request {
     }
 }
 
-fn read_request(c: &TcpStream) -> Result<Request> {
-    let mut r = BufReader::new(c);
+/// One line of the head, at most `MAX_LINE` bytes: a longer one is an error, not memory.
+fn head_line(r: &mut BufReader<&Timed>, line: &mut String) -> Result<usize> {
+    let n = r.by_ref().take(MAX_LINE as u64 + 1).read_line(line)?;
+    if line.len() > MAX_LINE {
+        bail!("{}", tr!("riga troppo lunga", "line too long"));
+    }
+    Ok(n)
+}
+
+/// The socket with an optional deadline for the whole head: a client that sends a byte at a time does not hold the thread.
+struct Timed<'a> {
+    stream: &'a TcpStream,
+    deadline: Cell<Option<Instant>>,
+}
+
+impl Read for &Timed<'_> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if let Some(d) = self.deadline.get() {
+            let left = d.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                return Err(std::io::ErrorKind::TimedOut.into());
+            }
+            self.stream.set_read_timeout(Some(left.min(READ_TIMEOUT)))?;
+        }
+        let mut s = self.stream;
+        s.read(buf)
+    }
+}
+
+/// What the network gate answers to a request it does not let through.
+#[derive(Debug)]
+struct Refused {
+    status: u16,
+    /// For the log, in English.
+    reason: &'static str,
+    /// For whoever uses the other PC, in the current language.
+    message: String,
+    path: String,
+}
+
+impl std::fmt::Display for Refused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.message)
+    }
+}
+
+impl std::error::Error for Refused {}
+
+/// What a PC of the network may do, in order: no web pages, a numeric address (a name pointing here is another site's),
+/// the key, and only the routes a PC that uses the engine needs. The loans of the GPUs and the writes to the engine stay
+/// for the apps of this PC.
+fn admit(method: &str, url: &str, headers: &[(String, String)], share: &Share) -> std::result::Result<(), Refused> {
+    let header = |name: &str| headers.iter().find(|(k, _)| k.eq_ignore_ascii_case(name)).map(|(_, v)| v.as_str());
+    let path = url.split('?').next().unwrap_or("");
+    let refuse = |status, reason, message: String| Err(Refused { status, reason, message, path: path.to_string() });
+    if header("Origin").is_some() {
+        return refuse(403, "request from a web page", tr!("il motore risponde ai tuoi PC, non alle pagine web", "the engine answers your PCs, not web pages"));
+    }
+    if !header("Host").is_some_and(|h| h.rsplit_once(':').map_or(h, |(ip, _)| ip).parse::<Ipv4Addr>().is_ok()) {
+        return refuse(
+            403,
+            "the address must be numeric",
+            tr!("l'indirizzo dev'essere numerico (http://192.168.x.y:porta o http://100.x.y.z:porta)", "the address must be numeric (http://192.168.x.y:port or http://100.x.y.z:port)"),
+        );
+    }
+    let key = header("Authorization").and_then(|v| v.strip_prefix("Bearer ")).unwrap_or("");
+    if !share.right_key(key.trim()) {
+        return refuse(
+            401,
+            "wrong or missing key",
+            tr!(
+                "La chiave non è giusta, oppure la condivisione è spenta: copia di nuovo il codice dal PC con il motore e incollalo in «Modelli e motore».",
+                "The key is not right, or sharing is off: copy the code again from the PC with the engine and paste it in \"Models and engine\"."
+            ),
+        );
+    }
+    // Decoded paths and `..` are not routes of the engine's: nothing that is not written here passes.
+    let clean = !path.contains("..") && !path.contains('%');
+    let allowed = clean
+        && match method {
+            "GET" => path.starts_with("/v1/") || matches!(path, "/health" | "/props" | "/metrics" | "/slots" | "/engine" | "/mango/models"),
+            "POST" => path.starts_with("/v1/"),
+            _ => false,
+        };
+    if !allowed {
+        return refuse(403, "route not shared", tr!("questa rotta è solo per l'app sul PC con il motore", "this route is only for the app on the PC with the engine"));
+    }
+    Ok(())
+}
+
+/// `gate`: the request comes from the network. It is checked as soon as its head is read, before the body: whoever has no
+/// right to ask does not make the manager read hundreds of MB.
+fn read_request(c: &TcpStream, gate: Option<&Share>) -> Result<Request> {
+    c.set_read_timeout(Some(READ_TIMEOUT))?;
+    let timed = Timed { stream: c, deadline: Cell::new(gate.map(|_| Instant::now() + HEAD_DEADLINE)) };
+    let mut r = BufReader::new(&timed);
     let mut line = String::new();
-    r.read_line(&mut line)?;
+    head_line(&mut r, &mut line)?;
     let mut parts = line.split_whitespace();
     let (Some(method), Some(url)) = (parts.next(), parts.next()) else {
         bail!("{}", tr!("richiesta malformata", "malformed request"))
@@ -70,7 +174,7 @@ fn read_request(c: &TcpStream) -> Result<Request> {
     let mut headers = Vec::new();
     loop {
         let mut h = String::new();
-        if r.read_line(&mut h)? == 0 {
+        if head_line(&mut r, &mut h)? == 0 || headers.len() > MAX_HEADERS {
             bail!("{}", tr!("connessione chiusa nelle intestazioni", "connection closed in the headers"));
         }
         let h = h.trim_end();
@@ -81,22 +185,51 @@ fn read_request(c: &TcpStream) -> Result<Request> {
             headers.push((k.trim().to_string(), v.trim().to_string()));
         }
     }
+    timed.deadline.set(None);
+    c.set_read_timeout(Some(READ_TIMEOUT))?;
+    if let Some(share) = gate {
+        admit(&method, &url, &headers, share)?;
+    }
     let n: usize = headers.iter().find(|(k, _)| k.eq_ignore_ascii_case("content-length")).and_then(|(_, v)| v.parse().ok()).unwrap_or(0);
     if n > MAX_BODY {
         bail!("{}", tr!("richiesta troppo grande", "request too large"));
     }
-    let mut body = vec![0u8; n];
-    r.read_exact(&mut body)?;
+    // The memory grows with the bytes that arrive, not with the length the client announces.
+    let mut body = Vec::new();
+    r.take(n as u64).read_to_end(&mut body)?;
+    if body.len() != n {
+        bail!("{}", tr!("corpo della richiesta incompleto", "request body incomplete"));
+    }
+    // The wait is over: the socket is then watched for the client closing (`Stop`), with no time limit.
+    c.set_read_timeout(None)?;
     Ok(Request { method, url, headers, body })
 }
 
-fn handle(c: TcpStream, m: &EngineManager) {
-    let req = match read_request(&c) {
+/// A request from another PC (`share.rs`): the gate is in `read_request`.
+pub(crate) fn handle_network(c: TcpStream, share: &Share) {
+    handle(c, share.manager(), Some(share));
+}
+
+fn handle(c: TcpStream, m: &EngineManager, net: Option<&Share>) {
+    let mut req = match read_request(&c, net) {
         Ok(r) => r,
-        Err(e) => return respond(&c, 400, error(&format!("{e:#}"))),
+        Err(e) => {
+            return match (e.downcast_ref::<Refused>(), net) {
+                (Some(r), Some(share)) => {
+                    let address = c.peer_addr().map(|a| a.ip().to_string()).unwrap_or_default();
+                    share.refused(&address, r.status, r.reason, &r.path);
+                    respond(&c, r.status, error(&r.message))
+                }
+                _ => respond(&c, 400, error(&format!("{e:#}"))),
+            };
+        }
     };
-    if req.header("Origin").is_some() {
+    if net.is_none() && (req.header("Origin").is_some() || req.header("Host").is_some_and(|h| !mango_common::loopback_host(h))) {
         return respond(&c, 403, error(&tr!("il motore risponde alle app sul PC, non alle pagine web", "the engine answers apps on the PC, not web pages")));
+    }
+    if net.is_some() {
+        // The key is for this manager, not for the engine.
+        req.headers.retain(|(k, _)| !k.eq_ignore_ascii_case("authorization"));
     }
     // The body is read only with `Content-Length`: a chunked one would arrive empty (and `release` without a body
     // releases all the GPUs), so it's rejected.
@@ -111,6 +244,9 @@ fn handle(c: TcpStream, m: &EngineManager) {
         );
     }
     let path = req.url.split('?').next().unwrap_or("").to_string();
+    if let (Some(share), "/mango/models") = (net, path.as_str()) {
+        return respond(&c, 200, share.offered());
+    }
     if path == "/engine" || path.starts_with("/engine/") {
         let t0 = Instant::now();
         let (status, v) = control(&req, &path, &c, m);
@@ -201,7 +337,8 @@ fn control(req: &Request, path: &str, c: &TcpStream, m: &EngineManager) -> (u16,
     };
     match outcome {
         Ok(s) => (200, serde_json::to_value(s).unwrap_or(Value::Null)),
-        Err(e) => (500, error(&format!("{e:#}"))),
+        // A model the plan refuses answers 422, as on `/v1/`: the sentence says why and nobody retries.
+        Err(e) => (if e.is::<crate::WillNotStart>() { 422 } else { 500 }, error(&format!("{e:#}"))),
     }
 }
 
@@ -351,6 +488,55 @@ fn reason(status: u16) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// What `read_request` makes of what a client sends and then stops sending: it must not wait for ever or reserve
+    /// the memory of a length that is only announced.
+    fn read(sent: &[u8]) -> (Result<Request>, Duration) {
+        let l = TcpListener::bind("127.0.0.1:0").unwrap();
+        let mut client = TcpStream::connect(l.local_addr().unwrap()).unwrap();
+        client.write_all(sent).unwrap();
+        let (server, _) = l.accept().unwrap();
+        let t0 = Instant::now();
+        let r = read_request(&server, None);
+        (r, t0.elapsed())
+    }
+
+    #[test]
+    fn a_client_that_stops_sending_does_not_hold_the_request_and_a_huge_header_is_refused() {
+        let (r, took) = read(b"POST /v1/x HTTP/1.1\r\nContent-Length: 200000000\r\n\r\nabc");
+        assert!(r.is_err() && took < Duration::from_secs(10), "{took:?}");
+        let (r, took) = read(b"GET / HTTP/1.1\r\nHost: 127.0.0.1\r\n");
+        assert!(r.is_err() && took < Duration::from_secs(10), "{took:?}");
+        let (r, took) = read(format!("GET / HTTP/1.1\r\nX: {}\r\n\r\n", "a".repeat(MAX_LINE + 10)).as_bytes());
+        assert!(r.is_err() && took < Duration::from_secs(1), "{took:?}");
+        let (r, _) = read(b"POST /v1/x HTTP/1.1\r\nContent-Length: 3\r\n\r\nabc");
+        assert_eq!(r.ok().map(|r| r.body), Some(b"abc".to_vec()));
+    }
+
+    /// A PC of the network that sends the head a byte at a time, always before the read times out, does not keep the thread.
+    #[test]
+    fn a_head_sent_drop_by_drop_is_cut_at_the_deadline() {
+        let dir = tempfile::tempdir().unwrap();
+        let manager = EngineManager::new(Box::new(|k, _, _| bail!("no model in the tests ({k})")), Box::new(Vec::new), dir.path(), None);
+        let share = Share::new(dir.path(), manager, 0, true).unwrap();
+        let l = TcpListener::bind("127.0.0.1:0").unwrap();
+        let mut client = TcpStream::connect(l.local_addr().unwrap()).unwrap();
+        let (server, _) = l.accept().unwrap();
+        let drip = std::thread::spawn(move || {
+            for byte in b"GET / HTTP/1.1
+X: aaaaaaaaaaaaaaaaaaaaaaaaaaaa" {
+                if client.write_all(&[*byte]).is_err() {
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(200));
+            }
+        });
+        let t0 = Instant::now();
+        assert!(read_request(&server, Some(&share)).is_err());
+        assert!(t0.elapsed() < Duration::from_millis(2500), "{:?}", t0.elapsed());
+        drop(server);
+        drip.join().unwrap();
+    }
 
     #[test]
     fn the_loan_is_the_given_pids_or_the_callers_and_never_nobodys_by_mistake() {

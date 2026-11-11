@@ -8,23 +8,17 @@ import { createMediaQuery } from "@solid-primitives/media"
 import { useLanguage } from "@/context/language"
 import { SettingsGeneralV2 } from "./general"
 import { SettingsHelpV2 } from "./help"
-import { SettingsLocalModelsV2 } from "./local-models"
-import { SettingsProvidersV2 } from "./providers"
-import { SettingsModelsV2 } from "./models"
 import { SettingsPromptV2 } from "./prompt"
 import { SettingsTeamV2 } from "./team"
 import "./settings-v2.css"
-import { SettingsServersV2 } from "./servers"
 import { useDialog } from "@opencode-ai/ui/context/dialog"
 import { useLayout } from "@/context/layout"
 import { useTabs } from "@/context/tabs"
 import { useServerSync } from "@/context/server-sync"
-import { inMangoDesktop } from "@/utils/mango-desktop"
 import { reportTarget } from "@/utils/report"
 import { mangoVersion } from "@/utils/mango-version"
 
 export const DialogSettings: Component<{
-  sessionID?: string
   defaultValue?: string
 }> = (props) => {
   const language = useLanguage()
@@ -38,13 +32,9 @@ export const DialogSettings: Component<{
   const [page, setPage] = createSignal(!!props.defaultValue)
   const titles: Record<string, string> = {
     general: language.t("settings.tab.general"),
-    "local-models": language.t("settings.tab.localModels"),
-    prompt: language.t("settings.tab.prompt"),
+    prompt: language.t("settings.prompt.title"),
     team: language.t("settings.tab.team"),
     help: language.t("settings.tab.help"),
-    servers: language.t("status.popover.tab.servers"),
-    providers: language.t("settings.providers.title"),
-    models: language.t("settings.models.title"),
   }
   const [report] = createResource(reportTarget)
   // The project the settings are about: the one picked in the page, else the open tab's, else the one selected in
@@ -68,10 +58,6 @@ export const DialogSettings: Component<{
   const directory = createMemo(
     () => picked() ?? routeDirectory() ?? layout.home.selection().directory ?? projects()[0]?.worktree,
   )
-
-  const showProviders = () => {
-    void dialog.show(() => <DialogSettings sessionID={props.sessionID} defaultValue="providers" />)
-  }
 
   return (
     <Dialog size="x-large" variant="settings" class="settings-v2-dialog">
@@ -103,62 +89,28 @@ export const DialogSettings: Component<{
           }}
         >
           <div class="flex flex-col justify-between h-full w-full">
-            <div class="flex flex-col gap-3 w-full">
-              <div class="flex flex-col gap-3">
-                <div class="flex flex-col gap-1.5">
-                  <TabsV2.SectionTitle>{language.t("settings.section.desktop")}</TabsV2.SectionTitle>
-                  <div class="flex flex-col gap-1.5 w-full">
-                    <TabsV2.Trigger value="general">
-                      <Icon name="sliders" />
-                      {language.t("settings.tab.general")}
-                    </TabsV2.Trigger>
-                    <Show when={inMangoDesktop()}>
-                      <TabsV2.Trigger value="local-models">
-                        <Icon name="models" />
-                        {language.t("settings.tab.localModels")}
-                      </TabsV2.Trigger>
-                    </Show>
-                    <TabsV2.Trigger value="prompt">
-                      <Icon name="bullet-list" />
-                      {language.t("settings.tab.prompt")}
-                    </TabsV2.Trigger>
-                    <Show when={window.__MANGO_DESKTOP__?.team}>
-                      <TabsV2.Trigger value="team">
-                        <Icon name="brain" />
-                        {language.t("settings.tab.team")}
-                      </TabsV2.Trigger>
-                    </Show>
-                    {/* "Report a problem" is also from the phone: the app on the computer sends it */}
-                    <Show when={report()}>
-                      <TabsV2.Trigger value="help">
-                        <Icon name="help" />
-                        {language.t("settings.tab.help")}
-                      </TabsV2.Trigger>
-                    </Show>
-                  </div>
-                </div>
-
-                {/* in the Mango Code app there is a single local model: no providers, servers and models; nor from the phone */}
-                <Show when={!inMangoDesktop() && !phone()}>
-                  <div class="flex flex-col gap-1.5">
-                    <TabsV2.SectionTitle>{language.t("settings.section.server")}</TabsV2.SectionTitle>
-                    <div class="flex flex-col gap-1.5 w-full">
-                      <TabsV2.Trigger value="servers">
-                        <Icon name="server" />
-                        {language.t("status.popover.tab.servers")}
-                      </TabsV2.Trigger>
-                      <TabsV2.Trigger value="providers">
-                        <Icon name="providers" />
-                        {language.t("settings.providers.title")}
-                      </TabsV2.Trigger>
-                      <TabsV2.Trigger value="models">
-                        <Icon name="models" />
-                        {language.t("settings.models.title")}
-                      </TabsV2.Trigger>
-                    </div>
-                  </div>
-                </Show>
-              </div>
+            <div class="flex flex-col gap-1.5 w-full">
+              <TabsV2.Trigger value="general">
+                <Icon name="sliders" />
+                {language.t("settings.tab.general")}
+              </TabsV2.Trigger>
+              <TabsV2.Trigger value="prompt">
+                <Icon name="bullet-list" />
+                {language.t("settings.prompt.title")}
+              </TabsV2.Trigger>
+              <Show when={window.__MANGO_DESKTOP__?.team}>
+                <TabsV2.Trigger value="team">
+                  <Icon name="brain" />
+                  {language.t("settings.tab.team")}
+                </TabsV2.Trigger>
+              </Show>
+              {/* "Report a problem" is also from the phone: the app on the computer sends it */}
+              <Show when={report()}>
+                <TabsV2.Trigger value="help">
+                  <Icon name="help" />
+                  {language.t("settings.tab.help")}
+                </TabsV2.Trigger>
+              </Show>
             </div>
             <div class="settings-v2-nav-footer">
               <span>{language.t("app.name.desktop")}</span>
@@ -167,10 +119,7 @@ export const DialogSettings: Component<{
           </div>
         </TabsV2.List>
         <TabsV2.Content value="general" class="settings-v2-panel">
-          <SettingsGeneralV2 sessionID={props.sessionID} />
-        </TabsV2.Content>
-        <TabsV2.Content value="local-models" class="settings-v2-panel">
-          <SettingsLocalModelsV2 />
+          <SettingsGeneralV2 />
         </TabsV2.Content>
         <TabsV2.Content value="prompt" class="settings-v2-panel">
           <SettingsPromptV2 directory={directory} projects={projects} onPick={setPicked} />
@@ -180,15 +129,6 @@ export const DialogSettings: Component<{
         </TabsV2.Content>
         <TabsV2.Content value="help" class="settings-v2-panel">
           <SettingsHelpV2 />
-        </TabsV2.Content>
-        <TabsV2.Content value="servers" class="settings-v2-panel">
-          <SettingsServersV2 />
-        </TabsV2.Content>
-        <TabsV2.Content value="providers" class="settings-v2-panel">
-          <SettingsProvidersV2 directory={directory} onBack={showProviders} />
-        </TabsV2.Content>
-        <TabsV2.Content value="models" class="settings-v2-panel">
-          <SettingsModelsV2 />
         </TabsV2.Content>
       </TabsV2>
     </Dialog>

@@ -14,11 +14,13 @@
 pub mod tune;
 pub mod bench;
 pub mod http;
-mod loan;
+pub mod share;
+pub mod remote;
+pub mod loan;
 
 use anyhow::{bail, Context, Result};
 use engine_cfg::EnginePlan;
-use mango_common::{tr, user_error};
+use mango_common::{tail, tr, user_error};
 use serde::Serialize;
 use std::fs::File;
 use std::io::Write;
@@ -29,9 +31,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
-const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 /// How long a request waits while the GPUs are released, before giving up.
 const RELEASED_WAIT: Duration = Duration::from_secs(30 * 60);
+/// Above this size `manager.log` becomes `manager.1.log` (the previous one is dropped): the network can cause lines.
+const LOG_MAX: u64 = 1024 * 1024;
 /// How long `release` lets in-flight requests finish before stopping the engine (and cutting them).
 pub const RELEASE_WAIT: Duration = Duration::from_secs(60);
 
@@ -258,10 +261,14 @@ impl EngineManager {
     /// One line per control call in `manager.log` (logs folder): JSON, with local time.
     pub fn log(&self, mut line: serde_json::Value) {
         line["time"] = chrono::Local::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, false).into();
+        let file = self.0.logs.join("manager.log");
+        if std::fs::metadata(&file).is_ok_and(|m| m.len() > LOG_MAX) {
+            let _ = std::fs::rename(&file, self.0.logs.join("manager.1.log"));
+        }
         let written = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
-            .open(self.0.logs.join("manager.log"))
+            .open(&file)
             .and_then(|mut f| writeln!(f, "{line}"));
         if let Err(e) = written {
             eprintln!("manager.log: {e}");
@@ -328,11 +335,17 @@ impl EngineManager {
                             s.reduced = true;
                             s
                         }
-                        Err(_) => {
+                        // It does not fit on the GPUs that remain: wait for `resume`.
+                        Err(e) if e.is::<WillNotStart>() => {
                             let mut s = self.lock();
                             s.phase = Phase::Released;
                             s.doesnt_fit = Some(want);
                             s
+                        }
+                        // Anything else (the program does not open, the port is taken) is told, not waited for.
+                        Err(e) => {
+                            self.lock().phase = Phase::Released;
+                            return Err(e);
                         }
                     };
                 }
@@ -394,7 +407,10 @@ impl EngineManager {
                 s.phase = Phase::Running;
                 s.running = Some(a);
                 if let Some(f) = &self.0.remembered_file {
-                    let _ = std::fs::write(f, key);
+                    if let Err(e) = std::fs::write(f, key) {
+                        // the model runs; only the next start will not remember it
+                        self.log(serde_json::json!({ "event": "model not remembered", "file": f.display().to_string(), "error": e.to_string() }));
+                    }
                 }
                 self.0.cv.notify_all();
                 Ok(s)
@@ -417,7 +433,7 @@ impl EngineManager {
 
     /// The engine plan for `key` on a free port, without the `excluded` GPUs.
     fn plan(&self, key: &str, excluded: &[u32]) -> Result<EnginePlan> {
-        let port = std::net::TcpListener::bind(("127.0.0.1", 0))?.local_addr()?.port();
+        let port = mango_common::random_port()?;
         (self.0.planner)(key, port, excluded)
     }
 
@@ -429,7 +445,7 @@ impl EngineManager {
             .stdin(Stdio::null())
             .stdout(out.try_clone()?)
             .stderr(out)
-            .creation_flags(CREATE_NO_WINDOW);
+            .creation_flags(mango_common::CREATE_NO_WINDOW);
         for k in &plan.spec.env_remove {
             cmd.env_remove(k);
         }
@@ -679,10 +695,10 @@ impl EngineManager {
 fn wait_healthy(a: &mut Running, log: &Path, tick: &mut dyn FnMut(u64)) -> Result<()> {
     let Some(url) = a.plan.spec.health_url.clone() else { return Ok(()) };
     let t0 = Instant::now();
-    let agent = ureq::AgentBuilder::new().timeout(Duration::from_secs(2)).build();
+    let agent = mango_common::internet::agent(&url, Duration::from_secs(2));
     loop {
         if let Ok(r) = agent.get(&url).call() {
-            if r.status() == 200 {
+            if r.status().as_u16() == 200 {
                 return Ok(());
             }
         }
@@ -732,16 +748,10 @@ fn recompute_excluded(s: &mut State) {
 
 /// How many tokens the engine's slot memory holds right now (`GET /slots`, `n_cache_tokens`).
 fn cached_tokens(url: &str) -> Option<u64> {
-    let r = ureq::get(&format!("{url}/slots")).timeout(Duration::from_secs(5)).call().ok()?;
-    let v: serde_json::Value = serde_json::from_reader(r.into_reader()).ok()?;
+    let url = format!("{url}/slots");
+    let mut r = mango_common::internet::agent(&url, Duration::from_secs(5)).get(&url).call().ok()?;
+    let v: serde_json::Value = serde_json::from_reader(r.body_mut().as_reader()).ok()?;
     v[0]["n_cache_tokens"].as_u64()
-}
-
-/// Last `n` non-empty lines of a log, for error messages.
-fn tail(path: &Path, n: usize) -> String {
-    let txt = std::fs::read(path).map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default();
-    let lines: Vec<&str> = txt.lines().filter(|l| !l.trim().is_empty()).collect();
-    lines[lines.len().saturating_sub(n)..].join("\n")
 }
 
 #[cfg(test)]
@@ -767,6 +777,18 @@ mod tests {
     }
 
     /// An explicit `resume` called by whoever has the GPUs always gives them back, even if there are other loans.
+    #[test]
+    fn manager_log_is_bounded() {
+        let dir = tempfile::tempdir().unwrap();
+        let m = manager_without_models(dir.path());
+        std::fs::write(dir.path().join("manager.log"), vec![b'x'; LOG_MAX as usize + 1]).unwrap();
+
+        m.log(serde_json::json!({ "event": "after" }));
+
+        assert!(std::fs::metadata(dir.path().join("manager.1.log")).unwrap().len() > LOG_MAX);
+        assert!(std::fs::metadata(dir.path().join("manager.log")).unwrap().len() < 1000);
+    }
+
     #[test]
     fn explicit_resume_removes_all_loans() {
         let dir = tempfile::tempdir().unwrap();

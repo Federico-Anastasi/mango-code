@@ -16,12 +16,12 @@ const TEXTS = {
     wordsPerToken: 0.65, // Italian: serves to give an idea, not to measure
     stepStartup: "Preparazione",
     stepEngine: "Modello di linguaggio",
-    stepVoice: "Dettatura",
     stepAgent: "Assistente",
     stepPreparing: "Preparazione del modello",
     startupTitle: "Sto preparando tutto",
     readyTitle: "Pronto, apro Mango Code",
     startupNote: "Di solito ci vogliono da venti secondi a un minuto.",
+    startupSlow: "Ci sta mettendo più del solito: sto ricaricando il modello e le conversazioni di prima. Lascia aperto.",
     yourComputer: "Il tuo computer",
     models: "Modelli",
     fastestNote:
@@ -90,7 +90,17 @@ const TEXTS = {
     badgeProtected: "Protetto",
     optimizedTitle: "Assetto messo a punto per queste schede: ",
     onGpu: "Sulla scheda video",
-    onCpu: "Sul processore · più lento",
+    onCpu: "Sul processore",
+    // A guess from how much the model reads for each word it writes: the memory of the PC changes it, so it is a band.
+    speed: {
+      very_slow: "molto lento: meno di una parola al secondo",
+      slow: "lento: una o due parole al secondo",
+      fair: "discreto: qualche parola al secondo",
+      quick: "svelto: più veloce di quanto si legge",
+    },
+    speedHint: "Una stima: dipende da quanto è veloce la memoria del computer.",
+    sizes: { small: "piccolo", medium: "medio", large: "grande" },
+    quantDetails: "Dettagli tecnici: le sigle delle versioni",
     contextLabel: (k) => `${k}k di contesto`,
     memoryHint: (reason, thousandWords) => `${reason} Ricorda circa ${thousandWords} mila parole di conversazione.`,
     doesNotFit: "Non ci sta in questo computer",
@@ -123,6 +133,42 @@ const TEXTS = {
     done: "Fatto",
     connecting: "Mi collego…",
     progress: (done, total, percent) => `${done} di ${total} · ${percent}%`,
+    pace: (rate, seconds) => `${rate}/s · ${seconds < 60 ? "meno di un minuto" : seconds < 5400 ? `circa ${Math.round(seconds / 60)} min` : `circa ${num(seconds / 3600)} ore`}`,
+    // the engine of another PC, and the sharing of this one
+    remoteTitle: "Uso il motore di un altro mio PC",
+    remoteIntro:
+      "Hai Mango Code su un altro PC con una scheda video? Usa il suo motore: non scarichi niente e questo computer non ha bisogno di una scheda video. Su quel PC apri «Modelli e motore», accendi «Condividi il motore con i miei PC» e premi «Copia il codice»; poi incollalo qui.",
+    remoteCodePlaceholder: "Incolla qui il codice (mango://…)",
+    remoteConnect: "Collega",
+    remotePaste: "Incolla prima il codice.",
+    remoteChecking: "Controllo il PC…",
+    remoteSwitching: "Il PC risponde. Riparto con il suo motore…",
+    remoteUsing: (ip) => `Stai usando il motore del PC ${ip}.`,
+    remoteModels: (names) => `Modelli di quel PC: ${names}.`,
+    remoteBack: "Torna al motore di questo PC",
+    choiceIntroRemote: "Questo computer usa il motore di un altro tuo PC: non scarica modelli e non usa la sua scheda video.",
+    shareTitle: "Condividi il motore con i miei PC",
+    shareRow: "Lascia usare questo motore ai tuoi altri PC",
+    shareDescription:
+      "Un altro tuo PC, in casa o fuori con Tailscale, può usare i modelli di questo: anche senza scheda video. Chi ha il codice usa il motore, non i tuoi file: dallo solo ai tuoi PC. Spento, la porta è chiusa e i codici non valgono più.",
+    shareWhere: "Sull'altro PC incolla il codice in «Modelli e motore», alla voce «Uso il motore di un altro mio PC»: al primo avvio è la prima cosa che si vede.",
+    shareHome: "In casa (Wi-Fi)",
+    shareHomeMissing: "Il computer non è collegato a una rete di casa.",
+    shareAway: "Fuori casa (Tailscale)",
+    shareAwayMissing: "Tailscale non è acceso su questo computer.",
+    shareFirewall:
+      "La prima volta Windows chiede se Mango Code può ricevere connessioni: consenti le reti private. In casa il codice e le richieste passano in chiaro sul Wi-Fi; con Tailscale sono cifrati. Se due PC usano il motore insieme, a ogni cambio di modello si ricarica.",
+    shareCopy: "Copia il codice",
+    shareCopied: "Copiato",
+    shareNewKey: "Nuova chiave",
+    dictationTitle: "Dettatura (microfono nella chat)",
+    dictationRow: "Scrivi parlando",
+    dictationDescription: (mb) =>
+      `Occupa ${mb} MB sul disco. Si scarica in sottofondo quando Mango Code è pronto, senza farti aspettare, e il microfono compare nella chat appena è pronta. Puoi accenderla o spegnerla anche dopo, dalle impostazioni: spegnendola liberi lo spazio.`,
+    dictationWaiting: "Si scarica appena Mango Code è pronto.",
+    dictationDownloading: (done, mb) => `Scarico la dettatura: ${done} di ${mb} MB`,
+    dictationReady: "Pronta: il microfono è nella chat.",
+    dictationRetry: "Riprova",
     // error
     logsFolder: "Cartella dei log: ",
     cannotRetry: "Non riesco a riprovare: ",
@@ -136,12 +182,12 @@ const TEXTS = {
     wordsPerToken: 0.75,
     stepStartup: "Preparing",
     stepEngine: "Language model",
-    stepVoice: "Dictation",
     stepAgent: "Assistant",
     stepPreparing: "Preparing the model",
     startupTitle: "Getting everything ready",
     readyTitle: "Ready, opening Mango Code",
     startupNote: "It usually takes between twenty seconds and a minute.",
+    startupSlow: "It is taking longer than usual: I am reloading the model and your earlier conversations. Keep it open.",
     yourComputer: "Your computer",
     models: "Models",
     fastestNote:
@@ -209,7 +255,16 @@ const TEXTS = {
     badgeProtected: "Protected",
     optimizedTitle: "Tune made for these graphics cards: ",
     onGpu: "On the graphics card",
-    onCpu: "On the processor · slower",
+    onCpu: "On the processor",
+    speed: {
+      very_slow: "very slow: less than a word a second",
+      slow: "slow: a word or two a second",
+      fair: "fair: a few words a second",
+      quick: "quick: faster than you read",
+    },
+    speedHint: "A guess: it depends on how fast the computer's memory is.",
+    sizes: { small: "small", medium: "medium", large: "large" },
+    quantDetails: "Technical details: the version names",
     contextLabel: (k) => `${k}k context`,
     memoryHint: (reason, thousandWords) => `${reason} It remembers about ${thousandWords} thousand words of conversation.`,
     doesNotFit: "Does not fit in this computer",
@@ -240,6 +295,42 @@ const TEXTS = {
     done: "Done",
     connecting: "Connecting…",
     progress: (done, total, percent) => `${done} of ${total} · ${percent}%`,
+    pace: (rate, seconds) => `${rate}/s · ${seconds < 60 ? "less than a minute" : seconds < 5400 ? `about ${Math.round(seconds / 60)} min` : `about ${num(seconds / 3600)} hours`}`,
+    // the engine of another PC, and the sharing of this one
+    remoteTitle: "Use the engine of another PC of mine",
+    remoteIntro:
+      "Do you have Mango Code on another PC with a graphics card? Use its engine: you download nothing and this computer does not need a graphics card. On that PC open \"Models and engine\", turn on \"Share the engine with my PCs\" and press \"Copy the code\"; then paste it here.",
+    remoteCodePlaceholder: "Paste the code here (mango://…)",
+    remoteConnect: "Connect",
+    remotePaste: "Paste the code first.",
+    remoteChecking: "Checking the PC…",
+    remoteSwitching: "The PC answers. Starting again with its engine…",
+    remoteUsing: (ip) => `You are using the engine of PC ${ip}.`,
+    remoteModels: (names) => `Models of that PC: ${names}.`,
+    remoteBack: "Back to the engine of this PC",
+    choiceIntroRemote: "This computer uses the engine of another PC of yours: it downloads no models and does not use its graphics card.",
+    shareTitle: "Share the engine with my PCs",
+    shareRow: "Let your other PCs use this engine",
+    shareDescription:
+      "Another PC of yours, at home or away with Tailscale, can use the models of this one: even without a graphics card. Whoever has the code uses the engine, not your files: give it only to your own PCs. Off, the port is closed and the codes stop working.",
+    shareWhere: "On the other PC paste the code in \"Models and engine\", under \"Use the engine of another PC of mine\": at the first start it is the first thing you see.",
+    shareHome: "At home (Wi-Fi)",
+    shareHomeMissing: "This computer is not connected to a home network.",
+    shareAway: "Away (Tailscale)",
+    shareAwayMissing: "Tailscale is not running on this computer.",
+    shareFirewall:
+      "The first time Windows asks whether Mango Code may receive connections: allow private networks. At home the code and the requests go in the clear on the Wi-Fi; on Tailscale they are encrypted. If two PCs use the engine together, every change of model reloads it.",
+    shareCopy: "Copy the code",
+    shareCopied: "Copied",
+    shareNewKey: "New key",
+    dictationTitle: "Dictation (microphone in the chat)",
+    dictationRow: "Write by speaking",
+    dictationDescription: (mb) =>
+      `It takes ${mb} MB on the disk. It downloads in the background once Mango Code is ready, without making you wait, and the microphone shows up in the chat as soon as it is ready. You can turn it on or off later too, from the settings: turning it off frees the space.`,
+    dictationWaiting: "It downloads as soon as Mango Code is ready.",
+    dictationDownloading: (done, mb) => `Downloading dictation: ${done} of ${mb} MB`,
+    dictationReady: "Ready: the microphone is in the chat.",
+    dictationRetry: "Try again",
     logsFolder: "Logs folder: ",
     cannotRetry: "Cannot retry: ",
     cannotOpenLogs: "Cannot open the logs: ",
@@ -262,11 +353,13 @@ function applyLanguage(code) {
 
 // --- views ------------------------------------------------------------------------------------
 
-const ORDER = ["startup", "engine", "voice", "agent", "preparing", "ready"];
+const ORDER = ["startup", "engine", "agent", "preparing", "ready"];
 const $ = (id) => document.getElementById(id);
 const stepRows = [...document.querySelectorAll("#steps li")];
+const startupNote = document.querySelector("[data-text=startupNote]");
 const VIEWS = ["starting", "choice", "download", "error"];
 
+let startedAt = null;    // when the startup in progress was first shown: after a minute the note says it is slower than usual
 let received = false;    // a state has already arrived (an event always beats the initial read)
 let lastError = null;    // the last error state, to go back to the screen if "Retry" fails
 let choice = null;       // the choice shown now (the app's assessment), for the summary
@@ -277,6 +370,7 @@ function view(name) {
     shownChoice = "";
     choice = null;
   }
+  if (name !== "starting") startedAt = null;
   for (const v of VIEWS) $(v).hidden = v !== name;
   document.querySelector("main").dataset.view = name;
 }
@@ -292,18 +386,20 @@ const thousandWords = (context) => num(Math.max(1, Math.round((context * t.words
 const contextLabel = (tokens) => t.contextLabel(num(Math.round(tokens / 1024), 0));
 
 // Where a model runs, in few words: all on the graphics cards or all on the processor (never split).
-const where = (placement) => (placement === "gpu" ? t.onGpu : t.onCpu);
+const where = (placement, speed) => (placement === "gpu" ? t.onGpu : speed ? `${t.onCpu} · ${t.speed[speed]}` : t.onCpu);
 
 // --- startup in progress ----------------------------------------------------------------------
 
 function showStartup(s) {
   view("starting");
+  startedAt ??= Date.now();
+  startupNote.textContent = Date.now() - startedAt > 60_000 ? t.startupSlow : t.startupNote;
   const pos = ORDER.indexOf(s.stage);
   if (pos < 0) return;
   $("startup-title").textContent = s.stage === "ready" ? t.readyTitle : t.startupTitle;
   for (const li of stepRows) {
     const step = li.dataset.step;
-    // dictation is optional and model preparation exists only if it was not already ready: they appear when they start
+    // model preparation exists only if it was not already ready: it appears when it starts
     if (step === s.stage && li.dataset.optional !== undefined) li.hidden = false;
     const i = ORDER.indexOf(step);
     li.classList.toggle("done", i < pos || s.stage === "ready");
@@ -388,8 +484,8 @@ function modelItem(m, ticked) {
   const place = document.createElement("span");
   place.className = "where" + (m.placement === "cpu" ? " cpu" : "");
   if (m.placement) {
-    place.textContent = m.user ? where(m.placement) : `${where(m.placement)} · ${contextLabel(m.context)}`;
-    place.title = t.memoryHint(m.reason, thousandWords(m.context));
+    place.textContent = m.user ? where(m.placement, m.speed) : `${where(m.placement, m.speed)} · ${contextLabel(m.context)}`;
+    place.title = t.memoryHint(m.reason, thousandWords(m.context)) + (m.speed ? " " + t.speedHint : "");
   } else {
     place.className = "why";
     place.textContent = t.doesNotFit + ": " + m.reason;
@@ -443,19 +539,26 @@ function showChoice(s) {
   shownChoice = signature;
   // If the choice comes back with a changed list (a model added or removed), what the user had already
   // ticked stays ticked; the new model ticks itself.
-  const ticked = choice ? new Set([...chosen(), ...(s.added ? [s.added] : [])]) : null;
+  const ticked = choice?.assessment ? new Set([...chosen(), ...(s.added ? [s.added] : [])]) : null;
   choice = s;
+  // While this PC uses the engine of another there is nothing of its own to download: only that PC and the way back.
   const assessment = s.assessment;
   $("choice-title").textContent = s.cancelable ? t.choiceTitleCancelable : t.choiceTitleFirstRun;
-  $("choice-intro").textContent = s.cancelable ? t.choiceIntroCancelable : t.choiceIntroFirstRun;
-  showComputer(assessment);
-  $("models").replaceChildren(...assessment.models.map((m) => modelItem(m, ticked)));
-  $("optimize-folder").textContent = s.optimize_dir;
-  if (!ticked) refreshToken();
+  $("choice-intro").textContent = !assessment ? t.choiceIntroRemote : s.cancelable ? t.choiceIntroCancelable : t.choiceIntroFirstRun;
+  for (const id of ["local", "start-download", "summary"]) $(id).hidden = !assessment;
+  showRemote(s.remote);
+  if (assessment) {
+    showComputer(assessment);
+    $("models").replaceChildren(...assessment.models.map((m) => modelItem(m, ticked)));
+    $("optimize-folder").textContent = s.optimize_dir;
+    if (!ticked) refreshToken();
+    summary();
+  }
+  loadShare(!!assessment);
+  desktop().dictation.state().then((state) => (dictation = state), () => (dictation = null)).then(drawDictation);
   $("cancel").hidden = !s.cancelable;
   $("choice-status").textContent = "";
   $("cancel").disabled = false;
-  summary();
 }
 
 $("start-download").addEventListener("click", async () => {
@@ -484,6 +587,154 @@ $("cancel").addEventListener("click", async () => {
   } catch (e) {
     $("choice-status").textContent = t.cannotCancel + e;
   }
+});
+
+// --- the engine of another PC -------------------------------------------------------------------
+// The code is pasted here; the app checks it with that PC and, if it is right, starts again on that engine (nothing to download).
+// The key is in the code and only in the field, which hides it like a password: the page never shows it.
+
+const desktop = () => window.__MANGO_DESKTOP__;
+const failure = (e) => e?.message ?? String(e);
+
+function showRemote(remote) {
+  $("remote-using").hidden = !remote;
+  $("remote-intro").hidden = !!remote;
+  $("remote-status").textContent = "";
+  if (!remote) return;
+  $("remote-using-text").textContent = t.remoteUsing(remote.address.split(":")[0]);
+  $("remote-models").textContent = t.remoteModels(remote.models.join(", "));
+}
+
+$("remote-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const code = $("remote-code").value;
+  if (!code.trim()) {
+    $("remote-status").textContent = t.remotePaste;
+    return;
+  }
+  $("remote-connect").disabled = true;
+  $("remote-status").textContent = t.remoteChecking;
+  try {
+    await desktop().engineRemote.connect(code);
+    $("remote-code").value = "";
+    $("remote-status").textContent = t.remoteSwitching;
+  } catch (err) {
+    $("remote-status").textContent = failure(err);
+  } finally {
+    $("remote-connect").disabled = false;
+  }
+});
+
+$("remote-back").addEventListener("click", async () => {
+  $("remote-back").disabled = true;
+  try {
+    await desktop().engineRemote.disconnect();
+  } catch (err) {
+    $("remote-status").textContent = failure(err);
+  } finally {
+    $("remote-back").disabled = false;
+  }
+});
+
+// --- sharing the engine of this PC -----------------------------------------------------------
+
+let share = null; // the state of the sharing; none where there is no engine yet (before the first start)
+
+async function loadShare(possible) {
+  share = null;
+  if (possible) share = await desktop().engineShare.state().catch(() => null);
+  drawShare();
+}
+
+function place(label, access, missing) {
+  const div = document.createElement("div");
+  div.className = "place";
+  const name = document.createElement("div");
+  name.className = "name";
+  name.textContent = label;
+  const detail = document.createElement("div");
+  detail.className = "meta";
+  detail.textContent = access ? access.address : missing;
+  div.append(name, detail);
+  if (access) {
+    // The code stays in this closure: it is copied, never written on the page.
+    const copy = document.createElement("button");
+    copy.type = "button";
+    copy.className = "secondary";
+    copy.textContent = t.shareCopy;
+    copy.addEventListener("click", () =>
+      navigator.clipboard.writeText(access.code).then(
+        () => { copy.textContent = t.shareCopied; },
+        () => { copy.textContent = t.shareCopy; },
+      ),
+    );
+    div.append(copy);
+  }
+  return div;
+}
+
+function drawShare() {
+  $("share").hidden = !share;
+  if (!share) return;
+  $("share-on").checked = share.enabled;
+  $("share-details").hidden = !share.enabled;
+  $("share-error").textContent = share.error ?? "";
+  $("share-places").replaceChildren(place(t.shareHome, share.home, t.shareHomeMissing), place(t.shareAway, share.away, t.shareAwayMissing));
+}
+
+async function changeShare(action) {
+  $("share-on").disabled = $("share-new-key").disabled = true;
+  try {
+    share = await action(desktop().engineShare);
+    drawShare();
+  } catch (err) {
+    drawShare();
+    $("share-error").textContent = failure(err);
+  } finally {
+    $("share-on").disabled = $("share-new-key").disabled = false;
+  }
+}
+
+$("share-on").addEventListener("change", (e) => changeShare((api) => api.setEnabled(e.target.checked)));
+$("share-new-key").addEventListener("click", () => changeShare((api) => api.newKey()));
+
+// --- dictation (the microphone in the chat) ---------------------------------------------------
+// The choice is the user's: off until they turn it on. The app downloads it in the background once it is ready; the
+// state arrives here as it changes.
+
+let dictation = null; // { enabled, status, doneMb, sizeMb, error }; none until the app answers
+
+function drawDictation() {
+  $("dictation").hidden = !dictation;
+  if (!dictation) return;
+  $("dictation-description").textContent = t.dictationDescription(dictation.sizeMb);
+  $("dictation-on").checked = dictation.enabled;
+  $("dictation-state").textContent =
+    dictation.status === "waiting" ? t.dictationWaiting
+    : dictation.status === "downloading" ? t.dictationDownloading(dictation.doneMb, dictation.sizeMb)
+    : dictation.status === "ready" ? t.dictationReady
+    : dictation.error ?? "";
+  $("dictation-retry").hidden = dictation.status !== "error" || !dictation.enabled;
+}
+
+async function changeDictation(action) {
+  $("dictation-on").disabled = $("dictation-retry").disabled = true;
+  try {
+    dictation = await action(desktop().dictation);
+    drawDictation();
+  } catch (err) {
+    drawDictation();
+    $("dictation-state").textContent = failure(err);
+  } finally {
+    $("dictation-on").disabled = $("dictation-retry").disabled = false;
+  }
+}
+
+$("dictation-on").addEventListener("change", (e) => changeDictation((api) => api.setEnabled(e.target.checked)));
+$("dictation-retry").addEventListener("click", () => changeDictation((api) => api.setEnabled(true)));
+window.addEventListener("mango-dictation", (e) => {
+  dictation = e.detail;
+  drawDictation();
 });
 
 // --- other models -----------------------------------------------------------------------------
@@ -553,9 +804,35 @@ function currentProposal() {
   return { key: v.key, ...(withImages ?? v) };
 }
 
+// The versions of a repo from the lightest to the heaviest are told in thirds: small, medium, large. A single version, or a
+// file of the computer, keeps its name.
+function sizeTiers(variants) {
+  if (variants.length < 2) return null;
+  const order = variants.map((v, i) => [v.bytes, i]).sort((a, b) => a[0] - b[0]);
+  const tiers = [];
+  order.forEach(([, i], rank) => (tiers[i] = ["small", "medium", "large"][Math.min(2, Math.floor((rank * 3) / order.length))]));
+  return tiers;
+}
+
+// The names of the versions (IQ3_M and the like) for whoever asks, one line for each.
+function drawQuantDetails(tiers) {
+  const box = $("other-quants");
+  box.hidden = !tiers;
+  if (!tiers) return;
+  box.querySelector("summary").textContent = t.quantDetails;
+  box.querySelector("ul").replaceChildren(
+    ...analysis.variants.map((v, i) => {
+      const li = document.createElement("li");
+      li.textContent = `${t.sizes[tiers[i]]}: ${v.name} · ${size(v.bytes)}`;
+      return li;
+    }),
+  );
+}
+
 function drawVariants() {
   const marked = Number(document.querySelector("#other-variants input:checked")?.value ?? analysis.variants.findIndex((v) => v.recommended));
   const withImages = $("other-images").checked;
+  const tiers = sizeTiers(analysis.variants);
   $("other-variants").replaceChildren(
     ...analysis.variants.map((v, i) => {
       const p = withImages && v.with_images ? v.with_images : v;
@@ -572,12 +849,13 @@ function drawVariants() {
       const body = document.createElement("span");
       const name = document.createElement("span");
       name.className = "name";
-      name.textContent = v.name;
+      // Repos of quantizations: small, medium or large by weight, the name of the version only in the technical details.
+      name.textContent = tiers ? t.sizes[tiers[i]] : v.name;
       if (v.recommended) name.append(badge(t.recommendedVariant));
       const meta = document.createElement("span");
       meta.className = "meta";
-      meta.textContent = [size(p.bytes), p.placement ? where(p.placement) : t.doesNotFit].join(" · ");
-      meta.title = p.reason;
+      meta.textContent = [size(p.bytes), p.placement ? where(p.placement, p.speed) : t.doesNotFit].join(" · ");
+      meta.title = p.reason + (p.speed ? " " + t.speedHint : "");
       body.append(name, meta);
       if (!p.placement) {
         const why = document.createElement("span");
@@ -590,6 +868,7 @@ function drawVariants() {
       return li;
     }),
   );
+  drawQuantDetails(tiers);
   updateAdd();
 }
 
@@ -705,6 +984,20 @@ $("token-remove").addEventListener("click", async () => {
 
 // --- download ---------------------------------------------------------------------------------
 
+// The speed over the last ten seconds of each file, to say how long what is left takes.
+const samples = {};
+function pace(name, done, total) {
+  const now = Date.now();
+  let list = (samples[name] ??= []);
+  if (list.length && done < list.at(-1)[1]) list = samples[name] = [];
+  list.push([now, done]);
+  while (list.length > 1 && now - list[1][0] >= 10000) list.shift();
+  const [before, from] = list[0];
+  if (now - before < 2000 || done <= from) return "";
+  const rate = ((done - from) * 1000) / (now - before);
+  return " · " + t.pace(size(rate), (total - done) / rate);
+}
+
 function showDownload(s) {
   view("download");
   $("download-title").textContent = s.detail;
@@ -727,7 +1020,7 @@ function showDownload(s) {
       else if (p.state === "done") detail.textContent = p.total ? size(p.total) : t.done;
       else if (p.total) {
         const percent = Math.min(100, Math.floor((p.done / p.total) * 100));
-        detail.textContent = t.progress(size(p.done), size(p.total), percent);
+        detail.textContent = t.progress(size(p.done), size(p.total), percent) + pace(p.name, p.done, p.total);
         fill.style.width = percent + "%";
       } else detail.textContent = t.connecting;
       li.append(indicator, name, detail, bar);
@@ -747,6 +1040,7 @@ function showError(s) {
   $("error-sentence").textContent = e.message.split(t.technicalDetailMarker)[0];
   $("error-message").textContent = e.message;
   $("logs").hidden = !e.logs;
+  $("local-engine").hidden = !e.remote;
   $("retry").disabled = false;
   $("status").textContent = e.logs ? t.logsFolder + e.logs : "";
 }
@@ -760,6 +1054,7 @@ function apply(s) {
 }
 
 function reset() {
+  startedAt = null;
   for (const li of stepRows) li.classList.remove("done", "active");
   for (const li of stepRows) if (li.dataset.optional !== undefined) li.hidden = true;
 }
@@ -773,6 +1068,18 @@ $("retry").addEventListener("click", async () => {
   } catch (e) {
     showError(lastError);
     $("status").textContent = t.cannotRetry + e;
+  }
+});
+
+// With the engine of another PC saved, the way out of an error that is that PC's: this one's engine.
+$("local-engine").addEventListener("click", async () => {
+  reset();
+  showStartup({ stage: "startup", detail: "" });
+  try {
+    await desktop().engineRemote.disconnect();
+  } catch (e) {
+    showError(lastError);
+    $("status").textContent = t.cannotRetry + failure(e);
   }
 });
 

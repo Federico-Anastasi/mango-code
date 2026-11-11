@@ -36,10 +36,13 @@ export function parsePromptSettings(body: unknown): PromptSettings | undefined {
   return { directory: raw.directory, items: items as PromptItem[] }
 }
 
-/** The items of a section: from the heaviest, the unmeasured ones last by name. */
+/**
+ * The items of a section: from the heaviest, the unmeasured ones last by name. An item that weighs nothing is left out
+ * while it is on (a plugin that only works behind the scenes); once it is off it is listed, to turn it back on.
+ */
 export function itemsOf(settings: PromptSettings, kind: PromptKind | "base"): PromptItem[] {
   return settings.items
-    .filter((item) => item.type === kind)
+    .filter((item) => item.type === kind && (item.tokens !== 0 || !item.enabled))
     .toSorted((a, b) => (b.tokens ?? -1) - (a.tokens ?? -1) || a.name.localeCompare(b.name))
 }
 

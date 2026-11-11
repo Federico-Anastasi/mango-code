@@ -26,6 +26,36 @@ describe("the preview's address", () => {
   })
 })
 
+describe("the globe of the phone", () => {
+  const order = { directory: "C:\\p", path: "C:\\p\\index.html" }
+  const shown = { port: 47097, page: { path: "/x", title: "", label: "x", local: true } }
+
+  test("with nothing in the computer's panel it opens the last page the conversation wrote", async () => {
+    const calls: { method: string; body?: unknown }[] = []
+    globalThis.fetch = (async (_url: string, init?: RequestInit) => {
+      calls.push({ method: init?.method ?? "GET", body: init?.body ? JSON.parse(String(init.body)) : undefined })
+      return new Response(JSON.stringify(init?.method === "POST" ? shown : { port: 47097, page: null }))
+    }) as typeof fetch
+    phonePreview.rememberPage("ses_1", order)
+    await phonePreview.open("ses_1")
+    expect(calls).toEqual([{ method: "GET" }, { method: "POST", body: order }])
+    expect(phonePreview.view()?.src).toBe(`http://${location.hostname}:47097/x`)
+  })
+
+  test("a page the panel already shows stays, and a conversation that wrote none leaves the empty panel as it is", async () => {
+    const calls = answer(200, shown)
+    phonePreview.rememberPage("ses_1", order)
+    await phonePreview.open("ses_1")
+    expect(calls).toEqual([{ method: "GET" }])
+
+    phonePreview.rememberPage("ses_1", undefined)
+    const empty = answer(200, { port: 47097, page: null })
+    await phonePreview.open("ses_1")
+    expect(empty).toEqual([{ method: "GET" }])
+    expect(phonePreview.view()?.src).toBe(`http://${location.hostname}:47097/`)
+  })
+})
+
 describe("links to the computer's own pages", () => {
   test("only http on localhost or 127.0.0.1", () => {
     expect(localLink("http://localhost:3000/")).toBe("http://localhost:3000/")
@@ -79,6 +109,22 @@ describe("asking the phone port", () => {
     answer(200, { port: 47097, page: null })
     await phonePreview.detect()
     expect(phonePreview.available()).toBe(true)
+  })
+
+  test("a failed look at the start (the network dropped) is repeated when the page is back online", async () => {
+    globalThis.fetch = (async (_url: string): Promise<Response> => {
+      throw new TypeError("Failed to fetch")
+    }) as typeof fetch
+    await phonePreview.detect()
+    expect(phonePreview.available()).toBe(false)
+    const stop = phonePreview.watch()
+    await Bun.sleep(0)
+    expect(phonePreview.available()).toBe(false)
+    answer(200, { port: 47097, page: null })
+    window.dispatchEvent(new Event("online"))
+    await Bun.sleep(0)
+    expect(phonePreview.available()).toBe(true)
+    stop()
   })
 
   test("opening shows what the panel has; opening a page asks the panel first", async () => {

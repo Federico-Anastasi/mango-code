@@ -13,7 +13,7 @@ use mango_common::tr;
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 use tauri::{
-    ipc::Response,
+    ipc::{CapabilityBuilder, Response},
     plugin::Builder,
     webview::{NewWindowResponse, WebviewWindowBuilder},
     App, AppHandle, Manager, Url, Window, Wry,
@@ -27,12 +27,8 @@ pub const INIT_SCRIPT: &str = r#"
   const invoke = (cmd, args) => window.__TAURI_INTERNALS__.invoke("plugin:mango-bridge|" + cmd, args);
 
   // What goes wrong in the page ends up in logs\ui.log (report.rs): uncaught errors, console.error, and the calls
-  // to the app that take more than a second or never answer. At most 100 lines a minute.
-  let budget = 100;
-  setInterval(() => (budget = 100), 60000);
+  // to the app that take more than a second or never answer. The app caps the lines (report.rs).
   const log = (level, text) => {
-    if (budget <= 0) return;
-    budget--;
     invoke("ui_log", { level, text: String(text).slice(0, 4000), page: location.pathname }).catch(() => {});
   };
   const describe = (v) => {
@@ -52,7 +48,7 @@ pub const INIT_SCRIPT: &str = r#"
     log("console", args.map(describe).join(" "));
   };
   // These wait for the user (a dialog) or do slow work on purpose: their time says nothing.
-  const waits = new Set(["pick_folders", "report_problem", "update_check"]);
+  const waits = new Set(["pick_folders", "report_problem", "update_check", "engine_remote_connect"]);
   const call = (cmd, args) => {
     if (waits.has(cmd)) return invoke(cmd, args);
     const t0 = performance.now();
@@ -121,6 +117,8 @@ pub const INIT_SCRIPT: &str = r#"
       nav: (action) => call("preview_nav", { action }),
       state: () => call("preview_state"),
       openExternal: () => call("preview_external"),
+      // a PDF or a picture of a project (absolute path); rejects with { code, message } (not_found, forbidden, blocked_type, too_large, ...)
+      openFile: (path) => call("preview_file", { path }),
     }),
     // "Use my Chrome": { installed, debugging, enabled }; setEnabled rejects with chrome_missing / chrome_debug_off
     chrome: Object.freeze({
@@ -140,6 +138,25 @@ pub const INIT_SCRIPT: &str = r#"
       state: () => call("phone_state"),
       setEnabled: (enabled) => call("phone_set_enabled", { enabled }),
       newKey: () => call("phone_new_key"),
+    }),
+    // Dictation (the microphone in the chat): state() = { enabled, status: off | waiting | downloading | ready | error, doneMb, sizeMb,
+    // error }; setEnabled() saves the choice and returns the state. Changes arrive as "mango-dictation" on window.
+    dictation: Object.freeze({
+      state: () => call("dictation_state"),
+      setEnabled: (enabled) => call("dictation_set_enabled", { enabled }),
+    }),
+    // "Share the engine with my PCs": { enabled, listening, port, error, home, away } (home and away: { address, code } or null)
+    engineShare: Object.freeze({
+      state: () => call("engine_share_state"),
+      setEnabled: (enabled) => call("engine_share_set_enabled", { enabled }),
+      newKey: () => call("engine_share_new_key"),
+    }),
+    // "Use the engine of another PC" (the page of Models and engine): connect(code) checks the pasted code with that PC and, if it is
+    // right, the app starts again on its engine; it rejects with { code, message } (bad_code, rejected, unreachable, no_models, not_mango).
+    // disconnect() goes back to the engine of this PC.
+    engineRemote: Object.freeze({
+      connect: (code) => call("engine_remote_connect", { code }),
+      disconnect: () => call("engine_remote_disconnect"),
     }),
   });
 
@@ -263,6 +280,11 @@ fn valid_folder_name(raw: &str) -> Result<&str, BridgeError> {
 }
 
 pub(crate) fn projects_root(app: &AppHandle) -> Result<PathBuf, BridgeError> {
+    // Development builds only: the tests make their projects in a folder of their own, never in the user's Documents.
+    #[cfg(debug_assertions)]
+    if let Some(root) = std::env::var_os("MANGO_PROJECTS_FOLDER").map(PathBuf::from).filter(|p| p.is_absolute()) {
+        return Ok(root);
+    }
     let docs = app
         .path()
         .document_dir()
@@ -286,11 +308,21 @@ fn projects_folder(app: AppHandle) -> Result<String, BridgeError> {
     projects_root(&app).map(|p| p.display().to_string())
 }
 
+/// The folder chosen to create a project in: an existing one, by absolute path (a relative one would be taken from the
+/// app's working folder).
+fn existing_parent(raw: &str) -> Result<PathBuf, BridgeError> {
+    let p = PathBuf::from(raw);
+    if !p.is_absolute() || !p.is_dir() {
+        return Err(err("invalid", tr!("la cartella «{raw}» non esiste", "the folder «{raw}» does not exist")));
+    }
+    Ok(p)
+}
+
 /// Creates `<parent>\<name>` (without `parent`, `Documents\Mango Code\<name>`) and returns the path.
 #[tauri::command]
 async fn create_project(app: AppHandle, name: String, parent: Option<String>) -> Result<String, BridgeError> {
     let root = match parent {
-        Some(p) => PathBuf::from(p),
+        Some(p) => existing_parent(&p)?,
         None => projects_root(&app)?,
     };
     create_in(&root, &name).map(|p| p.display().to_string())
@@ -366,11 +398,16 @@ fn open_external(url: String) -> Result<(), BridgeError> {
     open_in_browser(&url)
 }
 
-/// A page of the app itself: local loading page or web UI on the agent server. Nothing else may take the window's
-/// place: a local file (file://) the agent made, opened there by mistake, replaced the whole app.
-fn is_internal(url: &Url) -> bool {
+/// A page of the app itself: local loading page or web UI on the agent server (its own port). Nothing else may take
+/// the window's place: a local file (file://) the agent made, or the development server of a project on another local
+/// port, would get the whole bridge (the capability is for the agent's origin only, `install`).
+fn is_internal(url: &Url, agent_port: u16) -> bool {
     match url.scheme() {
-        "http" | "https" => matches!(url.host_str(), Some("127.0.0.1" | "localhost" | "tauri.localhost")),
+        "http" | "https" => match url.host_str() {
+            Some("127.0.0.1") => url.port() == Some(agent_port),
+            Some("tauri.localhost") => url.port().is_none(),
+            _ => false,
+        },
         "tauri" | "about" => true,
         _ => false,
     }
@@ -378,27 +415,30 @@ fn is_internal(url: &Url) -> bool {
 
 // ---------------------------------------------------------------- project files
 
-/// Extensions that Windows runs instead of opening them with a program: they are never launched from here.
-const EXECUTABLE: &[&str] = &[
-    "exe", "com", "bat", "cmd", "scr", "pif", "msi", "msp", "mst", "hta", "cpl", "msc", "lnk", "url", "reg", "inf",
-    "scf", "ps1", "psm1", "vbs", "vbe", "js", "jse", "wsf", "wsh", "jar", "py", "pyw", "application", "gadget", "dll",
-    "sys",
+/// The types of file that are opened with their Windows program from here: documents, text, images, sound and video.
+/// The agent writes these files, and many other types run code or launch a program when opened (scripts, shortcuts,
+/// installers, documents with macros, settings files): everything else is only shown in File Explorer.
+const OPENABLE: &[&str] = &[
+    "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "odt", "ods", "odp", "rtf", "txt", "md", "csv", "tsv", "json", "xml",
+    "log", "html", "htm", "svg", "png", "jpg", "jpeg", "gif", "webp", "bmp", "ico", "tif", "tiff", "mp3", "wav", "ogg", "m4a",
+    "flac", "mp4", "webm", "mov", "mkv", "avi", "zip",
 ];
 
-fn is_executable(path: &Path) -> bool {
+fn can_open(path: &Path) -> bool {
     path.extension()
         .and_then(|e| e.to_str())
-        .is_some_and(|e| EXECUTABLE.iter().any(|x| x.eq_ignore_ascii_case(e)))
+        .is_some_and(|e| OPENABLE.iter().any(|x| x.eq_ignore_ascii_case(e)))
 }
 
 /// Project folders the agent server knows (main folder and any working copies).
 pub(crate) fn agent_projects() -> Result<Vec<PathBuf>, BridgeError> {
     let url = format!("http://127.0.0.1:{}/project", crate::agent_port());
-    let body = ureq::get(&url)
-        .timeout(std::time::Duration::from_secs(3))
+    let body = mango_common::internet::agent(&url, std::time::Duration::from_secs(3))
+        .get(&url)
         .call()
         .map_err(|e| err("unavailable", format!("{url}: {e}")))?
-        .into_string()
+        .body_mut()
+        .read_to_string()
         .map_err(|e| err("unavailable", format!("{url}: {e}")))?;
     let list: Vec<serde_json::Value> = serde_json::from_str(&body)
         .map_err(|e| err("unavailable", tr!("{url}: risposta non valida: {e}", "{url}: invalid response: {e}")))?;
@@ -453,7 +493,7 @@ pub(crate) fn plain(p: &Path) -> PathBuf {
 
 /// An existing file or folder inside a project or in `Documents\Mango Code`; nothing else.
 /// The web UI passes paths that come from the agent: here we decide what it is lawful to touch.
-async fn allowed_path(app: &AppHandle, raw: String) -> Result<PathBuf, BridgeError> {
+pub(crate) async fn allowed_path(app: &AppHandle, raw: String) -> Result<PathBuf, BridgeError> {
     let path = PathBuf::from(&raw);
     if !path.is_absolute() {
         return Err(err("invalid", tr!("percorso non assoluto: {raw}", "path is not absolute: {raw}")));
@@ -462,6 +502,7 @@ async fn allowed_path(app: &AppHandle, raw: String) -> Result<PathBuf, BridgeErr
     tauri::async_runtime::spawn_blocking(move || {
         let real = std::fs::canonicalize(&path).map_err(|e| match e.kind() {
             std::io::ErrorKind::NotFound => err("not_found", path.display().to_string()),
+            std::io::ErrorKind::PermissionDenied => err("unreadable", format!("{}: {e}", path.display())),
             _ => err("io", format!("{}: {e}", path.display())),
         })?;
         let mut areas = vec![docs];
@@ -491,11 +532,11 @@ async fn file_info(app: AppHandle, path: String) -> Result<FileInfo, BridgeError
     Ok(FileInfo { size: if meta.is_dir() { 0 } else { meta.len() }, is_dir: meta.is_dir() })
 }
 
-/// Opens the file with the default Windows program (folders in File Explorer).
+/// Opens the file with the default Windows program (folders in File Explorer); a type outside `OPENABLE` is refused.
 #[tauri::command]
 async fn open_path(app: AppHandle, path: String) -> Result<(), BridgeError> {
     let real = allowed_path(&app, path).await?;
-    if real.is_file() && is_executable(&real) {
+    if real.is_file() && !can_open(&real) {
         return Err(err("blocked_type", real.display().to_string()));
     }
     crate::supervisor::open_outside_job(&plain(&real).to_string_lossy()).map_err(|e| err("io", format!("{}: {e}", real.display())))
@@ -522,7 +563,7 @@ fn remember_page(url: String) -> Result<(), BridgeError> {
         return Err(err("invalid", tr!("pagina non della web UI: {url}", "not a web UI page: {url}")));
     }
     let f = mango_common::last_page_file().map_err(|e| err("io", e.to_string()))?;
-    std::fs::write(&f, parsed.as_str()).map_err(|e| err("io", format!("{}: {e}", f.display())))
+    mango_common::write_atomic(&f, parsed.as_str()).map_err(|e| err("io", format!("{}: {e}", f.display())))
 }
 
 // ---------------------------------------------------------------- models
@@ -567,8 +608,14 @@ fn set_titlebar_color(window: Window, r: u8, g: u8, b: u8) -> Result<(), BridgeE
 
 // ---------------------------------------------------------------- window
 
-/// Registers the bridge plugin.
+/// Registers the bridge plugin. The web UI served by the agent (this app's agent port, nothing else on the computer)
+/// gets the bridge like the loading page; `capabilities/default.json` covers the local page.
 pub fn install(app: &App) -> tauri::Result<()> {
+    let mut agent_ui = CapabilityBuilder::new("agent-ui").local(false).webview("main").remote(format!("http://127.0.0.1:{}", crate::agent_port()));
+    for permission in ["core:default", "dialog:default", "opener:default", "mango-bridge:default"] {
+        agent_ui = agent_ui.permission(permission);
+    }
+    app.add_capability(agent_ui)?;
     app.handle().plugin(
         Builder::<Wry>::new("mango-bridge")
             .invoke_handler(tauri::generate_handler![
@@ -589,6 +636,7 @@ pub fn install(app: &App) -> tauri::Result<()> {
                 crate::preview::preview_nav,
                 crate::preview::preview_state,
                 crate::preview::preview_external,
+                crate::preview::preview_file,
                 crate::chrome::chrome_info,
                 crate::chrome::chrome_set_enabled,
                 crate::team::team_info,
@@ -598,6 +646,13 @@ pub fn install(app: &App) -> tauri::Result<()> {
                 crate::phone::phone_state,
                 crate::phone::phone_set_enabled,
                 crate::phone::phone_new_key,
+                crate::dictation::dictation_state,
+                crate::dictation::dictation_set_enabled,
+                crate::engine_share::engine_share_state,
+                crate::engine_share::engine_share_set_enabled,
+                crate::engine_share::engine_share_new_key,
+                crate::engine_remote::engine_remote_connect,
+                crate::engine_remote::engine_remote_disconnect,
                 crate::report::ui_log,
                 crate::report::report_problem,
                 crate::report::report_info,
@@ -633,7 +688,9 @@ pub fn window<'a>(
             if url.host_str() == Some("tauri.localhost") {
                 let _ = for_nav.state::<crate::AppState>().app_page.set(url.clone());
             }
-            if is_internal(url) {
+            if is_internal(url, crate::agent_port()) {
+                // another page of the window: the panel of the previous one must not stay over it
+                crate::preview::hide(&for_nav);
                 return true;
             }
             if let Err(e) = open_in_browser(url.as_str()) {
@@ -659,6 +716,17 @@ mod tests {
     }
 
     #[test]
+    fn a_project_is_created_only_inside_an_existing_absolute_folder() {
+        let base = std::env::temp_dir().join(format!("mango-bridge-parent-{}", std::process::id()));
+        std::fs::create_dir_all(&base).unwrap();
+        assert_eq!(existing_parent(&base.display().to_string()).unwrap(), base);
+        for bad in ["projects", r"..\x", "", r"C:\does\not\exist\at\all"] {
+            assert_eq!(existing_parent(bad).unwrap_err().code, "invalid", "{bad:?}");
+        }
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
     fn creates_and_rejects_a_duplicate() {
         let root = std::env::temp_dir().join(format!("mango-bridge-test-{}", std::process::id()));
         let dir = create_in(&root, "Test").unwrap();
@@ -671,13 +739,21 @@ mod tests {
     #[test]
     fn internal_and_external_links() {
         let u = |s: &str| Url::parse(s).unwrap();
-        assert!(is_internal(&u("http://127.0.0.1:4096/abc")));
-        assert!(is_internal(&u("http://tauri.localhost/index.html")));
-        assert!(is_internal(&u("tauri://localhost/index.html")));
-        assert!(!is_internal(&u("https://example.com/")));
-        assert!(!is_internal(&u("mailto:a@b.it")));
-        assert!(!is_internal(&u("file:///C:/Users/a/site/index.html")));
-        assert!(!is_internal(&u("data:text/html,hello")));
+        let internal = |s: &str| is_internal(&u(s), 4096);
+        assert!(internal("http://127.0.0.1:4096/abc"));
+        assert!(internal("http://tauri.localhost/index.html"));
+        assert!(internal("tauri://localhost/index.html"));
+        assert!(!internal("https://example.com/"));
+        assert!(!internal("mailto:a@b.it"));
+        assert!(!internal("file:///C:/Users/a/site/index.html"));
+        assert!(!internal("data:text/html,hello"));
+        // another local port is another program (a project's development server): no bridge
+        assert!(!internal("http://127.0.0.1:5173/"));
+        assert!(!internal("http://127.0.0.1/"));
+        assert!(!internal("http://localhost:5173/"));
+        assert!(!internal("http://localhost:4096/"));
+        assert!(!internal("http://tauri.localhost:5173/"));
+        assert!(is_internal(&u("http://127.0.0.1:52356/"), 52356));
     }
 
     #[test]
@@ -708,12 +784,16 @@ mod tests {
     }
 
     #[test]
-    fn executable_types_and_windows_prefix() {
-        for bad in ["a.exe", "a.BAT", "x/y.ps1", "a.lnk", "b.Js", "c.py"] {
-            assert!(is_executable(Path::new(bad)), "{bad}");
+    fn only_documents_and_media_are_opened_and_windows_prefix() {
+        for bad in [
+            "a.exe", "a.BAT", "x/y.ps1", "a.lnk", "b.Js", "c.py", "a.chm", "a.jnlp", "a.appref-ms", "a.settingcontent-ms", "a.rdp", "a.xll",
+            "a.iqy", "a.slk", "a.docm", "a.xlsm", "a.pptm", "a.ps1xml", "a.psc1", "a.psd1", "a.wsc", "a.ws", "a.bas", "a.msh", "a.theme",
+            "a.diagcab", "a.library-ms", "a.search-ms", "a", "exe", "a.docx.exe",
+        ] {
+            assert!(!can_open(Path::new(bad)), "{bad}");
         }
-        for ok in ["a.docx", "a.html", "a.pdf", "a", "a.txt", "exe"] {
-            assert!(!is_executable(Path::new(ok)), "{ok}");
+        for ok in ["a.docx", "a.html", "a.pdf", "a.txt", "A.PNG", "x/y.mp4", "a.b.xlsx"] {
+            assert!(can_open(Path::new(ok)), "{ok}");
         }
         assert_eq!(plain(Path::new(r"\\?\C:\Users\x\a.docx")), PathBuf::from(r"C:\Users\x\a.docx"));
         assert_eq!(plain(Path::new(r"\\?\UNC\server\s\a.docx")), PathBuf::from(r"\\?\UNC\server\s\a.docx"));

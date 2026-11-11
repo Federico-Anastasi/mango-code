@@ -1,4 +1,4 @@
-//! Starts and watches the app's processes (engine, agent server).
+//! Starts and watches the app's processes: the agent server (the engine is the `EngineManager`'s, which also stops it).
 //!
 //! The app itself enters a Job Object with KILL_ON_JOB_CLOSE at startup: every child and grandchild
 //! inherits it, so when the app closes, or crashes, Windows kills them all. No orphan
@@ -7,7 +7,7 @@
 //! the user (`open_outside_job`).
 
 use anyhow::{bail, Context, Result};
-use mango_common::{tr, ProcSpec};
+use mango_common::{tail, tr, ProcSpec, CREATE_NO_WINDOW};
 use std::fs::File;
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
@@ -22,7 +22,6 @@ use windows::Win32::System::JobObjects::{
 };
 use windows::Win32::System::Threading::GetCurrentProcess;
 
-const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 /// The process leaves the app's job (which allows it): it survives the app.
 pub const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x0100_0000;
 
@@ -36,7 +35,6 @@ struct Running {
     name: String,
     child: Child,
     log: PathBuf,
-    shutdown_post: Option<mango_common::PostCall>,
 }
 
 // The job handle is not used from other threads after creation: it stays open as long as the app lives.
@@ -90,7 +88,6 @@ impl Supervisor {
             name: spec.name.clone(),
             child,
             log: log.clone(),
-            shutdown_post: spec.shutdown_post.clone(),
         });
         Ok(log)
     }
@@ -100,10 +97,10 @@ impl Supervisor {
     pub fn wait_ready(&self, spec: &ProcSpec, mut tick: impl FnMut(u64)) -> Result<()> {
         let Some(url) = &spec.health_url else { return Ok(()) };
         let t0 = Instant::now();
-        let agent = ureq::AgentBuilder::new().timeout(Duration::from_secs(2)).build();
+        let agent = mango_common::internet::agent(url, Duration::from_secs(2));
         loop {
             if let Ok(r) = agent.get(url).call() {
-                if r.status() == 200 {
+                if r.status().as_u16() == 200 {
                     return Ok(());
                 }
             }
@@ -143,22 +140,11 @@ impl Supervisor {
         }
     }
 
-    /// Stops all the children, in reverse start order: first whoever uses the engine (the agent, whose
-    /// running request drops and releases the engine), then the engine, which before the end receives its
-    /// `shutdown_post` (saves the open conversation). The job would kill them anyway when the app
-    /// closes, but without saving.
+    /// Stops all the children (the agent, whose running request drops and releases the engine). The job would
+    /// kill them anyway when the app closes.
     pub fn shutdown(&self) {
         let children: Vec<Running> = self.children.lock().unwrap().drain(..).rev().collect();
         for mut r in children {
-            if let Some(c) = &r.shutdown_post {
-                if matches!(r.child.try_wait(), Ok(None)) {
-                    let t0 = Instant::now();
-                    match c.send() {
-                        Ok(v) => eprintln!("{}: orderly shutdown in {} ms: {v}", r.name, t0.elapsed().as_millis()),
-                        Err(e) => eprintln!("{}: orderly shutdown failed ({e}), stopping anyway", r.name),
-                    }
-                }
-            }
             let _ = r.child.kill();
             let _ = r.child.wait();
         }
@@ -182,10 +168,3 @@ pub fn open_outside_job(target: &str) -> std::io::Result<()> {
 }
 
 const OPEN_SCRIPT: &str = "$ErrorActionPreference = 'Stop'; if (Test-Path -LiteralPath $env:MANGO_OPEN_TARGET) { Invoke-Item -LiteralPath $env:MANGO_OPEN_TARGET } else { Start-Process -FilePath $env:MANGO_OPEN_TARGET }";
-
-/// Last `n` non-empty lines of a log, for the error messages.
-pub fn tail(path: &Path, n: usize) -> String {
-    let txt = std::fs::read(path).map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default();
-    let lines: Vec<&str> = txt.lines().filter(|l| !l.trim().is_empty()).collect();
-    lines[lines.len().saturating_sub(n)..].join("\n")
-}

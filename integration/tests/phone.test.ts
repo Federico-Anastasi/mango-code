@@ -2,7 +2,7 @@
 // with the key gives the cookie and from there the web UI and the agent's routes pass through the phone port; a
 // foreign page does not; turned off, the port closes. The port sits on 127.0.0.1 (`MANGO_PHONE_PC_ONLY`, only in
 // development builds): the test does not make Windows ask to open it on the network. The rules one by one are the
-// tests of the `phone` crate (`cargo test -p phone`).
+// tests of the `phone` crate (`cargo test -p phone`); that it listens only on the addresses of the links is one of them.
 
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import fs from "node:fs";
@@ -26,7 +26,7 @@ beforeAll(async () => {
   base = `http://127.0.0.1:${port}`;
   env = await start([{ text: "Hello from the fake engine." }], {
     window: true,
-    env: { MANGO_PHONE_PC_ONLY: "1", MANGO_PHONE_PORT: String(port) },
+    env: { MANGO_PHONE_PC_ONLY: "1", MANGO_PHONE_PORT: String(port), MANGO_NETWORK_PUBLIC: "1" },
   });
   p = await page(env.cdp!, (t) => t.url.startsWith(env.agent));
 }, 200_000);
@@ -54,6 +54,9 @@ test("on: with the link you get in and the web UI and the agent pass; without it
   expect(state.enabled).toBe(true);
   expect(state.listening).toBe(true);
   expect(state.port).toBe(port);
+  // Windows calls the home network public (here by the development switch): the link says so; Tailscale's never does
+  if (state.home) expect(state.home.public).toBe(true);
+  if (state.away) expect(state.away.public).toBe(false);
 
   expect((await fetch(`${base}/`, { headers: { accept: "text/html" } })).status).toBe(401);
   expect((await fetch(`${base}/phone?key=wrong`, { redirect: "manual" })).status).toBe(401);

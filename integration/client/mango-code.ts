@@ -14,22 +14,24 @@ export interface Service {
   pid: number;
   /** The agent server: sessions, events, permissions, questions, tools. */
   agent: string;
-  /** The engine manager: loaded model, GPUs, release and resume. */
-  engine: string;
+  /** The engine manager: loaded model, GPUs, release and resume. `null` when this Mango Code uses the engine of another PC: there is no manager here. */
+  engine: string | null;
   /** false if it was started with --service (no window). */
   window: boolean;
   /** Only in the file of a Mango Code that is not ready (see `notReady`), which then has neither `agent` nor `engine`. */
   reason?: string;
 }
 
+const localAppData = () => process.env.LOCALAPPDATA ?? path.join(os.homedir(), "AppData", "Local");
+
 /** The Mango Code data folder (`MANGO_DATA` if set, as the app does). */
 export function dataDir(): string {
-  return process.env.MANGO_DATA ?? path.join(process.env.LOCALAPPDATA ?? path.join(os.homedir(), "AppData", "Local"), "MangoCode");
+  return process.env.MANGO_DATA ?? path.join(localAppData(), "MangoCode");
 }
 
 /** The installed app's executable. */
 export function executable(): string {
-  return path.join(process.env.LOCALAPPDATA ?? "", "Mango Code", "mango-code.exe");
+  return path.join(localAppData(), "Mango Code", "mango-code.exe");
 }
 
 function alive(pid: number): boolean {
@@ -124,6 +126,8 @@ export interface MessageOptions {
   attachments?: { mime: string; data: Uint8Array | string; name?: string }[];
 }
 
+const CONNECT_TIMEOUT_MS = 10_000;
+
 export class MangoCode {
   constructor(readonly service: Service) {}
 
@@ -183,17 +187,22 @@ export class MangoCode {
 
   // --- events ------------------------------------------------------------------------------------
 
-  /** The server's raw events for the folder; returns the function that stops listening. */
-  listen(directory: string, on: (e: AgentEvent) => void): () => void {
+  /**
+   * The server's raw events for the folder; returns the function that stops listening. `onError` is called when the
+   * stream ends or fails on its own (the server refuses it, the connection drops, the agent restarts), never after
+   * the stop function; without it that ends the listening silently.
+   */
+  listen(directory: string, on: (e: AgentEvent) => void, onError?: (error: Error) => void): () => void {
     const ctl = new AbortController();
     (async () => {
       const r = await fetch(`${this.service.agent}/event?${this.q(directory)}`, { signal: ctl.signal });
-      const rd = r.body!.getReader();
+      if (!r.ok || !r.body) throw new Error(`GET /event: ${r.status} ${await r.text()}`);
+      const rd = r.body.getReader();
       const dec = new TextDecoder();
       let buf = "";
       for (;;) {
         const { value, done } = await rd.read();
-        if (done) return;
+        if (done) throw new Error("the event stream closed");
         buf += dec.decode(value, { stream: true });
         let i: number;
         while ((i = buf.indexOf("\n\n")) >= 0) {
@@ -202,13 +211,16 @@ export class MangoCode {
           for (const line of block.split("\n")) if (line.startsWith("data: ")) on(JSON.parse(line.slice(6)));
         }
       }
-    })().catch(() => {});
+    })().catch((e) => {
+      if (!ctl.signal.aborted) onError?.(e instanceof Error ? e : new Error(String(e)));
+    });
     return () => ctl.abort();
   }
 
   /**
    * One turn of the session: sends the message and yields the steps (text in pieces, tools with their
-   * result, permissions, questions) until the agent is idle again.
+   * result, permissions, questions) until the agent is idle again. If the event stream cannot be opened in
+   * `CONNECT_TIMEOUT_MS`, or it drops during the turn, the steps end with an `error` and then `end`.
    */
   async *turn(id: string, directory: string, text: string, opts: MessageOptions = {}): AsyncGenerator<Step> {
     const queue: Step[] = [];
@@ -218,10 +230,31 @@ export class MangoCode {
       queue.push(s);
       wake?.();
     };
+    let connected!: () => void;
+    const open = new Promise<void>((r) => (connected = r));
+    // A `session.idle` that was already on its way (the server repeats it) is not the end of this turn: the turn has
+    // begun when the session is `busy` or its user message arrives.
+    let begun = false;
+    let failed = false;
+    const fail = (error: unknown) => {
+      failed = true;
+      push({ type: "error", error });
+      push({ type: "end" });
+      connected();
+    };
     const stop = this.listen(directory, (e) => {
       const p = e.properties ?? {};
       if (p.sessionID && p.sessionID !== id) return;
       switch (e.type) {
+        case "server.connected":
+          connected();
+          break;
+        case "session.status":
+          if (p.status?.type === "busy") begun = true;
+          break;
+        case "message.updated":
+          if (p.info?.role === "user") begun = true;
+          break;
         case "message.part.updated": {
           const part = p.part;
           partType.set(part.id, part.type);
@@ -240,17 +273,20 @@ export class MangoCode {
           push({ type: "question", id: p.id, questions: p.questions });
           break;
         case "session.error":
+          begun = true;
           push({ type: "error", error: p.error });
           break;
         case "session.idle":
-          push({ type: "end" });
+          if (begun) push({ type: "end" });
           break;
       }
-    });
+    }, (error) => fail(error.message));
+    const timer = setTimeout(() => fail("the event stream did not open"), CONNECT_TIMEOUT_MS);
     try {
       // The event stream must be connected before the message, or the first pieces are lost.
-      await new Promise((r) => setTimeout(r, 300));
-      await this.send(id, directory, text, opts);
+      await open;
+      clearTimeout(timer);
+      if (!failed) await this.send(id, directory, text, opts);
       for (;;) {
         while (queue.length) {
           const s = queue.shift()!;
@@ -261,6 +297,7 @@ export class MangoCode {
         wake = null;
       }
     } finally {
+      clearTimeout(timer);
       stop();
     }
   }
@@ -317,9 +354,14 @@ export class MangoCode {
 
   // --- engine and GPUs ---------------------------------------------------------------------------
 
+  private engineUrl(): string {
+    if (!this.service.engine) throw new Error("this Mango Code uses the engine of another PC: there is no engine manager here to release, resume or load a model");
+    return this.service.engine;
+  }
+
   /** The engine manager's state (`GET /engine`). */
   async engine(): Promise<any> {
-    return this.call("GET", `${this.service.engine}/engine`);
+    return this.call("GET", `${this.engineUrl()}/engine`);
   }
 
   /**
@@ -327,19 +369,20 @@ export class MangoCode {
    * to finish (60 s at most: then they drop), saves and stops the engine; returns when the GPUs are free.
    * Usually 1-2 s; while it waits `engine().phase` is `releasing`. If a model is loading it first waits for
    * the load to end (up to 300 s). The loan belongs to this process: if it exits without `resume`, the
-   * engine resumes by itself. See docs/INTEGRATION.md, section 6.
+   * engine resumes by itself. `pid`: the loan belongs to that process (a program working for another one), or to
+   * none with 0. See docs/INTEGRATION.md, section 6.
    */
-  async release(gpus?: number[]): Promise<any> {
-    return this.call("POST", `${this.service.engine}/engine/release`, gpus ? { gpus } : {});
+  async release(gpus?: number[], pid?: number): Promise<any> {
+    return this.call("POST", `${this.engineUrl()}/engine/release`, { gpus, pid });
   }
 
   /** Gives the GPUs back to the engine and reloads the model; returns when it is ready. */
   async resume(): Promise<any> {
-    return this.call("POST", `${this.service.engine}/engine/resume`, {});
+    return this.call("POST", `${this.engineUrl()}/engine/resume`, {});
   }
 
   /** Loads a model without waiting for a session (e.g. before a long job). */
   async startModel(model: string): Promise<any> {
-    return this.call("POST", `${this.service.engine}/engine/model`, { model });
+    return this.call("POST", `${this.engineUrl()}/engine/model`, { model });
   }
 }

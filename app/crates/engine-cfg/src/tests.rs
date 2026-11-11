@@ -44,6 +44,22 @@ fn command_line_identical_to_the_powershell_launcher() {
     }
 }
 
+/// The engines (forks included) read their command line in the ANSI code page: with a user name with accents the
+/// paths go as their short ASCII names, which open the same files.
+#[test]
+fn paths_with_accents_go_to_the_engine_as_ascii() {
+    let t = Fake::with_accents();
+    let plan = make_plan(&t, &three_gpus()).unwrap();
+    let a = &plan.spec.args;
+    assert!(a.iter().all(|x| x.is_ascii()), "{a:?}");
+    for flag in ["-m", "--slot-save-path", "--chat-template-file", "--cache-disk"] {
+        let i = a.iter().position(|x| x == flag).unwrap_or_else(|| panic!("{flag} is missing: {a:?}"));
+        assert!(std::path::Path::new(&a[i + 1]).exists(), "{flag} {}", a[i + 1]);
+    }
+    let model = std::fs::canonicalize(&a[a.iter().position(|x| x == "-m").unwrap() + 1]).unwrap();
+    assert_eq!(model, std::fs::canonicalize(&plan.gguf).unwrap());
+}
+
 /// Every profile engine has on-disk memory, in its own folder, and saves the conversation before stopping: with the
 /// automatic split (TOQ), with the measured `-ts` (the prism models) and with MTP.
 #[test]
@@ -557,6 +573,17 @@ fn the_downloaded_engine_is_found_by_build() {
 
 fn recommendations(hw: &Hardware) -> BTreeMap<String, Recommendation> {
     recommended(&real_paths(), hw).unwrap().into_iter().map(|c| (c.model.clone(), c)).collect()
+}
+
+/// A model on the processor says how fast it writes, from what each token reads: the catalog's real files on a PC without cards.
+/// On cards it says nothing (the page shows the speed only where it is slower than one reads).
+#[test]
+fn a_model_on_the_processor_says_how_fast_it_writes() {
+    let c = recommendations(&pc(vec![], 65_536));
+    assert_eq!((c["3.6"].placement, c["3.6"].speed), (Some(Placement::Cpu), Some(Speed::Fair)), "{:?}", c["3.6"]);
+    assert_eq!((c["3.8"].placement, c["3.8"].speed), (Some(Placement::Cpu), Some(Speed::Slow)), "dense: every weight is read for each token");
+    assert_eq!(c["3.5-4b"].speed, Some(Speed::Fair));
+    assert!(recommendations(&three_gpus()).values().all(|r| r.speed.is_none()));
 }
 
 /// The bytes of Bonsai 2's files for official llama.cpp: the `Q2_0` weights and the image encoder.

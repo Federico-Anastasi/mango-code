@@ -4,35 +4,17 @@
   "engine": "prism",
   "build": "cuda-12",
   "hardware": {
-    "gpus": [
-      "NVIDIA GeForce RTX 3060 Ti",
-      "NVIDIA GeForce GTX 1080",
-      "NVIDIA GeForce GTX 1660 SUPER"
-    ]
+    "gpus": ["NVIDIA GeForce RTX 3060 Ti", "NVIDIA GeForce GTX 1080", "NVIDIA GeForce GTX 1660 SUPER"]
   },
   "env": {
     "GGML_CUDA_CLOCK_KEEPER": "1"
   },
-  "args": [
-    "-ngl",
-    "999",
-    "-fa",
-    "1",
-    "-ctk",
-    "q8_0",
-    "-ctv",
-    "q8_0",
-    "--spec-type",
-    "ngram-simple",
-    "--no-mmproj-offload",
-    "--image-min-tokens",
-    "1024"
-  ],
+  "args": ["-ngl", "999", "-fa", "1", "-ctk", "q8_0", "-ctv", "q8_0", "--spec-type", "ngram-simple", "--no-mmproj-offload", "--image-min-tokens", "1024"],
   "ctx": 262144,
   "ub": 512,
   "ts": "27,22,16",
   "measurements": {
     "date": "2026-09-19",
-    "note": "[engine] Runs ONLY on the PrismML fork build ($LLAMA\\prism, setup.ps1 -Only llama-prism): the weights are in a rotated basis (Hadamard) and stock llama.cpp rejects PQ2_0 or, worse, loads and produces garbage. The build is our fork mango-prism.\n[env] Clock keeper (mango patch in ggml-cuda.cu): with the layer split each GPU sits idle 2/3 of the token and the driver drops it to P3 - MEASURED the 3060 Ti at 720 MHz SM / 5000 mem instead of 2100 / 7000. An idle warp on a lowest-priority stream keeps it up: decode 17.4 -> 23.7 tok/s on 3 GPUs. Without admin (nvidia-smi -lgc) there is no other way.\n[ctx] 256k: it is the context of the team's ONLY dev. The engine serves a single session (-np 1), so the whole pool goes to it. KV q8_0 = 34 KiB/token, 8.5 GiB for 256k.\n[spec] --spec-type ngram-simple: speculation that takes the drafts from the context itself (no drafter, zero VRAM), lossless because the model verifies every token. On edits (the agent recopies the file) it accepts >95%: 26.7 -> 69 tok/s. On new text it costs ~5%. Bonsai 2 has no MTP head and its DSpark drafter does not exist.\n[why] Ternary Qwen3.8-27B (98.2% of the declared FP16), same qwen35 hybrid-GDN arch as 3.8 but half-size weights (6.7 GiB): that is why it fits at 256k, or 2 slots of 128k. MEASURED 2026-09-19 (2 slots, config here): new text 27 tok/s with one dev, 20 each with two; file edits 69 tok/s with one dev, 39-60 each with two; prefill 325 tok/s on 30k. The 3.6 does more in prefill (1014): that is the price of dense. PTQ1_0 (5.9 GB) discarded with the numbers: slower in decode too on all 3 GPUs (unpacking base-3 costs more than the bytes saved) and without quantized prefill on the 1080/1660S.md.\n[ub] 512: prefill 325 against 316 for ub 256 on 30k, and a smaller compute buffer (1242 MiB per GPU against 1346).\n[ts] In LAYERS (65 = 64 + output), not in percentages: balanced on MEMORY. The 3060 Ti would like more (it is 2x the others) but every 4 layers there is an attention layer with 544 MiB of KV at 256k: the 28th does not fit. Measured VRAM 7443/6873/5353 MiB."
+    "note": "[engine] Runs ONLY on the PrismML fork build (prism engine): the weights are in a rotated basis (Hadamard) and stock llama.cpp rejects PQ2_0 or, worse, loads and produces garbage. The build is our fork mango-prism.\n[env] Clock keeper (mango patch in ggml-cuda.cu): with the layer split each GPU sits idle 2/3 of the token and the driver drops it to P3 - MEASURED the 3060 Ti at 720 MHz SM / 5000 mem instead of 2100 / 7000. An idle warp on a lowest-priority stream keeps it up: decode 17.4 -> 23.7 tok/s on 3 GPUs. Without admin (nvidia-smi -lgc) there is no other way.\n[ctx] 256k: it is the context of the team's ONLY dev. The engine serves a single session (-np 1), so the whole pool goes to it. KV q8_0 = 34 KiB/token, 8.5 GiB for 256k.\n[spec] --spec-type ngram-simple: speculation that takes the drafts from the context itself (no drafter, zero VRAM), lossless because the model verifies every token. On edits (the agent recopies the file) it accepts >95%: 26.7 -> 69 tok/s. On new text it costs ~5%. Bonsai 2 has no MTP head and its DSpark drafter does not exist.\n[why] Ternary Qwen3.8-27B (98.2% of the declared FP16), same qwen35 hybrid-GDN arch as 3.8 but half-size weights (6.7 GiB): that is why it fits at 256k, or 2 slots of 128k. MEASURED 2026-09-19 (2 slots, config here): new text 27 tok/s with one dev, 20 each with two; file edits 69 tok/s with one dev, 39-60 each with two; prefill 325 tok/s on 30k. The 3.6 does more in prefill (1014): that is the price of dense. PTQ1_0 (5.9 GB) discarded with the numbers: slower in decode too on all 3 GPUs (unpacking base-3 costs more than the bytes saved) and without quantized prefill on the 1080/1660S.\n[ub] 512: prefill 325 against 316 for ub 256 on 30k, and a smaller compute buffer (1242 MiB per GPU against 1346).\n[ts] In LAYERS (65 = 64 + output), not in percentages: balanced on MEMORY. The 3060 Ti would like more (it is 2x the others) but every 4 layers there is an attention layer with 544 MiB of KV at 256k: the 28th does not fit. Measured VRAM 7443/6873/5353 MiB."
   }
 }

@@ -38,6 +38,7 @@ import { readSessionTabsRemovedDetail, SESSION_TABS_REMOVED_EVENT } from "@/comp
 import { useGlobal } from "@/context/global"
 import { ServerConnection, useServer } from "@/context/server"
 import { tabKey, useTabs } from "@/context/tabs"
+import { useDefaultProject } from "@/hooks/use-default-project"
 import type { PromptSession } from "@/context/prompt"
 import "./titlebar.css"
 import { newTabTooltipKeybind } from "./command-tooltip-keybind"
@@ -209,6 +210,7 @@ export function Titlebar(props: {
             const global = useGlobal()
 
             const tabs = useTabs()
+            const defaultProject = useDefaultProject()
             const tabsStore = tabs.store
             const tabsStoreActions = tabs
             const [session] = createResource(
@@ -321,9 +323,15 @@ export function Titlebar(props: {
                 const project = global.ensureServerCtx(conn).projects.list()[0]
                 return project ? [{ server: ServerConnection.key(conn), project }] : []
               })[0]
-              if (!fallback) return
+              if (fallback) {
+                tabs.newDraft({ server: fallback.server, directory: fallback.project.worktree }, "")
+                return
+              }
 
-              tabs.newDraft({ server: fallback.server, directory: fallback.project.worktree }, "")
+              // no project at all: the conversation goes to the default folder (only inside the app)
+              void defaultProject?.().then((directory) => {
+                if (directory) tabs.newDraft({ server: server.key, directory }, "")
+              })
             }
             const toggleHome = () => tabs.toggleHome({ home: layout.route().type === "home", current: currentTab() })
 
@@ -452,7 +460,12 @@ export function Titlebar(props: {
                           size="large"
                           class="!size-11 shrink-0"
                           icon={<IconV2 name="globe" />}
-                          onClick={() => void phonePreview.open().catch(previewFailed(language.t("preview.phone.failed")))}
+                          onClick={() => {
+                            const route = layout.route()
+                            void phonePreview
+                              .open(route.type === "session" ? route.sessionId : undefined)
+                              .catch(previewFailed(language.t("preview.phone.failed")))
+                          }}
                           aria-label={language.t("preview.toggle")}
                           data-action="titlebar-preview"
                         />

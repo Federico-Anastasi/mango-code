@@ -26,9 +26,12 @@ How to build is in the README, under [Build from source](README.md#build-from-so
 cd app; cargo test --workspace                     # the app and its crates
 cd packages/app; bun run test:unit                 # the web interface
 cd integration; bun test                           # end-to-end, with a fake engine (no graphics card used)
+cd launcher/mango-documents; bun test              # the document tools
 ```
 
-Tests don't run from the repository root: run them from the folders above.
+Tests don't run from the repository root: run them from the folders above. On a fresh clone `cargo test --workspace`
+stops until the installer's resources folder exists (the build script creates it with the installer; for the tests an
+empty one is enough): `New-Item -ItemType Directory -Force app/scripts/staging/resources`.
 
 ## License
 

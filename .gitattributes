@@ -6,3 +6,7 @@
 # opencode: file generati
 packages/core/migration/**/snapshot.json linguist-generated
 packages/core/src/database/migration.gen.ts linguist-generated
+
+# Private files: git archive leaves them out, and app/scripts/public-tree.mjs reads this list to build the public tree.
+PIANO.md export-ignore
+launcher/docs/known-issues.md export-ignore

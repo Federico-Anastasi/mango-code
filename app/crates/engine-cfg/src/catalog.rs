@@ -205,8 +205,12 @@ impl ModelCfg {
     /// The bytes of the weights that `engine` reads for every token written: all of them in dense models, only the
     /// active ones in MoEs.
     pub fn read_per_token(&self, engine: &str) -> u64 {
-        let weights = self.files_for(engine).map(|f| f.size).sum::<u64>() - self.mmproj_bytes();
-        weights * self.active_permille.unwrap_or(1000) / 1000
+        self.weights_bytes(engine) * self.active_permille.unwrap_or(1000) / 1000
+    }
+
+    /// The weights `engine` loads, without the image encoder.
+    pub fn weights_bytes(&self, engine: &str) -> u64 {
+        self.files_for(engine).map(|f| f.size).sum::<u64>() - self.mmproj_bytes()
     }
 
     /// The model's shape from the catalog, with the cache types `ctk`/`ctv`. `None` if the catalog doesn't say.
@@ -316,6 +320,12 @@ pub struct ModelEntry {
     pub missing: Option<String>,
     /// Weights and image encoder are on disk (the engine may still be missing).
     pub weights: bool,
+    /// The weights it loads, without the image encoder.
+    pub bytes: u64,
+    /// How fast it writes, if it runs on the processor.
+    pub speed: Option<crate::Speed>,
+    /// Only on request (see `Recommendation::on_request`): the catalog says it is not reliable as an agent.
+    pub on_request: bool,
 }
 
 /// The local models (cloud ones stay out) in catalog order, the recommended ones first and then the user's, and the
@@ -337,6 +347,7 @@ pub fn catalog_for(paths: &Paths, hw: &Hardware) -> Result<(Vec<ModelEntry>, Str
             }
         }
         let weights = missing.is_none();
+        let (bytes, read_per_token) = (cfg.weights_bytes(cfg.engine_with(&setup)), cfg.read_per_token(cfg.engine_with(&setup)));
         let target = cfg.ctx.unwrap_or(file.ctx).min(file.ctx);
         let (ctx, placement) = match setup {
             Ok(a) => {
@@ -353,7 +364,8 @@ pub fn catalog_for(paths: &Paths, hw: &Hardware) -> Result<(Vec<ModelEntry>, Str
                 (target, None)
             }
         };
-        entries.push(ModelEntry { key: key.to_string(), label: cfg.label, origin: file.origin(key), ctx, placement, images: cfg.mmproj.is_some(), missing, weights });
+        let speed = (placement == Some(Placement::Cpu)).then(|| crate::cpu_speed(read_per_token));
+        entries.push(ModelEntry { key: key.to_string(), label: cfg.label, origin: file.origin(key), ctx, placement, images: cfg.mmproj.is_some(), missing, weights, bytes, speed, on_request: cfg.on_request });
     }
     Ok((entries, file.default))
 }

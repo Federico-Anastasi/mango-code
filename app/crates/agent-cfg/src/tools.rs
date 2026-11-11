@@ -75,8 +75,7 @@ pub fn run(program: &str, args: &[&str], max: Duration) -> Output {
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        cmd.creation_flags(CREATE_NO_WINDOW);
+        cmd.creation_flags(mango_common::CREATE_NO_WINDOW);
     }
     let Ok(mut child) = cmd.spawn() else { return Output::NotFound };
 

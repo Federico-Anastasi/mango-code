@@ -1,7 +1,7 @@
 //! Engine (llama-server) configuration: given a model and the PC's hardware, produces the `ProcSpec` the supervisor
 //! starts. It starts nothing.
 //!
-//! Two levels (port of `mango-engine.ps1` for the profiles):
+//! Two levels:
 //! - a **profile** (`profiles.rs`) if the PC's GPUs are those it was measured for, or if it is a profile for the
 //!   PC's build (the models official llama.cpp doesn't read): its engine, its arguments, the split of the layers and
 //!   of the image encoder across the GPUs (`split.rs`);
@@ -17,17 +17,19 @@ pub mod memory;
 mod profiles;
 #[cfg(test)]
 mod fixtures;
+mod speed;
 mod split;
 
 pub use catalog::{catalog, catalog_for, Origin, ModelEntry};
 pub use general::{recommended, Recommendation, Placement};
+pub use speed::{cpu_speed, Speed};
 pub use hardware::{gpu_memory, detect, choose_build, Cpu, Hardware, Vendor, Gpu};
 pub use profiles::{profile_for, ProfileHardware, Measurements, Profile};
 
 use anyhow::{bail, Result};
 use catalog::{load_models, model_cfg, require, setup_for, ModelsFile, Setup};
 use mango_common::download::installed_engine;
-use mango_common::{tr, Build, PostCall, Paths, ProcSpec};
+use mango_common::{tr, PostCall, Paths, ProcSpec};
 use std::path::{Path, PathBuf};
 
 /// The engine to start and what is needed downstream.
@@ -93,18 +95,10 @@ pub fn plan_excluding(paths: &Paths, model_key: Option<&str>, port: u16, exclude
     plan_for(paths, model_key, port, &detect()?, excluded)
 }
 
-/// Like `plan_excluding`, on given hardware instead of this PC's (the terminal shows it for a PC that isn't its own).
+/// Like `plan_excluding`, on given hardware instead of this PC's.
 pub fn plan_for(paths: &Paths, model_key: Option<&str>, port: u16, hw: &Hardware, excluded: &[u32]) -> Result<EnginePlan> {
     let file = load_models(paths)?;
     build_plan(paths, &file, model_key, port, hw, excluded, gguf::read_shape)
-}
-
-/// The engine (folder in `<engines>`) and the build `model_key` runs with on `hw`: those of the plan, even if they
-/// aren't on disk yet.
-pub fn engine_of(paths: &Paths, model_key: &str, hw: &Hardware) -> Result<(String, Build)> {
-    let file = load_models(paths)?;
-    let setup = setup_for(paths, model_key, &model_cfg(&file, model_key)?, hw)?;
-    Ok((setup.engine().to_string(), setup.build()))
 }
 
 /// How the start is composed: the engine, the context, the GPUs, the environment, the setup's own arguments, and
@@ -204,7 +198,7 @@ fn build_plan(
     })?;
     let mut args: Vec<String> = vec![
         "-m".into(),
-        gguf.display().to_string(),
+        mango_common::engine_path(&gguf),
         "-c".into(),
         ctx.to_string(),
         "--jinja".into(),
@@ -213,7 +207,7 @@ fn build_plan(
         "--port".into(),
         port.to_string(),
         "--slot-save-path".into(),
-        slots.display().to_string(),
+        mango_common::engine_path(&slots),
         "-np".into(),
         "1".into(),
         "--no-warmup".into(),
@@ -227,7 +221,7 @@ fn build_plan(
         })?;
         args.extend([
             "--cache-disk".into(),
-            dir.display().to_string(),
+            mango_common::engine_path(&dir),
             "--cache-disk-mib".into(),
             mib.to_string(),
             "--cache-disk-hours".into(),
@@ -236,10 +230,10 @@ fn build_plan(
     }
     args.extend(setup_args);
     if let Some(p) = &mmproj {
-        args.extend(["--mmproj".into(), p.display().to_string()]);
+        args.extend(["--mmproj".into(), mango_common::engine_path(p)]);
     }
     if let Some(p) = &template {
-        args.extend(["--chat-template-file".into(), p.display().to_string()]);
+        args.extend(["--chat-template-file".into(), mango_common::engine_path(p)]);
     }
     args.extend(args_after);
 

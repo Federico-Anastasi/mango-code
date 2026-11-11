@@ -111,7 +111,6 @@ fn read_user_list(paths: &Paths) -> Result<BTreeMap<String, Value>> {
 /// Writes the list to a file next to it and renames it: either the old one is there, or the whole new one.
 fn write_user_list(paths: &Paths, models: BTreeMap<String, Value>) -> Result<()> {
     let f = paths.data.join(USER_FILE);
-    let tmp = paths.data.join(format!("{USER_FILE}.tmp"));
     let error = |e: &dyn std::fmt::Display| {
         user_error(
             &tr!("Non riesco a salvare il tuo elenco di modelli ({USER_FILE}).", "I can't save your model list ({USER_FILE})."),
@@ -119,8 +118,7 @@ fn write_user_list(paths: &Paths, models: BTreeMap<String, Value>) -> Result<()>
         )
     };
     std::fs::create_dir_all(&paths.data).map_err(|e| error(&e))?;
-    std::fs::write(&tmp, serde_json::to_string_pretty(&serde_json::json!({ "models": models }))?).map_err(|e| error(&e))?;
-    std::fs::rename(&tmp, &f).map_err(|e| error(&e))
+    crate::write_atomic(&f, serde_json::to_string_pretty(&serde_json::json!({ "models": models }))?).map_err(|e| error(&e))
 }
 
 fn cannot_read_user_list() -> String {

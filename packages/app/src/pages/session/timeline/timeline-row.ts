@@ -37,6 +37,8 @@ export namespace TimelineRow {
   }> {}
   export class Error extends Data.TaggedClass("Error")<{
     userMessageID: string
+    /** The conversation does not fit the model: the row shows a translated text, not the server's. */
+    overflow: boolean
     text: string
   }> {}
   export class Retry extends Data.TaggedClass("Retry")<{

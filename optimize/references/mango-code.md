@@ -1,6 +1,6 @@
 # Mango Code seen from outside
 
-This is the layout set by the profile and engine contract (catalog `mango-engines.json`, `profiles/` folders, engines in `<engine>\<version>-<build>\`). If they are missing on the PC, the app is an earlier version: work with `mango-tune` and with the engines in `<dist>\engine\<name>\`.
+This is the layout set by the profile and engine contract (catalog `mango-engines.json`, `profiles/` folders, engines in `<engine>\<version>-<build>\`). If they are missing on the PC, the app is an earlier version.
 
 What you need to know to measure an engine, write a profile and test it, without reading the app's code. If a point does not
 match what you find on the PC, the PC is right: recheck (`hygiene.md`).
@@ -13,7 +13,7 @@ match what you find on the PC, the PC is right: recheck (`hygiene.md`).
 | distribution (`dist`): catalog, templates, MCP | in the installed app's `resources\` folder; in the repo `launcher\` (the `MANGO_DIST` variable moves it) |
 | model catalog | `<dist>\mango-models.json`: for each model name, GGUF file, mmproj, repo, maximum context, chat template; `order` is the listing order. The user's models are in `%LOCALAPPDATA%\MangoCode\user-models.json` (same format, they are added) |
 | engine catalog | `<dist>\mango-engines.json`: downloadable versions per build (`cpu`, `vulkan`, `cuda-12`, `cuda-13`, and the `prism`, `toq` engines of the RTX 3060 Ti + GTX 1080 + GTX 1660 SUPER profiles) |
-| installed engines | `<engines>\<engine>\<version>-<build>\llama-server.exe`; an engine placed by hand in `<engines>\<name>\llama-server.exe` counts as installed. `<engines>` = `<dist>\engine` or what `<dist>\mango-paths.json` says (`llama`) |
+| installed engines | `<engines>\<engine>\<version>-<build>\llama-server.exe`; an engine placed by hand in `<engines>\<name>\llama-server.exe` counts as installed. `<engines>` = `<data>\engine` or what `<dist>\mango-paths.json` says (`llama`) |
 | downloaded models | `%LOCALAPPDATA%\MangoCode\models\` (or `mango-paths.json`, `models`) |
 | optimized profiles | `<dist>\profiles\<family>\*.json` (the distributed ones); yours in `%LOCALAPPDATA%\MangoCode\profiles\`, which the app reads: for the same model and GPUs, yours wins. Format: `launcher\profiles\README.md` |
 | user data | `%LOCALAPPDATA%\MangoCode\` (`MANGO_DATA` moves it) |

@@ -16,8 +16,9 @@ import { tr } from "@/util/mango-language"
 //        "not measured"). `source`: `default` or `folder`, which file the on/off comes from.
 //   PUT /mango/settings?directory=<work>  {"type", "name", "enabled", "scope": "all" | "folder"}
 //     -> the changed item. It applies from the next message.
-// The PUT goes only through the page (the request carries `Origin`, and the server lets through the ones from its own
-// web UI): connected apps add to the prompt and cannot turn anything off.
+// The PUT is meant to go only through the page (it carries `Origin`; a request without one gets 403): connected apps
+// add to the prompt and do not turn anything off. A rule between apps, not a barrier: a process on the PC can send an
+// `Origin` of its own.
 export const SETTINGS_PATH = "/mango/settings"
 
 const failure = (message: string, status = 400) => HttpServerResponse.jsonUnsafe({ error: message }, { status })

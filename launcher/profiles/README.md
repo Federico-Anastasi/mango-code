@@ -12,8 +12,7 @@ profile; with neither, the general plan applies (official llama.cpp).
   memory.
 - `<data>\profiles\`, in any subfolder (for example `<data>\profiles\<name>\<model>.json`): the user's own, also for a
   model of their own. `<data>` is `%LOCALAPPDATA%\MangoCode`, or `MANGO_DATA`. `mango-tune profile` writes the profiles
-  it produces there. For the same model and GPUs the user's wins. App and terminal choose the same way
-  (`mango-launch.exe`, the app's logic).
+  it produces there. For the same model and GPUs the user's wins.
 
 ## Format
 
@@ -42,7 +41,7 @@ profile; with neither, the general plan applies (official llama.cpp).
 `<data>\user-models.json` adds models to Mango Code's catalog, without replacing it: `{ "models": { "<key>":
 { ... } } }`, each entry in the same format as `models` in `mango-models.json`. A key already in the catalog is an
 error. User models appear after the recommended ones and before the cloud ones, by key, in the selector, in the first
-run and in `mango-code -Models`; they are never the recommended one.
+run; they are never the recommended one.
 
 The app writes this file from the "Other models" section of the model choice (`app/README.md`). A Hugging Face entry
 has `repo`, `revision` and `files` (`path` on disk, `size`, `sha256`, and `name` if the file sits in a folder of the

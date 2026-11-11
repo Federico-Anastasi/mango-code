@@ -118,13 +118,12 @@ pub fn wait_with(
 pub fn wait(agent_url: &str, folder: &str, max_time: Duration, notice: &mut dyn FnMut(&str)) -> Outcome {
     let base = agent_url.trim_end_matches('/').to_string();
     let read = |t: Duration| -> Result<String> {
-        Ok(ureq::get(&format!("{base}/mcp")).query("directory", folder).timeout(t.max(Duration::from_secs(1))).call()?.into_string()?)
+        let url = format!("{base}/mcp");
+        Ok(mango_common::internet::agent(&url, t.max(Duration::from_secs(1))).get(&url).query("directory", folder).call()?.body_mut().read_to_string()?)
     };
     let reconnect = |name: &str, t: Duration| -> Result<()> {
-        ureq::post(&format!("{base}/mcp/{name}/connect"))
-            .query("directory", folder)
-            .timeout(t.max(Duration::from_secs(1)))
-            .send_string("")?;
+        let url = format!("{base}/mcp/{name}/connect");
+        mango_common::internet::agent(&url, t.max(Duration::from_secs(1))).post(&url).query("directory", folder).send("")?;
         Ok(())
     };
     wait_with(&read, &reconnect, max_time, notice)
@@ -135,8 +134,9 @@ pub fn wait(agent_url: &str, folder: &str, max_time: Duration, notice: &mut dyn 
 pub fn last_session_dir(agent_url: &str) -> Option<String> {
     let page = std::fs::read_to_string(mango_common::last_page_file().ok()?).ok()?;
     let id = session_id(page.trim())?;
-    let r = ureq::get(&format!("{}/session/{id}", agent_url.trim_end_matches('/'))).timeout(Duration::from_secs(5)).call().ok()?;
-    let v: Value = serde_json::from_str(&r.into_string().ok()?).ok()?;
+    let url = format!("{}/session/{id}", agent_url.trim_end_matches('/'));
+    let mut r = mango_common::internet::agent(&url, Duration::from_secs(5)).get(&url).call().ok()?;
+    let v: Value = serde_json::from_str(&r.body_mut().read_to_string().ok()?).ok()?;
     v.get("directory").and_then(Value::as_str).map(str::to_string)
 }
 
@@ -286,7 +286,7 @@ mod tests {
         assert_eq!(e, Outcome::default());
         let r = requests.lock().unwrap().clone();
         // the folder travels as an encoded parameter (the server reads "+" as a space)
-        assert_eq!(r[0], "GET /mcp?directory=C%3A%5CUsers%5CZo%C3%AB%5Cproject+one HTTP/1.1");
+        assert_eq!(r[0], "GET /mcp?directory=C%3A%5CUsers%5CZo%C3%AB%5Cproject%20one HTTP/1.1");
         assert!(r.iter().any(|x| x.starts_with("POST /mcp/chrome-devtools/connect?directory=")), "{r:?}");
     }
 }

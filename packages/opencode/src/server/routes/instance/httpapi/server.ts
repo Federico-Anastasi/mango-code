@@ -40,7 +40,6 @@ import { SessionStatus } from "@/session/status"
 import { SessionSummary } from "@/session/summary"
 import { Todo } from "@/session/todo"
 import { SessionShare } from "@/share/session"
-import { ShareNext } from "@/share/share-next"
 import { Skill } from "@/skill"
 import { Discovery } from "@/skill/discovery"
 import { Snapshot } from "@/snapshot"
@@ -73,9 +72,7 @@ import {
   VOICE_LIVE_END_PATH,
   VOICE_LIVE_PCM_PATH,
   VOICE_LIVE_START_PATH,
-  VOICE_TRANSCRIBE_PATH,
   voiceLiveEffect,
-  voiceTranscribeEffect,
 } from "@/server/shared/voice"
 import { ENGINE_SPEED_PATH, engineSpeedEffect } from "@/server/shared/engine-speed"
 import { SESSION_WORK_PATH, sessionWorkEffect } from "@/server/shared/session-work"
@@ -83,6 +80,8 @@ import { ENGINE_WARMUP_PATH, engineWarmupEffect } from "@/server/shared/engine-w
 import { FOLDERS_PATH, foldersEffect } from "@/server/shared/mango-folders"
 import { SETTINGS_PATH, settingsEffect } from "@/server/shared/mango-settings"
 import { LANGUAGE_PATH, languageEffect } from "@/server/shared/mango-language"
+import { FOLDER_PATH, projectFolderEffect } from "@/server/shared/mango-project-folder"
+import { MODELS_PATH, modelsEffect } from "@/server/shared/mango-models"
 import { ServerAuth } from "@/server/auth"
 import { InstanceHttpApi, RootHttpApi } from "./api"
 import { Api } from "@opencode-ai/server/api"
@@ -210,8 +209,6 @@ const docRoute = HttpRouter.use((router) => router.add("GET", "/doc", () => Effe
 // it is not an opencode endpoint, it is the forwarding to a local Mango Code service.
 const voiceRoute = HttpRouter.use((router) =>
   Effect.gen(function* () {
-    yield* router.add("POST", VOICE_TRANSCRIBE_PATH, (request) => voiceTranscribeEffect(request))
-    // Live dictation: PCM chunks while the user speaks, events with partial and final sentences.
     yield* router.add("POST", VOICE_LIVE_START_PATH, (request) => voiceLiveEffect("start", request))
     yield* router.add("POST", VOICE_LIVE_PCM_PATH, (request) => voiceLiveEffect("pcm", request))
     yield* router.add("POST", VOICE_LIVE_END_PATH, (request) => voiceLiveEffect("end", request))
@@ -267,6 +264,21 @@ const languageRoute = HttpRouter.use((router) =>
   Effect.gen(function* () {
     yield* router.add("GET", LANGUAGE_PATH, (request) => languageEffect(request))
     yield* router.add("PUT", LANGUAGE_PATH, (request) => languageEffect(request))
+  }),
+).pipe(Layer.provide(authOnlyRouterLayer))
+
+// mango-code: what the web UI asks before it makes a project of a folder (see shared/mango-project-folder.ts).
+const projectFolderRoute = HttpRouter.use((router) =>
+  Effect.gen(function* () {
+    yield* router.add("GET", FOLDER_PATH, (request) => projectFolderEffect(request))
+    yield* router.add("POST", FOLDER_PATH, (request) => projectFolderEffect(request))
+  }),
+).pipe(Layer.provide(authOnlyRouterLayer))
+
+// mango-code: what the model menu says about each model (see shared/mango-models.ts).
+const modelsRoute = HttpRouter.use((router) =>
+  Effect.gen(function* () {
+    yield* router.add("GET", MODELS_PATH, () => modelsEffect)
   }),
 ).pipe(Layer.provide(authOnlyRouterLayer))
 
@@ -336,7 +348,6 @@ const app = LayerNode.group([
   Workspace.node,
   Worktree.node,
   Installation.node,
-  ShareNext.node,
   SessionShare.node,
   InstanceStore.node,
   httpClient,
@@ -365,6 +376,8 @@ export function createRoutes(
     foldersRoute,
     settingsRoute,
     languageRoute,
+    projectFolderRoute,
+    modelsRoute,
     uiRoute,
   ).pipe(
     Layer.provide([
@@ -373,7 +386,7 @@ export function createRoutes(
       corsVaryFix,
       fenceLayer,
       cors(corsOptions),
-      originGuard,
+      originGuard.pipe(Layer.provide(ServerAuth.Config.layer)),
       AppNodeBuilderV1.build(MoveSession.node, [[LocationServiceMap.node, locationServiceMapV2]]),
       HttpServer.layerServices,
     ]),

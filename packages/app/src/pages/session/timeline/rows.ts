@@ -158,7 +158,7 @@ export namespace Timeline {
       }),
     )
 
-    if (compaction) {
+    if (compaction && !error) {
       rows.push(
         new TimelineRow.TurnDivider({
           userMessageID: userMessage.id,
@@ -226,6 +226,7 @@ export namespace Timeline {
       rows.push(
         new TimelineRow.Error({
           userMessageID: userMessage.id,
+          overflow: error.name === "ContextOverflowError",
           text: unwrapErrorMessage(
             typeof data === "string" ? data : data === undefined || data === null ? "" : String(data),
           ),

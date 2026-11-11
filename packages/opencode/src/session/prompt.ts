@@ -714,12 +714,10 @@ const layer = Layer.effect(
 
       // Copies the attachment into <project>/Attachments. An error does not stop the message: the path
       // is missing and the note to the model says the attachment is not in the project.
-      const saveUploaded = (part: FileInput) =>
+      const saveUploaded = (part: FileInput, bytes: Uint8Array) =>
         Effect.gen(function* () {
           const instance = yield* InstanceState.context
-          return yield* Effect.tryPromise(() =>
-            saveAttachment(instance.directory, part.filename, decodeDataUrlBytes(part.url)),
-          ).pipe(
+          return yield* Effect.tryPromise(() => saveAttachment(instance.directory, part.filename, bytes)).pipe(
             Effect.catch((error) =>
               Effect.logWarning("attachment not saved", { error, filename: part.filename }).pipe(Effect.as(undefined)),
             ),
@@ -737,10 +735,10 @@ const layer = Layer.effect(
       // converted to text for a model that cannot read files.
       const importAttachment = (part: FileInput) =>
         Effect.gen(function* () {
-          const saved = yield* saveUploaded(part)
+          const bytes = decodeDataUrlBytes(part.url)
+          const saved = yield* saveUploaded(part, bytes)
           const name = part.filename ?? "file"
           const where = saved ? `saved in ${saved}` : "not saved in the project"
-          const bytes = decodeDataUrlBytes(part.url)
           const mdl = yield* provider.getModel(info.model.providerID, info.model.modelID).pipe(Effect.option)
           const sees = Option.isSome(mdl) && mdl.value.capabilities.input.image
           const kind = documentKind(part.filename, part.mime)
@@ -871,7 +869,7 @@ const layer = Layer.effect(
               if (part.mime === "text/plain") {
                 const text = decodeDataUrl(part.url)
                 const long = text.length > MAX_DOCUMENT_CHARS
-                const saved = long ? yield* saveUploaded(part) : undefined
+                const saved = long ? yield* saveUploaded(part, Buffer.from(text)) : undefined
                 return [
                   {
                     messageID: info.id,

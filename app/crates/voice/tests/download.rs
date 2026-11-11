@@ -13,7 +13,7 @@ fn resumes_a_partial_and_verifies_the_sha256() {
 
     // first whole round
     let mut calls = 0;
-    let path = voice::download(vad, &dir, &mut |done, total| {
+    let path = voice::download(vad, &dir, &std::sync::atomic::AtomicBool::new(false), &mut |done, total| {
         calls += 1;
         assert!(done <= total);
     })
@@ -29,7 +29,7 @@ fn resumes_a_partial_and_verifies_the_sha256() {
     let part = dir.join(format!("{}.part", vad.name));
     fs::write(&part, &bytes[..bytes.len() / 2]).unwrap();
     let mut first = None;
-    voice::download(vad, &dir, &mut |done, _| {
+    voice::download(vad, &dir, &std::sync::atomic::AtomicBool::new(false), &mut |done, _| {
         first.get_or_insert(done);
     })
     .unwrap();
@@ -42,7 +42,7 @@ fn resumes_a_partial_and_verifies_the_sha256() {
     let mut bad = bytes.clone();
     bad[1000] ^= 0xff;
     fs::write(&part, &bad).unwrap();
-    let err = voice::download(vad, &dir, &mut |_, _| {}).unwrap_err();
+    let err = voice::download(vad, &dir, &std::sync::atomic::AtomicBool::new(false), &mut |_, _| {}).unwrap_err();
     assert!(err.to_string().contains("sha256"), "{err}");
     assert!(!part.exists());
     let _ = fs::remove_dir_all(&dir);

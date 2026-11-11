@@ -1,6 +1,7 @@
 //! The model choice and download page, in the app window: at startup when what is needed
 //! is missing (`first_run::assess`), and later, from the "Models and engine" item of the tray icon, to add a
-//! model or change the engine.
+//! model or change the engine. The same page is where the PC starts to use the engine of another PC (`engine_remote.rs`),
+//! and, while it does, the only thing it shows.
 
 use crate::first_run::{self as fr, Assessment, Progress, Step, System};
 use crate::{publish, set_error, set_status, start_page, write_reason, AppState, Status};
@@ -17,7 +18,10 @@ use tauri::{AppHandle, Manager};
 pub struct Choice {
     /// You can go back without choosing (the app is already in use).
     pub cancelable: bool,
-    pub assessment: Assessment,
+    /// What this PC would download; none while it uses the engine of another PC (nothing to download then).
+    pub assessment: Option<Assessment>,
+    /// The PC whose engine is in use, if one is.
+    pub remote: Option<crate::engine_remote::Info>,
     /// The model just added from "Other models": the page ticks it.
     pub added: Option<String>,
     /// The folder of the skill that optimizes Mango Code on this PC, to give to a frontier AI.
@@ -39,6 +43,8 @@ pub enum Outcome {
     Nothing,
     Downloaded,
     Cancelled,
+    /// The user chose the engine of another PC, or to come back to this one: startup goes on from the saved choice.
+    Switched,
 }
 
 enum Answer {
@@ -46,6 +52,8 @@ enum Answer {
     Cancel,
     /// The list of models changed (one added or removed from "Other models"): it is read again and the choice proposed again.
     Reassess(Option<String>),
+    /// The engine in use changed (`engine_remote.rs` saved or removed the other PC's code).
+    Switched,
 }
 
 /// Who waits for the user's answer to the choice page.
@@ -63,6 +71,10 @@ impl Pending {
 
     pub fn reassess(&self, added: Option<String>) -> Result<(), String> {
         self.answer(Answer::Reassess(added))
+    }
+
+    pub fn switched(&self) -> Result<(), String> {
+        self.answer(Answer::Switched)
     }
 
     fn answer(&self, a: Answer) -> Result<(), String> {
@@ -174,7 +186,8 @@ pub fn ensure(app: &AppHandle, paths: &Paths, system: &dyn System, mode: Mode) -
                         detail: tr!("Scegli cosa scaricare", "Choose what to download"),
                         choice: Some(Choice {
                             cancelable: !startup,
-                            assessment: v.clone(),
+                            assessment: Some(v.clone()),
+                            remote: None,
                             added: added.take(),
                             optimize_dir: optimize_dir(paths).display().to_string(),
                         }),
@@ -187,6 +200,7 @@ pub fn ensure(app: &AppHandle, paths: &Paths, system: &dyn System, mode: Mode) -
                         break (chosen, plan);
                     }
                     Answer::Cancel => return Ok(Outcome::Cancelled),
+                    Answer::Switched => return Ok(Outcome::Switched),
                     Answer::Reassess(key) => {
                         v = fr::assess(system).with_context(assess_error)?;
                         added = key;
@@ -215,6 +229,26 @@ pub fn ensure(app: &AppHandle, paths: &Paths, system: &dyn System, mode: Mode) -
         bail!("{}", tr!("Lo scaricamento è finito, ma il modello non risulta installato.", "The download finished, but the model does not appear to be installed."));
     }
     Ok(Outcome::Downloaded)
+}
+
+/// "Models and engine" while this PC uses the engine of another: the page shows that PC and the way back, no hardware and
+/// no downloads. It returns when the user closes the page or changes the engine.
+fn show_remote(app: &AppHandle, paths: &Paths, info: crate::engine_remote::Info) -> Result<Outcome> {
+    let waiting = app.state::<AppState>().choice.open(true);
+    publish(
+        app,
+        Status {
+            stage: "choice".into(),
+            detail: tr!("Modelli e motore", "Models and engine"),
+            choice: Some(Choice { cancelable: true, assessment: None, remote: Some(info), added: None, optimize_dir: optimize_dir(paths).display().to_string() }),
+            ..Default::default()
+        },
+    );
+    match waiting.recv().with_context(|| tr!("la pagina della scelta si è chiusa", "the choice page was closed"))? {
+        Answer::Switched => Ok(Outcome::Switched),
+        Answer::Cancel => Ok(Outcome::Cancelled),
+        Answer::Chosen(_) | Answer::Reassess(_) => bail!("{}", tr!("questa pagina non scarica modelli", "this page does not download models")),
+    }
 }
 
 /// The "Models and engine" item of the tray. If the app is in use, the window moves to the choice page
@@ -249,12 +283,17 @@ fn change_in_use(app: &AppHandle) -> Result<()> {
     }
     let paths = st.paths.get().with_context(|| tr!("percorsi non ancora noti", "paths not known yet"))?.clone();
     let agent = st.agent.lock().unwrap().clone().with_context(|| tr!("l'agente non risulta acceso", "the agent does not appear to be running"))?;
-    let system = crate::system::choose(&paths)?;
+    let remote = st.remote.lock().unwrap().clone();
     let window = st.main.get().cloned().with_context(|| tr!("finestra principale sparita", "main window gone"))?;
     set_status(app, "startup", tr!("Controllo il computer", "Checking the computer"));
     window.navigate(st.app_page.get().with_context(|| tr!("pagina dell'app sconosciuta", "app page unknown"))?.clone())?;
-    match ensure(app, &paths, &*system, Mode::Change)? {
-        Outcome::Downloaded => crate::restart(app, Mode::Startup { interactive: true }),
+    let outcome = match remote {
+        Some(info) => show_remote(app, &paths, info)?,
+        // The hardware is read only if this PC's engine is the one in use.
+        None => ensure(app, &paths, &*crate::system::choose(&paths)?, Mode::Change)?,
+    };
+    match outcome {
+        Outcome::Downloaded | Outcome::Switched => crate::restart(app, Mode::Startup { interactive: true }),
         Outcome::Nothing | Outcome::Cancelled => {
             set_status(app, "ready", tr!("Pronto", "Ready"));
             window.navigate(start_page(&agent).parse().with_context(|| tr!("URL dell'agente", "Agent URL"))?)?;

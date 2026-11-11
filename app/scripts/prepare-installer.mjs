@@ -1,8 +1,8 @@
 // Prepares the staging folder from which Tauri builds the installer.
 //
-// The resources come from the repo's `launcher/`: it is the same tree the terminal uses, and the installed app
-// finds it again under `resources/` with the same shape. The agent is `mango-code.exe`, built from the repo
-// sources with `launcher/setup.ps1 -Only opencode` in `launcher/opencode/web/` (another location,
+// The resources come from the repo's `launcher/`, and the installed app finds them again under `resources/` with
+// the same shape. The agent is `mango-code.exe`, built from the repo
+// sources with `app/scripts/build-agent.ps1` in `launcher/opencode/web/` (another location,
 // if `launcher/mango-paths.json` names one).
 //
 // The installer is a base one: app, agent, resources. No engines and no NVIDIA libraries (they were more than
@@ -29,7 +29,7 @@ const STAGING = path.join(HERE, "staging");
 // Tauri copies the staging under <installation>/resources: Paths::discover() looks there.
 const ROOT = path.join(STAGING, "resources");
 
-const readJson = (f) => JSON.parse(fs.readFileSync(f, "utf8").replace(/^﻿/, ""));
+const readJson = (f) => JSON.parse(fs.readFileSync(f, "utf8").replace(/^\uFEFF/, ""));
 
 const PATHS_FILE = path.join(DIST, "mango-paths.json");
 const AGENT_DIR = (fs.existsSync(PATHS_FILE) && readJson(PATHS_FILE).opencode) || path.join(DIST, "opencode");
@@ -208,13 +208,18 @@ for (const f of skill) copy(path.join(DIST, f), path.relative("..", f));
 const TUNE = path.resolve(HERE, "..", "target", "release", "mango-tune.exe");
 if (!fs.existsSync(TUNE)) throw new Error(`${TUNE} missing: cargo build --release -p engine --bin mango-tune in app/`);
 copy(TUNE, "optimize/mango-tune.exe");
+// mango-launch, which runs one request from a script (`mango-launch -p`, docs/INTEGRATION.md), goes at the top of the resources:
+// the installed app is the folder above them.
+const LAUNCH = path.resolve(HERE, "..", "target", "release", "mango-launch.exe");
+if (!fs.existsSync(LAUNCH)) throw new Error(`${LAUNCH} missing: cargo build --release -p engine --bin mango-launch in app/`);
+copy(LAUNCH, "mango-launch.exe");
 
 // The licenses travel with the program: whoever receives the installer also receives the texts and, in NOTICE.md,
 // where the source code is.
 const legal = [...tracked(path.join("..", "LICENSES")), "../LICENSE", "../NOTICE.md", "../TRADEMARKS.md"];
 for (const f of legal) copy(path.join(DIST, f), path.join("licenses", path.basename(f)));
 
-if (!fs.existsSync(OPENCODE_EXE)) throw new Error(`${OPENCODE_EXE} missing: build it with launcher\\setup.ps1 -Only opencode, or use --opencode <path>`);
+if (!fs.existsSync(OPENCODE_EXE)) throw new Error(`${OPENCODE_EXE} missing: build it with app\\scripts\\build-agent.ps1, or use --opencode <path>`);
 copy(OPENCODE_EXE, "opencode/web/mango-code.exe");
 
 for (const { modules, roots } of NODE) {

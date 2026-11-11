@@ -1,10 +1,8 @@
 // Office documents -> text, for a model that reads only text (Mango Code).
 // Word, Excel, PowerPoint and PDF are recognized from the content of the file, not from the extension alone.
-import ExcelJS from "exceljs"
-import JSZip from "jszip"
-import mammoth from "mammoth"
-import TurndownService from "turndown"
-import { extractText, getDocumentProxy } from "unpdf"
+// The libraries are loaded when a document of their format is read: they are heavy and most sessions have no document.
+import path from "node:path"
+import type ExcelJS from "exceljs"
 
 export type DocumentKind = "docx" | "xlsx" | "pptx" | "pdf"
 
@@ -18,6 +16,9 @@ const MIME: Record<DocumentKind, string> = {
 /** Cap on the text of a document put in a message: ~10k tokens on an 80-128k context. */
 export const MAX_DOCUMENT_CHARS = 40_000
 
+/** What the entries of a .docx/.xlsx/.pptx may declare once unpacked, all together: a zip of a few MB can unpack to gigabytes. */
+const MAX_UNPACKED_BYTES = 200 * 1024 * 1024
+
 const MAX_SHEET_ROWS = 1000
 const MAX_SHEET_COLUMNS = 40
 
@@ -30,11 +31,32 @@ export function documentKind(filename: string | undefined, mime: string | undefi
 
 /** The text of the document as Markdown: headings, lists and tables stay recognizable. */
 export async function documentToText(kind: DocumentKind, bytes: Uint8Array): Promise<string> {
+  if (kind !== "pdf" && unpackedBytes(bytes) > MAX_UNPACKED_BYTES)
+    throw new Error(`the document is too big once unpacked (more than ${MAX_UNPACKED_BYTES / 1024 / 1024} MB)`)
   const text = await (kind === "docx" ? docx(bytes) : kind === "xlsx" ? xlsx(bytes) : kind === "pptx" ? pptx(bytes) : pdf(bytes))
   return text.replace(/\n{3,}/g, "\n\n").trim()
 }
 
+/** The size the entries of a zip declare once unpacked, read from its central directory without unpacking anything. */
+function unpackedBytes(bytes: Uint8Array) {
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+  // the end record (a comment may follow it) says where the entries are listed and how many there are
+  let end = bytes.length - 22
+  while (end >= 0 && view.getUint32(end, true) !== 0x06054b50) end--
+  if (end < 0) return 0
+  const count = view.getUint16(end + 10, true)
+  let at = view.getUint32(end + 16, true)
+  let total = 0
+  for (let i = 0; i < count && at + 46 <= bytes.length && view.getUint32(at, true) === 0x02014b50; i++) {
+    total += view.getUint32(at + 24, true)
+    at += 46 + view.getUint16(at + 28, true) + view.getUint16(at + 30, true) + view.getUint16(at + 32, true)
+  }
+  return total
+}
+
 async function docx(bytes: Uint8Array) {
+  const { default: mammoth } = await import("mammoth")
+  const { default: TurndownService } = await import("turndown")
   const { value } = await mammoth.convertToHtml(
     { buffer: Buffer.from(bytes) },
     // embedded images would be megabytes of base64: a text-only model has no use for them
@@ -66,6 +88,7 @@ function cellText(cell: ExcelJS.Cell) {
 }
 
 async function xlsx(bytes: Uint8Array) {
+  const { default: ExcelJS } = await import("exceljs")
   const book = new ExcelJS.Workbook()
   await book.xlsx.load(Buffer.from(bytes) as unknown as ArrayBuffer)
   const sheets = book.worksheets.map((sheet) => {
@@ -107,28 +130,39 @@ function xmlText(xml: string) {
 }
 
 async function pptx(bytes: Uint8Array) {
+  const { default: JSZip } = await import("jszip")
   const zip = await JSZip.loadAsync(bytes)
-  const number = (name: string) => Number(name.match(/(\d+)\.xml$/)?.[1])
-  const named = (dir: string) =>
-    Object.keys(zip.files)
-      .filter((name) => new RegExp(`^ppt/${dir}/[^/]+\\.xml$`).test(name))
-      .sort((a, b) => number(a) - number(b))
-  const notes = new Map<number, string[]>()
-  for (const name of named("notesSlides")) {
-    const lines = xmlText(await zip.files[name].async("string"))
-    if (lines.length) notes.set(number(name), lines)
+  // a part that is not there reads as empty: a slide with no relationships has no notes
+  const read = async (name: string) => (await zip.file(name)?.async("string")) ?? ""
+  // The numbers in the file names say neither the order of the slides nor whose notes are whose: the presentation lists
+  // the slides in order and each slide points to its own notes.
+  const relations = async (file: string) => {
+    const dir = path.posix.dirname(file)
+    const xml = await read(`${dir}/_rels/${path.posix.basename(file)}.rels`)
+    return [...xml.matchAll(/<Relationship\b[^>]*>/g)].map((tag) => {
+      const attribute = (name: string) => tag[0].match(new RegExp(`\\b${name}="([^"]*)"`))?.[1] ?? ""
+      const target = attribute("Target")
+      return { id: attribute("Id"), type: attribute("Type"), file: target.startsWith("/") ? target.slice(1) : path.posix.join(dir, target) }
+    })
   }
+  const slideFiles = await relations("ppt/presentation.xml")
+  const order = [...(await read("ppt/presentation.xml")).matchAll(/<(?:\w+:)?sldId\b[^>]*\s\w+:id="([^"]+)"/g)].map((m) => m[1])
+  if (order.length === 0) throw new Error("the PowerPoint file lists no slides")
   const slides = await Promise.all(
-    named("slides").map(async (name, index) => {
-      const lines = xmlText(await zip.files[name].async("string"))
-      const note = notes.get(number(name))
-      return [`## Slide ${index + 1}`, ...lines.map((line) => `- ${line}`), ...(note ? ["", "Speaker notes:", ...note] : [])].join("\n")
+    order.map(async (id, index) => {
+      const file = slideFiles.find((slide) => slide.id === id)?.file
+      if (!file || !zip.file(file)) throw new Error(`slide ${index + 1} of the presentation is not in the file`)
+      const lines = xmlText(await read(file))
+      const notes = (await relations(file)).find((rel) => rel.type.endsWith("/notesSlide"))
+      const note = notes ? xmlText(await read(notes.file)) : []
+      return [`## Slide ${index + 1}`, ...lines.map((line) => `- ${line}`), ...(note.length ? ["", "Speaker notes:", ...note] : [])].join("\n")
     }),
   )
   return slides.join("\n\n")
 }
 
 async function pdf(bytes: Uint8Array) {
+  const { extractText, getDocumentProxy } = await import("unpdf")
   const doc = await getDocumentProxy(new Uint8Array(bytes))
   const { text } = await extractText(doc, { mergePages: false })
   const pages = text.map((page, i) => ({ n: i + 1, page: page.trim() })).filter(({ page }) => page)

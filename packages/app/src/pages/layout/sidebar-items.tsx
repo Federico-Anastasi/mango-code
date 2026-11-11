@@ -12,7 +12,6 @@ import { useServerSync } from "@/context/server-sync"
 import { useLanguage } from "@/context/language"
 import { getAvatarColors, type LocalProject, useLayout } from "@/context/layout"
 import { useNotification } from "@/context/notification"
-import { usePermission } from "@/context/permission"
 import { messageAgentColor } from "@/utils/agent"
 import { sessionTitle } from "@/utils/session-title"
 import { sessionPermissionRequest } from "../session/composer/session-request-tree"
@@ -26,7 +25,6 @@ export const ProjectIcon = (props: {
 }): JSX.Element => {
   const serverSync = useServerSync()
   const notification = useNotification()
-  const permission = usePermission()
   const dirs = createMemo(() => [props.project.worktree, ...(props.project.sandboxes ?? [])])
   const unseenCount = createMemo(() =>
     dirs().reduce((total, directory) => total + notification.project.unseenCount(directory), 0),
@@ -34,10 +32,10 @@ export const ProjectIcon = (props: {
   const hasError = createMemo(() => dirs().some((directory) => notification.project.unseenHasError(directory)))
   const hasPermissions = createMemo(() =>
     dirs().some((directory) => {
-      return hasProjectPermissions(serverSync().session.data.permission, (item) => {
-        if (serverSync().session.get(item.sessionID)?.directory !== directory) return false
-        return !permission.autoResponds(item, directory)
-      })
+      return hasProjectPermissions(
+        serverSync().session.data.permission,
+        (item) => serverSync().session.get(item.sessionID)?.directory === directory,
+      )
     }),
   )
   const notify = createMemo(() => props.notify && (hasPermissions() || unseenCount() > 0))
@@ -148,20 +146,12 @@ export const SessionItem = (props: SessionItemProps): JSX.Element => {
   const layout = useLayout()
   const language = useLanguage()
   const notification = useNotification()
-  const permission = usePermission()
   const serverSync = useServerSync()
   const unseenCount = createMemo(() => notification.session.unseenCount(props.session.id))
   const hasError = createMemo(() => notification.session.unseenHasError(props.session.id))
   const [sessionStore] = serverSync().child(props.session.directory)
   const hasPermissions = createMemo(() => {
-    return !!sessionPermissionRequest(
-      sessionStore.session,
-      serverSync().session.data.permission,
-      props.session.id,
-      (item) => {
-        return !permission.autoResponds(item, props.session.directory)
-      },
-    )
+    return !!sessionPermissionRequest(sessionStore.session, serverSync().session.data.permission, props.session.id)
   })
   const isWorking = createMemo(() => {
     if (hasPermissions()) return false

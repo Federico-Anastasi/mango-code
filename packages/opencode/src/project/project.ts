@@ -1,4 +1,3 @@
-import os from "node:os"
 import path from "node:path"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { and, eq, sql } from "drizzle-orm"
@@ -11,6 +10,7 @@ import { Flag } from "@opencode-ai/core/flag/flag"
 import { GlobalBus } from "@/bus/global"
 import { which } from "@opencode-ai/core/util/which"
 import { Command } from "@/command"
+import { isBroadFolder, refusesBroadFolder } from "@/project/broad-folder"
 import { InstanceState } from "@/effect/instance-state"
 import { Effect, Layer, Scope, Context, Stream, Types, Schema } from "effect"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
@@ -216,12 +216,20 @@ const layer = Layer.effect(
     // diffs and the files the app opens all go through the project, whose identity is the first commit). A folder
     // without git gets `git init`; a repository without commits gets an empty first commit, made from the empty tree so
     // nothing the user staged ends up in it. The author is fixed: git on a new PC may have none configured. Only with
-    // MANGO_PROJECTS_GIT (set by the app), and never on a drive root or the user's own folder.
+    // MANGO_PROJECTS_GIT (set by the app), and never in a folder too broad to be a project (see broad-folder.ts) or a folder that holds
+    // repositories (a repository around them would swallow them).
     const ensureGit = Effect.fnUntraced(function* (directory: string, initialized: boolean) {
       if (process.env.MANGO_PROJECTS_GIT !== "1") return
       const resolved = path.resolve(directory)
-      if (resolved === path.parse(resolved).root || resolved.toLowerCase() === os.homedir().toLowerCase()) return
+      if (isBroadFolder(resolved)) return
       if (!initialized) {
+        const entries = yield* fs.readDirectoryEntries(resolved).pipe(Effect.orElseSucceed(() => []))
+        const holdsRepository = yield* Effect.forEach(
+          entries.filter((entry) => entry.type === "directory"),
+          (entry) => fs.exists(path.join(resolved, entry.name, ".git")).pipe(Effect.orElseSucceed(() => false)),
+          { concurrency: 8 },
+        )
+        if (holdsRepository.some(Boolean)) return
         const init = yield* git(["init", "-q"], { cwd: resolved })
         if (init.code !== 0) return yield* Effect.logWarning("git init failed", { directory: resolved, stderr: init.stderr })
       }
@@ -391,7 +399,7 @@ const layer = Layer.effect(
     })
 
     const initGit = Effect.fn("Project.initGit")(function* (input: { directory: string; project: Info }) {
-      if (input.project.vcs === "git") return input.project
+      if (input.project.vcs === "git" || refusesBroadFolder(input.directory)) return input.project
       if (!(yield* Effect.sync(() => which("git")))) throw new Error("Git is not installed")
       const result = yield* git(["init", "--quiet"], { cwd: input.directory })
       if (result.code !== 0) {

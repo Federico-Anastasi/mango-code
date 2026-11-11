@@ -3,9 +3,11 @@
 
 use super::*;
 use std::io::{Read, Write};
-use std::net::{Ipv4Addr, TcpListener};
+use std::net::TcpListener;
+use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
+use std::time::Duration;
 
 /// A fake agent: for each connection it sends the request head on `received` and answers with `reply`; then it
 /// closes, like the real agent with `Connection: close`, except for an event stream, which stays open.
@@ -116,7 +118,7 @@ fn fixture(agent: &Agent) -> Fixture {
     let preview_port = free_port();
     let reports = Arc::new(FakeReports { received: Mutex::new(Vec::new()) });
     let computer = Arc::new(FakeComputer { shown: Mutex::new(None), folders: Mutex::new(Vec::new()), opened: Mutex::new(Vec::new()) });
-    let t = Phone::new(data.path(), &data.path().join("logs"), Ipv4Addr::LOCALHOST, port, preview_port, agent.port, reports.clone(), computer.clone()).unwrap();
+    let t = Phone::new(data.path(), &data.path().join("logs"), true, port, preview_port, agent.port, reports.clone(), computer.clone()).unwrap();
     Fixture { t, port, preview_port, data, reports, computer }
 }
 
@@ -419,6 +421,111 @@ fn a_new_key_and_turning_off_drop_the_sessions() {
     assert_eq!(status(&r), "401");
 }
 
+/// If `phone.json` cannot be written, nothing changes: the file and what the app shows say the same, and a restart does
+/// not reopen the service with the key the user turned off.
+#[test]
+fn if_the_state_cannot_be_saved_turning_off_and_a_new_key_change_nothing() {
+    let a = agent(OK);
+    let p = fixture(&a);
+    p.t.set_enabled(true).unwrap();
+    let (key, cookie) = (p.key(), p.enter());
+    // a folder where the file is written first: every save fails
+    std::fs::create_dir(p.data.path().join("phone.json.tmp")).unwrap();
+    assert!(p.t.new_key().is_err());
+    assert_eq!(p.key(), key);
+    assert!(p.t.set_enabled(false).is_err());
+    let s = p.t.state();
+    assert!(s.enabled && s.listening);
+    let r = p.send(&format!("GET /session HTTP/1.1\r\nHost: {{host}}\r\nCookie: mango_phone={cookie}\r\n\r\n"));
+    assert_eq!(status(&r), "200", "the session is still valid: {r}");
+    let saved = std::fs::read_to_string(p.data.path().join("phone.json")).unwrap();
+    assert!(saved.contains(&key) && saved.contains("\"enabled\": true"), "{saved}");
+    // the obstacle gone, it turns off
+    std::fs::remove_dir(p.data.path().join("phone.json.tmp")).unwrap();
+    assert!(!p.t.set_enabled(false).unwrap().enabled);
+}
+
+/// A line break or a NUL inside the URL, a name or a value would become lines of the request to the agent: refused
+/// with 400, the agent sees nothing.
+#[test]
+fn control_characters_in_the_head_are_refused_before_the_agent() {
+    let a = agent(OK);
+    let p = fixture(&a);
+    p.t.set_enabled(true).unwrap();
+    let cookie = p.enter();
+    for (what, request) in [
+        ("a line feed in a value", format!("GET /x HTTP/1.1\r\nHost: {{host}}\r\nCookie: mango_phone={cookie}\r\nX-A: b\nInjected: yes\r\n\r\n")),
+        ("a carriage return in a value", format!("GET /x HTTP/1.1\r\nHost: {{host}}\r\nCookie: mango_phone={cookie}\r\nX-A: b\rInjected: yes\r\n\r\n")),
+        ("a NUL in the URL", format!("GET /x\0y HTTP/1.1\r\nHost: {{host}}\r\nCookie: mango_phone={cookie}\r\n\r\n")),
+        ("a line feed in a name", format!("GET /x HTTP/1.1\r\nHost: {{host}}\r\nCookie: mango_phone={cookie}\r\nX\nA: b\r\n\r\n")),
+    ] {
+        let r = p.send(&request);
+        assert_eq!(status(&r), "400", "{what}: {r}");
+    }
+    assert!(a.received.try_recv().is_err(), "the agent received something");
+    // and a normal request still goes through
+    assert_eq!(status(&p.send(&format!("GET /x HTTP/1.1\r\nHost: {{host}}\r\nCookie: mango_phone={cookie}\r\n\r\n"))), "200");
+}
+
+/// A connection that drips the head does not hold its thread beyond a time limit, and the open connections have a cap.
+#[test]
+fn slow_heads_and_too_many_connections_are_cut() {
+    let a = agent(OK);
+    let p = fixture(&a);
+    p.t.set_enabled(true).unwrap();
+    let started = std::time::Instant::now();
+    let mut slow = TcpStream::connect(("127.0.0.1", p.port)).unwrap();
+    slow.set_read_timeout(Some(Duration::from_secs(1))).unwrap();
+    slow.write_all(b"GET / HTTP/1.1\r\n").unwrap();
+    let mut buf = [0u8; 512];
+    // one byte at a time, never finishing: the reply (400) comes at the limit, not when the phone stops
+    let reply = loop {
+        if slow.write_all(b"X").is_err() {
+            break String::new();
+        }
+        match slow.read(&mut buf) {
+            Ok(n) if n > 0 => break String::from_utf8_lossy(&buf[..n]).into_owned(),
+            _ => {}
+        }
+        assert!(started.elapsed() < Duration::from_secs(10), "the head was never cut");
+    };
+    assert!(reply.starts_with("HTTP/1.1 400"), "{reply}");
+
+    let idle: Vec<TcpStream> = (0..crate::http::MAX_CONNECTIONS).map(|_| TcpStream::connect(("127.0.0.1", p.port)).unwrap()).collect();
+    std::thread::sleep(Duration::from_millis(300));
+    let mut extra = TcpStream::connect(("127.0.0.1", p.port)).unwrap();
+    extra.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+    let _ = extra.write_all(b"GET /phone HTTP/1.1\r\n\r\n");
+    assert!(matches!(extra.read(&mut buf), Ok(0) | Err(_)), "a connection over the cap was served");
+    drop(idle);
+}
+
+/// Whoever is on the network cannot fill the disk through `phone.log`: the path of a refused request is cut, the file
+/// is rotated, and the refusals of a minute are limited.
+#[test]
+fn the_log_does_not_grow_without_limit() {
+    let a = agent(OK);
+    let p = fixture(&a);
+    p.t.set_enabled(true).unwrap();
+    let long = "a".repeat(5000);
+    for _ in 0..(crate::REFUSALS_PER_MINUTE + 50) {
+        assert_eq!(status(&p.send(&format!("GET /{long} HTTP/1.1\r\nHost: {{host}}\r\n\r\n"))), "401");
+    }
+    let log = p.log();
+    let refused = log.lines().filter(|l| l.contains("\"refused\"")).count();
+    assert_eq!(refused, crate::REFUSALS_PER_MINUTE, "{log}");
+    assert!(log.lines().all(|l| l.len() < 600), "a line carries the whole path");
+    assert!(log.contains("more refusals not written"), "{log}");
+    // rotation: the old file stays as `phone.1.log`, the new one starts small
+    let filler = "x".repeat(10_000);
+    for _ in 0..(crate::LOG_MAX / 10_000 + 20) {
+        p.t.d.log(serde_json::json!({ "event": "filler", "text": filler }));
+    }
+    let logs = p.data.path().join("logs");
+    assert!(logs.join("phone.1.log").is_file());
+    assert!(std::fs::metadata(logs.join("phone.log")).unwrap().len() < crate::LOG_MAX);
+}
+
 #[test]
 fn turning_off_also_closes_the_open_events() {
     // The agent sends the head and an event, then keeps the stream open.
@@ -456,7 +563,7 @@ fn on_and_sessions_stay_after_a_restart() {
     p.t.set_enabled(true).unwrap();
     let cookie = p.enter();
     p.t.d.listener.lock().unwrap().take().unwrap().close();
-    let t = Phone::new(p.data.path(), &p.data.path().join("logs"), Ipv4Addr::LOCALHOST, p.port, p.preview_port, a.port, p.reports.clone(), p.computer.clone()).unwrap();
+    let t = Phone::new(p.data.path(), &p.data.path().join("logs"), true, p.port, p.preview_port, a.port, p.reports.clone(), p.computer.clone()).unwrap();
     assert!(t.state().listening);
     let r = p.send(&format!("GET /x HTTP/1.1\r\nHost: {{host}}\r\nCookie: mango_phone={cookie}\r\n\r\n"));
     assert_eq!(status(&r), "200");
@@ -524,7 +631,7 @@ impl Site {
         std::fs::create_dir_all(root.path().join("outside")).unwrap();
         std::fs::write(root.path().join("outside").join("secret.txt"), "secret").unwrap();
         // A directory link, as Windows allows without privileges, to the folder outside.
-        let made = std::process::Command::new("cmd").args(["/C", "mklink", "/J"]).arg(site.join("link")).arg(root.path().join("outside")).output().unwrap();
+        let made = std::process::Command::new("cmd").args(["/C", "mklink", "/J"]).arg(site.join("link")).arg(root.path().join("outside")).creation_flags(mango_common::CREATE_NO_WINDOW).output().unwrap();
         assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stdout));
         Site { root }
     }
@@ -692,7 +799,7 @@ fn a_page_that_is_not_the_computers_is_never_relayed() {
     *p.computer.shown.lock().unwrap() = None;
     let r = preview_get(&p, &cookie, "/");
     assert_eq!(status(&r), "404");
-    assert!(r.contains("<h1>"), "{r}");
+    assert!(r.contains("<h1>") && r.contains(&mango_common::tr!("«Apri» sulla scheda del file", "“Open” on the file card")), "{r}");
     assert!(server.received.try_recv().is_err() && a.received.try_recv().is_err());
 }
 
@@ -996,5 +1103,16 @@ fn the_web_ui_may_show_the_preview_port_in_a_frame() {
     p.t.set_enabled(true).unwrap();
     let cookie = p.enter();
     let r = p.send(&format!("GET / HTTP/1.1\r\nHost: {{host}}\r\n{}Accept: text/html\r\n\r\n", with_cookie(&cookie)));
-    assert!(r.contains(&format!("Content-Security-Policy: default-src 'self'; frame-src 'self' http://127.0.0.1:{}\r\n", p.preview_port)), "{r}");
+    assert!(r.contains(&format!("Content-Security-Policy: default-src 'self'; frame-src 'self' blob: http://127.0.0.1:{}\r\n", p.preview_port)), "{r}");
+}
+
+#[test]
+fn the_port_is_open_only_on_the_addresses_of_the_links() {
+    let a = agent(OK);
+    let p = fixture(&a);
+    p.t.set_enabled(true).unwrap();
+    assert!(TcpStream::connect(("127.0.0.1", p.port)).is_ok());
+    // a port on all the networks would answer on every address of the computer
+    assert!(TcpStream::connect(("127.0.0.2", p.port)).is_err());
+    assert!(TcpStream::connect(("127.0.0.2", p.preview_port)).is_err());
 }

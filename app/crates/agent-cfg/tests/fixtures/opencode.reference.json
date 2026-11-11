@@ -1,0 +1,120 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+
+  "share": "disabled",
+  "autoupdate": false,
+
+  "model": "mango/local",
+  "small_model": "mango/local",
+
+  "provider": {
+    "mango": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "mango-code",
+      "options": {
+        "baseURL": "http://127.0.0.1:8080/v1",
+        "apiKey": "dummy",
+        "timeout": false,
+        "headerTimeout": 900000
+      },
+      "models": {
+        "local": {
+          "name": "TOQ-v1",
+          "tool_call": true,
+          "reasoning": true,
+          "attachment": false,
+          "modalities": { "input": ["text"], "output": ["text"] },
+          "temperature": true,
+          "interleaved": "reasoning_content",
+          "limit": { "context": 122880, "output": 15360 },
+          "cost": { "input": 0, "output": 0, "cache_read": 0, "cache_write": 0 },
+          "variants": {
+            "low": { "disabled": true },
+            "medium": { "disabled": true },
+            "high": { "disabled": true }
+          }
+        }
+      }
+    },
+    "openrouter": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "openrouter",
+      "options": {
+        "baseURL": "https://openrouter.ai/api/v1",
+        "apiKey": "sk-or-v1-not-configured"
+      },
+      "models": {
+        "unused/unused": {
+          "name": "n/a",
+          "tool_call": true,
+          "reasoning": true,
+          "attachment": false,
+          "modalities": { "input": ["text"], "output": ["text"] },
+          "temperature": true,
+          "limit": { "context": 128000, "output": 4096 },
+          "cost": { "input": 0, "output": 0, "cache_read": 0 }
+        }
+      }
+    }
+  },
+
+  "subagent_depth": 0,
+  "tools": {
+    "task": false,
+    "websearch": false,
+
+    "chrome-devtools_lighthouse_audit": false,
+    "chrome-devtools_take_heapsnapshot": false,
+    "chrome-devtools_drag": false,
+    "chrome-devtools_hover": false,
+    "chrome-devtools_upload_file": false,
+    "chrome-devtools_type_text": false,
+    "chrome-devtools_get_console_message": false,
+    "chrome-devtools_select_page": false,
+    "chrome-devtools_take_screenshot": false
+  },
+
+  "permission": {
+    "edit": "allow",
+    "bash": "allow",
+    "read": "allow",
+    "glob": "allow",
+    "grep": "allow",
+    "list": "allow",
+    "webfetch": "allow",
+    "skill": "allow",
+    "todowrite": "allow",
+    "external_directory": "allow",
+    "task": "deny",
+    "websearch": "deny"
+  },
+
+  "compaction": {
+    "auto": true,
+    "prune": false
+  },
+
+  "skills": {
+    "paths": ["C:\\Test\\dist\\mango-plugin\\skills"]
+  },
+
+  "instructions": ["C:\\Test\\dist\\opencode-home\\MANGO.md", "C:\\Test\\dist\\opencode-home\\MANGO-web-text.md"],
+
+  "plugin": [],
+
+  "mcp": {
+    "web-search": {
+      "type": "local",
+      "command": ["node", "C:\\Test\\dist\\mango-websearch-mcp.js"],
+      "enabled": true,
+      "timeout": 120000
+    },
+    "chrome-devtools": {
+      "type": "local",
+      "command": ["node", "C:\\Test\\dist\\mango-chrome-mcp.mjs"],
+      "enabled": true,
+      "timeout": 30000
+    }
+  }
+}
+

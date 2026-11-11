@@ -5,7 +5,8 @@
 //! "Install and restart" (a button in the title bar and a notice) and so does Settings > Help. The installer is signed
 //! with the maintainer's key: the public half is in `tauri.conf.json`, and a file with another signature is refused (the check is
 //! done by the download). The click stops the agent and the engine in order (the same as "Quit"), starts the installer
-//! in passive mode (only its progress bar) and closes the app; the installer reopens it.
+//! in passive mode (only its progress bar) and closes the app; the installer reopens it. If the installer does not
+//! start, the app starts again what it stopped.
 //!
 //! The installer is started here and not by the plugin's `install`: the plugin starts it as a child of the app, so
 //! inside the app's job (supervisor.rs), and Windows killed it together with the app the moment the app exited.
@@ -71,14 +72,14 @@ pub async fn check(app: &AppHandle) -> State {
         // No release with a latest.json yet (only pre-releases, which `releases/latest` does not see): nothing newer.
         Ok(u) => match u.check().await {
             Err(tauri_plugin_updater::Error::ReleaseNotFound) => Ok(None),
-            other => other.map_err(|e| e.to_string()),
+            other => other.map_err(|e| failure(tr!("controllo degli aggiornamenti", "update check"), e)),
         },
-        Err(e) => Err(e),
+        Err(e) => Err(tr!("controllo degli aggiornamenti: {e}", "update check: {e}")),
     };
     let update = match update {
         Ok(Some(update)) => update,
         Ok(None) => return set(app, State::UpToDate),
-        Err(e) => return set(app, State::Error { message: tr!("controllo degli aggiornamenti: {e}", "update check: {e}") }),
+        Err(message) => return set(app, State::Error { message }),
     };
     let version = update.version.clone();
     set(app, State::Downloading { version: version.clone(), percent: Some(0) });
@@ -98,14 +99,32 @@ pub async fn check(app: &AppHandle) -> State {
             *app.state::<Updates>().ready.lock().unwrap() = Some((update, bytes));
             set(app, State::Ready { version })
         }
-        Err(e) => set(app, State::Error { message: tr!("scaricamento dell'aggiornamento: {e}", "update download: {e}") }),
+        Err(e) => set(app, State::Error { message: failure(tr!("scaricamento dell'aggiornamento", "update download"), e) }),
+    }
+}
+
+/// The text of a failed step: a connection that does not work in plain words (what to do, the technical text after
+/// it), any other failure with the name of its step.
+fn failure(step: String, e: tauri_plugin_updater::Error) -> String {
+    use tauri_plugin_updater::Error::{Network, Reqwest};
+    match e {
+        Reqwest(_) | Network(_) if mango_common::internet::is_certificate_error(&e) => mango_common::internet::certificate_message(),
+        Reqwest(_) | Network(_) => mango_common::network_error(e).to_string(),
+        _ => format!("{step}: {e}"),
     }
 }
 
 /// The updater, with the address and the transport of a local test if `MANGO_UPDATE_URL` asks for it.
 fn updater(app: &AppHandle) -> Result<tauri_plugin_updater::Updater, String> {
     let mut builder = app.updater_builder();
-    if let Some(url) = test_endpoint() {
+    let test = test_endpoint();
+    // The plugin has its own network: the certificates are Windows', and the proxy is the one the rest of the app uses for the updates' address.
+    let endpoint = test.as_ref().map(Url::to_string).or_else(|| app.config().plugins.0.get("updater")?.get("endpoints")?.get(0)?.as_str().map(str::to_owned));
+    builder = match endpoint.as_deref().and_then(mango_common::internet::proxy_for).and_then(|p| Url::parse(&p).ok()) {
+        Some(proxy) => builder.proxy(proxy),
+        None => builder.no_proxy(),
+    };
+    if let Some(url) = test {
         builder = builder.endpoints(vec![url]).map_err(|e| e.to_string())?;
     }
     builder.build().map_err(|e| e.to_string())
@@ -146,7 +165,7 @@ pub async fn update_check(app: AppHandle) -> State {
 /// Installs the update already downloaded (and verified): agent and engine stop, the installer starts outside the
 /// app's job and the app closes. The installer (NSIS `/P` passive, `/UPDATE`, `/R` reopens the app) replaces the files.
 #[tauri::command]
-pub fn update_install(app: AppHandle) -> Result<(), BridgeError> {
+pub async fn update_install(app: AppHandle) -> Result<(), BridgeError> {
     let Some((update, bytes)) = app.state::<Updates>().ready.lock().unwrap().take() else {
         return Err(err("invalid", tr!("nessun aggiornamento pronto", "no update ready")));
     };
@@ -162,15 +181,14 @@ pub fn update_install(app: AppHandle) -> Result<(), BridgeError> {
         .and_then(|_| std::fs::write(&installer, &bytes))
         .map_err(|e| fail(&app, format!("{}: {e}", installer.display())))?;
     set(&app, State::Installing { version });
-    // First agent and engine, as with "Quit": the installer must find their files free.
-    if let Some(supervisor) = app.state::<crate::AppState>().sup.get() {
-        supervisor.shutdown();
+    // First agent and engine, as with "Quit": the engine saves the conversation before the installer can close the app.
+    crate::stop_children(&app);
+    let started = std::process::Command::new(&installer).args(["/P", "/UPDATE", "/R"]).creation_flags(CREATE_BREAKAWAY_FROM_JOB).spawn();
+    if let Err(e) = started {
+        // an antivirus or a locked file: the app goes on as it was
+        crate::restart(&app, crate::Mode::Startup { interactive: true });
+        return Err(fail(&app, format!("{}: {e}", installer.display())));
     }
-    std::process::Command::new(&installer)
-        .args(["/P", "/UPDATE", "/R"])
-        .creation_flags(CREATE_BREAKAWAY_FROM_JOB)
-        .spawn()
-        .map_err(|e| fail(&app, format!("{}: {e}", installer.display())))?;
     app.exit(0);
     Ok(())
 }
@@ -179,6 +197,15 @@ pub fn update_install(app: AppHandle) -> Result<(), BridgeError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_connection_that_fails_is_told_in_plain_words_and_another_failure_keeps_its_step() {
+        let offline = failure("update check".into(), tauri_plugin_updater::Error::Network("error sending request".into()));
+        assert!(offline.contains(&tr!("Controlla la connessione", "Check your connection")), "{offline}");
+        assert!(!offline.contains("update check"), "{offline}");
+        let other = failure("update check".into(), tauri_plugin_updater::Error::EmptyEndpoints);
+        assert!(other.starts_with("update check: "), "{other}");
+    }
 
     #[test]
     fn the_states_are_written_as_the_web_ui_reads_them() {

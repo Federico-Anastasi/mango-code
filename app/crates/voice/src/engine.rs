@@ -1,7 +1,6 @@
 //! Whisper (whisper.cpp) on the processor: models load in a thread, transcriptions are serialized (there is one
 //! processor, and whisper's state is single per model).
 
-use crate::audio::SAMPLE_RATE;
 use mango_common::tr;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
@@ -11,6 +10,8 @@ use whisper_rs::{
     WhisperVadContextParams, WhisperVadParams,
 };
 
+/// The audio whisper expects: mono f32 PCM at 16 kHz.
+pub const SAMPLE_RATE: u32 = 16_000;
 /// Like faster-whisper (beam_size=5 in its `transcribe`).
 const BEAM_SIZE: i32 = 5;
 /// Under a second whisper.cpp transcribes nothing: it is padded with silence.

@@ -24,7 +24,8 @@ export function chosenLanguage(): Language | undefined {
 
 /** The current language: the chosen one, else the system's. */
 export function language(): Language {
-  if (chosenLanguage()) return chosenLanguage()!
+  const chosen = chosenLanguage()
+  if (chosen) return chosen
   if (isLanguage(process.env.MANGO_SYSTEM_LANGUAGE)) return process.env.MANGO_SYSTEM_LANGUAGE
   return Intl.DateTimeFormat().resolvedOptions().locale.toLowerCase().startsWith("it") ? "it" : "en"
 }

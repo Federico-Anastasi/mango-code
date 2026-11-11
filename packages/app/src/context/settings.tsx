@@ -1,5 +1,5 @@
-import { createStore, reconcile } from "solid-js/store"
-import { batch, createEffect, createMemo, createSignal, onCleanup } from "solid-js"
+import { createStore } from "solid-js/store"
+import { createEffect, createMemo, createSignal, onCleanup } from "solid-js"
 import { createSimpleContext } from "@opencode-ai/ui/context"
 import { persisted } from "@/utils/persist"
 import { usePlatform } from "@/context/platform"
@@ -24,19 +24,14 @@ export interface Settings {
     autoSave: boolean
     releaseNotes: boolean
     followup: "queue" | "steer"
-    showFileTree: boolean
     showNavigation: boolean
-    showSearch: boolean
-    showStatus: boolean
     showTerminal: boolean
     showReasoningSummaries: boolean
     shellToolPartsExpanded: boolean
     editToolPartsExpanded: boolean
-    showCustomAgents: boolean
     mobileTitlebarPosition: "top" | "bottom"
     newLayoutDesigns?: boolean
     layoutTransitionEligible?: boolean
-    agentVisibilityInitialized?: boolean
     newInterfaceNoticeDismissed?: boolean
     shouldDisplayTabsToast?: boolean
   }
@@ -44,7 +39,6 @@ export interface Settings {
     fontSize: number
     mono: string
     sans: string
-    terminal: string
   }
   keybinds: Record<string, string>
   permissions: {
@@ -56,7 +50,6 @@ export interface Settings {
 
 export const monoDefault = "System Mono"
 export const sansDefault = "System Sans"
-export const terminalDefault = "JetBrainsMono Nerd Font Mono"
 const legacyNewLayoutDesignsDefault = import.meta.env.VITE_OPENCODE_CHANNEL !== "prod"
 export const newLayoutDesignsDefault = true
 // Existing users can switch layouts until local midnight on this date. Set new Date(YYYY, M-1, D) to show.
@@ -94,11 +87,6 @@ export function hasExistingWebState(settings: Promise<string> | string | null, p
   return settings !== null || previousVersion !== undefined
 }
 
-export function initialAgentVisibility(initialized: boolean | undefined, existing: boolean, previousVersion?: string) {
-  if (initialized === true) return
-  return existing || previousVersion !== undefined
-}
-
 export function shouldEnableNewLayout(previous: string | undefined, current: string | undefined) {
   if (!current) return false
   const currentComparison = compareVersions(current, newLayoutDesignsUpgradeCutoff)
@@ -134,12 +122,9 @@ export function resolveNewLayoutDesigns(retired: boolean, preference: boolean | 
 const monoFallback =
   'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace'
 const sansFallback = 'ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif'
-const terminalFallback =
-  '"JetBrainsMono Nerd Font Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace'
 
 const monoBase = monoFallback
 const sansBase = sansFallback
-const terminalBase = terminalFallback
 
 function input(font: string | undefined) {
   return font ?? ""
@@ -172,35 +157,25 @@ export function sansFontFamily(font: string | undefined) {
   return stack(font, sansBase)
 }
 
-export function terminalInput(font: string | undefined) {
-  return input(font)
-}
-
-export function terminalFontFamily(font: string | undefined) {
-  return stack(font, terminalBase)
-}
+export const terminalFontFamily =
+  '"JetBrainsMono Nerd Font Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace'
 
 const defaultSettings: Settings = {
   general: {
     autoSave: true,
     releaseNotes: true,
     followup: "steer",
-    showFileTree: false,
     showNavigation: false,
-    showSearch: false,
-    showStatus: false,
     showTerminal: false,
     showReasoningSummaries: false,
     shellToolPartsExpanded: false,
     editToolPartsExpanded: false,
-    showCustomAgents: false,
     mobileTitlebarPosition: "top",
   },
   appearance: {
     fontSize: 14,
     mono: "",
     sans: "",
-    terminal: "",
   },
   keybinds: {},
   permissions: {
@@ -240,13 +215,6 @@ export const { use: useSettings, provider: SettingsProvider } = createSimpleCont
       migrationApplied: false,
       previous: undefined as string | undefined,
     })
-    const showFileTree = withFallback(() => store.general?.showFileTree, defaultSettings.general.showFileTree)
-    const showSearch = withFallback(() => store.general?.showSearch, defaultSettings.general.showSearch)
-    const showStatus = withFallback(() => store.general?.showStatus, defaultSettings.general.showStatus)
-    const showCustomAgents = withFallback(
-      () => store.general?.showCustomAgents,
-      defaultSettings.general.showCustomAgents,
-    )
     const sunset = oldInterfaceSunset
     const [oldInterfaceRetired, setOldInterfaceRetired] = createSignal(sunset ? Date.now() >= sunset.getTime() : false)
     const layoutTransitionClassified = createMemo(() => typeof store.general?.layoutTransitionEligible === "boolean")
@@ -276,15 +244,8 @@ export const { use: useSettings, provider: SettingsProvider } = createSimpleCont
         layoutTransitionEligible() ? legacyNewLayoutDesignsDefault : newLayoutDesignsDefault,
       )
     })
-    const visible = (preference: () => boolean) => createMemo(() => !newLayoutDesigns() || preference())
-    const initializeAgentVisibility = (existing: boolean) => {
-      const initial = initialAgentVisibility(store.general?.agentVisibilityInitialized, existing, launchState.previous)
-      if (initial === undefined) return
-      batch(() => {
-        setStore("general", "showCustomAgents", initial)
-        setStore("general", "agentVisibilityInitialized", true)
-      })
-    }
+    // The file tree, the search button, the server status and the agent picker are off in the new layout.
+    const oldLayoutOnly = createMemo(() => !newLayoutDesigns())
 
     if (sunset && !oldInterfaceRetired()) {
       const timeout = { current: undefined as ReturnType<typeof setTimeout> | undefined }
@@ -315,7 +276,6 @@ export const { use: useSettings, provider: SettingsProvider } = createSimpleCont
       if (!ready() || !launchState.classified || platform.platform !== "web") return
       const existing = hasExistingWebState(settingsInit, launchState.previous)
       if (!layoutTransitionClassified()) setStore("general", "layoutTransitionEligible", existing)
-      initializeAgentVisibility(existing)
     })
 
     createEffect(() => {
@@ -376,22 +336,7 @@ export const { use: useSettings, provider: SettingsProvider } = createSimpleCont
         setFollowup(value: "queue" | "steer") {
           setStore("general", "followup", value === "queue" ? "steer" : value)
         },
-        showFileTree,
-        setShowFileTree(value: boolean) {
-          setStore("general", "showFileTree", value)
-        },
         showNavigation: withFallback(() => store.general?.showNavigation, defaultSettings.general.showNavigation),
-        setShowNavigation(value: boolean) {
-          setStore("general", "showNavigation", value)
-        },
-        showSearch,
-        setShowSearch(value: boolean) {
-          setStore("general", "showSearch", value)
-        },
-        showStatus,
-        setShowStatus(value: boolean) {
-          setStore("general", "showStatus", value)
-        },
         showTerminal: withFallback(() => store.general?.showTerminal, defaultSettings.general.showTerminal),
         setShowTerminal(value: boolean) {
           setStore("general", "showTerminal", value)
@@ -417,10 +362,6 @@ export const { use: useSettings, provider: SettingsProvider } = createSimpleCont
         setEditToolPartsExpanded(value: boolean) {
           setStore("general", "editToolPartsExpanded", value)
         },
-        showCustomAgents,
-        setShowCustomAgents(value: boolean) {
-          setStore("general", "showCustomAgents", value)
-        },
         mobileTitlebarPosition: withFallback(
           () => store.general?.mobileTitlebarPosition,
           defaultSettings.general.mobileTitlebarPosition,
@@ -441,7 +382,6 @@ export const { use: useSettings, provider: SettingsProvider } = createSimpleCont
           if (typeof current === "boolean") return
           setStore("general", "layoutTransitionEligible", eligible)
         },
-        initializeAgentVisibility,
         layoutTransitionAvailable: createMemo(() => ready() && layoutTransition().available),
         newInterfaceNoticeVisible: createMemo(() => ready() && layoutTransition().notice),
         dismissNewInterfaceNotice() {
@@ -453,10 +393,10 @@ export const { use: useSettings, provider: SettingsProvider } = createSimpleCont
         },
       },
       visibility: {
-        fileTree: visible(showFileTree),
-        search: visible(showSearch),
-        status: visible(showStatus),
-        customAgents: visible(showCustomAgents),
+        fileTree: oldLayoutOnly,
+        search: oldLayoutOnly,
+        status: oldLayoutOnly,
+        customAgents: oldLayoutOnly,
       },
       appearance: {
         fontSize: withFallback(() => store.appearance?.fontSize, defaultSettings.appearance.fontSize),
@@ -471,27 +411,9 @@ export const { use: useSettings, provider: SettingsProvider } = createSimpleCont
         setUIFont(value: string) {
           setStore("appearance", "sans", value.trim() ? value : "")
         },
-        terminalFont: withFallback(() => store.appearance?.terminal, defaultSettings.appearance.terminal),
-        setTerminalFont(value: string) {
-          setStore("appearance", "terminal", value.trim() ? value : "")
-        },
       },
       keybinds: {
         get: (action: string) => store.keybinds?.[action],
-        set(action: string, keybind: string) {
-          setStore("keybinds", action, keybind)
-        },
-        reset(action: string) {
-          setStore("keybinds", (current) => {
-            if (!Object.prototype.hasOwnProperty.call(current, action)) return current
-            const next = { ...current }
-            delete next[action]
-            return next
-          })
-        },
-        resetAll() {
-          setStore("keybinds", reconcile({}))
-        },
       },
       permissions: {
         autoApprove: withFallback(() => store.permissions?.autoApprove, defaultSettings.permissions.autoApprove),

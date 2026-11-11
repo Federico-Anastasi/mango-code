@@ -5,6 +5,7 @@
 
 use serde_json::Value;
 use std::path::{Path, PathBuf};
+use std::os::windows::process::CommandExt;
 use std::process::{Command, Output};
 
 const TUNE: &str = env!("CARGO_BIN_EXE_mango-tune");
@@ -39,7 +40,7 @@ impl Fixture {
 
     fn run(&self, args: &[&str], env: &[(&str, &str)]) -> Output {
         let mut c = Command::new(TUNE);
-        c.args(args).env("MANGO_DATA", &self.root);
+        c.args(args).env("MANGO_DATA", &self.root).creation_flags(mango_common::CREATE_NO_WINDOW);
         for (k, v) in env {
             c.env(k, v);
         }

@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import {
   formatFileSize,
   isProjectFileCard,
+  previewKind,
   projectFileKind,
   projectFilePath,
   producedFilePath,
@@ -32,6 +33,14 @@ describe("projectFileKind", () => {
   })
 })
 
+describe("previewKind", () => {
+  test("a PDF and the pictures can be shown in the panel, an SVG as a picture; the other documents cannot", () => {
+    expect(previewKind("a/b/c.PDF")).toBe("pdf")
+    for (const name of ["a.png", "a.JPG", "a.jpeg", "a.gif", "a.webp", "a.bmp", "a.ico", "logo.svg"]) expect(previewKind(name)).toBe("image")
+    for (const name of ["a.docx", "a.xlsx", "a.pptx", "index.html", "a.txt", "a.zip", "Makefile"]) expect(previewKind(name)).toBeUndefined()
+  })
+})
+
 describe("projectFilePath", () => {
   test("joins with the separator of the project folder", () => {
     expect(projectFilePath("C:\\Users\\Alice\\Project", "docs/report.docx")).toBe("C:\\Users\\Alice\\Project\\docs\\report.docx")
@@ -58,6 +67,8 @@ describe("projectFileProblem", () => {
   test("the bridge code chooses the reason", () => {
     expect(projectFileProblem({ code: "not_found", message: "x" })).toBe("missing")
     expect(projectFileProblem({ code: "blocked_type", message: "x" })).toBe("blocked")
+    expect(projectFileProblem({ code: "too_large", message: "x" })).toBe("large")
+    expect(projectFileProblem({ code: "unreadable", message: "x" })).toBe("unreadable")
     expect(projectFileProblem({ code: "forbidden", message: "x" })).toBe("failed")
     expect(projectFileProblem(new Error("boom"))).toBe("failed")
     expect(projectFileProblem(undefined)).toBe("failed")

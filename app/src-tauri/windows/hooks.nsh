@@ -38,19 +38,30 @@
   DeleteRegKey SHCTX "Software\Classes\Directory\Background\shell\MangoCode"
 !macroend
 
-; On uninstall, the user is asked whether to delete their data too. The 9 GB model is in
+; What uninstalling frees: the downloaded models (dictation included), the engines, the engines' saved
+; conversation state and the logs, which are the gigabytes. The conversations (`agent\`) and the settings (the
+; files next to the folders) stay: whoever frees the space does not lose their chats. `root` is the data folder.
+!macro MANGO_FREE_SPACE root
+  RMDir /r "${root}\models"
+  RMDir /r "${root}\engine"
+  RMDir /r "${root}\slots"
+  RMDir /r "${root}\memory"
+  RMDir /r "${root}\logs"
+!macroend
+
+; On uninstall, the user is asked whether to free that space. The 9 GB model is in
 ; %LOCALAPPDATA%\MangoCode\models: keeping it by default avoids a new download for whoever reinstalls.
-; On updates (the new installer removes the previous version) and on silent
-; uninstall nothing is asked and the data stays.
+; The question says what goes, what stays and where. On updates (the new installer removes the previous
+; version) and on silent uninstall nothing is asked and the data stays.
 !macro NSIS_HOOK_POSTUNINSTALL
   ${If} $UpdateMode <> 1
   ${AndIfNot} ${Silent}
     ${If} $LANGUAGE = ${LANG_ITALIAN}
-      StrCpy $0 "Vuoi eliminare anche il modello scaricato, i log e le impostazioni di Mango Code?$\r$\n$\r$\nLa cartella $LOCALAPPDATA\MangoCode occupa diversi gigabyte. Se pensi di reinstallare Mango Code conviene tenerla."
+      StrCpy $0 "Vuoi liberare lo spazio di Mango Code?$\r$\n$\r$\nVengono eliminati i modelli scaricati (anche quello della dettatura), i motori e i log: diversi gigabyte.$\r$\n$\r$\nLe tue conversazioni e le impostazioni restano nella cartella $LOCALAPPDATA\MangoCode e le ritrovi se reinstalli. Se non ti servono più, elimina a mano quella cartella."
     ${Else}
-      StrCpy $0 "Also delete the downloaded model, logs and settings of Mango Code?$\r$\n$\r$\nThe folder $LOCALAPPDATA\MangoCode takes several gigabytes. If you plan to reinstall Mango Code it is better to keep it."
+      StrCpy $0 "Free the space of Mango Code?$\r$\n$\r$\nThe downloaded models (dictation included), the engines and the logs are deleted: several gigabytes.$\r$\n$\r$\nYour conversations and settings stay in the folder $LOCALAPPDATA\MangoCode and are there if you reinstall. If you no longer need them, delete that folder by hand."
     ${EndIf}
     MessageBox MB_YESNO|MB_ICONQUESTION|MB_DEFBUTTON2 "$0" IDNO +2
-    RMDir /r "$LOCALAPPDATA\MangoCode"
+    !insertmacro MANGO_FREE_SPACE "$LOCALAPPDATA\MangoCode"
   ${EndIf}
 !macroend

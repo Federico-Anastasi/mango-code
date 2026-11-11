@@ -17,7 +17,6 @@ import { InstanceStore } from "../../src/project/instance-store"
 import { MessageID, PartID, SessionID } from "../../src/session/schema"
 import { MessageV2 } from "../../src/session/message-v2"
 
-import type { Config } from "@/config/config"
 import { Session as SessionNs } from "@/session/session"
 import { errorMessage } from "../../src/util/error"
 import { TestLLMServer } from "../lib/llm-server"
@@ -90,7 +89,8 @@ function serverFetch(
       void serverPath
       Flag.OPENCODE_SERVER_PASSWORD = input?.password
       Flag.OPENCODE_SERVER_USERNAME = input?.username
-      const baseUrl = HttpServer.formatAddress(server.address)
+      // The test server listens on every address; the origin guard accepts only a loopback Host.
+      const baseUrl = HttpServer.formatAddress(server.address).replace("0.0.0.0", "127.0.0.1")
       return Object.assign(
         async (request: RequestInfo | URL, init?: RequestInit) => {
           const source = request instanceof Request ? request : new Request(request, init)
