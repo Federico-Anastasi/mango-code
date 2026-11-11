@@ -183,14 +183,6 @@ pub const INIT_SCRIPT: &str = r#"
   matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => setTimeout(sync, 50));
   setInterval(sync, 1000);
 
-  // The zoom (Ctrl+ / Ctrl- / Ctrl+0 are the browser's): after a change of the page scale the app
-  // remembers it for the next start.
-  let zooming;
-  addEventListener("resize", () => {
-    clearTimeout(zooming);
-    zooming = setTimeout(() => call("remember_zoom", { pageScale: devicePixelRatio }).catch(() => {}), 800);
-  });
-
   // Last page of the web UI (project or conversation): the app reopens it at the next start.
   let page = "";
   setInterval(() => {
@@ -629,7 +621,6 @@ pub fn install(app: &App) -> tauri::Result<()> {
                 reveal_path,
                 set_titlebar_color,
                 remember_page,
-                crate::zoom::remember_zoom,
                 open_models,
                 crate::preview::preview_place,
                 crate::preview::preview_go,

@@ -94,8 +94,11 @@ export type MangoPhone = {
 export type MangoPreviewState = { url: string; title: string; loading: boolean; failed: string | null; visible: boolean }
 
 export type MangoPreview = {
-  /** Rectangle of the placeholder in the page (CSS pixels) and zoom: the native panel overlaps it. */
-  place(rect: { x: number; y: number; width: number; height: number; dpr: number; zoom: number; visible: boolean }): Promise<void>
+  /**
+   * Rectangle of the placeholder in the page (CSS pixels), zoom, and how round its corners are (CSS pixels; the two bottom ones,
+   * or all four with `roundTop`): the native panel overlaps it.
+   */
+  place(rect: { x: number; y: number; width: number; height: number; dpr: number; zoom: number; radius: number; roundTop: boolean; visible: boolean }): Promise<void>
   go(url: string): Promise<void>
   nav(action: "back" | "forward" | "reload" | "stop"): Promise<void>
   state(): Promise<MangoPreviewState>

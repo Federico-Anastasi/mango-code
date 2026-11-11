@@ -672,7 +672,7 @@ pub fn run() {
                 .background_color(tauri::window::Color(21, 23, 31, 255))
                 .inner_size(1360.0, 880.0)
                 .min_inner_size(900.0, 600.0)
-                // Ctrl+ / Ctrl- / Ctrl+0: the browser's own zoom (`zoom.rs` remembers it)
+                // Ctrl+ / Ctrl- / Ctrl+0 and Ctrl+wheel: the browser's own zoom (`zoom.rs` remembers it)
                 .zoom_hotkeys_enabled(true)
                 .visible(!service_mode());
             // An instance with its own data (MANGO_DATA) keeps its own WebView2 data too: two WebView2 with
@@ -690,8 +690,8 @@ pub fn run() {
             }
             let main = bridge::window(window, app.handle()).build()?;
             allow_microphone(&main);
-            if let Some(zoom) = mango_common::zoom_file().ok().and_then(|f| zoom::read(&f)) {
-                let _ = main.set_zoom(zoom);
+            if let Ok(file) = mango_common::zoom_file() {
+                zoom::install(&main, file);
             }
             let _ = app.state::<AppState>().main.set(main);
             // The Preview panel is born with the window and before the agent: the browser

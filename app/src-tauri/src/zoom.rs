@@ -1,25 +1,22 @@
-//! The zoom of the app's window (Ctrl+ / Ctrl- / Ctrl+0).
+//! The zoom of the app's window and of the Preview panel (Ctrl+ / Ctrl- / Ctrl+0, Ctrl+wheel).
 //!
-//! The keys are the browser's own: the window is built with `zoom_hotkeys_enabled`. The web UI tells the
-//! app the page scale after a change (`remember_zoom`); the app keeps it in `<data>\zoom.txt` and applies it to the
-//! window at the next start. The Preview panel is a webview of its own and keeps its zoom: `preview_place` already
-//! converts the placeholder's rectangle with the page scale (`preview.rs`).
+//! The keys are the browser's own: both webviews are built with `zoom_hotkeys_enabled`, and each zooms by itself, the
+//! one the pointer or the keyboard is in. WebView2 says when a zoom changes (`watch`). The window's is kept in
+//! `<data>\zoom.txt` and applied at the next start (`install`); the panel's lasts until the app closes (`preview.rs`).
+//!
+//! The zoom is the one WebView2 reports, never one worked out from the page: `devicePixelRatio` is the zoom times the
+//! screen's scale times Windows' text size (Settings, Accessibility), and a zoom saved with the text size inside it
+//! came back multiplied by it at every start.
 
-use crate::bridge::{err, BridgeError};
-use std::path::Path;
-use tauri::Window;
+use std::path::{Path, PathBuf};
+use tauri::{Webview, WebviewWindow};
 
 /// The limits of the browser's zoom (WebView2: 25% to 500%).
-const MIN: f64 = 0.25;
-const MAX: f64 = 5.0;
-
-/// The zoom of the page: its scale (`devicePixelRatio`) over the screen's own scale, to two decimals.
-fn zoom_of(page_scale: f64, screen_scale: f64) -> f64 {
-    ((page_scale / screen_scale).clamp(MIN, MAX) * 100.0).round() / 100.0
-}
+pub(crate) const MIN: f64 = 0.25;
+pub(crate) const MAX: f64 = 5.0;
 
 /// The saved zoom, if there is one and it is a number the browser accepts.
-pub fn read(file: &Path) -> Option<f64> {
+fn read(file: &Path) -> Option<f64> {
     let zoom: f64 = std::fs::read_to_string(file).ok()?.trim().parse().ok()?;
     (MIN..=MAX).contains(&zoom).then_some(zoom)
 }
@@ -35,30 +32,42 @@ fn write(file: &Path, zoom: f64) -> std::io::Result<()> {
     mango_common::write_atomic(file, zoom.to_string())
 }
 
-/// The web UI saw its scale change: it remembers the zoom for the next start.
-#[tauri::command]
-pub fn remember_zoom(window: Window, page_scale: f64) -> Result<(), BridgeError> {
-    if !page_scale.is_finite() || page_scale <= 0.0 {
-        return Err(err("invalid", format!("page scale: {page_scale}")));
+/// Calls `changed` with the new zoom every time the webview's zoom changes, whoever changed it: the user or `set_zoom`.
+pub(crate) fn watch(webview: &Webview, changed: impl Fn(f64) + Send + 'static) -> tauri::Result<()> {
+    webview.with_webview(move |webview| unsafe {
+        let handler = webview2_com::ZoomFactorChangedEventHandler::create(Box::new(move |controller, _| {
+            if let Some(controller) = controller {
+                let mut zoom = 1.0;
+                controller.ZoomFactor(&mut zoom)?;
+                changed(zoom);
+            }
+            Ok(())
+        }));
+        let mut token = 0;
+        if let Err(e) = webview.controller().add_ZoomFactorChanged(&handler, &mut token) {
+            eprintln!("Zoom not watched: {e}");
+        }
+    })
+}
+
+/// Gives the window the zoom of the last time and remembers the one the user leaves it at.
+pub fn install(window: &WebviewWindow, file: PathBuf) {
+    if let Some(zoom) = read(&file) {
+        let _ = window.set_zoom(zoom);
     }
-    let screen = window.scale_factor().map_err(|e| err("io", e.to_string()))?;
-    let file = mango_common::zoom_file().map_err(|e| err("io", e.to_string()))?;
-    write(&file, zoom_of(page_scale, screen)).map_err(|e| err("io", format!("{}: {e}", file.display())))
+    let watched = watch(window.as_ref(), move |zoom| {
+        if let Err(e) = write(&file, zoom) {
+            eprintln!("Zoom not saved in {}: {e}", file.display());
+        }
+    });
+    if let Err(e) = watched {
+        eprintln!("Zoom not watched: {e}");
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn the_zoom_is_the_page_scale_over_the_screen_scale() {
-        assert_eq!(zoom_of(1.75, 1.75), 1.0);
-        assert_eq!(zoom_of(1.75 * 1.25, 1.75), 1.25);
-        assert_eq!(zoom_of(1.5 * 0.9, 1.5), 0.9);
-        assert_eq!(zoom_of(1.0, 1.75), 0.57);
-        assert_eq!(zoom_of(100.0, 1.0), MAX);
-        assert_eq!(zoom_of(0.01, 1.0), MIN);
-    }
 
     #[test]
     fn the_zoom_is_kept_in_a_file_and_100_percent_removes_it() {

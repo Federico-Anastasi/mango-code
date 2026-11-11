@@ -302,13 +302,20 @@ address in `100.64.0.0/10`). The phone does not see the bridge: no phone setting
 
 ## Zoom
 
-Ctrl+ / Ctrl- / Ctrl+0 zoom the whole window (the keys are the browser's own: the window is built with
-`zoom_hotkeys_enabled`). The web UI tells the app its page scale after a change (`remember_zoom`, 800 ms after the last
-resize of the page, `INIT_SCRIPT` in `bridge.rs`); `zoom.rs` turns it into the zoom (page scale over the screen's scale)
-and keeps it in `<data>\zoom.txt` (the file goes away at 100%), and `lib.rs` applies it to the window at the next start.
-The Preview panel is a webview of its own and keeps its zoom: `preview_place` already converts the placeholder's rectangle
-with the page scale, so after a zoom the native panel stays on its place. While a dialog, menu or list is open above the
+Ctrl+ / Ctrl- / Ctrl+0 and Ctrl+wheel zoom the page they are on: the chat or the page in the Preview panel, each by itself
+(the keys are the browser's own: both webviews are built with `zoom_hotkeys_enabled`). WebView2 tells `zoom.rs` when a
+zoom changes. The window's zoom is kept in `<data>\zoom.txt` (the file goes away at 100%) and applied at the next start;
+it is the zoom WebView2 reports, not one worked out from the page scale, which also contains the screen's scale and
+Windows' text size. The panel's zoom lasts until the app closes and sits on top of the format's own (`fit` × `user` in
+`preview.rs`: a phone or a tablet is shown whole, shrunk to the room there is). `preview_place` converts the placeholder's rectangle
+with the page scale, so after a zoom of the window the native panel stays on its place. While a dialog, menu or list is open above the
 page the panel steps aside (`layerOver` in `preview-panel.tsx`: Kobalte marks its open layers) and comes back when it closes.
+
+**How the panel looks.** A card with the chat's gap and rounded corners (`preview-panel.tsx`). The page is a native window on
+top of it, a rectangle: `preview_place` also receives how round its corners are and `round_corners` in `preview.rs` cuts the
+window to that shape, again at every change of size (the two bottom corners in the desktop format, where the page reaches
+the card's; all four on a device). The phone and the tablet formats draw a device, a recent iPhone (393 × 852) and an
+11-inch iPad (834 × 1194), with the page on its screen at its real size and the whole device scaled to fit the panel.
 
 **PDF and pictures in the panel.** The card of a PDF or a picture (png, jpg, gif, webp, bmp, ico, svg) opens it in the panel with a
 click (`preview_file` in `preview.rs`, the bridge's `preview.openFile`): the same checks as `open_path` (only a file inside a

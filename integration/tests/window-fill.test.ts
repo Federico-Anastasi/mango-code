@@ -149,7 +149,7 @@ for (const level of [1.25, 1.5, 1.75]) {
     await p.evaluate(`new Promise((ok) => { const t = setInterval(() => document.querySelector('aside[aria-label="Anteprima"]') && (clearInterval(t), ok(1)), 200) })`);
     await Bun.sleep(3000);
     const ratio = (await p.evaluate("window.devicePixelRatio")) as number;
-    const box = (await p.evaluate(`(() => { const r = document.querySelector('aside[aria-label="Anteprima"] [class*="flex-1"] > div').getBoundingClientRect(); return [r.x, r.y, r.width, r.height]; })()`)) as number[];
+    const box = (await p.evaluate(`(() => { const r = document.querySelector('aside[aria-label="Anteprima"] [data-slot="preview-page"]').getBoundingClientRect(); return [r.x, r.y, r.width, r.height]; })()`)) as number[];
     const expected = box.map((v) => v * ratio);
     const { rects } = native(env.app.pid!);
     console.log(`zoom ${level * 100}%: scale ${ratio}, placeholder ${expected.map(Math.round)} physical px; child windows ${JSON.stringify(rects)}`);

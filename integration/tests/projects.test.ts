@@ -66,7 +66,7 @@ test("the bridge commands that touch the window answer even with the Preview pan
   const command = (name: string, args: object) =>
     p.evaluate(`window.__TAURI_INTERNALS__.invoke('plugin:mango-bridge|${name}', ${JSON.stringify(args)}).then(() => 'ok', (e) => JSON.stringify(e))`);
   expect(await command("set_titlebar_color", { r: 10, g: 10, b: 10 })).toBe("ok");
-  expect(await command("preview_place", { x: 0, y: 0, width: 100, height: 100, dpr: 1, zoom: 1, visible: false })).toBe("ok");
+  expect(await command("preview_place", { x: 0, y: 0, width: 100, height: 100, dpr: 1, zoom: 1, radius: 0, roundTop: false, visible: false })).toBe("ok");
 }, 60_000);
 
 test("an existing folder opens with the Windows picker", async () => {

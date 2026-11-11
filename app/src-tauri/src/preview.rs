@@ -4,7 +4,9 @@
 //! Tauri 2, `Window::add_child`). The bar (address, back/forward, formats) is HTML in the web UI,
 //! which also knows where the panel is: it sends `preview_place` the rectangle of a placeholder and this
 //! native webview overlaps it. A separate window is not needed and would have lost the
-//! resizing next to the chat.
+//! resizing next to the chat. The web UI draws the panel as a card with rounded corners, like the chat's; the
+//! page reaches the card's two bottom corners, so its window is cut round there (`round_corners`); on the screen of a
+//! phone or a tablet, all four.
 //!
 //! HOW THE AGENT CONNECTS. `chrome-devtools-mcp` talks to the panel via CDP. WebView2 turns on
 //! remote debugging with a browser argument, and the argument applies to all webviews that share
@@ -57,8 +59,30 @@ struct State {
     /// The panel is shown (the web UI has a visible placeholder).
     #[serde(skip)]
     visible: bool,
+    /// The zoom the format asks for: a tablet in a narrow panel is shown shrunk (see `preview_place`).
     #[serde(skip)]
-    zoom: f64,
+    fit: f64,
+    /// The zoom the user chose on top of it (Ctrl+wheel, Ctrl+ / Ctrl-). The panel shows the page at `fit` × `user`.
+    #[serde(skip)]
+    user: f64,
+    /// The shape the panel's window was last cut to.
+    #[serde(skip)]
+    shape: Shape,
+}
+
+/// The user's own zoom, once WebView2 says the panel's page is at `actual` while the format asks for `fit`.
+/// 100% is what Ctrl+0 gives: it means "no zoom of mine", also in a shrunk format, where `actual / fit` would
+/// read it as a zoom in and carry it over to the next format.
+fn user_zoom(actual: f64, fit: f64) -> f64 {
+    if (actual - 1.0).abs() < 1e-3 {
+        return 1.0;
+    }
+    actual / fit
+}
+
+/// What the panel is set to for a format's zoom and the user's, within what the browser accepts.
+fn shown_zoom(fit: f64, user: f64) -> f64 {
+    (fit * user).clamp(crate::zoom::MIN, crate::zoom::MAX)
 }
 
 /// The pages the panel can show. The rest (mailto, app schemes) goes to the system.
@@ -145,12 +169,14 @@ pub fn install(app: &AppHandle) -> anyhow::Result<()> {
     let port = mango_common::random_port()?;
     let data = mango_common::data_dir()?.join("preview");
     std::fs::create_dir_all(&data)?;
-    app.manage(Panel { cdp_port: port, state: Mutex::new(State { zoom: 1.0, ..Default::default() }) });
+    app.manage(Panel { cdp_port: port, state: Mutex::new(State { fit: 1.0, user: 1.0, ..Default::default() }) });
 
     let main = crate::main_window(app).ok_or_else(|| anyhow::anyhow!("main window missing"))?;
-    let (for_nav, for_windows, for_title, for_load) = (app.clone(), app.clone(), app.clone(), app.clone());
+    let (for_nav, for_windows, for_title, for_load, for_zoom) = (app.clone(), app.clone(), app.clone(), app.clone(), app.clone());
     let builder = WebviewBuilder::new(LABEL, WebviewUrl::External(BLANK.parse()?))
         .data_directory(data)
+        // Ctrl+wheel, Ctrl+ / Ctrl- / Ctrl+0 over the page zoom it, like in a browser
+        .zoom_hotkeys_enabled(true)
         // Tauri's arguments for WebView2 + remote debugging (loopback only, random port). Without
         // --remote-allow-origins: a web page cannot open the debug WebSocket, only whoever sends no Origin can.
         .additional_browser_args(&format!(
@@ -205,6 +231,17 @@ pub fn install(app: &AppHandle) -> anyhow::Result<()> {
         .as_ref()
         .window()
         .add_child(builder, LogicalPosition::new(0.0, 0.0), LogicalSize::new(1.0, 1.0))?;
+    // A zoom that is not the one `preview_place` set is the user's: it stays on top of the next formats.
+    let watched = crate::zoom::watch(&webview, move |actual| {
+        let p = for_zoom.state::<Panel>();
+        let mut s = p.state.lock().unwrap();
+        if (actual - shown_zoom(s.fit, s.user)).abs() > 1e-6 {
+            s.user = user_zoom(actual, s.fit);
+        }
+    });
+    if let Err(e) = watched {
+        eprintln!("Zoom of the Preview panel not watched: {e}");
+    }
     webview.hide()?;
     Ok(())
 }
@@ -217,8 +254,40 @@ fn io<E: std::fmt::Display>(e: E) -> BridgeError {
     err("io", e.to_string())
 }
 
-/// Where the placeholder is in the web UI (CSS pixels, `dpr` = devicePixelRatio of the page) and with what
-/// zoom to show the page. If `visible` is false the panel hides.
+/// The shape the panel's window is cut to, in physical pixels: its size, the radius of its rounded corners, and whether the two
+/// top ones are rounded too.
+type Shape = (i32, i32, i32, bool);
+
+/// Cuts the panel's window to a rectangle with rounded corners: the web UI draws the page inside a card or on the screen of a
+/// device, both with rounded corners, and the page is a native window on top of them, a rectangle that would cover them. The
+/// two bottom corners are always rounded (the card's, which the page reaches), the top ones only on a device. A window's shape
+/// does not follow its size: it is cut again whenever the size or the corners change.
+fn round_corners(wv: &tauri::Webview, (width, height, radius, top): Shape) -> tauri::Result<()> {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::Graphics::Gdi::{CombineRgn, CreateRectRgn, CreateRoundRectRgn, DeleteObject, SetWindowRgn, RGN_OR};
+    wv.with_webview(move |webview| unsafe {
+        let mut parent = Default::default();
+        if webview.controller().ParentWindow(&mut parent).is_err() {
+            return;
+        }
+        // A rectangle rounded all around, joined to the part that stays square: the top down to where the bottom corners begin.
+        // The rounded one starts its curve a pixel before the radius: the square part goes two pixels further, or a notch shows.
+        let shape = CreateRoundRectRgn(0, 0, width + 1, height + 1, radius * 2, radius * 2);
+        if !top {
+            let square = CreateRectRgn(0, 0, width, (height - radius + 2).clamp(0, height));
+            CombineRgn(shape, shape, square, RGN_OR);
+            let _ = DeleteObject(square);
+        }
+        // the window owns the shape it is given
+        if SetWindowRgn(HWND(parent.0), shape, true) == 0 {
+            let _ = DeleteObject(shape);
+        }
+    })
+}
+
+/// Where the placeholder is in the web UI (CSS pixels, `dpr` = devicePixelRatio of the page), with what zoom to show the page
+/// and how round its corners are (`radius`, CSS pixels: the two bottom ones, and with `round_top` the top ones too).
+/// If `visible` is false the panel hides.
 #[tauri::command]
 #[allow(clippy::too_many_arguments)] // they are what the page sends: one named argument each
 pub fn preview_place(
@@ -230,6 +299,8 @@ pub fn preview_place(
     height: f64,
     dpr: f64,
     zoom: f64,
+    radius: f64,
+    round_top: bool,
     visible: bool,
 ) -> Result<(), BridgeError> {
     let wv = panel(&app)?;
@@ -244,15 +315,22 @@ pub fn preview_place(
         size: LogicalSize::new(width * k, height * k).into(),
     })
     .map_err(io)?;
-    let changed = {
+    // The lock is released before `set_zoom`: WebView2 reports the change to `install`'s watcher, which takes it.
+    let shape = ((width * dpr).round() as i32, (height * dpr).round() as i32, (radius * dpr).round() as i32, round_top);
+    let (zoomed, reshaped) = {
         let p = app.state::<Panel>();
         let mut s = p.state.lock().unwrap();
-        let c = (s.zoom - zoom).abs() > 1e-6;
-        s.zoom = zoom;
-        c
+        let zoomed = (s.fit - zoom).abs() > 1e-6;
+        s.fit = zoom;
+        let reshaped = s.shape != shape;
+        s.shape = shape;
+        (zoomed.then(|| shown_zoom(s.fit, s.user)), reshaped)
     };
-    if changed {
+    if let Some(zoom) = zoomed {
         wv.set_zoom(zoom).map_err(io)?;
+    }
+    if reshaped {
+        round_corners(&wv, shape).map_err(io)?;
     }
     wv.show().map_err(io)
 }
@@ -412,6 +490,22 @@ mod tests {
         for bad in ["", "   ", "javascript:alert(1)", "mailto:a@b.it", "ms-settings:privacy", "ftp://x.it/"] {
             assert!(normalize(bad).is_err(), "{bad:?} should have been rejected");
         }
+    }
+
+    #[test]
+    fn the_users_zoom_stays_on_top_of_the_formats() {
+        // desktop format: what the browser reports is the user's zoom
+        assert_eq!(user_zoom(1.25, 1.0), 1.25);
+        assert_eq!(user_zoom(0.75, 1.0), 0.75);
+        // a tablet shrunk to 60%: one step in is 125% of that, and the next format shows it at 125% too
+        assert!((user_zoom(0.75, 0.6) - 1.25).abs() < 1e-9);
+        assert!((shown_zoom(0.8, user_zoom(0.75, 0.6)) - 1.0).abs() < 1e-9);
+        // Ctrl+0 is no zoom of the user's, in any format
+        assert_eq!(user_zoom(1.0, 1.0), 1.0);
+        assert_eq!(user_zoom(1.0, 0.6), 1.0);
+        // never outside what the browser accepts
+        assert_eq!(shown_zoom(0.5, 0.25), crate::zoom::MIN);
+        assert_eq!(shown_zoom(1.0, 9.0), crate::zoom::MAX);
     }
 
     #[test]
