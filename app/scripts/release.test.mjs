@@ -28,6 +28,11 @@ test("the notes of latest.json are the list of changes as plain text, not the fi
   assert.equal(whatChanged(markdown), "- The phone app: Ctrl+0 resets the zoom, see the guide.\n- A long item that goes on the next line.")
 })
 
+test("a list of changes in groups, each under its title, is taken whole", () => {
+  const markdown = ["**Changed since 0.1.0**", "", "Starting the app", "- One.", "- Two.", "", "Settings", "- Three.", "", "**What to expect**", "- Not a change."].join("\n")
+  assert.equal(whatChanged(markdown), "- One.\n- Two.\n- Three.")
+})
+
 test("release notes without a list of changes, or with an empty one, are an error", () => {
   assert.throws(() => whatChanged("First release.\n\n**What to expect**\n- Something.\n"), /no "\*\*Changed since/)
   assert.throws(() => whatChanged("**Changed since 0.1.0**\n\n**What to expect**\n- Something.\n"), /empty/)

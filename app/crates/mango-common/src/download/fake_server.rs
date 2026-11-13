@@ -1,5 +1,5 @@
 //! A local HTTP server for tests: serves fixed bytes with `Range` support, and can break off halfway, stall
-//! without closing, or pretend not to know the range.
+//! without closing, send a file in pieces, or pretend not to know the range.
 
 use std::collections::HashMap;
 use std::io::{self, Read};
@@ -18,6 +18,10 @@ pub struct Route {
     /// network) until the test calls `FakeServer::release`, then drops it. The server serves one request at a
     /// time: the next request waits for the release.
     pub stall_at: Option<usize>,
+    /// The 200 reply waits after every this many bytes, longer than a download waits between two progress calls:
+    /// a test can stop a download while the file is arriving, however fast the computer is. `interrupt_at` and
+    /// `stall_at` come first: with one of them the reply does not wait.
+    pub pause_every: Option<usize>,
     /// Always replies with the whole file and 200, even to a request with `Range`.
     pub ignore_range: bool,
     /// A request with `Range` gets a 206 from this byte, whatever it asked for, saying so in `Content-Range`.
@@ -28,7 +32,7 @@ pub struct Route {
 
 impl Route {
     pub fn file(body: Vec<u8>) -> Route {
-        Route { body, interrupt_at: None, stall_at: None, ignore_range: false, resume_from: None, refusal: None }
+        Route { body, interrupt_at: None, stall_at: None, pause_every: None, ignore_range: false, resume_from: None, refusal: None }
     }
 
     pub fn refuse(status: u16, error_code: &'static str) -> Route {
@@ -68,6 +72,26 @@ impl Read for DropsAfter {
             return Err(io::Error::new(io::ErrorKind::ConnectionReset, "connection dropped"));
         }
         let n = buf.len().min(self.data.len() - self.pos);
+        buf[..n].copy_from_slice(&self.data[self.pos..self.pos + n]);
+        self.pos += n;
+        Ok(n)
+    }
+}
+
+/// Reads `data` in pieces of `piece` bytes, waiting before each piece after the first.
+struct InPieces {
+    data: Vec<u8>,
+    pos: usize,
+    piece: usize,
+}
+
+impl Read for InPieces {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let left = self.data.len() - self.pos;
+        if self.pos > 0 && left > 0 && self.pos % self.piece == 0 {
+            std::thread::sleep(super::PROGRESS_INTERVAL * 2);
+        }
+        let n = buf.len().min(left).min(self.piece - self.pos % self.piece);
         buf[..n].copy_from_slice(&self.data[self.pos..self.pos + n]);
         self.pos += n;
         Ok(n)
@@ -139,13 +163,14 @@ fn reply(rq: tiny_http::Request, v: Route, range: Option<String>, released: &Arc
             let rest = v.body[from..].to_vec();
             rq.respond(Response::from_data(rest).with_status_code(StatusCode(206)).with_header(h))
         }
-        None => match v.interrupt_at.or(v.stall_at) {
-            Some(n) => {
+        None => match (v.interrupt_at.or(v.stall_at), v.pause_every) {
+            (Some(n), _) => {
                 let stall = v.stall_at.map(|_| released.clone());
                 let r = DropsAfter { data: v.body[..n].to_vec(), pos: 0, stall };
                 rq.respond(Response::new(StatusCode(200), vec![], r, Some(total), None))
             }
-            None => rq.respond(Response::from_data(v.body)),
+            (None, Some(piece)) => rq.respond(Response::new(StatusCode(200), vec![], InPieces { data: v.body, pos: 0, piece }, Some(total), None)),
+            (None, None) => rq.respond(Response::from_data(v.body)),
         },
     }
 }

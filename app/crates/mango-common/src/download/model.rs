@@ -325,12 +325,14 @@ mod tests {
     }
 
     /// A download stopped halfway keeps what has arrived: the next call goes on from there, and `discard_partial`
-    /// deletes it instead.
+    /// deletes it instead. The first file arrives in pieces with a wait between them: progress is told at intervals,
+    /// and a file that arrives whole within one of them would be stopped only after it is complete.
     #[test]
     fn a_stopped_download_resumes_from_where_it_was_or_is_discarded() {
         use std::sync::atomic::Ordering;
         let (g, mm) = (data(1_500_000, 0), data(400_000, 5));
         let s = server(&g, &mm);
+        s.set("/acme/m-GGUF/resolve/rev1/m.gguf", Route { pause_every: Some(400_000), ..Route::file(g.clone()) });
         let tmp = tempfile::tempdir().unwrap();
         let paths = dist(tmp.path(), &g, &mm);
         let part = paths.models.join("m-GGUF/m.gguf.part");
@@ -474,8 +476,8 @@ mod tests {
         assert!(outside.is_dir(), "a folder outside the models folder is never removed");
     }
 
-    /// `3.8` and `toq` share the image encoder. Removing `3.8` takes it too when `toq` is not on the disk, and leaves it
-    /// when `toq` is there, whole or arriving.
+    /// Two models share a file, as two models of the catalog share an image encoder. Removing one takes the file too
+    /// when the other is not on the disk, and leaves it when the other is there, whole or arriving.
     #[test]
     fn a_shared_file_goes_with_the_model_unless_the_other_one_is_on_the_disk() {
         let tmp = tempfile::tempdir().unwrap();
@@ -513,8 +515,9 @@ mod tests {
         assert!(paths.models.join("shared/mm.gguf").is_file());
     }
 
-    /// Cancelling `toq` while `3.8` downloads the image encoder they share: the shared partial file stays for `3.8`,
-    /// the one of `toq` alone goes. Without the other model in the queue or on the disk, the shared one goes too.
+    /// Cancelling one model while another downloads a file they share: the shared partial file stays for the other,
+    /// the one of the cancelled model alone goes. Without the other model in the queue or on the disk, the shared one
+    /// goes too.
     #[test]
     fn a_cancel_leaves_a_shared_partial_file_to_the_model_that_needs_it() {
         let tmp = tempfile::tempdir().unwrap();

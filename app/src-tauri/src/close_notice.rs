@@ -112,9 +112,9 @@ pub fn on_close(window: &WebviewWindow) {
 
 // Both commands are `async`: they run on a thread of their own, and their hide reaches the window through the app's
 // event loop, after the page's call has returned. A command without `async` runs on the main thread inside the page's
-// call, and its hide is done there and then. In the real window (0.1.3, 13/11) «OK» wrote the notice as read and the
-// window stayed; which of the two is the cause is not known yet: `hide` writes in `startup.log` when it fails or when
-// the window is still visible right after it.
+// call, and its hide is done there and then. «OK» has been seen to write the notice as read and leave the window
+// open; the cause is not known yet: `hide` writes in `startup.log` when it fails or when the window is still visible
+// right after it.
 
 /// The page's answer to the X: `shown` when the notice is up and the window stays; otherwise the window goes.
 #[tauri::command(async)]

@@ -51,7 +51,7 @@ export type MangoDesktop = {
     state(): Promise<MangoUpdateReport>
     check(): Promise<MangoUpdateReport>
     /**
-     * Turns the check at each start on or off, and gives the new report. It rejects like `models`. An app before 0.1.3
+     * Turns the check at each start on or off, and gives the new report. It rejects like `models`. An app before 0.1.4
      * has neither this nor `automatic` in its report: the page then leaves the choice off.
      */
     setAutomatic?(automatic: boolean): Promise<MangoUpdateReport>
@@ -84,8 +84,10 @@ export type MangoDesktop = {
     remove(key: string): Promise<void>
     openFolder(): Promise<void>
   }
-  /** «Another model»: a model from Hugging Face or a GGUF on the computer, added to the user's list. They reject like `models`. */
-  /** They reject like `models`: `code` `"token"` when the user's token answers the refusal. */
+  /**
+   * «Another model»: a model from Hugging Face or a GGUF on the computer, added to the user's list. They reject like
+   * `models`: `code` `"token"` when the user's token answers the refusal.
+   */
   otherModels?: {
     /**
      * A name searches Hugging Face; a link (or `owner/name`, a result's id) gives the analysis of that repo at once, or
@@ -114,10 +116,10 @@ export type MangoDesktop = {
     setGpuUsed(name: string, used: boolean): Promise<void>
     /** Where a model that fits one card runs. */
     setSmallModels(smallModels: "one" | "all"): Promise<void>
-    /** «Come si ottimizza»: the folder of the skill that tunes Mango Code on this PC, to give to a frontier AI. */
+    /** «How it is tuned»: the folder of the skill that tunes Mango Code on this PC, to give to a frontier AI. */
     openOptimize(): Promise<void>
     /**
-     * «Aggiorna il motore»: the models on the disk that wait for the engine the app came with are queued, their download
+     * «Update the engine»: the models on the disk that wait for the engine the app came with are queued, their download
      * brings only the engine. It answers the sentence to show.
      */
     updateEngine(): Promise<string>

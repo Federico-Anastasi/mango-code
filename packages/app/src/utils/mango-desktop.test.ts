@@ -56,10 +56,10 @@ describe("mangoPlatform", () => {
       },
     })
     const files = mangoPlatform(value).projectFiles!
-    expect(await files.info("C:\P\a.docx")).toEqual({ size: 11264, isDir: false })
-    await files.open("C:\P\a.docx")
-    expect(opened).toEqual(["C:\P\a.docx"])
-    expect(await files.reveal!("C:\P\a.docx").catch((e) => e)).toEqual({ code: "not_found", message: "x" })
+    expect(await files.info("C:\\P\\a.docx")).toEqual({ size: 11264, isDir: false })
+    await files.open("C:\\P\\a.docx")
+    expect(opened).toEqual(["C:\\P\\a.docx"])
+    expect(await files.reveal!("C:\\P\\a.docx").catch((e) => e)).toEqual({ code: "not_found", message: "x" })
   })
 
   test("a PDF, a picture or a web page opens in the preview panel, the other documents in their Windows program", async () => {
@@ -115,7 +115,7 @@ describe("the updater of the app", () => {
       check: async () => ({ status: "up-to-date", automatic: current }),
       setAutomatic: async (next) => {
         calls.push(next)
-        if (starting) throw { code: "unavailable", message: "Mango Code si sta ancora avviando." }
+        if (starting) throw { code: "unavailable", message: "Mango Code is still starting." }
         current = next
         return { status: "up-to-date", automatic: next }
       },
@@ -124,7 +124,7 @@ describe("the updater of the app", () => {
     return { calls, updater: mangoPlatform(bridge({ updates }).value).updater! }
   }
 
-  test("an app without the choice (before 0.1.3) gives an updater without it, and its report reads", async () => {
+  test("an app without the choice (before 0.1.4) gives an updater without it, and its report reads", async () => {
     const updates: NonNullable<MangoDesktop["updates"]> = {
       state: async () => ({ status: "up-to-date" }),
       check: async () => ({ status: "up-to-date" }),
@@ -161,7 +161,7 @@ describe("the updater of the app", () => {
     await Promise.resolve()
     expect(await updater.setAutomatic!(false).catch((cause) => cause)).toEqual({
       code: "unavailable",
-      message: "Mango Code si sta ancora avviando.",
+      message: "Mango Code is still starting.",
     })
     expect(updater.automatic!()).toBe(true)
   })

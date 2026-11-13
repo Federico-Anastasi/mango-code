@@ -10,7 +10,11 @@ import fs from "node:fs"
 import path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 
-/** The list under "**Changed since …**" of the release notes, one "- " line per item, without Markdown marks. */
+/**
+ * The items under "**Changed since …**" of the release notes, up to the next bold heading, one "- " line per item,
+ * without Markdown marks. A list in groups, each under its title, is taken whole: the titles and the empty lines
+ * between the groups are left out.
+ */
 export function whatChanged(markdown) {
   const lines = markdown.replace(/\r\n/g, "\n").split("\n")
   const start = lines.findIndex((line) => /^\*\*Changed since .+\*\*\s*$/.test(line))
@@ -20,7 +24,6 @@ export function whatChanged(markdown) {
     if (/^\*\*/.test(line)) break
     if (/^[-*] /.test(line)) items.push(line.replace(/^[-*] /, "- "))
     else if (/^\s+\S/.test(line) && items.length) items[items.length - 1] += ` ${line.trim()}`
-    else if (items.length) break
   }
   if (!items.length) throw new Error('the "**Changed since …**" list of the release notes is empty')
   return items.map((item) => item.replace(/\[([^\]]+)\]\([^)]*\)/g, "$1").replace(/[`*]/g, "")).join("\n")

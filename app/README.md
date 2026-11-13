@@ -540,13 +540,15 @@ choice made in the first minute counts); "Check for updates" works all the same.
 Publishing a release (`.github/workflows/release.yml`; official installers are built only there, never on a PC: a
 local build carries the PC's paths inside its binaries):
 1. raise `version` in `src-tauri/tauri.conf.json` and in `Cargo.toml` (a release candidate is `X.Y.Z-rc.N`, so the
-   final `X.Y.Z` is higher), and write the notes in `release-notes/v<version>.md` with a `**Changed since …**` list:
-   it is the text of `latest.json`'s notes. `node app/scripts/check-version.mjs` checks all of this; the workflow
-   runs it with `--tag`, so the tag must be `v` + the version;
+   final `X.Y.Z` is higher), let `cargo` bring `Cargo.lock` to it, and write the notes in
+   `release-notes/v<version>.md` with a `**Changed since …**` list: it is the text of `latest.json`'s notes.
+   `node app/scripts/check-version.mjs` checks all of this; the workflow runs it with `--tag`, so the tag must be
+   `v` + the version;
 2. push the tag `v<version>`: the workflow waits for the maintainer's approval on the `release` environment, which
    holds the signing key (`TAURI_SIGNING_PRIVATE_KEY`, `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`);
 3. it runs the tests that need neither a graphics card nor the network (`cargo test --workspace`, the release
-   scripts' tests, the list of Rust crates against `Cargo.lock`), builds the agent and the installer with
+   scripts' tests, the list of Rust crates against `Cargo.lock`, the document tools' tests), builds the agent and
+   the installer with
    `scripts\build.ps1 -Phase Build` (no key in the environment), signs it with `-Phase Sign` (the only step that reads
    the key), checks the signature with `scripts\verify-signature.mjs`, writes `latest.json` with
    `scripts\update-manifest.mjs`, creates the release as a draft with the installer, its `.sig`, `latest.json` and the
