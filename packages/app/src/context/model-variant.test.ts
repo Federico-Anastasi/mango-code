@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { cycleModelVariant, getConfiguredAgentVariant, resolveModelVariant } from "./model-variant"
+import { getConfiguredAgentVariant, resolveModelVariant } from "./model-variant"
 
 describe("model variant", () => {
   test("resolves configured agent variant when model matches", () => {
@@ -52,35 +52,5 @@ describe("model variant", () => {
     })
 
     expect(value).toBeUndefined()
-  })
-
-  test("cycles from configured variant to next", () => {
-    const value = cycleModelVariant({
-      variants: ["low", "high", "xhigh"],
-      selected: undefined,
-      configured: "high",
-    })
-
-    expect(value).toBe("xhigh")
-  })
-
-  test("wraps from configured last variant to first", () => {
-    const value = cycleModelVariant({
-      variants: ["low", "high", "xhigh"],
-      selected: undefined,
-      configured: "xhigh",
-    })
-
-    expect(value).toBe("low")
-  })
-
-  test("cycles from an explicit default to the first variant", () => {
-    const value = cycleModelVariant({
-      variants: ["low", "high", "xhigh"],
-      selected: null,
-      configured: "xhigh",
-    })
-
-    expect(value).toBe("low")
   })
 })

@@ -487,6 +487,71 @@ it.live(
   }),
 )
 
+// A project inside a larger repository (a space and an accent in its name): the changes of a turn name their files
+// from the project, the folder the app opens them from.
+it.live(
+  "subdirectory diffFull names files from the project",
+  Effect.gen(function* () {
+    const dir = yield* scopedGitTmpdir()
+    const project = path.join(dir, "Contabilità prova B")
+    yield* write(`${project}/registro.md`, "uno\n")
+    yield* write(`${project}/vecchio.md`, "vecchio\n")
+    yield* write(`${dir}/fuori.md`, "fuori\n")
+    yield* exec(dir, ["git", "add", "."])
+    yield* exec(dir, ["git", "commit", "-m", "init"])
+    yield* Effect.gen(function* () {
+      const snapshot = yield* Snapshot.Service
+      const before = yield* snapshot.track()
+      expect(before).toBeTruthy()
+      yield* write(`${project}/fatture.md`, "| 1 | €1.464,00 àè |\n")
+      yield* write(`${project}/registro.md`, "uno\ndue\n")
+      yield* write(`${project}/sub/x.md`, "x\n")
+      yield* rm(`${project}/vecchio.md`)
+      yield* write(`${dir}/fuori.md`, "cambiato\n")
+      const after = yield* snapshot.track()
+      const diffs = yield* snapshot.diffFull(before!, after!)
+      expect(diffs.map((item) => [item.file, item.status, item.additions, item.deletions])).toEqual([
+        ["fatture.md", "added", 1, 0],
+        ["registro.md", "modified", 1, 0],
+        ["sub/x.md", "added", 1, 0],
+        ["vecchio.md", "deleted", 0, 1],
+      ])
+      expect(diffs[0]?.patch).toContain("+| 1 | €1.464,00 àè |")
+      expect(diffs[0]?.patch).toContain("+++ fatture.md")
+      expect(diffs[1]?.patch).toContain("+due")
+      expect(diffs[2]?.patch).toContain("+++ sub/x.md")
+      expect(diffs[3]?.patch).toContain("-vecchio")
+    }).pipe(provideInstance(project))
+  }),
+)
+
+// Git puts a name with a quote, a backslash, a tab or a newline between quotes unless asked for -z: the project's part
+// of the name would be cut from the wrong characters. Windows forbids those characters in names.
+nonWindowsIt(
+  "subdirectory diffFull names files with quotes and backslashes from the project",
+  Effect.gen(function* () {
+    const dir = yield* scopedGitTmpdir()
+    const project = path.join(dir, "Contabilità prova B")
+    yield* write(`${project}/registro.md`, "uno\n")
+    yield* exec(dir, ["git", "add", "."])
+    yield* exec(dir, ["git", "commit", "-m", "init"])
+    yield* Effect.gen(function* () {
+      const snapshot = yield* Snapshot.Service
+      const before = yield* snapshot.track()
+      expect(before).toBeTruthy()
+      yield* write(`${project}/say "hi"\\now.md`, "uno\n")
+      yield* write(`${project}/tab\there.md`, "due\n")
+      const after = yield* snapshot.track()
+      const diffs = yield* snapshot.diffFull(before!, after!)
+      expect(diffs.map((item) => [item.file, item.status, item.additions])).toEqual([
+        ['say "hi"\\now.md', "added", 1],
+        ["tab\there.md", "added", 1],
+      ])
+      expect(diffs[0]?.patch).toContain("+uno")
+    }).pipe(provideInstance(project))
+  }),
+)
+
 nonWindowsIt(
   "subdirectory snapshots treat wildcard characters literally",
   Effect.gen(function* () {

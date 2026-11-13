@@ -25,7 +25,6 @@ export interface Settings {
     releaseNotes: boolean
     followup: "queue" | "steer"
     showNavigation: boolean
-    showTerminal: boolean
     showReasoningSummaries: boolean
     shellToolPartsExpanded: boolean
     editToolPartsExpanded: boolean
@@ -40,7 +39,6 @@ export interface Settings {
     mono: string
     sans: string
   }
-  keybinds: Record<string, string>
   permissions: {
     autoApprove: boolean
   }
@@ -157,16 +155,12 @@ export function sansFontFamily(font: string | undefined) {
   return stack(font, sansBase)
 }
 
-export const terminalFontFamily =
-  '"JetBrainsMono Nerd Font Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace'
-
 const defaultSettings: Settings = {
   general: {
     autoSave: true,
     releaseNotes: true,
     followup: "steer",
     showNavigation: false,
-    showTerminal: false,
     showReasoningSummaries: false,
     shellToolPartsExpanded: false,
     editToolPartsExpanded: false,
@@ -177,7 +171,6 @@ const defaultSettings: Settings = {
     mono: "",
     sans: "",
   },
-  keybinds: {},
   permissions: {
     autoApprove: false,
   },
@@ -337,10 +330,6 @@ export const { use: useSettings, provider: SettingsProvider } = createSimpleCont
           setStore("general", "followup", value === "queue" ? "steer" : value)
         },
         showNavigation: withFallback(() => store.general?.showNavigation, defaultSettings.general.showNavigation),
-        showTerminal: withFallback(() => store.general?.showTerminal, defaultSettings.general.showTerminal),
-        setShowTerminal(value: boolean) {
-          setStore("general", "showTerminal", value)
-        },
         showReasoningSummaries: withFallback(
           () => store.general?.showReasoningSummaries,
           defaultSettings.general.showReasoningSummaries,
@@ -411,9 +400,6 @@ export const { use: useSettings, provider: SettingsProvider } = createSimpleCont
         setUIFont(value: string) {
           setStore("appearance", "sans", value.trim() ? value : "")
         },
-      },
-      keybinds: {
-        get: (action: string) => store.keybinds?.[action],
       },
       permissions: {
         autoApprove: withFallback(() => store.permissions?.autoApprove, defaultSettings.permissions.autoApprove),

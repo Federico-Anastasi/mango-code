@@ -6,7 +6,6 @@ import {
   createOpenReviewFile,
   createOpenSessionFileTab,
   createSessionTabs,
-  focusTerminalById,
   getTabReorderIndex,
   shouldShowFileTree,
 } from "./helpers"
@@ -69,32 +68,6 @@ describe("createOpenSessionFileTab", () => {
   })
 })
 
-describe("focusTerminalById", () => {
-  test("focuses textarea when present", () => {
-    document.body.innerHTML = `<div id="terminal-wrapper-one"><div data-component="terminal"><textarea></textarea></div></div>`
-
-    const focused = focusTerminalById("one")
-
-    expect(focused).toBe(true)
-    expect(document.activeElement?.tagName).toBe("TEXTAREA")
-  })
-
-  test("falls back to terminal element focus", () => {
-    document.body.innerHTML = `<div id="terminal-wrapper-two"><div data-component="terminal" tabindex="0"></div></div>`
-    const terminal = document.querySelector('[data-component="terminal"]') as HTMLElement
-    let pointerDown = false
-    terminal.addEventListener("pointerdown", () => {
-      pointerDown = true
-    })
-
-    const focused = focusTerminalById("two")
-
-    expect(focused).toBe(true)
-    expect(document.activeElement).toBe(terminal)
-    expect(pointerDown).toBe(true)
-  })
-})
-
 describe("getTabReorderIndex", () => {
   test("returns target index for valid drag reorder", () => {
     expect(getTabReorderIndex(["a", "b", "c"], "a", "c")).toBe(2)
@@ -121,7 +94,6 @@ describe("createSessionTabs", () => {
 
       expect(result.activeTab()).toBe("norm:src/a.ts")
       expect(result.activeFileTab()).toBe("norm:src/a.ts")
-      expect(result.closableTab()).toBe("norm:src/a.ts")
       dispose()
     })
   })
@@ -142,7 +114,6 @@ describe("createSessionTabs", () => {
       })
 
       expect(result.activeTab()).toBe("context")
-      expect(result.closableTab()).toBe("context")
       dispose()
     })
 
@@ -162,7 +133,6 @@ describe("createSessionTabs", () => {
 
       expect(result.activeTab()).toBe("review")
       expect(result.activeFileTab()).toBeUndefined()
-      expect(result.closableTab()).toBeUndefined()
       dispose()
     })
   })
@@ -186,7 +156,6 @@ describe("createSessionTabs", () => {
       expect(result.openedTabs()).toEqual(["file://src/a.ts"])
       expect(result.activeTab()).toBe(SESSION_OPEN_FILE_TAB)
       expect(result.activeFileTab()).toBeUndefined()
-      expect(result.closableTab()).toBe(SESSION_OPEN_FILE_TAB)
       dispose()
     })
   })

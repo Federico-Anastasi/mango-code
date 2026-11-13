@@ -1,6 +1,9 @@
-// The model menu under the chat, one line for each model (the app's real window, WebView2 CDP): weight, where it runs, whether
-// it reads images, and the warning only for the model the catalog marks `on_request`. Fake engine, no GPU used (the models are
-// small files; where they run is what this PC's hardware says, so the test checks the form of the line and not the place).
+// The two model menus (the app's real window, WebView2 CDP): the one in the top bar and the one under the chat list the
+// same models, those on the computer, and say which one is in use and which is the default. Under the chat each row has
+// its line: weight, where it runs, whether it reads images, and no judgment of the model, not even for the one the
+// catalog marks `on_request`. Choosing a model in the bar uses it at once, and the conversation's model follows it.
+// Fake engine, no GPU used (the models are small files; where they run is what this PC's hardware says, so the test
+// checks the form of the line and not the place).
 // Own ports (47696-47699). With `MC_PHOTOS=<folder>` it saves the screenshots (860 px and 390 px) there.
 // `bun test --cwd integration tests/model-menu.test.ts`, after `cargo build -p mango-code -p engine` in app/.
 
@@ -56,31 +59,31 @@ async function mouseClick(selector: string) {
   for (const type of ["mouseMoved", "mousePressed", "mouseReleased"]) await p.send("Input.dispatchMouseEvent", { type, x: box.x, y: box.y, button: "left", clickCount: 1 });
 }
 
-test("the agent tells what the menu says: weight, where it runs, the warning of a model the catalog does not trust", async () => {
-  const info = await (await fetch(`${env.agent}/mango/models/info`)).json();
-  expect(Object.keys(info)).toEqual(expect.arrayContaining(["fake", "small", "huge", "weak"]));
-  expect(info.small).toMatchObject({ bytes: 3 * GB, weak: false });
-  expect(["gpu", "cpu"]).toContain(info.small.place);
-  expect(info.huge).toMatchObject({ place: "none", weak: false });
-  expect(info.weak.weak).toBe(true);
-  expect(info.fake.weak).toBe(false);
+test("the agent tells what the menu says: weight and where it runs, with no judgment of the model", async () => {
+  const catalog = await (await fetch(`${env.agent}/mango/models`)).json();
+  const by = Object.fromEntries(catalog.models.map((m: { key: string }) => [m.key, m]));
+  expect(Object.keys(by)).toEqual(expect.arrayContaining(["fake", "small", "huge", "weak"]));
+  for (const key of ["fake", "small", "huge", "weak"]) expect(by[key].present, key).toBe(true);
+  expect(by.small).toMatchObject({ bytes: 3 * GB, verdict: { fits: true } });
+  expect(["gpu", "cpu"]).toContain(by.small.verdict.where.placement);
+  expect(by.huge.verdict).toMatchObject({ fits: false, where: null });
+  for (const key of ["fake", "small", "huge", "weak"]) expect(by[key], key).not.toHaveProperty("weak");
 }, 60_000);
 
-test("each row of the menu has its line, and only the model on request has the warning; no internal name is above them", async () => {
+test("each row of the menu that fits says where it runs, as the top bar's menu; none has a warning; no internal name is above them", async () => {
   await waitFor(`document.querySelector('[data-action="prompt-model"]') !== null`, 60_000);
   await Bun.sleep(1500);
   await mouseClick('[data-action="prompt-model"]');
-  await waitFor(`document.querySelectorAll('[data-slot="model-detail"]').length >= 4`);
+  await waitFor(`document.querySelectorAll('[data-slot="model-detail"]').length >= 3`);
   const rows: { name: string; detail: string; warning: string }[] = await p.evaluate(`[...document.querySelectorAll('[data-option-key]')]
     .filter((r) => r.querySelector('[data-slot="model-detail"]'))
     .map((r) => ({ name: r.querySelector('[data-slot="model-detail"]').parentElement.firstElementChild.textContent, detail: r.querySelector('[data-slot="model-detail"]').textContent, warning: r.querySelector('[data-slot="model-warning"]')?.textContent ?? "" }))`);
   const by = (name: string) => rows.find((r) => r.name === name)!;
-  // weight · where; the name carries nothing else
-  expect(by("Model small").detail).toMatch(/^3 GB · (Sulla scheda video|Sul processore( · .+)?)$/);
-  expect(by("Model huge").detail).toBe("10.240 GB · Non ci sta in questo computer");
-  expect(by("Fake model").detail).toMatch(/^1000 B · (Sulla scheda video|Sul processore)/);
-  for (const name of ["Fake model", "Model small", "Model huge"]) expect(by(name).warning, name).toBe("");
-  expect(by("Model weak").warning).toContain("Poco adatto a lavorare sui file");
+  // «2 schede · 128k»; the model that does not fit has no place to say
+  expect(by("Model small").detail).toMatch(/^(\d+ sched[ae]|processore) · \d+k$/);
+  expect(by("Fake model").detail).toMatch(/^(\d+ sched[ae]|processore) · \d+k$/);
+  expect(rows.some((r) => r.name === "Model huge")).toBe(false);
+  for (const name of ["Fake model", "Model small", "Model weak"]) expect(by(name).warning, name).toBe("");
   const text: string = await p.evaluate(`document.querySelector('[data-slot="model-selector-scroll"]').innerText`);
   expect(text).not.toContain("mango");
   if (process.env.MC_PHOTOS) {
@@ -93,4 +96,46 @@ test("each row of the menu has its line, and only the model on request has the w
     }
     await p.send("Emulation.clearDeviceMetricsOverride");
   }
+  // closed before the next test: a menu still open would be read with the top bar's one
+  await p.send("Input.dispatchKeyEvent", { type: "keyDown", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 });
+  await p.send("Input.dispatchKeyEvent", { type: "keyUp", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 });
+  await waitFor(`!document.querySelector('[role="menu"]')`);
 }, 90_000);
+
+const optionKeys = (menu: string) =>
+  p.evaluate(`[...document.querySelectorAll('${menu} [data-option-key]')].map((r) => r.getAttribute('data-option-key'))`) as Promise<string[]>;
+
+test("the top bar names the model in use, and its menu lists the same models as the one under the chat", async () => {
+  await waitFor(`document.querySelector('[data-action="titlebar-model"]')?.innerText.includes("Fake model")`, 60_000);
+  await mouseClick('[data-action="titlebar-model"]');
+  await waitFor(`document.querySelectorAll('[role="menu"] [data-option-key]').length >= 4`);
+  const bar = await optionKeys('[role="menu"]');
+  expect(bar.sort()).toEqual(["fake", "huge", "small", "weak"]);
+  const tag: string = await p.evaluate(`document.querySelector('[role="menu"] [data-option-key="fake"] [data-slot="model-tag"]')?.textContent ?? ""`);
+  expect(tag).toBe("Predefinito · In uso");
+  expect(await p.evaluate(`document.querySelector('[role="menu"]').innerText`)).toContain("Gestisci i modelli…");
+  await p.send("Input.dispatchKeyEvent", { type: "keyDown", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 });
+  await p.send("Input.dispatchKeyEvent", { type: "keyUp", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 });
+  await Bun.sleep(500);
+  await mouseClick('[data-action="prompt-model"]');
+  await waitFor(`document.querySelectorAll('[role="menu"] [data-option-key^="mango:"]').length >= 4`);
+  const composer = (await optionKeys('[role="menu"]')).filter((key) => key.startsWith("mango:")).map((key) => key.replace(/^mango:/, ""));
+  expect(composer.sort()).toEqual(bar.sort());
+  await p.send("Input.dispatchKeyEvent", { type: "keyDown", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 });
+  await p.send("Input.dispatchKeyEvent", { type: "keyUp", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 });
+}, 90_000);
+
+test("a model chosen in the bar is used at once, and the conversation's model follows it", async () => {
+  await Bun.sleep(500);
+  await mouseClick('[data-action="titlebar-model"]');
+  await waitFor(`!!document.querySelector('[role="menu"] [data-option-key="small"]')`);
+  await mouseClick('[role="menu"] [data-option-key="small"]');
+  for (let i = 0; i < 120; i++) {
+    const state = await (await fetch(`${env.engine}/control/state`)).json();
+    if (state.model.phase === "ready" && state.model.model === "small") break;
+    await Bun.sleep(500);
+  }
+  expect((await (await fetch(`${env.engine}/control/state`)).json()).model).toMatchObject({ phase: "ready", model: "small" });
+  await waitFor(`document.querySelector('[data-action="titlebar-model"]')?.innerText === "Model small"`);
+  await waitFor(`document.querySelector('[data-action="prompt-model"]')?.innerText.includes("Model small")`);
+}, 120_000);

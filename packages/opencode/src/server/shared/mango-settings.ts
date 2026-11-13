@@ -14,6 +14,7 @@ import { tr } from "@/util/mango-language"
 //        `type`: tools, mcp, skills, instructions, plugins (can be turned on and off) and base (the base prompt, fixed).
 //        `tokens`: the weight measured with the first request of a conversation, `null` if there is none (the page says
 //        "not measured"). `source`: `default` or `folder`, which file the on/off comes from.
+//        An agent without any model has no request to list: `model` null and no items.
 //   PUT /mango/settings?directory=<work>  {"type", "name", "enabled", "scope": "all" | "folder"}
 //     -> the changed item. It applies from the next message.
 // The PUT is meant to go only through the page (it carries `Origin`; a request without one gets 403): connected apps
@@ -46,9 +47,11 @@ export function settingsEffect(
     if ("error" in loaded) return failure(loaded.error, 500)
 
     if (request.method === "GET") {
-      const listed = yield* store.provide({ directory }, prompt.items())
       // The weights of the model that ran the folder's latest conversation: chosen in the chat, it can differ from
-      // the agent's default model, and its measurements are the ones there are.
+      // the agent's default model, and its measurements are the ones there are. The items are those of its request.
+      const listed = yield* store.provide({ directory }, prompt.items(PromptMeasurement.measuredModel(directory)))
+      const problem = PromptMeasurement.takeProblem()
+      if (problem) yield* Effect.logWarning("prompt: weights not read", { reason: problem })
       const model = PromptMeasurement.measuredModel(directory) ?? listed.model
       const items = listed.items
       const { valid } = loaded
@@ -57,7 +60,7 @@ export function settingsEffect(
         model,
         file: { default: PromptSettings.defaultFile() ?? null, folder: PromptSettings.folderFile(directory) },
         items: items.map((item) => {
-          const tokens = PromptMeasurement.tokens(directory, model, item.kind, item.name) ?? null
+          const tokens = (model && PromptMeasurement.tokens(directory, model, item)) ?? null
           if (!isKind(item.kind)) return { type: item.kind, name: item.name, tokens, enabled: true, source: null }
           return {
             type: item.kind,

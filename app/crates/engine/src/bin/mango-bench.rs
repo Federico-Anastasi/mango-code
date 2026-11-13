@@ -6,7 +6,8 @@
 //!
 //! The text is real: Mango Code's sources and documents (`launcher/`, `app/`), in a fixed order, cut to the exact
 //! number of tokens with the model's tokenizer; the question at the end asks for a summary. Temperature 0, no
-//! prompt cache (every point rereads everything). One JSON line per point on stdout, the table at the end.
+//! prompt cache (every point rereads everything), and the calls that restore and save the user's open conversation
+//! are not made. One JSON line per point on stdout, the table at the end.
 
 use anyhow::{bail, Context, Result};
 use mango_common::Paths;
@@ -54,10 +55,15 @@ fn main() -> Result<()> {
     std::fs::create_dir_all(&logs)?;
     let p = paths.clone();
     let m = EngineManager::new(
-        Box::new(move |k, port, excluded| engine_cfg::plan_excluding(&p, Some(k), port, excluded)),
+        // The bench is not a conversation: it neither restores the one the user left open nor saves its own text over it.
+        Box::new(move |k, port, excluded| {
+            let mut plan = engine_cfg::plan_excluding(&p, Some(k), port, excluded)?;
+            plan.spec.startup_post = None;
+            plan.spec.shutdown_post = None;
+            Ok(plan)
+        }),
         Box::new(engine_cfg::gpu_memory),
         &logs,
-        None,
     );
     let mut lines = Vec::new();
     for k in &keys {

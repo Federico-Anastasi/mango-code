@@ -1,7 +1,7 @@
 // "Share the engine with my PCs" with the real app and the fake engine, from the side of another PC: it only has a code
 // (`mango://ip:port/key`) and `fetch`. Off by default: the port is closed; on: the right code gets the models the PC offers and a
 // reply that arrives in pieces; a wrong or missing key gets 401; the GPUs' routes are refused; turned off, the port closes and the
-// old code does not come back. The section of the "Models and engine" page that drives it, and the PC that uses the code, are in
+// old code does not come back. Everything goes through the bridge, as the settings use it; the PC that uses the code is in
 // engine-remote.test.ts. The port is on 127.0.0.1 (`MANGO_SHARE_PC_ONLY`, only in development builds): the test does not make
 // Windows ask to open it on the network, and the firewall is not tried.
 

@@ -53,7 +53,7 @@ export function provider(model: Provider.Model) {
 export interface Interface {
   readonly environment: (model: Provider.Model) => Effect.Effect<string[]>
   /** `enabled` (mango-code): which skills stay in the prompt; without it, all. */
-  readonly skills: (agent: Agent.Info, enabled?: (name: string) => boolean) => Effect.Effect<string | undefined>
+  readonly skills: (agent: Agent.Info, sessionID: string, enabled?: (name: string) => boolean) => Effect.Effect<string | undefined>
   /** `enabled` (mango-code): which MCP servers bring their instructions; without it, all. */
   readonly mcp: (
     agent: Agent.Info,
@@ -110,10 +110,10 @@ const layer = Layer.effect(
         ].filter((part): part is string => part !== undefined)
       }),
 
-      skills: Effect.fn("SystemPrompt.skills")(function* (agent: Agent.Info, enabled?: (name: string) => boolean) {
+      skills: Effect.fn("SystemPrompt.skills")(function* (agent: Agent.Info, sessionID: string, enabled?: (name: string) => boolean) {
         if (Permission.disabled(["skill"], agent.permission).has("skill")) return
 
-        const all = yield* skill.available(agent)
+        const all = yield* skill.listing(sessionID, agent)
         const list = enabled ? all.filter((s) => enabled(s.name)) : all
         // All off: no block, not an empty list.
         if (all.length > 0 && list.length === 0) return

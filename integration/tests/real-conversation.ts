@@ -12,10 +12,8 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { MangoCode, find } from "../client/mango-code";
-import { writeLanguage } from "./environment";
+import { APP_EXE, writeLanguage } from "./environment";
 
-const REPO = path.resolve(import.meta.dir, "..", "..");
-const APP_EXE = path.join(REPO, "app", "target", "debug", "mango-code.exe");
 const args = process.argv.slice(2);
 const stopIndex = args.indexOf("--stop-after");
 const stopAfter = stopIndex >= 0 ? Number(args.splice(stopIndex, 2)[1]) * 1000 : null;

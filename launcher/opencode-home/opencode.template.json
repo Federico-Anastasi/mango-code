@@ -8,6 +8,7 @@
 
   "model": "{{PROVIDER}}/{{MODEL_REF}}",
   "small_model": "{{PROVIDER}}/{{MODEL_REF}}",
+  "_model": "GENERATED: the app's default model. Both entries are left out while no model is on the computer.",
   "_small_model": "The same provider and model as the running one: with a cloud model the session title and summaries would look for another provider and fail with an authentication error.",
 
   "provider": {
@@ -24,15 +25,16 @@
       "_options": "apiKey is fake but MUST be there (the OpenAI-compatible client refuses to start without it). timeout false and headerTimeout 15 min are needed: a 50k-token prefill can take two minutes before the first byte, and the default 30-60 s would cut the request on long contexts.",
       "models": {
         "local": {
-          "name": "{{LABEL}}",
+          "_local": "GENERATED: this entry becomes one per model the app declares, each with its own name, attachment, modalities and limit.",
+          "name": "",
           "tool_call": true,
           "reasoning": true,
-          "attachment": {{LOCAL_ATTACHMENT}},
-          "modalities": { "input": {{LOCAL_INPUT_MODALITIES}}, "output": ["text"] },
+          "attachment": false,
+          "modalities": { "input": ["text"], "output": ["text"] },
           "_modalities": "GENERATED: [text, image] if the model has an mmproj. REQUIRED, not a duplicate of `attachment`: without it opencode does not send the images a tool returns (a screenshot) and puts an 'ERROR: Cannot read image' message in their place (capabilities.input.image comes from modalities.input, not from attachment).",
           "temperature": true,
           "interleaved": "reasoning_content",
-          "limit": { "context": {{CTX}}, "output": {{OUTPUT}} },
+          "limit": { "context": 0, "output": 0 },
           "cost": { "input": 0, "output": 0, "cache_read": 0, "cache_write": 0 },
           "variants": {
             "low": { "disabled": true },

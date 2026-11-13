@@ -1,5 +1,6 @@
 import path from "path"
 import { Effect, Schema } from "effect"
+import { FSUtil } from "@opencode-ai/core/fs-util"
 import { Ripgrep } from "@opencode-ai/core/ripgrep"
 import { Skill } from "../skill"
 import * as Tool from "./tool"
@@ -14,6 +15,11 @@ export const SkillTool = Tool.define(
   Effect.gen(function* () {
     const skill = yield* Skill.Service
     const ripgrep = yield* Ripgrep.Service
+    const fs = yield* FSUtil.Service
+
+    // The list of skills is read when the instance starts: a skill whose folder is removed afterwards is still in it.
+    // The built-in skill has no file ("<built-in>").
+    const exists = (info: Skill.Info) => (path.isAbsolute(info.location) ? fs.existsSafe(info.location) : Effect.succeed(true))
 
     return {
       description: DESCRIPTION,
@@ -23,6 +29,16 @@ export const SkillTool = Tool.define(
           const info = yield* skill
             .require(params.name)
             .pipe(Effect.catchTag("Skill.NotFoundError", (error) => Effect.die(new Error(error.message))))
+
+          if (!(yield* exists(info))) {
+            const left = yield* Effect.filter(yield* skill.all(), exists)
+            const names = left.map((item) => item.name).toSorted()
+            return yield* Effect.die(
+              new Error(
+                `Skill "${info.name}" no longer exists: its folder was removed or renamed. Do not call it again. Skills that exist now: ${names.join(", ") || "none"}.`,
+              ),
+            )
+          }
 
           yield* ctx.ask({
             permission: "skill",

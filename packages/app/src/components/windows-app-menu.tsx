@@ -1,4 +1,4 @@
-import { Show, type JSX } from "solid-js"
+import type { JSX } from "solid-js"
 import { DropdownMenu } from "@opencode-ai/ui/dropdown-menu"
 import { Icon } from "@opencode-ai/ui/icon"
 import { IconButton } from "@opencode-ai/ui/icon-button"
@@ -90,7 +90,6 @@ export function WindowsAppMenu(props: {
                     ) : (
                       <DesktopMenuItem
                         label={entry.labelKey ? language.t(entry.labelKey) : ""}
-                        keybind={entry.command ? props.command.keybind(entry.command) : entry.accelerator?.windows}
                         disabled={entry.command ? commandDisabled(entry.command) : false}
                         onSelect={() => runEntry(entry)}
                       />
@@ -121,13 +120,10 @@ function DesktopMenuSubmenu(props: { label: string; children: JSX.Element }) {
   )
 }
 
-function DesktopMenuItem(props: { label: string; keybind?: string; disabled?: boolean; onSelect: () => void }) {
+function DesktopMenuItem(props: { label: string; disabled?: boolean; onSelect: () => void }) {
   return (
     <DropdownMenu.Item disabled={props.disabled} onSelect={props.onSelect}>
       <DropdownMenu.ItemLabel>{props.label}</DropdownMenu.ItemLabel>
-      <Show when={props.keybind}>
-        <span data-slot="desktop-app-menu-keybind">{props.keybind}</span>
-      </Show>
     </DropdownMenu.Item>
   )
 }

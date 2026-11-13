@@ -45,8 +45,6 @@ export type StreamInput = {
   tools: Record<string, Tool>
   retries?: number
   toolChoice?: "auto" | "required" | "none"
-  /** mango-code: engine warmup request, a single token (see prompt.ts, `warmup`). */
-  warmup?: boolean
 }
 
 export type StreamRequest = StreamInput & {
@@ -367,7 +365,7 @@ const live: Layer.Layer<
 
             // mango-code: the local engine serves one request at a time; while the stream is open
             // the conversation is queued or being served (see engine-queue.ts).
-            if (input.model.providerID === "mango" && !input.warmup) {
+            if (input.model.providerID === "mango") {
               yield* Effect.acquireRelease(
                 Effect.sync(() => enqueueEngineRequest(input.sessionID, { parentSessionID: input.parentSessionID })),
                 (release) => Effect.sync(release),

@@ -307,6 +307,81 @@ describe("Vcs diff", () => {
     20_000,
   )
 
+  // The project is a folder inside a larger repository (a space and an accent in its name, like a folder made by
+  // "New project" under a parent that is itself a repository): files are named from the project, not from the repository.
+  const projectInRepository = Effect.fn("VcsTest.projectInRepository")(function* () {
+    const repo = yield* tmpdirScoped({ git: true })
+    const project = path.join(repo, "Contabilità prova B")
+    yield* write(path.join(project, "registro.md"), "uno\n")
+    yield* write(path.join(project, "vecchio.md"), "vecchio\n")
+    yield* write(path.join(repo, "fuori.md"), "fuori\n")
+    yield* git(repo, ["add", "."])
+    yield* git(repo, ["commit", "--no-gpg-sign", "-m", "add files"])
+    yield* write(path.join(project, "registro.md"), "uno\ndue\n")
+    yield* write(path.join(project, "fatture.md"), "| Fattura | Totale |\n| 1 | €1.464,00 àè |\n")
+    yield* write(path.join(project, "sub", "x.md"), "x\n")
+    yield* remove(path.join(project, "vecchio.md"))
+    yield* write(path.join(repo, "fuori.md"), "cambiato\n")
+    return { repo, project }
+  })
+
+  worktreeIt.live("diff('git') and status() name files from a project inside a larger repository", () =>
+    Effect.gen(function* () {
+      const { project } = yield* projectInRepository()
+
+      const [diff, status] = yield* Effect.gen(function* () {
+        const vcs = yield* init()
+        return yield* Effect.all([vcs.diff("git"), vcs.status()], { concurrency: 2 })
+      }).pipe(provideInstance(project))
+
+      expect(diff.map((item) => [item.file, item.status, item.additions, item.deletions])).toEqual([
+        ["fatture.md", "added", 2, 0],
+        ["registro.md", "modified", 1, 0],
+        ["sub/x.md", "added", 1, 0],
+        ["vecchio.md", "deleted", 0, 1],
+      ])
+      expect(status.map((item) => [item.file, item.status, item.additions])).toEqual([
+        ["fatture.md", "added", 2],
+        ["registro.md", "modified", 1],
+        ["sub/x.md", "added", 1],
+        ["vecchio.md", "deleted", 0],
+      ])
+      expect(diff.find((item) => item.file === "fatture.md")?.patch).toContain("+| 1 | €1.464,00 àè |")
+      expect(diff.find((item) => item.file === "registro.md")?.patch).toContain("+due")
+      expect(diff.find((item) => item.file === "sub/x.md")?.patch).toContain("+x")
+      expect(diff.find((item) => item.file === "vecchio.md")?.patch).toContain("-vecchio")
+    }),
+  )
+
+  // The raw patch carries a project's changes to another checkout through `git apply`, which reads the names of a git
+  // patch from the repository root.
+  worktreeIt.live("diffRaw() of a project inside a larger repository applies back with apply()", () =>
+    Effect.gen(function* () {
+      const { repo, project } = yield* projectInRepository()
+
+      const raw = yield* Effect.gen(function* () {
+        const vcs = yield* init()
+        return yield* vcs.diffRaw()
+      }).pipe(provideInstance(project))
+      expect(raw).not.toContain("fuori.md")
+
+      yield* git(repo, ["checkout", "--", "."])
+      yield* git(repo, ["clean", "-fdq"])
+      const applied = yield* Effect.gen(function* () {
+        const vcs = yield* init()
+        return yield* vcs.apply({ patch: raw })
+      }).pipe(provideInstance(project))
+
+      expect(applied).toEqual({ applied: true })
+      const read = (file: string) => Effect.promise(() => fs.readFile(path.join(project, file), "utf8"))
+      expect(yield* read("registro.md")).toBe("uno\ndue\n")
+      expect(yield* read("fatture.md")).toBe("| Fattura | Totale |\n| 1 | €1.464,00 àè |\n")
+      expect(yield* read("sub/x.md")).toBe("x\n")
+      expect(yield* Effect.promise(() => Bun.file(path.join(project, "vecchio.md")).exists())).toBe(false)
+      expect(yield* Effect.promise(() => fs.readFile(path.join(repo, "fuori.md"), "utf8"))).toBe("fuori\n")
+    }),
+  )
+
   it.instance(
     "diff('branch') returns changes against default branch",
     () =>

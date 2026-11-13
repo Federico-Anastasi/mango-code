@@ -4,7 +4,6 @@ const prefixes = {
   permission: "per",
   user: "usr",
   part: "prt",
-  pty: "pty",
 } as const
 
 const LENGTH = 26

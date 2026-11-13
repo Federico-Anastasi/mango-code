@@ -26,7 +26,8 @@ export namespace TimelineRow {
   }> {}
   export class Thinking extends Data.TaggedClass("Thinking")<{
     userMessageID: string
-    since: number
+    /** Since when the model gives no sign: undefined while something is moving, then the row keeps its place and says nothing. */
+    since: number | undefined
     afterParts: boolean
   }> {}
   export class DiffSummary extends Data.TaggedClass("DiffSummary")<{
@@ -39,12 +40,18 @@ export namespace TimelineRow {
     userMessageID: string
     /** The conversation does not fit the model: the row shows a translated text, not the server's. */
     overflow: boolean
+    /** The turn can be sent again from the row: the model closed in the middle of the answer. */
+    retry: boolean
     text: string
   }> {}
   export class Retry extends Data.TaggedClass("Retry")<{
     userMessageID: string
   }> {}
   export class TurnStats extends Data.TaggedClass("TurnStats")<{
+    userMessageID: string
+  }> {}
+  /** The model ended the turn without writing anything: a sentence says so instead of an empty space. */
+  export class EmptyAnswer extends Data.TaggedClass("EmptyAnswer")<{
     userMessageID: string
   }> {}
 
@@ -59,6 +66,7 @@ export namespace TimelineRow {
     | Error
     | Retry
     | TurnStats
+    | EmptyAnswer
 
   export const key = (row: TimelineRow) => {
     switch (row._tag) {
@@ -82,6 +90,8 @@ export namespace TimelineRow {
         return `retry:${row.userMessageID}`
       case "TurnStats":
         return `turn-stats:${row.userMessageID}`
+      case "EmptyAnswer":
+        return `empty-answer:${row.userMessageID}`
     }
   }
 

@@ -72,13 +72,11 @@ describe("skill", () => {
             name: "tagged-skill",
             description: "A tagged skill.",
             location: "/tmp/plugin.git#v1.3.0/SKILL.md",
-            content: "",
           },
           {
             name: "built-in-skill",
             description: "A built-in skill.",
             location: "<built-in>",
-            content: "",
           },
         ],
         { verbose: true },

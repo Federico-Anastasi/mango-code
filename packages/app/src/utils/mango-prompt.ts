@@ -5,6 +5,15 @@
 export const PROMPT_KINDS = ["tools", "mcp", "skills", "instructions", "plugins"] as const
 export type PromptKind = (typeof PROMPT_KINDS)[number]
 
+/** The rows of the Agent section: what each lists. Instructions and plugins are one row, both are text added to the prompt. */
+export const PROMPT_GROUPS = [
+  { id: "tools", kinds: ["tools"] },
+  { id: "mcp", kinds: ["mcp"] },
+  { id: "skills", kinds: ["skills"] },
+  { id: "instructions", kinds: ["instructions", "plugins"] },
+] as const satisfies readonly { id: string; kinds: readonly PromptKind[] }[]
+export type PromptGroup = (typeof PROMPT_GROUPS)[number]
+
 export type PromptItem = {
   /** One of PROMPT_KINDS, or `base` (the base prompt: fixed, it cannot be turned off). */
   type: string
@@ -63,4 +72,41 @@ export function itemLabel(kind: string, name: string): string {
   if (kind !== "instructions") return name
   if (/^[A-Za-z]:\//.test(name) || /^https?:\/\//.test(name)) return name.split("/").pop() || name
   return name
+}
+
+/** Mango Code's own MCP servers (launcher/opencode-home/opencode.template.json), by what they are for. */
+const OWN_MCP: Record<string, OwnMcp> = {
+  "chrome-devtools": "browser",
+  documents: "documents",
+  "web-search": "search",
+}
+export type OwnMcp = "browser" | "documents" | "search"
+
+/**
+ * How an MCP server is named on screen, among `servers`: Mango Code's own ones by the name the user knows (`label`),
+ * the user's by theirs. If one of the user's servers already goes by that name, ours keeps its own: two rows with the
+ * same name could not be told apart.
+ */
+export function mcpLabel(name: string, servers: readonly string[], label: (own: OwnMcp) => string) {
+  if (!Object.hasOwn(OWN_MCP, name)) return name
+  const known = label(OWN_MCP[name])
+  return servers.some((other) => other !== name && other.toLowerCase() === known.toLowerCase()) ? name : known
+}
+
+/** The items a row of the Agent section lists, and how many of them are on. */
+export function groupCount(settings: PromptSettings, group: PromptGroup) {
+  const listed = group.kinds.flatMap((kind) => itemsOf(settings, kind))
+  return { on: listed.filter((item) => item.enabled).length, all: listed.length }
+}
+
+/** The parts of the first request, for the bar: the base and each row's enabled items that were measured, those that weigh. */
+export function promptShares(settings: PromptSettings) {
+  const measured = (kinds: readonly (PromptKind | "base")[]) =>
+    settings.items
+      .filter((item) => item.enabled && (kinds as readonly string[]).includes(item.type))
+      .reduce((sum, item) => sum + (item.tokens ?? 0), 0)
+  return [
+    { id: "base" as const, tokens: measured(["base"]) },
+    ...PROMPT_GROUPS.map((group) => ({ id: group.id, tokens: measured(group.kinds) })),
+  ].filter((share) => share.tokens > 0)
 }

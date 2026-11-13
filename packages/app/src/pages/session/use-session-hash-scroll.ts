@@ -196,7 +196,6 @@ export const useSessionHashScroll = (input: {
 
   return {
     clearMessageHash,
-    scrollToMessage,
     applyHash,
   }
 }

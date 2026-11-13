@@ -1,15 +1,15 @@
-//! "Use my Chrome": the agent drives the user's Chrome (their profile, their sign-ins) instead of the
-//! Preview panel. It is an explicit choice, off by default, and shown only if Chrome is installed.
+//! "Use my Chrome": the agent may open a page that needs the user's sign-ins as a new tab of their own Chrome; every
+//! other page stays in the Preview panel. It is an explicit choice, off by default, and shown only if Chrome is installed.
 //!
 //! The link is the remote debugging that Chrome offers from `chrome://inspect/#remote-debugging`: at every
 //! connection Chrome shows a prompt ("Allow remote debugging?") that the user confirms.
 //! Chrome refuses remote debugging on a fixed port with the default profile, so it cannot be
 //! turned on from here: the user enables it by hand, once per Chrome start.
 //!
-//! The choice is in `browser.json` in the app data. `mango-chrome-mcp.mjs` also reads it at every
-//! start of the browser server: so changing it does not require restarting the agent.
+//! The choice is in `browser.json` in the app data. `mango-chrome-mcp.mjs` reads it at every tool call: changing it
+//! does not require restarting the agent, and turning it off drops a live connection to Chrome.
 
-use crate::bridge::{err, BridgeError};
+use crate::bridge::{err, shown, BridgeError};
 use mango_common::tr;
 use serde::{Deserialize, Serialize};
 use std::net::{SocketAddr, TcpStream};
@@ -36,7 +36,8 @@ pub fn read_choice() -> Choice {
 
 pub fn write_choice(s: &Choice) -> anyhow::Result<()> {
     let f = choice_file()?;
-    mango_common::write_atomic(&f, serde_json::to_string(s)?).map_err(|e| anyhow::anyhow!("{}: {e}", f.display()))
+    mango_common::write_atomic(&f, serde_json::to_string(s)?)
+        .map_err(|e| mango_common::user_error(&tr!("Non riesco a salvare la scelta del browser.", "I can't save the choice of the browser."), format!("{}: {e:#}", f.display())))
 }
 
 /// Where Windows installs Chrome (for everyone, for the user, 32-bit).
@@ -90,7 +91,7 @@ pub fn chrome_info() -> ChromeInfo {
 /// remote debugging off (`chrome_debug_off`): the browser server would have nothing to connect to and the
 /// agent would be left without a browser. Turning off goes back to the panel.
 #[tauri::command]
-pub fn chrome_set_enabled(enabled: bool) -> Result<(), BridgeError> {
+pub fn chrome_set_enabled(app: tauri::AppHandle, enabled: bool) -> Result<(), BridgeError> {
     if enabled {
         if !installed() {
             return Err(err("chrome_missing", tr!("Chrome non è installato", "Chrome is not installed")));
@@ -99,7 +100,7 @@ pub fn chrome_set_enabled(enabled: bool) -> Result<(), BridgeError> {
             return Err(err("chrome_debug_off", tr!("il debug remoto di Chrome è spento", "Chrome's remote debugging is off")));
         }
     }
-    write_choice(&Choice { my_chrome: enabled }).map_err(|e| err("io", format!("{e:#}")))
+    write_choice(&Choice { my_chrome: enabled }).map_err(|e| shown(&app, "io", "my Chrome: not saved", e))
 }
 
 #[cfg(test)]

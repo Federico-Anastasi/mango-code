@@ -139,14 +139,6 @@
     white-space: nowrap;
   }
 
-  [data-slot="desktop-app-menu-keybind"] {
-    margin-left: auto;
-    color: var(--text-weak);
-    font-size: var(--font-size-x-small);
-    font-weight: var(--font-weight-regular);
-    white-space: nowrap;
-  }
-
   [data-slot="desktop-app-menu-chevron"] {
     display: flex;
     margin-left: auto;
@@ -393,4 +385,15 @@
       animation-range: 0 0.1px;
     }
   }
+}
+
+/* The results of the search in the conversation (pages/session/timeline/conversation-find.ts). */
+::highlight(conversation-find) {
+  background-color: rgb(from var(--surface-warning-strong) r g b / 0.3);
+}
+
+/* The current result stands out from the others: full yellow with dark letters, in both themes. */
+::highlight(conversation-find-current) {
+  background-color: var(--surface-warning-strong);
+  color: #000;
 }

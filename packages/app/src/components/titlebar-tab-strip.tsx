@@ -11,14 +11,14 @@ import { ServerConnection } from "@/context/server"
 import { DraftTabItem, TabNavItem } from "@/components/titlebar-tab-nav"
 import { useGlobal, type ServerCtx } from "@/context/global"
 import { useLanguage } from "@/context/language"
-import { useCommand } from "@/context/command"
 import { useTabs } from "@/context/tabs"
 import { createTabPromptState } from "@/context/prompt"
 import { base64Encode } from "@opencode-ai/core/util/encode"
 import { showToast } from "@/utils/toast"
 import { canStartTabDrag, isTabCloseTarget } from "./titlebar-tab-gesture"
-import { adjacentTabKey, mergeVisibleTabOrder } from "./titlebar-tab-order"
+import { mergeVisibleTabOrder } from "./titlebar-tab-order"
 import type { Session } from "@opencode-ai/sdk/v2"
+import { sessionTitle } from "@/utils/session-title"
 
 function SessionTabSlot(props: {
   tab: SessionTab
@@ -153,7 +153,10 @@ function SessionTabEntry(props: {
         index={props.index}
         active={props.active}
         session={session}
-        fallbackTitle={persisted()?.title ?? (missingSession() ? language.t("session.tab.unknown") : undefined)}
+        fallbackTitle={
+          sessionTitle(persisted()?.title, language.t("session.untitled")) ??
+          (missingSession() ? language.t("session.tab.unknown") : undefined)
+        }
         onRename={rename}
         onNavigate={props.onNavigate}
         onClose={props.onClose}
@@ -163,7 +166,7 @@ function SessionTabEntry(props: {
 }
 
 function DraftTabSlot(props: {
-  tab: Extract<Tab, { type: "draft" }>
+  tab: Extract<Tab, { type: "draft" | "settings" }>
   id: string
   index: () => number
   active: () => boolean
@@ -195,6 +198,7 @@ function DraftTabSlot(props: {
         }}
         href={tabHref(props.tab)}
         title={props.title}
+        icon={props.tab.type === "settings" ? "settings-gear" : "edit"}
         onNavigate={() => props.onNavigate(ref)}
         onClose={props.onClose}
         active={props.active()}
@@ -213,11 +217,10 @@ export function TitlebarTabStrip(props: {
 }) {
   const global = useGlobal()
   const language = useLanguage()
-  const command = useCommand()
   let scrollRef!: HTMLDivElement
   let listRef!: HTMLDivElement
   const [visibility, setVisibility] = createStore<Record<string, boolean>>({})
-  const visibleTabs = createMemo(() => props.tabs.filter((tab) => tab.type === "draft" || visibility[tabKey(tab)]))
+  const visibleTabs = createMemo(() => props.tabs.filter((tab) => tab.type !== "session" || visibility[tabKey(tab)]))
   const visibleTabIds = () => visibleTabs().map(tabKey)
 
   // The tabs keep a width that reads; when they do not fit the strip scrolls and the tab in use stays in view.
@@ -226,34 +229,10 @@ export function TitlebarTabStrip(props: {
     queueMicrotask(() => scrollRef.querySelector('[data-active="true"]')?.scrollIntoView({ block: "nearest", inline: "nearest" }))
   })
 
-  command.register("titlebar-tab-cycle", () => [
-    {
-      id: `tab.prev`,
-      category: "tab",
-      title: "",
-      keybind: `mod+option+ArrowLeft,ctrl+shift+tab`,
-      hidden: true,
-      onSelect: () => selectAdjacentTab(-1),
-    },
-    {
-      id: `tab.next`,
-      category: "tab",
-      title: "",
-      keybind: `mod+option+ArrowRight,ctrl+tab`,
-      hidden: true,
-      onSelect: () => selectAdjacentTab(1),
-    },
-  ])
-
-  function selectAdjacentTab(offset: -1 | 1) {
-    const current = props.currentTab()
-    const key = adjacentTabKey(visibleTabIds(), current ? tabKey(current) : undefined, offset)
-    const next = props.tabs.find((tab) => tabKey(tab) === key)
-    if (next) props.onNavigate(next)
-  }
-
   return (
-    <div data-slot="titlebar-tabs" class="relative min-w-0">
+    // mango-code: the tabs scroll, so they give way first: with many open the model's name in the bar stays readable
+    // instead of shrinking to its first letter along with them.
+    <div data-slot="titlebar-tabs" class="relative min-w-0 shrink-[1000]">
       <div
         data-slot="titlebar-tabs-scroll"
         class="flex min-w-0 flex-row items-center gap-1.5 overflow-x-auto no-scrollbar [app-region:no-drag]"
@@ -304,9 +283,7 @@ export function TitlebarTabStrip(props: {
             <For each={props.tabs}>
               {(tab) => {
                 const id = tabKey(tab)
-                let ref!: HTMLDivElement
                 const visibleIndex = () => visibleTabs().findIndex((item) => tabKey(item) === id)
-                useTabShortcut(visibleIndex, () => props.onNavigate(tab, ref))
                 const serverCtx = createMemo(() => {
                   if (tab.type !== "session") return
                   const conn = global.servers.list().find((item) => ServerConnection.key(item) === tab.server)
@@ -322,10 +299,7 @@ export function TitlebarTabStrip(props: {
                       active={() => props.currentTab() === tab}
                                     serverCtx={serverCtx}
                       onVisibleChange={(visible) => setVisibility(id, visible)}
-                      onNavigate={(element) => {
-                        ref = element
-                        props.onNavigate(tab, element)
-                      }}
+                      onNavigate={(element) => props.onNavigate(tab, element)}
                       onClose={() => props.onClose(tab)}
                     />
                   )
@@ -337,11 +311,8 @@ export function TitlebarTabStrip(props: {
                     id={id}
                     index={visibleIndex}
                     active={() => props.currentTab() === tab}
-                    title={language.t("command.session.new")}
-                    onNavigate={(element) => {
-                      ref = element
-                      props.onNavigate(tab, element)
-                    }}
+                    title={language.t(tab.type === "settings" ? "sidebar.settings" : "command.session.new")}
+                    onNavigate={(element) => props.onNavigate(tab, element)}
                     onClose={() => props.onClose(tab)}
                   />
                 )
@@ -362,23 +333,4 @@ export function TitlebarTabStrip(props: {
       />
     </div>
   )
-}
-
-function useTabShortcut(index: () => number, onSelect: () => void) {
-  const command = useCommand()
-
-  command.register(() => {
-    const number = index() + 1
-    if (number < 1 || number > 9) return []
-    return [
-      {
-        id: `tab.${number}`,
-        category: "tab",
-        title: "",
-        keybind: `mod+${number}`,
-        hidden: true,
-        onSelect,
-      },
-    ]
-  })
 }

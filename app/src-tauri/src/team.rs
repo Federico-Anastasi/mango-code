@@ -2,8 +2,7 @@
 //! file), how many agents and which models. Config generation is in `agent-cfg::team`; here the commands of the
 //! web UI. The choices apply from the agent's start: saving them restarts the app, like changing the downloaded models.
 
-use crate::bridge::{err, BridgeError};
-use crate::choice::Mode;
+use crate::bridge::{err, shown, BridgeError};
 use crate::AppState;
 use agent_cfg::team::{self, Choices};
 use mango_common::{credentials, tr, Paths};
@@ -52,14 +51,14 @@ fn paths(app: &AppHandle) -> Result<Paths, BridgeError> {
     app.state::<AppState>().paths.get().cloned().ok_or_else(|| err("io", tr!("percorsi non ancora noti", "paths not known yet")))
 }
 
-fn io(e: anyhow::Error) -> BridgeError {
-    err("io", format!("{e:#}"))
+fn io(app: &AppHandle, e: anyhow::Error) -> BridgeError {
+    shown(app, "io", "team", e)
 }
 
 #[tauri::command]
 pub fn team_info(app: AppHandle) -> Result<TeamInfo, BridgeError> {
-    let key = credentials::read(team::CREDENTIAL).map_err(io)?.is_some();
-    info(&paths(&app)?, key).map_err(io)
+    let key = credentials::read(team::CREDENTIAL).map_err(|e| io(&app, e))?.is_some();
+    info(&paths(&app)?, key).map_err(|e| io(&app, e))
 }
 
 /// Saves the key in the Credential Manager and restarts the agent, which receives it in the environment.
@@ -67,24 +66,24 @@ pub fn team_info(app: AppHandle) -> Result<TeamInfo, BridgeError> {
 pub async fn team_set_key(app: AppHandle, key: String) -> Result<(), BridgeError> {
     let key = clean_key(&key)
         .ok_or_else(|| err("invalid_key", tr!("la chiave è vuota o contiene spazi", "the key is empty or contains spaces")))?;
-    credentials::save(team::CREDENTIAL, key).map_err(io)?;
-    crate::restart(&app, Mode::Startup { interactive: true });
+    credentials::save(team::CREDENTIAL, key).map_err(|e| io(&app, e))?;
+    crate::restart(&app);
     Ok(())
 }
 
 #[tauri::command]
 pub async fn team_remove_key(app: AppHandle) -> Result<(), BridgeError> {
-    credentials::remove(team::CREDENTIAL).map_err(io)?;
-    crate::restart(&app, Mode::Startup { interactive: true });
+    credentials::remove(team::CREDENTIAL).map_err(|e| io(&app, e))?;
+    crate::restart(&app);
     Ok(())
 }
 
 /// Saves how many agents and which models; if the Team is on (there is a key) it restarts the agent to apply them.
 #[tauri::command]
 pub async fn team_save(app: AppHandle, agents: u8, manager: String, agent: String) -> Result<(), BridgeError> {
-    team::write_choices(&paths(&app)?, &Choices { agents, manager, agent }).map_err(|e| err("invalid_choices", format!("{e:#}")))?;
-    if credentials::read(team::CREDENTIAL).map_err(io)?.is_some() {
-        crate::restart(&app, Mode::Startup { interactive: true });
+    team::write_choices(&paths(&app)?, &Choices { agents, manager, agent }).map_err(|e| shown(&app, "invalid_choices", "team: choices not saved", e))?;
+    if credentials::read(team::CREDENTIAL).map_err(|e| io(&app, e))?.is_some() {
+        crate::restart(&app);
     }
     Ok(())
 }

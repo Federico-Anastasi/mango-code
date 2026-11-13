@@ -95,12 +95,24 @@ type ScanState = {
   dirs: Set<string>
 }
 
+/** What the prompt shows of a skill. */
+export type Listed = Pick<Info, "name" | "description" | "location">
+
+// How many conversations keep the list they started with (see `listing`).
+const MAX_LISTINGS = 64
+
 export interface Interface {
   readonly get: (name: string) => Effect.Effect<Info | undefined>
   readonly require: (name: string) => Effect.Effect<Info, NotFoundError>
   readonly all: () => Effect.Effect<Info[]>
   readonly dirs: () => Effect.Effect<string[]>
   readonly available: (agent?: Agent.Info) => Effect.Effect<Info[]>
+  /**
+   * The skills the prompt of a conversation lists. The first turn of a conversation reads the skills from disk again;
+   * the following turns return that same list, so the prompt does not change inside the conversation (the engine keeps
+   * its cache only for an identical prefix).
+   */
+  readonly listing: (sessionID: string, agent?: Agent.Info) => Effect.Effect<Listed[]>
 }
 
 const add = Effect.fnUntraced(function* (state: State, match: string, events: EventV2Bridge.Service["Service"]) {
@@ -329,17 +341,46 @@ const layer = Layer.effect(
       return [...(yield* InstanceState.get(discovered)).dirs, ...extra.dirs]
     })
 
+    const permitted = <T extends Listed>(list: T[], agent?: Agent.Info) => {
+      const sorted = list.toSorted((a, b) => a.name.localeCompare(b.name))
+      if (!agent) return sorted
+      return sorted.filter((skill) => Permission.evaluate("skill", skill.name, agent.permission).action !== "deny")
+    }
+
     const available = Effect.fn("Skill.available")(function* (agent?: Agent.Info) {
-      const list = Object.values(yield* skills()).toSorted((a, b) => a.name.localeCompare(b.name))
-      if (!agent) return list
-      return list.filter((skill) => Permission.evaluate("skill", skill.name, agent.permission).action !== "deny")
+      return permitted(Object.values(yield* skills()), agent)
     })
 
-    return Service.of({ get, require, all, dirs, available })
+    // mango-code: the list of each conversation, kept in memory for as long as the instance lives (until the project
+    // is closed or the agent restarts) and for the last MAX_LISTINGS conversations: the oldest is let go when another
+    // begins. A conversation whose list is gone (restart, let go) reads the current skills, like a new one.
+    const listings = yield* InstanceState.make(() => Effect.sync(() => new Map<string, Listed[]>()))
+
+    const listing = Effect.fn("Skill.listing")(function* (sessionID: string, agent?: Agent.Info) {
+      const kept = yield* InstanceState.get(listings)
+      const list =
+        kept.get(sessionID) ??
+        (yield* Effect.gen(function* () {
+          yield* InstanceState.invalidate(discovered)
+          yield* InstanceState.invalidate(state)
+          // Without the content of the skills: only what the prompt shows is kept.
+          return Object.values(yield* skills()).map((item) => ({
+            name: item.name,
+            description: item.description,
+            location: item.location,
+          }))
+        }))
+      kept.delete(sessionID)
+      kept.set(sessionID, list)
+      if (kept.size > MAX_LISTINGS) kept.delete(kept.keys().next().value!)
+      return permitted(list, agent)
+    })
+
+    return Service.of({ get, require, all, dirs, available, listing })
   }),
 )
 
-export function fmt(list: Info[], opts: { verbose: boolean }) {
+export function fmt(list: Listed[], opts: { verbose: boolean }) {
   const described = list.filter((skill) => skill.description !== undefined)
   if (described.length === 0) return "No skills are currently available."
   if (opts.verbose) {

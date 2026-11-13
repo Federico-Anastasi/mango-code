@@ -60,7 +60,7 @@ const chatRequests = () =>
     .split("\n")
     .filter(Boolean)
     .map((l) => JSON.parse(l))
-    .filter((r) => r.route.startsWith("/v1/chat/completions") && !r.headers["x-mango-warmup"]);
+    .filter((r) => r.route.startsWith("/v1/chat/completions"));
 
 const textOf = (m: any): string => (typeof m.content === "string" ? m.content : JSON.stringify(m.content));
 const systemOf = (body: any) => body.messages.filter((m: any) => m.role === "system").map(textOf).join("\n");

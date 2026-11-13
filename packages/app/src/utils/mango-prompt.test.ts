@@ -1,5 +1,15 @@
 import { describe, expect, test } from "bun:test"
-import { itemLabel, itemsOf, parsePromptSettings, promptTotal, type PromptItem } from "./mango-prompt"
+import {
+  groupCount,
+  itemLabel,
+  itemsOf,
+  mcpLabel,
+  parsePromptSettings,
+  PROMPT_GROUPS,
+  promptShares,
+  promptTotal,
+  type PromptItem,
+} from "./mango-prompt"
 
 const item = (type: string, name: string, tokens: number | null, enabled = true, source: "default" | "folder" | null = "default") => ({
   type,
@@ -65,5 +75,69 @@ describe("prompt settings in the page", () => {
     expect(itemLabel("instructions", ".claude/rules/style.md")).toBe(".claude/rules/style.md")
     expect(itemLabel("instructions", "MANGO.md")).toBe("MANGO.md")
     expect(itemLabel("mcp", "chrome-devtools")).toBe("chrome-devtools")
+  })
+
+  test("Mango Code's own MCP servers go by the name the user knows; the user's servers keep theirs", () => {
+    const servers = ["chrome-devtools", "documents", "web-search", "echo", "toString"]
+    const italian = { browser: "Browser", documents: "Documenti", search: "Ricerca" } as const
+    const label = (name: string, list = servers) => mcpLabel(name, list, (own) => italian[own])
+    expect(label("chrome-devtools")).toBe("Browser")
+    expect(label("documents")).toBe("Documenti")
+    expect(label("web-search")).toBe("Ricerca")
+    expect(label("echo")).toBe("echo")
+    expect(label("toString")).toBe("toString")
+  })
+
+  test("a user's server already called like one of ours leaves both with their own name", () => {
+    const italian = { browser: "Browser", documents: "Documenti", search: "Ricerca" } as const
+    const servers = ["chrome-devtools", "browser", "web-search"]
+    expect(mcpLabel("chrome-devtools", servers, (own) => italian[own])).toBe("chrome-devtools")
+    expect(mcpLabel("browser", servers, (own) => italian[own])).toBe("browser")
+    // the other of ours keeps the known name
+    expect(mcpLabel("web-search", servers, (own) => italian[own])).toBe("Ricerca")
+  })
+})
+
+describe("the rows of the Agent section", () => {
+  const group = (id: string) => PROMPT_GROUPS.find((candidate) => candidate.id === id)!
+  const settings = () =>
+    parsePromptSettings({
+      ...body,
+      items: [
+        ...body.items,
+        item("skills", "greeting", 30, false),
+        item("instructions", "CLAUDE.md", 400),
+        item("plugins", "mango-discipline", 120),
+        item("plugins", "mango-project", 0),
+      ],
+    })!
+
+  test("four rows: tools, MCP servers, skills, and instructions together with the plugins", () => {
+    expect(PROMPT_GROUPS.map((candidate) => candidate.id)).toEqual(["tools", "mcp", "skills", "instructions"])
+    expect(group("instructions").kinds).toEqual(["instructions", "plugins"])
+  })
+
+  test("a row counts what is on out of what it lists; a plugin that weighs nothing is not listed, so not counted", () => {
+    expect(groupCount(settings(), group("tools"))).toEqual({ on: 3, all: 4 })
+    expect(groupCount(settings(), group("mcp"))).toEqual({ on: 1, all: 1 })
+    expect(groupCount(settings(), group("skills"))).toEqual({ on: 1, all: 2 })
+    expect(groupCount(settings(), group("instructions"))).toEqual({ on: 2, all: 2 })
+  })
+
+  test("the bar has the base and each row by what its enabled, measured items weigh, and the parts make the total", () => {
+    const current = settings()
+    expect(promptShares(current)).toEqual([
+      { id: "base", tokens: 1400 },
+      { id: "tools", tokens: 1050 },
+      { id: "mcp", tokens: 1100 },
+      { id: "skills", tokens: 55 },
+      { id: "instructions", tokens: 520 },
+    ])
+    expect(promptShares(current).reduce((sum, share) => sum + share.tokens, 0)).toBe(promptTotal(current).tokens)
+  })
+
+  test("a row with everything off or unmeasured has no part in the bar", () => {
+    const current = parsePromptSettings({ ...body, items: body.items.map((v) => (v.type === "mcp" ? { ...v, enabled: false } : v)) })!
+    expect(promptShares(current).map((share) => share.id)).toEqual(["base", "tools", "skills"])
   })
 })

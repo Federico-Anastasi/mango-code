@@ -1,8 +1,8 @@
 //! Installing engines (llama.cpp and our forks) from the `mango-engines.json` catalog:
 //! `<engines>/<engine>/<version>-<build>/llama-server.exe`.
 
-use super::{download, with_suffix, RemoteFile};
-use crate::{tr, Build, Paths};
+use super::{download_stoppable, with_suffix, RemoteFile};
+use crate::{tr, user_text, Build, Paths};
 use anyhow::{bail, Context, Result};
 use serde::Deserialize;
 use std::collections::BTreeMap;
@@ -10,6 +10,7 @@ use std::fs::{self, File};
 use std::io::{self, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::AtomicBool;
 use std::time::{Duration, Instant};
 
 const EXE: &str = "llama-server.exe";
@@ -38,17 +39,42 @@ struct EngineBuild {
 
 fn catalog(paths: &Paths) -> Result<BTreeMap<String, Engine>> {
     let f = paths.dist.join("mango-engines.json");
-    let text = fs::read_to_string(&f).with_context(|| tr!("non riesco a leggere {}", "can't read {}", f.display()))?;
-    serde_json::from_str(text.trim_start_matches('\u{feff}')).with_context(|| tr!("{} non è valido", "{} is not valid", f.display()))
+    let unreadable = || user_text(&tr!("Non riesco a leggere l'elenco dei motori di Mango Code.", "I can't read the list of Mango Code's engines."), f.display());
+    let text = fs::read_to_string(&f).with_context(unreadable)?;
+    serde_json::from_str(text.trim_start_matches('\u{feff}')).with_context(unreadable)
 }
 
 fn engine_dir(paths: &Paths, engine: &str, m: &Engine, build: Build) -> PathBuf {
     paths.engines.join(engine).join(format!("{}-{build}", m.version))
 }
 
+/// A downloaded engine that does not pass its check on this PC (`--version`, or no graphics card seen).
+#[derive(Debug)]
+pub struct EngineUnusable {
+    pub engine: String,
+    pub build: Build,
+}
+
+impl std::fmt::Display for EngineUnusable {
+    fn fmt(&self, out: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let (engine, build) = (&self.engine, self.build);
+        out.write_str(&tr!(
+            "il motore «{engine}» ({build}) scaricato non è utilizzabile su questo PC",
+            "the downloaded engine «{engine}» ({build}) is not usable on this PC"
+        ))
+    }
+}
+
+impl std::error::Error for EngineUnusable {}
+
+/// The catalog has this build of the engine: only our forks have the one for the GTX 16 family.
+pub fn has_build(paths: &Paths, engine: &str, build: Build) -> bool {
+    catalog(paths).is_ok_and(|c| c.get(engine).is_some_and(|m| m.build.contains_key(build.as_str())))
+}
+
 /// The folder with `llama-server.exe` for this engine and build, if it's already there: the downloaded one of the
-/// catalog's version, or (only for CUDA 12, as `build-engines.ps1` builds them) the old `<engines>\<engine>` of
-/// development from source.
+/// catalog's version, or (only for CUDA 12, as `build-engines.ps1` builds them, for the PC's cards) the old
+/// `<engines>\<engine>` of development from source.
 pub fn installed_engine(paths: &Paths, engine: &str, build: Build) -> Option<PathBuf> {
     if let Some(m) = catalog(paths).ok().and_then(|mut c| c.remove(engine)) {
         let d = engine_dir(paths, engine, &m, build);
@@ -57,15 +83,68 @@ pub fn installed_engine(paths: &Paths, engine: &str, build: Build) -> Option<Pat
         }
     }
     let old = paths.engines.join(engine);
-    (build == Build::Cuda12 && old.join(EXE).is_file()).then_some(old)
+    (build.cuda_major() == Some(12) && old.join(EXE).is_file()).then_some(old)
+}
+
+/// An engine of the catalog has a version other than the catalog's on the disk for `build`: the app came with a new
+/// one, and that one is to be replaced. The two CUDA 12 builds take each other's place: a PC with a GTX 16 that had
+/// the plain one, the only one there was, now asks for its own.
+pub fn older_engine(paths: &Paths, engine: &str, build: Build) -> bool {
+    let Some(m) = catalog(paths).ok().and_then(|mut c| c.remove(engine)) else { return false };
+    let replaces = |b: Build| b == build || (b.cuda_major() == Some(12) && build.cuda_major() == Some(12));
+    other_versions(paths, engine, &m.version).iter().any(|(dir, b)| replaces(*b) && dir.join(EXE).is_file())
+}
+
+/// After an update of an engine: once the catalog's version is on the disk for a build, its other versions go, every
+/// build of them, so that the disk does not fill up. One a process still runs (the engine left on the old version)
+/// stays: Windows does not delete a program that runs, and it goes at a later call. The folders removed; the log says
+/// what went and what stayed.
+pub fn remove_old_engines(paths: &Paths) -> Vec<PathBuf> {
+    let Ok(cat) = catalog(paths) else { return Vec::new() };
+    let mut removed = Vec::new();
+    for (engine, m) in &cat {
+        if !Build::ALL.iter().any(|&b| engine_dir(paths, engine, m, b).join(EXE).is_file()) {
+            continue;
+        }
+        for (dir, _) in other_versions(paths, engine, &m.version) {
+            // The program first: if it runs, it can't be deleted and the folder stays whole.
+            let gone = match fs::remove_file(dir.join(EXE)) {
+                Err(e) if e.kind() != io::ErrorKind::NotFound => Err(e),
+                _ => fs::remove_dir_all(&dir),
+            };
+            match gone {
+                Ok(()) => {
+                    crate::startup_log(paths, &format!("engines: the old version {} removed", dir.display()));
+                    removed.push(dir);
+                }
+                Err(e) => crate::startup_log(paths, &format!("engines: the old version {} stays for now: {e}", dir.display())),
+            }
+        }
+    }
+    removed
+}
+
+/// The folders of `engine` at a version other than `version`, with their build: `<engines>/<engine>/<version>-<build>/`.
+fn other_versions(paths: &Paths, engine: &str, version: &str) -> Vec<(PathBuf, Build)> {
+    let Ok(entries) = fs::read_dir(paths.engines.join(engine)) else { return Vec::new() };
+    entries
+        .flatten()
+        .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
+        .filter_map(|e| {
+            let name = e.file_name().to_string_lossy().into_owned();
+            let build = Build::ALL.into_iter().find(|b| name.strip_suffix(b.as_str()).and_then(|v| v.strip_suffix('-')).is_some_and(|v| !v.is_empty() && v != version))?;
+            Some((e.path(), build))
+        })
+        .collect()
 }
 
 /// Downloads the build from the catalog, extracts it into `<engines>/<engine>/<version>-<build>/` and checks that
 /// `llama-server.exe --version` starts (and, for CUDA, that it sees a GPU); only then does the folder appear. For
 /// CUDA it adds the runtime libraries if the PC lacks them. Already installed = no download.
-/// `progress(downloaded, total)` counts the bytes of all files.
-pub fn install_engine(paths: &Paths, engine: &str, build: Build, progress: &mut dyn FnMut(u64, u64)) -> Result<PathBuf> {
-    install_with(paths, engine, build, &std::env::var_os("PATH").unwrap_or_default(), check_engine, progress)
+/// `progress(downloaded, total)` counts the bytes of all files. When `stop` becomes true the download ends with
+/// `Stopped`, and what has arrived stays for the next call.
+pub fn install_engine(paths: &Paths, engine: &str, build: Build, stop: &AtomicBool, progress: &mut dyn FnMut(u64, u64)) -> Result<PathBuf> {
+    install_with(paths, engine, build, &std::env::var_os("PATH").unwrap_or_default(), check_engine, stop, progress)
 }
 
 /// How many bytes are left to download to have the engine: 0 if it's already installed; for CUDA the runtime counts
@@ -111,6 +190,7 @@ fn install_with(
     build: Build,
     path: &std::ffi::OsStr,
     check: fn(&Path, Build, bool) -> Result<()>,
+    stop: &AtomicBool,
     progress: &mut dyn FnMut(u64, u64),
 ) -> Result<PathBuf> {
     if let Some(d) = installed_engine(paths, engine, build) {
@@ -130,19 +210,14 @@ fn install_with(
         fs::remove_dir_all(&temp)?;
     }
     for (f, before) in &zips {
-        download(f, &work.join(file_name(&f.url)?), &mut |done, _| progress(before + done, total))?;
+        download_stoppable(f, &work.join(file_name(&f.url)?), stop, &mut |done, _| progress(before + done, total))?;
     }
     let r = (|| -> Result<()> {
         for (f, _) in &zips {
             extract(&work.join(file_name(&f.url)?), &temp)?;
         }
-        check(&temp, build, m.gpu_check).with_context(|| {
-            tr!(
-                "il motore «{engine}» ({build}) scaricato non è utilizzabile su questo PC",
-                "the downloaded engine «{engine}» ({build}) is not usable on this PC"
-            )
-        })?;
-        fs::rename(&temp, &dest).with_context(|| tr!("non riesco a creare {}", "can't create {}", dest.display()))
+        check(&temp, build, m.gpu_check).context(EngineUnusable { engine: engine.to_string(), build })?;
+        fs::rename(&temp, &dest).with_context(|| user_text(&tr!("Non riesco a mettere il motore nella sua cartella.", "I can't put the engine in its folder."), dest.display()))
     })();
     // The zips have done their job, either way; the half-built folder hasn't. A zip that cannot be deleted (an antivirus
     // holds it) does not replace the error of `r`.
@@ -156,6 +231,7 @@ fn install_with(
         let _ = fs::remove_dir_all(&temp);
         return Err(e);
     }
+    remove_old_engines(paths);
     Ok(dest)
 }
 
@@ -178,8 +254,9 @@ fn cuda_runtime_present(major: u32, path: &std::ffi::OsStr) -> bool {
 
 /// Extracts a zip into `dest`, refusing paths that escape the folder.
 fn extract(zip: &Path, dest: &Path) -> Result<()> {
-    let f = File::open(zip).with_context(|| tr!("non riesco ad aprire {}", "can't open {}", zip.display()))?;
-    let mut a = zip::ZipArchive::new(BufReader::new(f)).with_context(|| tr!("{} non è uno zip valido", "{} is not a valid zip", zip.display()))?;
+    let unreadable = || user_text(&tr!("Il motore scaricato non si apre: riprova.", "The downloaded engine does not open: try again."), zip.display());
+    let f = File::open(zip).with_context(unreadable)?;
+    let mut a = zip::ZipArchive::new(BufReader::new(f)).with_context(unreadable)?;
     for i in 0..a.len() {
         let mut e = a.by_index(i)?;
         let Some(rel) = e.enclosed_name() else {
@@ -193,7 +270,7 @@ fn extract(zip: &Path, dest: &Path) -> Result<()> {
         if let Some(p) = out.parent() {
             fs::create_dir_all(p)?;
         }
-        io::copy(&mut e, &mut File::create(&out)?).with_context(|| tr!("estrazione di {} fallita", "extracting {} failed", out.display()))?;
+        io::copy(&mut e, &mut File::create(&out)?).with_context(|| user_text(&tr!("Non riesco a estrarre il motore scaricato.", "I can't extract the downloaded engine."), out.display()))?;
     }
     Ok(())
 }
@@ -241,7 +318,7 @@ fn run(dir: &Path, arg: &str) -> Result<(String, String)> {
     cmd.arg(arg).current_dir(dir).stdin(Stdio::null()).stdout(File::create(&f_out)?).stderr(File::create(&f_err)?);
     #[cfg(windows)]
     std::os::windows::process::CommandExt::creation_flags(&mut cmd, crate::CREATE_NO_WINDOW);
-    let mut child = cmd.spawn().with_context(|| tr!("non riesco a lanciare {}", "can't launch {}", exe.display()))?;
+    let mut child = cmd.spawn().with_context(|| user_text(&tr!("Il motore scaricato non parte.", "The downloaded engine does not start."), exe.display()))?;
     drop(cmd); // closes our handles on the output files, so they can be deleted
     let start = Instant::now();
     let status = loop {
@@ -329,13 +406,85 @@ mod tests {
         Fixture { _tmp: tmp, paths, s }
     }
 
+    /// A list of the engines that cannot be read says so in a sentence; where it is goes to the log.
+    #[test]
+    fn an_engine_list_that_cannot_be_read_is_told_without_its_path() {
+        let f = fixture(&[], &[]);
+        fs::write(f.paths.dist.join("mango-engines.json"), "{ not json").unwrap();
+        let e = engine_size(&f.paths, "llamacpp", Build::Cpu).unwrap_err();
+        let shown = crate::user_phrase(&e);
+        assert_eq!(shown, tr!("Non riesco a leggere l'elenco dei motori di Mango Code.", "I can't read the list of Mango Code's engines."));
+        assert!(format!("{e:#}").contains("mango-engines.json"), "the path is in the detail: {e:#}");
+    }
+
+    /// After an update the old versions of the engine go, every build, once the new one is there; one whose program runs
+    /// stays until it stops; an engine that was not updated, the work folders and the new version stay.
+    #[test]
+    fn after_an_update_the_old_versions_go_when_no_process_runs_them() {
+        let f = fixture(&[], &[]);
+        let catalog = serde_json::json!({ "llamacpp": { "version": "new", "build": {} }, "prism": { "version": "p2", "build": {} } });
+        fs::write(f.paths.dist.join("mango-engines.json"), catalog.to_string()).unwrap();
+        let engine = |name: &str, folder: &str| {
+            let dir = f.paths.engines.join(name).join(folder);
+            fs::create_dir_all(dir.join("sub")).unwrap();
+            fs::write(dir.join(EXE), b"exe").unwrap();
+            fs::write(dir.join("sub").join("x.dll"), b"dll").unwrap();
+            dir
+        };
+        let (old_cpu, old_cuda, prism_old) = (engine("llamacpp", "old-cpu"), engine("llamacpp", "old-cuda-12"), engine("prism", "p1-cpu"));
+        let work = [f.paths.engines.join("llamacpp").join(".download"), f.paths.engines.join("llamacpp").join("new-cuda-12.tmp")];
+        work.iter().for_each(|w| fs::create_dir_all(w).unwrap());
+        assert!(older_engine(&f.paths, "llamacpp", Build::Cpu) && older_engine(&f.paths, "llamacpp", Build::Cuda12));
+        assert!(!older_engine(&f.paths, "llamacpp", Build::Vulkan), "no version of it for this build");
+        assert!(remove_old_engines(&f.paths).is_empty(), "the new version is not there yet: the old ones still serve");
+
+        // the new version arrived for one build, while the old CUDA one still runs
+        let new = engine("llamacpp", "new-cpu");
+        fs::write(old_cuda.join(EXE), system_exe("PING.EXE")).unwrap();
+        let mut running = Command::new(old_cuda.join(EXE)).args(["-n", "60", "127.0.0.1"]).stdout(Stdio::null()).spawn().unwrap();
+        let removed = remove_old_engines(&f.paths);
+        let _ = running.kill();
+        let _ = running.wait();
+        assert_eq!(removed, [old_cpu.clone()]);
+        assert!(!old_cpu.exists() && old_cuda.join(EXE).is_file() && old_cuda.join("sub").join("x.dll").is_file(), "the one that runs stays whole");
+        assert!(new.join(EXE).is_file() && prism_old.join(EXE).is_file() && work.iter().all(|w| w.is_dir()));
+        assert!(!older_engine(&f.paths, "llamacpp", Build::Cpu));
+        let log = fs::read_to_string(f.paths.logs().join("startup.log")).unwrap();
+        assert!(log.contains("old-cuda-12 stays for now"), "{log}");
+
+        // stopped, it goes at the next call
+        assert_eq!(remove_old_engines(&f.paths), [old_cuda.clone()]);
+        assert!(!old_cuda.exists() && new.is_dir());
+    }
+
+    /// A PC with a GTX 16 that updates has the plain CUDA 12 build of the version before, the only one there was: it
+    /// counts as the old engine of the build for those cards, and goes once that one is there. An engine without that
+    /// build in the catalog is not asked for it.
+    #[test]
+    fn the_plain_cuda_12_of_the_version_before_is_the_old_engine_of_the_gtx_16_build() {
+        let z = zip(&[("llama-server.exe", &system_exe("curl.exe"))]);
+        let p = fixture(&[("/c12.zip", &z), ("/gtx16.zip", &z)], &[("prism", "cuda-12", "/c12.zip", None), ("prism", "cuda-12-gtx16", "/gtx16.zip", None), ("toq", "cuda-12", "/c12.zip", None)]);
+        assert!(has_build(&p.paths, "prism", Build::Cuda12Gtx16) && !has_build(&p.paths, "toq", Build::Cuda12Gtx16) && !has_build(&p.paths, "llamacpp", Build::Cuda12));
+        let before = p.paths.engines.join("prism").join("v1.2.2-cuda-12");
+        fs::create_dir_all(&before).unwrap();
+        fs::write(before.join(EXE), b"exe").unwrap();
+        assert!(older_engine(&p.paths, "prism", Build::Cuda12Gtx16) && older_engine(&p.paths, "prism", Build::Cuda12));
+        assert!(!older_engine(&p.paths, "prism", Build::Cuda13) && !older_engine(&p.paths, "prism", Build::Vulkan));
+
+        let dir = install(&p.paths, "prism", Build::Cuda12Gtx16, &no_cuda(), &mut |_, _| {}).unwrap();
+        assert_eq!(dir, p.paths.engines.join("prism").join("v1.2.3-cuda-12-gtx16"));
+        assert!(!before.exists(), "the version before goes");
+        assert!(!older_engine(&p.paths, "prism", Build::Cuda12Gtx16));
+        assert_eq!(installed_engine(&p.paths, "prism", Build::Cuda12), None, "one build is not the other");
+    }
+
     /// In tests the check is only `--version`: the system executable standing in for the engine lists no GPUs.
     fn version_only(dir: &Path, _: Build, _: bool) -> Result<()> {
         run(dir, "--version").map(|_| ())
     }
 
     fn install(paths: &Paths, engine: &str, build: Build, path: &std::ffi::OsStr, progress: &mut dyn FnMut(u64, u64)) -> Result<PathBuf> {
-        install_with(paths, engine, build, path, version_only, progress)
+        install_with(paths, engine, build, path, version_only, &AtomicBool::new(false), progress)
     }
 
     fn no_cuda() -> OsString {
@@ -466,7 +615,7 @@ mod tests {
         let z = zip(&[("llama-server.exe", b"x")]);
         let p = fixture(&[("/cpu.zip", &z)], &[("llamacpp", "cpu", "/cpu.zip", None)]);
 
-        let err = format!("{:#}", install_with(&p.paths, "llamacpp", Build::Cpu, &no_cuda(), lock_the_zips_and_fail, &mut |_, _| {}).unwrap_err());
+        let err = format!("{:#}", install_with(&p.paths, "llamacpp", Build::Cpu, &no_cuda(), lock_the_zips_and_fail, &AtomicBool::new(false), &mut |_, _| {}).unwrap_err());
         HELD.with(|h| h.borrow_mut().clear());
 
         assert!(err.contains("the engine says no"), "{err}");
@@ -553,7 +702,7 @@ mod tests {
         let cat = fs::read_to_string(&f).unwrap().replace(r#""version":"v1.2.3""#, r#""version":"v1.2.3","gpu_check":false"#);
         fs::write(&f, cat).unwrap();
 
-        install_with(&p.paths, "toq", Build::Cuda12, &no_cuda(), record, &mut |_, _| {}).unwrap();
+        install_with(&p.paths, "toq", Build::Cuda12, &no_cuda(), record, &AtomicBool::new(false), &mut |_, _| {}).unwrap();
 
         assert!(!RECEIVED.load(std::sync::atomic::Ordering::SeqCst));
     }
@@ -567,6 +716,7 @@ mod tests {
         fs::write(old.join("llama-server.exe"), b"x").unwrap();
 
         assert_eq!(installed_engine(&p.paths, "prism", Build::Cuda12), Some(old.clone()));
+        assert_eq!(installed_engine(&p.paths, "prism", Build::Cuda12Gtx16), Some(old.clone()), "built from source for the PC's cards");
         assert_eq!(installed_engine(&p.paths, "prism", Build::Cpu), None);
         assert_eq!(installed_engine(&p.paths, "toq", Build::Cuda12), None);
         assert_eq!(install(&p.paths, "prism", Build::Cuda12, &no_cuda(), &mut |_, _| {}).unwrap(), old);

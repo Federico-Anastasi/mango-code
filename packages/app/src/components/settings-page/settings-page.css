@@ -1,0 +1,617 @@
+/* mango-code: the settings page (settings-page.tsx). The rows of the sections that came from the dialog keep their own
+   styles (settings-v2.css); here the frame, the nav with the search, and the parts of Models. */
+
+.settings-page {
+  display: flex;
+  flex: 1;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  background: var(--v2-background-bg-base);
+}
+
+.settings-page-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 232px;
+  min-width: 232px;
+  padding: 16px 12px;
+  background-color: var(--v2-background-bg-layer-01);
+  border-inline-end: 0.5px solid var(--v2-border-border-base);
+}
+
+.settings-page-search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--v2-text-text-faint);
+}
+
+.settings-page-search [data-component="text-input-v2"] {
+  flex: 1;
+  min-width: 0;
+}
+
+.settings-page-sections {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.settings-page-section-button {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 32px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--v2-text-text-muted);
+  font-size: 13px;
+  font-weight: 500;
+  text-align: start;
+  cursor: pointer;
+}
+
+.settings-page-section-button:hover {
+  background: var(--v2-background-bg-layer-02);
+}
+
+.settings-page-section-button[aria-current="page"] {
+  background: var(--v2-background-bg-layer-02);
+  color: var(--v2-text-text-base);
+}
+
+.settings-page-main {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.settings-page-pane {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.settings-page-pane-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 40px 40px 24px;
+}
+
+.settings-page-pane-heading {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.settings-page-pane-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 640;
+  line-height: 1;
+  color: var(--v2-text-text-base);
+}
+
+.settings-page-pane-description,
+/* the line at the top while a conversation answers */
+.settings-page-answering {
+  margin: 16px 40px 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--v2-background-bg-layer-01);
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--v2-text-text-muted);
+}
+
+.settings-page-note {
+  margin: 0;
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--v2-text-text-muted);
+}
+
+.settings-page-error {
+  margin: 0;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--v2-state-fg-danger);
+}
+
+/* the panes that come from the dialog: their own titles become the titles of their parts */
+.settings-page-pane .settings-v2-tab-header {
+  position: static;
+  padding: 8px 40px 16px;
+  background: none;
+}
+
+.settings-page-pane .settings-v2-tab-title {
+  font-size: 13px;
+  color: var(--v2-text-text-muted);
+}
+
+.settings-page-pane .settings-v2-tab-body + .settings-v2-tab-body,
+.settings-page-pane .settings-v2-tab-body + .settings-v2-tab-header {
+  padding-top: 0;
+}
+
+.settings-page-pane[data-slot="settings-search-results"] {
+  padding: 40px;
+}
+
+/* a row brought into view by the search */
+[data-component="settings-page"] [data-found] {
+  outline: 2px solid var(--v2-text-text-accent);
+  outline-offset: 4px;
+  border-radius: 6px;
+}
+
+/* --- Models ------------------------------------------------------------------------------------------------------ */
+
+.settings-page-models {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-bottom: 40px;
+}
+
+.settings-page-models > :not(.settings-page-pane-header) {
+  margin-inline: 40px;
+}
+
+.settings-page-models .settings-v2-section-title {
+  margin-top: 16px;
+}
+
+.settings-page-box {
+  display: flex;
+  flex-direction: column;
+  border: 0.5px solid var(--v2-border-border-base);
+  border-radius: 10px;
+  background: var(--v2-background-bg-layer-01);
+}
+
+.settings-page-box > * + * {
+  border-top: 0.5px solid var(--v2-border-border-base);
+}
+
+.settings-page-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 14px 16px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: start;
+}
+
+.settings-page-row--click {
+  cursor: pointer;
+}
+
+.settings-page-row--click:hover {
+  background: var(--v2-background-bg-layer-02);
+}
+
+.settings-page-row-copy {
+  display: flex;
+  flex: 1 1 240px;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.settings-page-row-line {
+  font-size: 12.5px;
+  line-height: 18px;
+  color: var(--v2-text-text-muted);
+}
+
+.settings-page-row-line[data-tone="danger"] {
+  color: var(--v2-state-fg-danger);
+}
+
+.settings-page-row-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--v2-text-text-muted);
+}
+
+.settings-page-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--v2-background-bg-layer-02);
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--v2-text-text-muted);
+}
+
+.settings-page-pill[data-tone="accent"] {
+  color: var(--v2-text-text-accent);
+}
+
+.settings-page-pill[data-tone="ok"] {
+  color: var(--v2-state-fg-success);
+}
+
+.settings-page-pill[data-tone="bad"] {
+  color: var(--v2-state-fg-danger);
+  white-space: normal;
+}
+
+.settings-page-detail {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 20px 24px;
+  padding: 16px;
+  background: var(--v2-background-bg-base);
+}
+
+.settings-page-field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.settings-page-field--wide,
+.settings-page-actions {
+  grid-column: 1 / -1;
+}
+
+.settings-page-field b {
+  font-size: 13px;
+  font-weight: 530;
+  color: var(--v2-text-text-base);
+}
+
+.settings-page-field small {
+  font-size: 12.5px;
+  line-height: 18px;
+  color: var(--v2-text-text-muted);
+}
+
+.settings-page-field small[data-tone="danger"] {
+  color: var(--v2-state-fg-danger);
+}
+
+/* the segments as wide as their words (the control is 232 px wide by default, with equal segments) */
+.settings-page-field [data-slot="segmented-control-v2"],
+[data-component="settings-prompt"] [data-action="settings-use-my-chrome"][data-slot="segmented-control-v2"] {
+  flex-wrap: wrap;
+  width: fit-content;
+  max-width: 100%;
+  height: auto;
+}
+
+.settings-page-field [data-slot="segmented-control-v2-item"],
+[data-action="settings-use-my-chrome"] [data-slot="segmented-control-v2-item"] {
+  flex: none;
+  white-space: nowrap;
+}
+
+.settings-page-inline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--v2-text-text-base);
+}
+
+.settings-page-inline:not([data-fits]):has(input[type="radio"]) {
+  color: var(--v2-text-text-faint);
+}
+
+.settings-page-cards {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+}
+
+.settings-page-card {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+}
+
+.settings-page-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.settings-page-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--v2-text-text-accent);
+  font: inherit;
+  cursor: pointer;
+}
+
+.settings-page-bar {
+  height: 4px;
+  margin-top: 4px;
+  overflow: hidden;
+  border-radius: 2px;
+  background: var(--v2-background-bg-layer-02);
+}
+
+.settings-page-bar u {
+  display: block;
+  height: 100%;
+  background: var(--v2-text-text-accent);
+  text-decoration: none;
+}
+
+.settings-page-footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--v2-text-text-muted);
+}
+
+/* On a phone: two screens, the sections then the one chosen (the bar has the way back); rows for the thumb. */
+@media (max-width: 767px) {
+  .settings-page-nav {
+    width: 100%;
+    min-width: 0;
+    border-inline-end: 0;
+  }
+
+  .settings-page-section-button {
+    height: 52px;
+    border-radius: 10px;
+    background: var(--v2-background-bg-layer-02);
+    color: var(--v2-text-text-base);
+    font-size: 16px;
+  }
+
+  .settings-page:not([data-phone-page]) .settings-page-main,
+  .settings-page[data-phone-page] .settings-page-nav {
+    display: none;
+  }
+
+  .settings-page-answering {
+    margin: 12px 16px 0;
+  }
+
+  .settings-page-pane-header {
+    padding: 16px;
+  }
+
+  .settings-page-pane-header .settings-page-pane-title {
+    display: none;
+  }
+
+  .settings-page-models > :not(.settings-page-pane-header) {
+    margin-inline: 16px;
+  }
+
+  .settings-page-pane .settings-v2-tab-header {
+    padding: 8px 16px;
+  }
+
+  .settings-page-pane[data-slot="settings-search-results"] {
+    padding: 16px;
+  }
+}
+
+/* --- Connections: the cards (links.tsx) ----------------------------------------------------------------------- */
+
+.settings-page-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 12px;
+}
+
+.settings-page-link-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px;
+  border: 0.5px solid var(--v2-border-border-base);
+  border-radius: 10px;
+  background: var(--v2-background-bg-layer-01);
+}
+
+/* an open card takes the whole row, for its QR, codes or fields */
+.settings-page-link-card[data-open] {
+  grid-column: 1 / -1;
+}
+
+.settings-page-link-card-head,
+.settings-page-link-card-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.settings-page-link-card p {
+  margin: 0;
+}
+
+.settings-page-link-card-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-top: 12px;
+  border-top: 0.5px solid var(--v2-border-border-base);
+}
+
+.settings-page-link-card-detail [data-component="text-input-v2"] {
+  width: 320px;
+  max-width: 100%;
+}
+
+/* «Un altro modello»: a link is long, the box takes the room up to the buttons */
+[data-action="settings-other-model-search"] [data-component="text-input-v2"] {
+  width: 100%;
+}
+
+/* the Team's page inside the cloud card: no frame of its own */
+.settings-page-link-card-detail .settings-v2-tab-header,
+.settings-page-link-card-detail .settings-v2-tab-body {
+  padding: 0;
+}
+
+/* --- Agent, General, Help ---------------------------------------------------------------------------------------- */
+
+.settings-page-agent,
+.settings-page-general,
+.settings-page-help {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-bottom: 40px;
+}
+
+.settings-page-agent > :not(.settings-page-pane-header),
+.settings-page-general > :not(.settings-page-pane-header),
+.settings-page-help > :not(.settings-page-pane-header) {
+  margin-inline: 40px;
+}
+
+.settings-page-agent .settings-v2-section-title,
+.settings-page-general > .settings-v2-section-title {
+  margin-top: 16px;
+}
+
+[data-slot="settings-v2-row-description"] > .settings-page-row-line {
+  display: block;
+  margin-top: 4px;
+}
+
+.settings-page-general [data-slot="settings-v2-row-description"]:empty {
+  display: none;
+}
+
+/* what a conversation starts with: the bar of its parts and what each one weighs */
+.settings-page-stack {
+  display: flex;
+  height: 8px;
+  margin: 8px 0 6px;
+  overflow: hidden;
+  border-radius: 4px;
+  background: var(--v2-background-bg-layer-02);
+}
+
+.settings-page-stack u {
+  display: block;
+  height: 100%;
+  text-decoration: none;
+}
+
+.settings-page-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  font-size: 12.5px;
+  color: var(--v2-text-text-muted);
+}
+
+.settings-page-legend i {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-inline-end: 6px;
+  border-radius: 50%;
+}
+
+.settings-page-stack u[data-kind="base"],
+.settings-page-legend i[data-kind="base"] {
+  background: var(--v2-text-text-faint);
+}
+
+.settings-page-stack u[data-kind="tools"],
+.settings-page-legend i[data-kind="tools"] {
+  background: var(--v2-text-text-accent);
+}
+
+.settings-page-stack u[data-kind="mcp"],
+.settings-page-legend i[data-kind="mcp"] {
+  background: var(--v2-state-fg-info);
+}
+
+.settings-page-stack u[data-kind="skills"],
+.settings-page-legend i[data-kind="skills"] {
+  background: var(--v2-state-fg-success);
+}
+
+.settings-page-stack u[data-kind="instructions"],
+.settings-page-legend i[data-kind="instructions"] {
+  background: color-mix(in srgb, var(--v2-state-fg-info) 55%, var(--v2-state-fg-danger));
+}
+
+/* the items of an open row of the Agent section */
+.settings-page-items {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 16px 16px;
+  background: var(--v2-background-bg-base);
+}
+
+.settings-page-items-title {
+  margin: 8px 0 0;
+  font-size: 12.5px;
+  font-weight: 530;
+  color: var(--v2-text-text-muted);
+}
+
+.settings-page-items [data-slot="settings-v2-row-control"] {
+  align-items: center;
+  gap: 12px;
+}
+
+.settings-page-items [data-slot="settings-v2-row-description"]:empty {
+  display: none;
+}
+
+/* the form of the report, under its row */
+.settings-page-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  background: var(--v2-background-bg-base);
+}
+
+@media (max-width: 767px) {
+  .settings-page-agent > :not(.settings-page-pane-header),
+  .settings-page-general > :not(.settings-page-pane-header),
+  .settings-page-help > :not(.settings-page-pane-header) {
+    margin-inline: 16px;
+  }
+
+  /* the choice of the Agent section goes under the line that says what the section is for */
+  .settings-page-agent .settings-page-pane-heading {
+    flex-basis: 100%;
+  }
+}

@@ -14,8 +14,11 @@ import path from "node:path";
 
 export const REPO = path.resolve(import.meta.dir, "..", "..");
 const LAUNCHER = path.join(REPO, "launcher");
-export const APP_EXE = path.join(REPO, "app", "target", "debug", "mango-code.exe");
-export const FAKE_ENGINE_EXE = path.join(REPO, "app", "target", "debug", "fake-engine.exe");
+// Where cargo puts the builds: its own CARGO_TARGET_DIR, if set.
+const DEBUG = path.join(path.resolve(process.env.CARGO_TARGET_DIR ?? path.join(REPO, "app", "target")), "debug");
+export const APP_EXE = path.join(DEBUG, "mango-code.exe");
+export const FAKE_ENGINE_EXE = path.join(DEBUG, "fake-engine.exe");
+export const LAUNCH_EXE = path.join(DEBUG, "mango-launch.exe");
 
 // What must not end up in the distribution: machine files, generated files, packages (linked separately).
 const EXCLUDED = new Set(["node_modules", "runtime", "opencode", "mango-paths.json", "mango-secrets.json", "opencode.json"]);
@@ -107,11 +110,14 @@ export function writeLanguage(data: string, language = "it") {
  * `otherModels`: other catalog models after the fake one, in the given order, already on disk; `bytes` says how much
  * one of them declares to weigh (1000 bytes by default: it fits any computer); `onRequest` marks some of them `on_request`
  * (the catalog does not trust them as agents). `args`: the arguments of the first
- * start (a folder to open). `firstRun`: the models and engines folders stay empty and the computer is the one
- * described by this function (a fake `System`, see app/src-tauri/src/fake.rs): the app shows the choice of models
- * instead of starting, and `start` returns at once, without waiting for the service (`agent` and `engine` empty).
+ * start (a folder to open). `noModels`: the models folder stays empty, the engines are there: the app opens with no model. `files`: the real size and
+ * hash of the file of some models, which the app can then download (from `MANGO_HF_URL`, repository `test/<model>`,
+ * revision `main`).
+ *
+ * `start` returns when the app is in use: the agent answers (`service.json`) and, if a model is on disk, it is loaded,
+ * so a test talks to it at once. `modelLoading`: it returns as soon as the agent answers, while the model still loads.
  */
-type Options = { onRequest?: string[]; window?: boolean; args?: string[]; otherModels?: string[]; bytes?: Record<string, number>; chunkMs?: number; noDebug?: boolean; env?: Record<string, string>; context?: number; firstRun?: (folders: { models: string; engines: string }) => object };
+type Options = { onRequest?: string[]; window?: boolean; args?: string[]; otherModels?: string[]; bytes?: Record<string, number>; chunkMs?: number; noDebug?: boolean; env?: Record<string, string>; context?: number; noModels?: boolean; modelLoading?: boolean; files?: Record<string, { size: number; sha256: string }> };
 
 /**
  * Removes the environment's folder (hundreds of MB). Its files (WebView2's above all) stay locked for a few seconds after
@@ -158,24 +164,36 @@ async function startIn(
   // The fake general engine sits where the download puts it (`<engines>/llamacpp/<version>-<build>/`), for every
   // build: the test does not depend on the PC's GPUs.
   fs.writeFileSync(path.join(dist, "mango-engines.json"), JSON.stringify({ llamacpp: { version: "fake", build: {} } }));
-  // At first run the fake computer downloads the cuda-12 build; the others are already there, so the real plan (which
-  // looks at this PC's GPUs) finds the engine whatever build it picks.
-  for (const b of options.firstRun ? ["cpu", "vulkan", "cuda-13"] : ["cpu", "vulkan", "cuda-12", "cuda-13"]) {
+  // Every build is there, so the real plan (which looks at this PC's GPUs) finds the engine whatever build it picks.
+  for (const b of ["cpu", "vulkan", "cuda-12", "cuda-13"]) {
     fs.mkdirSync(path.join(engines, "llamacpp", `fake-${b}`), { recursive: true });
     fs.copyFileSync(FAKE_ENGINE_EXE, path.join(engines, "llamacpp", `fake-${b}`, "llama-server.exe"));
   }
   const others = options.otherModels ?? [];
-  if (!options.firstRun) for (const id of ["fake", ...others]) fs.writeFileSync(path.join(models, `${id}.gguf`), "");
-  const fakeModel = (gguf: string, label: string, size = 1000, onRequest = false) => ({ label, gguf, files: [{ path: gguf, size, sha256: "0".repeat(64) }], memory: { kv_kib_token: 1, state_mib: 0 }, ...(onRequest ? { on_request: true } : {}) });
+  const empty = options.noModels === true;
+  if (!empty) for (const id of ["fake", ...others]) fs.writeFileSync(path.join(models, `${id}.gguf`), "");
+  const fakeModel = (gguf: string, label: string, size = 1000, onRequest = false) => {
+    const id = gguf.replace(/\.gguf$/, "");
+    const file = options.files?.[id];
+    return {
+      label,
+      gguf,
+      ...(file ? { repo: `test/${id}`, revision: "main" } : {}),
+      files: [{ path: gguf, size: file?.size ?? size, sha256: file?.sha256 ?? "0".repeat(64) }],
+      memory: { kv_kib_token: 1, state_mib: 0 },
+      // the fake models reason, as most of the catalog: the reasoning chosen for them reaches the requests
+      reasoning: true,
+      ...(onRequest ? { on_request: true } : {}),
+    };
+  };
   fs.writeFileSync(
     path.join(dist, "mango-models.json"),
     JSON.stringify({
       ctx: options.context ?? 16384,
       default: "fake",
-      order: ["fake", ...(options.firstRun ? ["second"] : others)],
+      order: ["fake", ...others],
       models: {
         fake: fakeModel("fake.gguf", "Fake model"),
-        ...(options.firstRun ? { second: fakeModel("second.gguf", "Second fake model") } : {}),
         ...Object.fromEntries(others.map((id) => [id, fakeModel(`${id}.gguf`, `Model ${id}`, options.bytes?.[id], options.onRequest?.includes(id))])),
       },
     }),
@@ -196,8 +214,6 @@ async function startIn(
   // panel included (it replaces its port): the panel tests keep it off.
   const cdp = options.window && !options.noDebug ? await freePort() : undefined;
 
-  const fakeSystemFile = path.join(root, "fake-system.json");
-  if (options.firstRun) fs.writeFileSync(fakeSystemFile, JSON.stringify(options.firstRun({ models, engines })));
   const appEnv = {
     ...process.env,
     MANGO_DIST: dist,
@@ -207,7 +223,8 @@ async function startIn(
     FAKE_ENGINE_SCRIPT: scriptFile,
     FAKE_ENGINE_LOG: engineLog,
     FAKE_ENGINE_CHUNK_MS: String(options.chunkMs ?? 20),
-    ...(options.firstRun ? { MANGO_FAKE_SYSTEM: fakeSystemFile } : {}),
+    // The fake models have a plan on this PC's real cards: what another program holds there must not keep them from starting.
+    MANGO_ROOM_CHECK_OFF: "1",
     ...(cdp ? { WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${cdp}` } : {}),
     ...options.env,
   } as Record<string, string>;
@@ -227,7 +244,6 @@ async function startIn(
       removeRoot(root);
     },
   };
-  if (options.firstRun) return env;
   const serviceFile = path.join(data, "service.json");
   const t0 = Date.now();
   while (!fs.existsSync(serviceFile)) {
@@ -241,5 +257,15 @@ async function startIn(
   const service = JSON.parse(fs.readFileSync(serviceFile, "utf8"));
   env.agent = service.agent;
   env.engine = service.engine;
-  return env;
+  if (empty || options.modelLoading) return env;
+  // The model loads after the agent answers, in the background.
+  for (;;) {
+    const state = await (await fetch(`${env.engine}/engine`)).json();
+    if (state.phase === "running") return env;
+    if (state.failed || Date.now() - t0 > 180_000) {
+      env.close();
+      throw new Error(`the model did not load: ${JSON.stringify(state)}; log in ${path.join(data, "logs")}`);
+    }
+    await Bun.sleep(200);
+  }
 }

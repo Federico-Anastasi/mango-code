@@ -8,14 +8,16 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-/** The content of `service.json`, which Mango Code writes when it is ready and removes on exit. */
+/** The content of `service.json`, which Mango Code writes as soon as its agent answers and removes on exit. */
 export interface Service {
   version: number;
   pid: number;
   /** The agent server: sessions, events, permissions, questions, tools. */
   agent: string;
-  /** The engine manager: loaded model, GPUs, release and resume. `null` when this Mango Code uses the engine of another PC: there is no manager here. */
+  /** The engine manager: loaded model, GPUs, release and resume. `null` when this Mango Code uses the engine of another PC: this PC's runs no model. */
   engine: string | null;
+  /** The app's own server on this PC, there also when the engine is another PC's. */
+  control: string;
   /** false if it was started with --service (no window). */
   window: boolean;
   /** Only in the file of a Mango Code that is not ready (see `notReady`), which then has neither `agent` nor `engine`. */
@@ -44,9 +46,8 @@ function alive(pid: number): boolean {
 }
 
 /**
- * Why Mango Code is running but not ready, if it says so: startup failed, or it waits for the models to
- * download to be chosen in its window (first run). Mango Code writes the file with `reason` instead of
- * `agent` and `engine`; it stands while the `pid` process lives.
+ * Why Mango Code is running but not ready, if it says so: its startup failed. Mango Code writes the file with `reason`
+ * instead of `agent` and `engine`; it stands while the `pid` process lives.
  */
 export function notReady(dir = dataDir()): string | null {
   try {
@@ -76,7 +77,7 @@ export async function find(dir = dataDir()): Promise<Service | null> {
   }
 }
 
-/** Finds Mango Code, or starts it without a window and waits until it is ready (the first start loads the model). */
+/** Finds Mango Code, or starts it without a window and waits until its agent answers (the model loads after that, and the first request waits for it). */
 export async function launch(opts: { exe?: string; dataDir?: string; timeoutMs?: number } = {}): Promise<Service> {
   const dir = opts.dataDir ?? dataDir();
   const found = await find(dir);

@@ -1,14 +1,12 @@
 import { Popover as Kobalte } from "@kobalte/core/popover"
-import { Component, ComponentProps, createEffect, createMemo, createSignal, For, JSX, onMount, Show } from "solid-js"
+import { Component, ComponentProps, createEffect, createMemo, For, JSX, Show } from "solid-js"
 import { createStore } from "solid-js/store"
 import { useLocal } from "@/context/local"
 import { useDialog } from "@opencode-ai/ui/context/dialog"
 import { popularProviders } from "@/hooks/use-providers"
-import { Button } from "@opencode-ai/ui/button"
 import { IconButton } from "@opencode-ai/ui/icon-button"
 import { ScrollView } from "@opencode-ai/ui/scroll-view"
 import { Tag } from "@opencode-ai/ui/tag"
-import { Dialog } from "@opencode-ai/ui/dialog"
 import { List } from "@opencode-ai/ui/list"
 import { Tooltip } from "@opencode-ai/ui/tooltip"
 import { Icon } from "@opencode-ai/ui/v2/icon"
@@ -17,8 +15,10 @@ import { MenuV2 } from "@opencode-ai/ui/v2/menu-v2"
 import { TooltipV2 } from "@opencode-ai/ui/v2/tooltip-v2"
 import { ModelTooltip } from "./model-tooltip"
 import { useLanguage } from "@/context/language"
-import { useServerSDK } from "@/context/server-sdk"
-import { fetchModelsInfo, modelDetail, type ModelInfo } from "@/utils/model-info"
+import { useMango } from "@/context/mango"
+import { MANGO_PROVIDER } from "@/utils/model-info"
+import { offered } from "@/utils/mango-state"
+import { whereLine } from "./mango-text"
 import { decode64 } from "@/utils/base64"
 import { handleDocumentSearchKeydown } from "@/utils/search-keydown"
 import { createMenuDismissController } from "@/utils/menu-dismiss-controller"
@@ -232,28 +232,38 @@ export function ModelSelectorPopoverV2(props: {
   /** The last item of the menu: by default it manages the models of the providers. */
   manageLabel?: string
   onManage?: () => void
+  /** mango-code: a model chosen here, besides becoming the conversation's (the app uses it now); `before`, the one it replaced. */
+  onPick?: (item: ModelItem, before?: { modelID: string; providerID: string }) => void
+  /** mango-code: a word after the name: in use, the default. */
+  tag?: (item: ModelItem) => string | undefined
 }) {
   const dialog = useDialog()
   const language = useLanguage()
-  const serverSDK = useServerSDK()
+  const mango = useMango()
   const controller = createModelSelectorController({
     model: props.model,
     provider: () => props.provider,
     onSelect: () => props.onClose?.(),
+    onPick: (item, before) => props.onPick?.(item, before),
   })
-  // What the app says about each model (weight, where it runs, a warning): a line under the name. Without it (the agent was
-  // not started by the app) the menu is as it was.
-  const [infos, setInfos] = createSignal<Record<string, ModelInfo>>({})
-  onMount(() => {
-    const sdk = serverSDK()
-    void fetchModelsInfo({ url: sdk.url, http: sdk.server.http }).then(setInfos, () => undefined)
-  })
+  // What the app says about its models: only those on the disk are listed, each with where it runs, «2 schede · 128k»,
+  // like the menu in the top bar. It is read again at every opening: a download or a choice changes it.
+  const refresh = () => void mango.refresh()
+  const local = (item: ModelItem) => item.provider.id === MANGO_PROVIDER
 
   return (
     <ModelSelectorPopoverV2View
       trigger={props.trigger}
-      detail={(item) => modelDetail(infos()[item.id], { images: item.capabilities?.input?.image === true }, language.t, language.locale())}
-      models={controller.models}
+      detail={(item) =>
+        local(item) && mango.state()?.model.phase !== "remote"
+          ? whereLine(mango.catalog()?.find((m) => m.key === item.id)?.verdict.where ?? null, language)
+          : undefined
+      }
+      models={(search) =>
+        controller.models(search).filter((item) => !local(item) || offered(mango.state(), mango.catalog(), item.id))
+      }
+      onOpen={refresh}
+      tag={props.tag}
       groups={controller.groups}
       current={controller.current}
       select={controller.select}
@@ -275,6 +285,7 @@ function createModelSelectorController(input: {
   provider: () => string | undefined
   model?: ModelState
   onSelect: () => void
+  onPick?: (item: ModelItem, before?: { modelID: string; providerID: string }) => void
 }) {
   const model = input.model ?? useLocal().model
   const allModels = createMemo(() =>
@@ -304,7 +315,9 @@ function createModelSelectorController(input: {
       return value ? modelKey(value) : undefined
     },
     select: (item: ModelItem) => {
+      const before = model.current()
       model.set({ modelID: item.id, providerID: item.provider.id }, { recent: true })
+      input.onPick?.(item, before && { modelID: before.id, providerID: before.provider.id })
       input.onSelect()
     },
   }
@@ -312,7 +325,7 @@ function createModelSelectorController(input: {
 
 function ModelSelectorPopoverV2View(props: {
   trigger: ModelSelectorTrigger
-  detail?: (item: ModelItem) => { line: string; warning?: string } | undefined
+  detail?: (item: ModelItem) => string | undefined
   models: (search: string) => ModelItem[]
   groups: (models: ModelItem[]) => { category: string; items: ModelItem[] }[]
   current: () => string | undefined
@@ -320,6 +333,8 @@ function ModelSelectorPopoverV2View(props: {
   manageLabel?: string
   onManage: () => void
   onClose: () => void
+  onOpen?: () => void
+  tag?: (item: ModelItem) => string | undefined
 }) {
   const language = useLanguage()
   const [store, setStore] = createStore({ open: false, search: "", active: "" })
@@ -340,6 +355,7 @@ function ModelSelectorPopoverV2View(props: {
     store.active ? contentRef?.querySelector<HTMLElement>(`[data-option-key="${CSS.escape(store.active)}"]`) : undefined
   const setOpen = (open: boolean) => {
     if (open) {
+      props.onOpen?.()
       dismiss.allowTriggerRestore()
       setStore({ open: true, active: initialActive() })
       setTimeout(() =>
@@ -509,25 +525,13 @@ function ModelSelectorPopoverV2View(props: {
                                 <span class="flex min-w-0 flex-1 flex-col">
                                   <span class="min-w-0 truncate leading-5">{item.name}</span>
                                   <Show when={props.detail?.(item)}>
-                                    {(detail) => (
-                                      <>
-                                        <Show when={detail().line}>
-                                          <span
-                                            data-slot="model-detail"
-                                            class="whitespace-normal text-[12px] font-[400] leading-4 text-v2-text-text-faint"
-                                          >
-                                            {detail().line}
-                                          </span>
-                                        </Show>
-                                        <Show when={detail().warning}>
-                                          <span
-                                            data-slot="model-warning"
-                                            class="whitespace-normal text-[12px] font-[440] leading-4 text-v2-text-text-muted"
-                                          >
-                                            {detail().warning}
-                                          </span>
-                                        </Show>
-                                      </>
+                                    {(line) => (
+                                      <span
+                                        data-slot="model-detail"
+                                        class="whitespace-normal text-[12px] font-[400] leading-4 text-v2-text-text-faint"
+                                      >
+                                        {line()}
+                                      </span>
                                     )}
                                   </Show>
                                 </span>
@@ -536,6 +540,13 @@ function ModelSelectorPopoverV2View(props: {
                                 </Show>
                                 <Show when={item.latest}>
                                   <TagV2 class="shrink-0">{language.t("model.tag.latest")}</TagV2>
+                                </Show>
+                                <Show when={props.tag?.(item)}>
+                                  {(tag) => (
+                                    <span data-slot="model-tag" class="shrink-0 text-[12px] leading-4 text-v2-text-text-muted">
+                                      {tag()}
+                                    </span>
+                                  )}
                                 </Show>
                               </MenuV2.RadioItem>
                             </TooltipV2>
@@ -566,40 +577,5 @@ function ModelSelectorPopoverV2View(props: {
         </MenuV2.Content>
       </MenuV2.Portal>
     </MenuV2>
-  )
-}
-
-export const DialogSelectModel: Component<{ provider?: string; model?: ModelState }> = (props) => {
-  const dialog = useDialog()
-  const language = useLanguage()
-  const local = useLocal()
-  const directory = () => decode64(local.slug())
-
-  const provider = () => {
-    void import("./dialog-connect-provider").then((x) => {
-      void dialog.show(() => <x.DialogConnectProvider directory={directory} />)
-    })
-  }
-
-  const manage = () => {
-    void import("./dialog-manage-models").then((x) => {
-      dialog.show(() => <x.DialogManageModels />)
-    })
-  }
-
-  return (
-    <Dialog
-      title={language.t("dialog.model.select.title")}
-      action={
-        <Button class="h-7 -my-1 text-14-medium" icon="plus-small" tabIndex={-1} onClick={provider}>
-          {language.t("command.provider.connect")}
-        </Button>
-      }
-    >
-      <ModelList provider={props.provider} model={props.model} onSelect={() => dialog.close()} />
-      <Button variant="ghost" class="ml-3 mt-5 mb-6 text-text-base self-start" onClick={manage}>
-        {language.t("dialog.model.manage")}
-      </Button>
-    </Dialog>
   )
 }

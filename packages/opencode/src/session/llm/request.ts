@@ -32,8 +32,6 @@ type PrepareInput = {
   readonly plugin: Plugin.Interface
   readonly flags: RuntimeFlags.Info
   readonly isWorkflow: boolean
-  /** mango-code: engine warmup request (see prompt.ts, `warmup`): a single token. */
-  readonly warmup?: boolean
 }
 
 export type Prepared = {
@@ -127,7 +125,7 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
         : undefined,
       topP: input.agent.topP ?? ProviderTransform.topP(input.model),
       topK: ProviderTransform.topK(input.model),
-      maxOutputTokens: input.warmup ? 1 : ProviderTransform.maxOutputTokens(input.model, input.flags.outputTokenMax),
+      maxOutputTokens: ProviderTransform.maxOutputTokens(input.model, input.flags.outputTokenMax),
       options,
     },
   )
@@ -204,8 +202,6 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
       ...(input.parentSessionID ? { "x-parent-session-id": input.parentSessionID } : {}),
       ...input.model.headers,
       ...headers,
-      // mango-code: if the engine already has the base of this prompt, it answers without touching the slot.
-      ...(input.warmup ? { "x-mango-warmup": "1" } : {}),
     },
   }
 })

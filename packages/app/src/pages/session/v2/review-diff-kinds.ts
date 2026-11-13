@@ -2,6 +2,7 @@ import type { SnapshotFileDiff, VcsFileDiff } from "@opencode-ai/sdk/v2"
 import type { FileDiffInfo } from "@opencode-ai/client/promise"
 import type { Kind } from "@/components/file-tree-v2"
 import { normalizeFileTreeV2Path } from "@/components/file-tree-v2-model"
+import { getFilename } from "@opencode-ai/core/util/path"
 
 export type RenderDiff = FileDiffInfo | (SnapshotFileDiff & { file: string }) | VcsFileDiff
 
@@ -29,6 +30,19 @@ export function reviewDiffDirectory(root: string, file: string) {
   const base = reviewRootDirectory(root)
   if (index < 0) return base
   return `${base.endsWith(separator) ? base : base + separator}${path.slice(0, index).replaceAll("/", separator)}`
+}
+
+/**
+ * Where to ask the agent again for the whole patch of `file`, named from the project folder `root`: first the file's
+ * own folder, a shorter list where the agent names the file from that folder (its name alone), then the project with
+ * 3 lines of context.
+ */
+export function reviewDiffRequests(root: string, file: string) {
+  const base = reviewRootDirectory(root)
+  const project = { directory: base, file, context: 3 }
+  const directory = reviewDiffDirectory(base, file)
+  if (directory === base) return [project]
+  return [{ directory, file: getFilename(file), context: undefined }, project]
 }
 
 export function reviewDiffKinds(diffs: RenderDiff[]) {

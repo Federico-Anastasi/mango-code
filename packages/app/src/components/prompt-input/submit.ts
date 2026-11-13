@@ -224,6 +224,9 @@ type PromptSubmitInput = {
   onNewSessionWorktreeReset?: () => void
   shouldQueue?: Accessor<boolean>
   onQueue?: (draft: FollowupDraft) => void
+  /** mango-code: the model is not ready: the message waits in the interface and leaves when it is. */
+  shouldWait?: Accessor<boolean>
+  onWait?: (draft: FollowupDraft) => void
   onAbort?: () => void
   onSubmit?: () => void
   model?: ModelSelection
@@ -336,6 +339,10 @@ export function createPromptSubmit(input: PromptSubmitInput) {
     const currentModel = modelSelection.current()
     const currentAgent = local.agent.current()
     const variant = modelSelection.variant.current()
+    // mango-code: whether it waits is decided with the model, now. A model that becomes ready while a new conversation is
+    // made on the server would otherwise send at once a message whose model was taken for waiting; waiting, it leaves
+    // with the model ready (`combine`).
+    const waits = mode === "normal" && input.shouldWait?.() === true
     if (!currentModel || !currentAgent) {
       showToast({
         title: language.t("prompt.toast.modelAgentRequired.title"),
@@ -471,6 +478,14 @@ export function createPromptSubmit(input: PromptSubmitInput) {
         input.queueScroll()
       })
       return true
+    }
+
+    // A new conversation is already on the server here; the message waits in the interface.
+    if (waits) {
+      input.onWait?.(draft)
+      clearContext(submission.target())
+      clearInput()
+      return
     }
 
     if (!isNewSession && mode === "normal" && input.shouldQueue?.()) {

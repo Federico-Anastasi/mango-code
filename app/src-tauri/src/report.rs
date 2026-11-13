@@ -261,7 +261,9 @@ fn deliver(app: &AppHandle, submission: Submission, png: Option<Vec<u8>>) -> Res
     if SENTRY_DSN.is_none() && !files.is_empty() {
         return Err(err("invalid", tr!("questa versione non invia allegati", "this build does not send attachments")));
     }
-    let report = Report::collect(&version, error, note, page, &who)?;
+    let engine = app.state::<crate::AppState>().engine.get().map(|m| m.state());
+    let model = engine.filter(|s| matches!(s.phase, engine::Phase::Running | engine::Phase::Starting)).and_then(|s| s.model).unwrap_or_else(|| "-".to_string());
+    let report = Report::collect(&version, model, error, note, page, &who)?;
     let done = match SENTRY_DSN {
         Some(dsn) => report.send(dsn, &version, png, &files).map(|_| Sent { sent: true, file: None })?,
         None => {
@@ -338,11 +340,11 @@ impl Computer {
 }
 
 impl Report {
-    fn collect(version: &str, error: Option<String>, note: Option<String>, page: Option<String>, who: &Who) -> Result<Report, BridgeError> {
+    fn collect(version: &str, model: String, error: Option<String>, note: Option<String>, page: Option<String>, who: &Who) -> Result<Report, BridgeError> {
         let data = mango_common::data_dir().map_err(|e| err("io", e.to_string()))?;
         let clean = |s: Option<String>| s.map(|s| anonymize(s.trim(), who)).filter(|s| !s.is_empty());
         let (error, note, page) = (clean(error), clean(note), clean(page));
-        let computer = computer(&data);
+        let computer = computer(model);
         let mut text = format!("# Mango Code problem report\n\n{}\n", computer.summary(version));
         if let Some(p) = &page {
             text += &format!("Page: {p}\n");
@@ -495,16 +497,14 @@ fn issue_url(computer: &str, file: &Path) -> Url {
     url
 }
 
-/// Windows, processor, memory, cards and the model in use.
-fn computer(data: &Path) -> Computer {
+/// Windows, processor, memory, cards and the model in use (`model`: the one the engine runs or is loading, "-" if none).
+fn computer(model: String) -> Computer {
     let windows = std::process::Command::new("cmd")
         .args(["/c", "ver"])
         .creation_flags(mango_common::CREATE_NO_WINDOW)
         .output()
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
         .unwrap_or_default();
-    let model = std::fs::read_to_string(data.join("model.txt")).map(|m| m.trim().to_string()).unwrap_or_default();
-    let model = if model.is_empty() { "-".to_string() } else { model };
     match engine_cfg::hardware::detect() {
         Ok(hw) => Computer {
             windows,

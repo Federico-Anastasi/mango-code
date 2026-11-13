@@ -2,7 +2,6 @@ import { Component, For, Match, Show, Switch } from "solid-js"
 import { FileIcon } from "@opencode-ai/ui/file-icon"
 import { Icon } from "@opencode-ai/ui/icon"
 import { Tag } from "@opencode-ai/ui/v2/badge-v2"
-import { KeybindV2 } from "@opencode-ai/ui/v2/keybind-v2"
 import { getDirectory, getFilename } from "@opencode-ai/core/util/path"
 
 export type AtOption =
@@ -24,7 +23,6 @@ export interface SlashCommand {
   trigger: string
   title: string
   description?: string
-  keybind?: string
   type: "builtin" | "custom"
   source?: "command" | "mcp" | "skill"
 }
@@ -45,8 +43,6 @@ type PromptPopoverProps = {
   slashMenuQuery: string
   onSlashMenuInput: (value: string) => void
   onSlashMenuKeyDown: (event: KeyboardEvent) => void
-  commandKeybind: (id: string) => string | undefined
-  commandKeybindParts: (id: string) => string[]
   newLayoutDesigns: boolean
   t: (key: string) => string
 }
@@ -288,8 +284,6 @@ export const PromptPopover: Component<PromptPopoverProps> = (props) => {
             >
               <For each={props.slashFlat}>
                 {(cmd) => {
-                  const keybind = () => props.commandKeybind(cmd.id)
-                  const keybindParts = () => props.commandKeybindParts(cmd.id)
                   return (
                     <button
                       data-slash-id={cmd.id}
@@ -352,14 +346,6 @@ export const PromptPopover: Component<PromptPopoverProps> = (props) => {
                                   ? props.t("prompt.slash.badge.mcp")
                                   : props.t("prompt.slash.badge.custom")}
                             </Tag>
-                          </Show>
-                        </Show>
-                        <Show when={props.newLayoutDesigns ? keybindParts().length > 0 : keybind()}>
-                          <Show
-                            when={props.newLayoutDesigns}
-                            fallback={<span class="text-12-regular text-text-subtle">{keybind()}</span>}
-                          >
-                            <KeybindV2 keys={keybindParts()} variant="neutral" />
                           </Show>
                         </Show>
                       </div>

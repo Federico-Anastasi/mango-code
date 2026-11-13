@@ -8,7 +8,7 @@
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <main data-view="starting">
+  <main>
     <!-- Logo: the same as the icon (app/src-tauri/icons/mango.svg) -->
     <svg class="logo" viewBox="16 32 170 170" aria-hidden="true">
       <defs>
@@ -39,119 +39,6 @@
 
     <h1>Mango Code</h1>
 
-    <!-- Startup in progress -->
-    <section id="starting" aria-live="polite">
-      <p class="subtitle" id="startup-title"></p>
-      <ol class="steps" id="steps">
-        <li data-step="startup"><span class="indicator"></span><span class="name" data-text="stepStartup"></span><span class="detail"></span></li>
-        <li data-step="engine"><span class="indicator"></span><span class="name" data-text="stepEngine"></span><span class="detail"></span></li>
-        <li data-step="agent"><span class="indicator"></span><span class="name" data-text="stepAgent"></span><span class="detail"></span></li>
-        <li data-step="preparing" data-optional hidden><span class="indicator"></span><span class="name" data-text="stepPreparing"></span><span class="detail"></span></li>
-      </ol>
-      <p class="note" data-text="startupNote"></p>
-    </section>
-
-    <!-- Model choice: first run, or "Models and engine" from the tray icon -->
-    <section id="choice" hidden>
-      <p class="subtitle" id="choice-title"></p>
-      <p class="explanation" id="choice-intro"></p>
-
-      <!-- The engine of another PC of the user: the road that downloads nothing; with one in use, the state of that PC -->
-      <div class="card" id="remote">
-        <h2 data-text="remoteTitle"></h2>
-        <p class="note" id="remote-intro" data-text="remoteIntro"></p>
-        <div id="remote-using" hidden>
-          <p id="remote-using-text"></p>
-          <p class="meta" id="remote-models"></p>
-          <div class="actions"><button type="button" class="secondary" id="remote-back" data-text="remoteBack"></button></div>
-        </div>
-        <form class="search" id="remote-form">
-          <input type="password" id="remote-code" data-placeholder="remoteCodePlaceholder" autocomplete="off" spellcheck="false">
-          <button type="submit" class="primary" id="remote-connect" data-text="remoteConnect"></button>
-        </form>
-        <p class="status" id="remote-status" aria-live="polite"></p>
-      </div>
-
-      <div id="local">
-      <h2 data-text="yourComputer"></h2>
-      <dl class="computer" id="computer"></dl>
-      <h2 data-text="models"></h2>
-      <ul class="models" id="models"></ul>
-      <p class="note" data-text="fastestNote"></p>
-      <p class="note" id="optimize"><span data-text="optimizeIntro"></span> <button type="button" class="link" id="optimize-open" data-text="optimizeOpen"></button><br><code id="optimize-folder"></code></p>
-
-      <h2 data-text="otherModels"></h2>
-      <p class="explanation" id="other-intro" data-text="otherIntro"></p>
-      <form class="search" id="other-form">
-        <input type="text" id="other-text" data-placeholder="searchPlaceholder" autocomplete="off" spellcheck="false">
-        <button type="submit" class="secondary" id="other-search" data-text="search"></button>
-        <button type="button" class="secondary" id="other-file" data-text="chooseFile"></button>
-      </form>
-      <p class="status" id="other-status" aria-live="polite"></p>
-      <ul class="models" id="other-results"></ul>
-      <div id="other-detail" hidden>
-        <p class="model-name" id="other-name"></p>
-        <ul class="warnings" id="other-warnings"></ul>
-        <ul class="models" id="other-variants"></ul>
-        <details class="quants" id="other-quants" hidden><summary></summary><ul></ul></details>
-        <label class="images" id="other-images-row" hidden><input type="checkbox" id="other-images"> <span id="other-images-text"></span></label>
-        <div class="actions">
-          <button type="button" class="primary" id="other-add"></button>
-          <button type="button" class="secondary" id="other-close" data-text="close"></button>
-        </div>
-      </div>
-      <details id="other-token">
-        <summary data-text="tokenSummary"></summary>
-        <p class="note" data-text="tokenNote"></p>
-        <form class="search" id="token-form">
-          <input type="password" id="token-value" autocomplete="off" spellcheck="false">
-          <button type="submit" class="secondary" id="token-save" data-text="save"></button>
-          <button type="button" class="secondary" id="token-remove" data-text="remove" hidden></button>
-        </form>
-        <p class="status" id="token-status" aria-live="polite"></p>
-      </details>
-      </div>
-
-      <!-- Sharing this PC's engine with the user's other PCs: only where there is an engine to share -->
-      <div class="card" id="share" hidden>
-        <h2 data-text="shareTitle"></h2>
-        <label class="switch"><input type="checkbox" id="share-on"> <span data-text="shareRow"></span></label>
-        <p class="note" data-text="shareDescription"></p>
-        <p class="note" data-text="shareWhere"></p>
-        <p class="status" id="share-error" aria-live="polite"></p>
-        <div id="share-details" hidden>
-          <div class="places" id="share-places"></div>
-          <p class="note" data-text="shareFirewall"></p>
-          <button type="button" class="secondary" id="share-new-key" data-text="shareNewKey"></button>
-        </div>
-      </div>
-
-      <!-- Dictation: the user's choice, it downloads in the background once the app is ready -->
-      <div class="card" id="dictation" hidden>
-        <h2 data-text="dictationTitle"></h2>
-        <label class="switch"><input type="checkbox" id="dictation-on"> <span data-text="dictationRow"></span></label>
-        <p class="note" id="dictation-description"></p>
-        <p class="status" id="dictation-state" aria-live="polite"></p>
-        <button type="button" class="secondary" id="dictation-retry" data-text="dictationRetry" hidden></button>
-      </div>
-
-      <div class="controls">
-        <p class="summary" id="summary" aria-live="polite"></p>
-        <div class="actions">
-          <button type="button" class="primary" id="start-download" disabled></button>
-          <button type="button" class="secondary" id="cancel" data-text="cancel" hidden></button>
-        </div>
-        <p class="status" id="choice-status" aria-live="polite"></p>
-      </div>
-    </section>
-
-    <!-- Download -->
-    <section id="download" hidden aria-live="polite">
-      <p class="subtitle" id="download-title"></p>
-      <ol class="steps download" id="download-steps"></ol>
-      <p class="note" data-text="downloadNote"></p>
-    </section>
-
     <!-- Error -->
     <section id="error" hidden role="alert">
       <p class="subtitle" id="error-title"></p>
@@ -177,6 +64,6 @@
       <p class="status" id="status" aria-live="polite"></p>
     </section>
   </main>
-  <script src="first-run.js"></script>
+  <script src="startup.js"></script>
 </body>
 </html>

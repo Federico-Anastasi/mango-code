@@ -5,7 +5,7 @@
 //    no violation), otherwise it is taken as a download;
 //  - the arrow closes the view;
 //  - the globe, with nothing in the computer's panel, opens the last page the conversation wrote;
-//  - what the model menu says about each model (`/mango/models/info`) reaches the phone through the port.
+//  - what the model menu says about each model (`/mango/models`) reaches the phone through the port.
 // Fake engine, no GPU, the port on 127.0.0.1 (`MANGO_PHONE_PC_ONLY`). Own ports (47693-47695). With `MC_PHOTOS=<folder>`
 // it saves a photo (390 px wide). `bun test --cwd integration`, after `cargo build -p mango-code -p engine` in app/.
 
@@ -162,7 +162,8 @@ test("the globe opens the last page the conversation wrote when the computer's p
 }, 60_000);
 
 test("what the model menu says about each model reaches the phone through the port", async () => {
-  const info = await ui.evaluate(() => fetch("/mango/models/info").then(async (r) => ({ status: r.status, body: await r.json() })));
+  const info = await ui.evaluate(() => fetch("/mango/models").then(async (r) => ({ status: r.status, body: await r.json() })));
   expect(info.status).toBe(200);
-  expect(info.body.fake).toMatchObject({ place: expect.stringMatching(/^(gpu|cpu)$/), weak: false });
+  const fake = info.body.models.find((m: { key: string }) => m.key === "fake");
+  expect(fake).toMatchObject({ present: true, verdict: { fits: true, where: { placement: expect.stringMatching(/^(gpu|cpu)$/) } } });
 }, 60_000);

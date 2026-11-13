@@ -13,7 +13,7 @@
 //! agent it is its own web UI) and without `Cookie`, `Referer`, `Authorization` or the proxy headers. To a page of the
 //! computer it goes the same way, to its own loopback address, with the page's cookies (not the phone's session). One request per
 //! connection (`Connection: close` on both sides): the reply returns as it arrives, piece by piece, so the events
-//! (`GET /event`) don't wait. An `Upgrade` (the web UI's terminal, WebSocket) passes both ways.
+//! (`GET /event`) don't wait. An `Upgrade` (a WebSocket) passes both ways.
 
 use crate::{site, Inner};
 use anyhow::{bail, Context, Result};
@@ -35,8 +35,11 @@ pub(crate) const MAX_CONNECTIONS: usize = 64;
 /// The route answered here, not by the agent: the problem report (see `Reports`).
 const REPORT: &str = "/phone/report";
 const METHODS: &[&str] = &["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"];
-/// Agent routes the web UI doesn't use: the app calls them at start (`warmup`) and the attached apps (`extra-folders`).
-const PC_ONLY: &[&str] = &["/mango/warmup", "/mango/extra-folders"];
+/// Agent routes the web UI doesn't use: the app calls them (`reload`, after it rewrote the agent's configuration) and the
+/// attached apps (`extra-folders`). The model, the models and the computer (`/mango/state`, `/mango/models`,
+/// `/mango/computer`, `/mango/model/*`) pass: from the phone too the model is chosen. The programs the agent left running
+/// (`processes`, with their "Stop") are shown and stopped on the PC only.
+const PC_ONLY: &[&str] = &["/mango/reload", "/mango/extra-folders", "/mango/processes"];
 /// Static files of the web UI that need no session: the app's manifest and icons are read by the system (the home screen, the
 /// browser's tab), which does not send the cookie, and the page that asks for the key shows the icon. The agent serves them without
 /// a password too, and they carry no data.
@@ -392,7 +395,7 @@ fn numeric(host: &str) -> bool {
     ip.parse::<Ipv4Addr>().is_ok()
 }
 
-/// The path is compared decoded, lowercase and without double slashes: `/mango//Warmup` and `/mango/%77armup` are the
+/// The path is compared decoded, lowercase and without double slashes: `/mango//Reload` and `/mango/%72eload` are the
 /// same route.
 fn pc_only(path: &str) -> bool {
     let mut p = decode(path).to_ascii_lowercase();
@@ -669,10 +672,21 @@ mod tests {
 
     #[test]
     fn the_pc_only_routes_cannot_be_got_around() {
-        for p in ["/mango/warmup", "/mango/extra-folders", "/mango//warmup", "/MANGO/Extra-Folders", "/mango/%77armup", "/mango/extra-folders/", "//mango/warmup"] {
+        for p in ["/mango/reload", "/mango/extra-folders", "/mango//reload", "/MANGO/Extra-Folders", "/mango/%72eload", "/mango/extra-folders/", "//mango/reload", "/mango/processes", "/mango/processes/stop"] {
             assert!(pc_only(p), "{p}");
         }
-        for p in ["/mango/engine/speed", "/mango/settings", "/session", "/mango/warmupx", "/event"] {
+        for p in [
+            "/mango/engine/speed",
+            "/mango/settings",
+            "/session",
+            "/mango/reloadx",
+            "/event",
+            "/mango/state",
+            "/mango/models",
+            "/mango/computer",
+            "/mango/model/use",
+            "/mango/model/retry",
+        ] {
             assert!(!pc_only(p), "{p}");
         }
     }

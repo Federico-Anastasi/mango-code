@@ -12,7 +12,7 @@ match what you find on the PC, the PC is right: recheck (`hygiene.md`).
 | installed app | `%LOCALAPPDATA%\Mango Code\` (`mango-code.exe`); in development from the repo, `app\target\{release,debug}\` |
 | distribution (`dist`): catalog, templates, MCP | in the installed app's `resources\` folder; in the repo `launcher\` (the `MANGO_DIST` variable moves it) |
 | model catalog | `<dist>\mango-models.json`: for each model name, GGUF file, mmproj, repo, maximum context, chat template; `order` is the listing order. The user's models are in `%LOCALAPPDATA%\MangoCode\user-models.json` (same format, they are added) |
-| engine catalog | `<dist>\mango-engines.json`: downloadable versions per build (`cpu`, `vulkan`, `cuda-12`, `cuda-13`, and the `prism`, `toq` engines of the RTX 3060 Ti + GTX 1080 + GTX 1660 SUPER profiles) |
+| engine catalog | `<dist>\mango-engines.json`: downloadable versions per build (`cpu`, `vulkan`, `cuda-12`, `cuda-13`, and the `prism`, `toq` engines of the RTX 3060 Ti + GTX 1080 + GTX 1660 SUPER profiles; `prism` also has `cuda-12-gtx16`, which a `cuda-12` profile gets by itself on a PC whose Turing cards are all GTX 16) |
 | installed engines | `<engines>\<engine>\<version>-<build>\llama-server.exe`; an engine placed by hand in `<engines>\<name>\llama-server.exe` counts as installed. `<engines>` = `<data>\engine` or what `<dist>\mango-paths.json` says (`llama`) |
 | downloaded models | `%LOCALAPPDATA%\MangoCode\models\` (or `mango-paths.json`, `models`) |
 | optimized profiles | `<dist>\profiles\<family>\*.json` (the distributed ones); yours in `%LOCALAPPDATA%\MangoCode\profiles\`, which the app reads: for the same model and GPUs, yours wins. Format: `launcher\profiles\README.md` |

@@ -10,7 +10,7 @@ import { uuid } from "@/utils/uuid"
 import { SessionTabsRemovedDetail } from "@/components/titlebar-session-events"
 import { sessionHref } from "@/utils/session-route"
 import { createTabMemory } from "./tab-memory"
-import { leftEmptyDraft, nextTabAfterClose, pushClosedTab, removeClosedTabs, takeClosedTab, type ClosedTab } from "./closed-tabs"
+import { leftEmptyDraft, nextTabAfterClose } from "./closed-tabs"
 import { createDraftPromptSession, type PromptModel, type PromptSession } from "./prompt-state"
 import { migrateTabs } from "./tab-migration"
 
@@ -28,7 +28,13 @@ export type DraftTab = {
   worktree?: string
 }
 
-export type Tab = SessionTab | DraftTab
+/** The settings page: one tab at most, kept by the server it was opened on like the others. */
+export type SettingsTab = {
+  type: "settings"
+  server: ServerConnection.Key
+}
+
+export type Tab = SessionTab | DraftTab | SettingsTab
 
 export type TabInfo = {
   title?: string
@@ -41,10 +47,26 @@ type RecentTab = {
 
 export const draftHref = (draftID: string) => `/new-session?draftId=${encodeURIComponent(draftID)}`
 
-export const tabHref = (tab: Tab) =>
-  tab.type === "draft" ? draftHref(tab.draftID) : sessionHref(tab.server, tab.sessionId)
+/** The settings page on a section, and on a row of it (`focus`: its title, or a model's key). */
+export const settingsHref = (target?: { section?: string; focus?: string }) => {
+  const query = new URLSearchParams()
+  if (target?.section) query.set("section", target.section)
+  if (target?.focus) query.set("focus", target.focus)
+  const search = query.toString()
+  return search ? `/settings?${search}` : "/settings"
+}
 
-export const tabKey = (tab: Tab) => (tab.type === "draft" ? `draft:${tab.draftID}` : `${tab.server}\n${tabHref(tab)}`)
+export const tabHref = (tab: Tab) => {
+  if (tab.type === "draft") return draftHref(tab.draftID)
+  if (tab.type === "settings") return settingsHref()
+  return sessionHref(tab.server, tab.sessionId)
+}
+
+export const tabKey = (tab: Tab) => {
+  if (tab.type === "draft") return `draft:${tab.draftID}`
+  if (tab.type === "settings") return "settings"
+  return `${tab.server}\n${tabHref(tab)}`
+}
 
 export function sessionHasOpenTab(tabs: Tab[], server: ServerConnection.Key, session: Session) {
   return tabs.some((tab) => tab.type === "session" && tab.server === server && tab.sessionId === session.id)
@@ -66,7 +88,6 @@ export const { use: useTabs, provider: TabsProvider } = createSimpleContext({
     )
     const [recent, setRecent, , recentReady] = persisted(Persist.window("tabs.recent"), createStore<RecentTab>({}))
     const [info, setInfo] = persisted(Persist.window("tabs.info"), createStore<Record<string, TabInfo>>({}))
-    const [closed, setClosed, , closedReady] = persisted(Persist.window("tabs.closed"), createStore<ClosedTab[]>([]))
 
     const params = useParams()
     const navigate = useNavigate()
@@ -89,15 +110,6 @@ export const { use: useTabs, provider: TabsProvider } = createSimpleContext({
       void recentReady.promise?.then(() => {
         if (write === recentWrite) setRecent("key", key)
       })
-    }
-
-    const updateClosed = (update: (stack: ClosedTab[]) => ClosedTab[]) => {
-      const apply = () => setClosed((stack) => update(stack))
-      if (closedReady()) {
-        apply()
-        return
-      }
-      void closedReady.promise?.then(apply)
     }
 
     const removeDraftPersisted = (draftID: string) => {
@@ -137,13 +149,6 @@ export const { use: useTabs, provider: TabsProvider } = createSimpleContext({
       for (const key of Object.keys(info)) {
         if (!keys.has(key)) removeInfo(key)
       }
-    })
-
-    createEffect(() => {
-      if (!closedReady()) return
-      const servers = new Set(server.list.map(ServerConnection.key))
-      const next = closed.filter((entry) => servers.has(entry.tab.server))
-      if (next.length !== closed.length) setClosed(() => next)
     })
 
     const navigateTab = (tab: Tab) => {
@@ -190,6 +195,26 @@ export const { use: useTabs, provider: TabsProvider } = createSimpleContext({
           )
         })
         return next
+      },
+      /**
+       * The settings page in its tab, which opens next to the others if it is not there: on `section` and its row
+       * `focus`, or on the last section seen.
+       */
+      openSettings(target?: { section?: string; focus?: string }) {
+        void startTransition(() => {
+          actions.addSettingsTab()
+          setRecentKey("settings")
+          navigate(settingsHref(target))
+        })
+      },
+      /** The settings page reached by its address (a reload) gets its tab too. */
+      addSettingsTab() {
+        if (store.some((tab) => tab.type === "settings")) return
+        setStore(
+          produce((tabs) => {
+            tabs.push({ type: "settings", server: server.key })
+          }),
+        )
       },
       reorder(keys: string[]) {
         setStore(
@@ -247,45 +272,17 @@ export const { use: useTabs, provider: TabsProvider } = createSimpleContext({
         removeDraftPersisted(draftID)
       },
       removeTab,
-      // User-initiated close: records the tab so it can be reopened.
-      // Cleanup paths (missing sessions, archive, server removal) go through
-      // removeTab and friends directly and are not recorded.
       closeTab(index: number) {
-        const tab = store[index]
-        if (!tab) return
-        if (tab.type === "session") updateClosed((stack) => pushClosedTab(stack, tab, index))
+        if (!store[index]) return
         removeTab(index)
       },
-      reopenClosedTab() {
-        if (!closedReady()) {
-          void closedReady.promise?.then(() => actions.reopenClosedTab())
-          return
-        }
-        const result = takeClosedTab(closed, store)
-        if (result.stack.length === closed.length) return
-        setClosed(() => result.stack)
-        const entry = result.entry
-        if (!entry) return
-        const index = Math.min(entry.index, store.length)
-        void startTransition(() => {
-          setStore(
-            produce((tabs) => {
-              if (tabs.some((item) => tabKey(item) === tabKey(entry.tab))) return
-              tabs.splice(index, 0, entry.tab)
-            }),
-          )
-          navigateTab(entry.tab)
-        })
-      },
       removeSessionTab(input: Omit<SessionTab, "type">) {
-        updateClosed((stack) => removeClosedTabs(stack, input.server, [input.sessionId]))
         const index = store.findIndex(
           (tab) => tab.type === "session" && tab.server === input.server && tab.sessionId === input.sessionId,
         )
         if (index !== -1) removeTab(index)
       },
       removeServer(key: ServerConnection.Key) {
-        updateClosed((stack) => stack.filter((entry) => entry.tab.server !== key))
         const drafts = store.flatMap((tab) => (tab.type === "draft" && tab.server === key ? [tab.draftID] : []))
         const removed = store.filter((tab) => tab.server === key).map(tabKey)
         setStore((tabs) => tabs.filter((tab) => tab.server !== key))
@@ -297,7 +294,6 @@ export const { use: useTabs, provider: TabsProvider } = createSimpleContext({
       },
       removeSessions: (input: SessionTabsRemovedDetail) => {
         const targetServer = input.server ?? server.key
-        updateClosed((stack) => removeClosedTabs(stack, targetServer, input.sessionIDs))
         const removed = store
           .filter(
             (tab) => tab.type === "session" && tab.server === targetServer && input.sessionIDs.includes(tab.sessionId),

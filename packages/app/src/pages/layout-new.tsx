@@ -16,6 +16,10 @@ import { displayName } from "@/pages/layout/helpers"
 import { onMissingDirectory } from "@/utils/missing-directory"
 import { pathKey } from "@/utils/path-key"
 import { setV2Toast, showToast, ToastRegion } from "@/utils/toast"
+import { missingParent } from "@/utils/mango-state"
+import { useMangoPendingSender } from "@/context/mango"
+import { useSettingsFromApp } from "@/components/settings-page/open"
+import { formatServerError } from "@/utils/server-errors"
 
 // A project folder gone from the disk: the project is removed from the list and the user is warned once.
 function useMissingProjectCleanup() {
@@ -46,12 +50,27 @@ function useMissingProjectCleanup() {
       showToast({
         variant: "error",
         title: language.t("toast.project.directoryMissing.title"),
+        // The name and the folder that held it, «sito (in Progetti\sito)».
         description: name
-          ? language.t("toast.project.directoryMissing.description", { project: name })
+          ? language.t("mango.project.missing", { project: name, parent: missingParent(directory) })
           : language.t("toast.directory.missing.description"),
       })
     }),
   )
+}
+
+// mango-code: the messages waiting for the model leave when it is ready, whatever screen is open.
+// Those that did not leave after their tries say so once here, and in their bubble with «Retry».
+function useMangoPending() {
+  const language = useLanguage()
+  const send = useMangoPendingSender((error) =>
+    showToast({
+      variant: "error",
+      title: language.t("mango.pending.sendFailed"),
+      description: formatServerError(error, language.t, language.t("mango.error.noAnswer")),
+    }),
+  )
+  createEffect(send)
 }
 
 export default function NewLayout(props: ParentProps) {
@@ -62,6 +81,8 @@ export default function NewLayout(props: ParentProps) {
 
   createEffect(() => setV2Toast(true))
   useMissingProjectCleanup()
+  useMangoPending()
+  useSettingsFromApp()
 
   const update: TitlebarUpdate = {
     version: () => {

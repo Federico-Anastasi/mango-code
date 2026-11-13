@@ -11,6 +11,8 @@ use mango_common::tr;
 use serde::{Deserialize, Serialize};
 use std::net::Ipv4Addr;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Weak;
 use std::time::Duration;
 
 /// How long the other PC has to answer: a PC that is off or on another network does not.
@@ -38,20 +40,20 @@ impl std::fmt::Display for Failure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(&match self {
             Failure::BadCode => tr!(
-                "Questo non è un codice di collegamento. Si copia con «Copia il codice» da «Modelli e motore», sul PC con il motore.",
-                "This is not a connection code. Copy it with \"Copy the code\" from \"Models and engine\", on the PC with the engine."
+                "Questo non è un codice di collegamento. Si copia con «Copia il codice» in Impostazioni › Collegamenti, sul PC con il motore.",
+                "This is not a connection code. Copy it with \"Copy the code\" in Settings › Connections, on the PC with the engine."
             ),
             Failure::Rejected => tr!(
-                "Il codice non è valido, oppure la condivisione è spenta su quel PC. Copia di nuovo il codice da «Modelli e motore», sul PC con il motore.",
-                "The code is not valid, or sharing is off on that PC. Copy the code again from \"Models and engine\", on the PC with the engine."
+                "Il codice non è valido, oppure la condivisione è spenta su quel PC. Copia di nuovo il codice da Impostazioni › Collegamenti, sul PC con il motore.",
+                "The code is not valid, or sharing is off on that PC. Copy the code again from Settings › Connections, on the PC with the engine."
             ),
             Failure::Unreachable => tr!(
                 "Il PC con il motore non risponde: è acceso? Mango Code è aperto lì, con la condivisione accesa?",
                 "The PC with the engine does not answer: is it turned on? Is Mango Code open there, with sharing on?"
             ),
             Failure::NoModels => tr!(
-                "Quel PC non ha modelli pronti. Apri Mango Code lì e scarica un modello da «Modelli e motore».",
-                "That PC has no model ready. Open Mango Code there and download a model from \"Models and engine\"."
+                "Quel PC non ha modelli pronti. Apri Mango Code lì e scarica un modello da Impostazioni › Modelli.",
+                "That PC has no model ready. Open Mango Code there and download a model from Settings › Models."
             ),
             Failure::NotMango(what) => tr!(
                 "A quell'indirizzo c'è qualcosa che non è Mango Code ({what}). Copia di nuovo il codice dal PC con il motore.",
@@ -115,11 +117,40 @@ impl Code {
     pub fn base(&self) -> String {
         format!("http://{}", self.address)
     }
+}
 
-    /// The address without the port, for the labels.
-    pub fn ip(&self) -> &str {
-        self.address.rsplit_once(':').map_or(&self.address, |(ip, _)| ip)
+/// What the PC said when it was asked, in five seconds at most.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Answer {
+    Yes,
+    /// The key is refused (401): the PC is there, and the chat says to paste its new code.
+    Refused,
+    No,
+}
+
+pub fn answer(code: &Code) -> Answer {
+    let url = format!("{}/mango/models", code.base());
+    match mango_common::internet::agent(&url, ANSWER_WITHIN).get(&url).header("Authorization", format!("Bearer {}", code.key)).call() {
+        Err(ureq::Error::StatusCode(401)) => Answer::Refused,
+        Ok(_) | Err(ureq::Error::StatusCode(_)) => Answer::Yes,
+        Err(_) => Answer::No,
     }
+}
+
+/// Asks the PC whether it answers, on a thread of its own, and writes it in `reachable` (a refused key is an answer) until
+/// nobody holds `reachable` any more. Every `every`; after a refused key every `refused_every`, so the other PC's log
+/// does not get a refusal every few seconds, and `every` again as soon as the answer changes. A new key is a new watch.
+pub fn watch(code: Code, reachable: Weak<AtomicBool>, every: Duration, refused_every: Duration) -> std::thread::JoinHandle<()> {
+    std::thread::spawn(move || {
+        let mut wait = every;
+        loop {
+            std::thread::sleep(wait);
+            let answer = answer(&code);
+            let Some(r) = reachable.upgrade() else { return };
+            r.store(answer != Answer::No, Ordering::SeqCst);
+            wait = if answer == Answer::Refused { refused_every } else { every };
+        }
+    })
 }
 
 /// Asks the PC what it offers: it proves the code and gives the models. Five seconds at most.
@@ -141,7 +172,7 @@ pub fn verify(code: &Code) -> std::result::Result<Offered, Failure> {
 
 /// Where the code is kept while this PC uses the engine of another.
 pub fn file(data: &Path) -> PathBuf {
-    data.join("remote-engine.json")
+    mango_common::remote_engine_file(data)
 }
 
 /// The code saved by an earlier "use this PC's engine", or none.
@@ -160,16 +191,19 @@ pub fn saved(data: &Path) -> Result<Option<Code>> {
 }
 
 pub fn save(data: &Path, code: &Code) -> Result<()> {
-    std::fs::create_dir_all(data)?;
     let file = file(data);
-    mango_common::write_atomic(&file, serde_json::to_string_pretty(code)?).with_context(|| tr!("scrittura di {}", "writing {}", file.display()))
+    let unsaved = || mango_common::user_text(&tr!("Non riesco a salvare il codice dell'altro PC.", "I can't save the other PC's code."), file.display());
+    std::fs::create_dir_all(data).with_context(unsaved)?;
+    mango_common::write_atomic(&file, serde_json::to_string_pretty(code)?).with_context(unsaved)
 }
 
 /// Back to the engine of this PC: removes the file (and with it the key).
 pub fn forget(data: &Path) -> Result<()> {
     let file = file(data);
     match std::fs::remove_file(&file) {
-        Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e).with_context(|| tr!("cancellazione di {}", "removing {}", file.display())),
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+            Err(e).with_context(|| mango_common::user_text(&tr!("Non riesco a togliere il codice dell'altro PC.", "I can't remove the other PC's code."), file.display()))
+        }
         _ => Ok(()),
     }
 }

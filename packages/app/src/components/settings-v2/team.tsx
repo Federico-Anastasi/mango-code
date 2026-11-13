@@ -11,7 +11,8 @@ import { SettingsListV2 } from "./parts/list"
 import { SettingsRowV2 } from "./parts/row"
 import "./settings-v2.css"
 
-export const SettingsTeamV2: Component = () => {
+/** `onChange`: after the key or the choices are saved (the card that holds the page shows whether a key is there). */
+export const SettingsTeamV2: Component<{ onChange?: () => void }> = (props) => {
   const language = useLanguage()
   const team = () => window.__MANGO_DESKTOP__?.team
   const [info, { refetch }] = createResource(async () => await team()?.info())
@@ -33,6 +34,7 @@ export const SettingsTeamV2: Component = () => {
     try {
       await action()
       await refetch()
+      props.onChange?.()
     } catch (cause) {
       const failure = mangoDesktopError(cause)
       setError(

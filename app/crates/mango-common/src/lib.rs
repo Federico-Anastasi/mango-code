@@ -17,7 +17,28 @@ use std::path::{Path, PathBuf};
 
 /// An error for a non-technical user, with the detail after it.
 pub fn user_error(msg: &str, detail: impl std::fmt::Display) -> anyhow::Error {
-    anyhow::anyhow!("{msg} {}", tr!("(dettaglio tecnico: {detail})", "(technical detail: {detail})"))
+    anyhow::anyhow!("{}", user_text(msg, detail))
+}
+
+/// The text of `user_error`, for a context: «sentence (dettaglio tecnico: detail)».
+pub fn user_text(msg: &str, detail: impl std::fmt::Display) -> String {
+    format!("{msg} {}", tr!("(dettaglio tecnico: {detail})", "(technical detail: {detail})"))
+}
+
+/// What the interface shows of an error: its sentence, without the technical detail (`user_text`), which goes to the log.
+pub fn user_phrase(e: &anyhow::Error) -> String {
+    let text = e.to_string();
+    let cut = [" (dettaglio tecnico:", " (technical detail:"].iter().filter_map(|mark| text.find(mark)).min();
+    cut.map_or_else(|| text.clone(), |at| text[..at].to_string())
+}
+
+/// One line at the end of `<data>\logs\startup.log`, with the local time. A log that can't be written stops nothing.
+pub fn startup_log(paths: &Paths, line: &str) {
+    use std::io::Write;
+    let _ = std::fs::create_dir_all(paths.logs());
+    if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(paths.logs().join("startup.log")) {
+        let _ = writeln!(file, "{} {line}", chrono::Local::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, false));
+    }
 }
 
 /// The error for a connection that does not work, the same text wherever the app reaches the internet.
@@ -129,6 +150,16 @@ impl Paths {
     pub fn logs(&self) -> PathBuf {
         self.data.join("logs")
     }
+
+    /// Where the code of another PC is kept while this PC uses its engine (`engine::remote`): there is one only then.
+    pub fn remote_engine(&self) -> PathBuf {
+        remote_engine_file(&self.data)
+    }
+}
+
+/// `Paths::remote_engine` from the data folder alone.
+pub fn remote_engine_file(data: &Path) -> PathBuf {
+    data.join("remote-engine.json")
 }
 
 /// The app's data for this user: `%LOCALAPPDATA%\MangoCode`, or `MANGO_DATA` (the automated tests use a folder
@@ -144,11 +175,6 @@ pub fn data_dir() -> Result<PathBuf> {
 /// The file another app uses to find a running Mango Code (see docs/INTEGRATION.md).
 pub fn service_file() -> Result<PathBuf> {
     Ok(data_dir()?.join("service.json"))
-}
-
-/// File with the last web UI page that was open (to reopen the app where it was).
-pub fn last_page_file() -> Result<PathBuf> {
-    Ok(data_dir()?.join("last-page.txt"))
 }
 
 /// File with the zoom of the app's window (absent: 100%).
@@ -277,6 +303,17 @@ pub fn hex(b: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// What the interface shows of an error is its sentence: the technical detail stays in the whole error, for the log.
+    #[test]
+    fn the_sentence_of_an_error_leaves_its_detail_out() {
+        let e = anyhow::Error::from(std::io::Error::from(std::io::ErrorKind::PermissionDenied)).context(user_text("Non riesco.", r"C:\x\y.gguf"));
+        assert_eq!(user_phrase(&e), "Non riesco.");
+        assert!(format!("{e:#}").contains(r"C:\x\y.gguf"));
+        assert!(e.chain().any(|c| c.is::<std::io::Error>()), "the cause stays: the sentence of a download looks for it");
+        assert_eq!(user_phrase(&user_error("Una frase.", "dettaglio")), "Una frase.");
+        assert_eq!(user_phrase(&anyhow::anyhow!("Solo una frase.")), "Solo una frase.");
+    }
 
     #[test]
     fn only_the_loopback_names_are_this_computer() {

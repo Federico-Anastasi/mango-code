@@ -32,19 +32,25 @@ and on two engines of our own derived from it. The app is in English and Italian
 <p align="center">
   <img src="docs/images/home.png" alt="Mango Code: a new conversation, with the local model Qwen3.6-35B-A3B and the project invoice-tool" width="100%">
   <br>
-  <sub>A new conversation: the local model, the Team switch and the project.</sub>
+  <sub>A new conversation: the local model, ready on the PC's own cards, and the project.</sub>
 </p>
 
 ## Features
 
 **Local models, set up for your PC**
-- At first run the app looks at your graphics cards, processor and memory, tells you which models fit and, for those that
-  would run on the processor, how slow in words ("a word or two a second"), then downloads the right engine (CUDA for NVIDIA, Vulkan for AMD and Intel, or the processor
-  alone) and the models you choose, with resume and checksum. A model runs entirely on the graphics cards, with the
-  largest context that fits, or entirely on the processor.
+- At first run the Home tells you what it found (graphics cards, processor, memory, free space) and recommends one
+  model with one button, or a list to choose more than one: for each it says whether it fits, where it runs, how much
+  conversation it remembers and, for those that would run on the processor, how slow in words ("a word or two a
+  second"). It downloads the right engine (CUDA for NVIDIA, Vulkan for AMD and Intel, or the processor alone) and the
+  models you choose, with resume and checksum, and the app can be used meanwhile. A model runs entirely on the
+  graphics cards, with the largest context that fits, or entirely on the processor.
+- **No waiting at start.** The app opens on the Home at once and loads the default model in the background; its name
+  and what it is doing are in the top bar, where you can change it without waiting. A message sent before the model is
+  ready waits and leaves by itself. If the model does not start, the app says why (also when another program is using
+  a card's memory) and offers one that fits.
 - **Recommended models**, each with arguments tuned for it: Qwen3.6-35B-A3B (the default), Qwen3.8-27B, Ternary
-  Bonsai 2 27B, Qwen3.8-27B-TOQ-v1 (our 2-bit trellis quantization), LFM2.5-24B-A2B, Qwen3.5-4B and Qwen3.5-2B (for
-  4 GB graphics cards). Most of them read images.
+  Bonsai 2 27B, Qwen3.8-27B-TOQ-v1 (our 2-bit trellis quantization), LFM2.5-24B-A2B, Ling 3.0 Tiny
+  (small and fast, also on a laptop's processor), Qwen3.5-4B and Qwen3.5-2B (for 4 GB graphics cards). Most of them read images.
 - **Other open models.** Search Hugging Face, paste a link or pick a GGUF file already on your PC: before adding it,
   the app tells you whether it fits in memory and whether its chat template handles tools and long conversations.
 - **Conversations that resume instantly.** Before the engine stops or switches model, it saves the conversation's
@@ -53,12 +59,15 @@ and on two engines of our own derived from it. The app is in English and Italian
 **An agent you can see into**
 - **You decide what goes in the prompt.** Every built-in tool, MCP server, skill, instruction file and plugin can be
   turned on or off, for all folders or for one, and the settings page shows how many tokens each one costs.
+- **Settings in one page**: six sections (Models, Computer, Agent, Connections, General, Help) and a search that finds
+  every setting. For each model you choose where it runs, how much it remembers, the style of its answers and whether
+  it reasons; for the computer, which graphics cards the models leave alone.
 - **Projects are git repositories**: a folder you open becomes one if it isn't (with an empty first commit), so every
   change the agent makes can be seen and undone. Never in a folder too broad to be a project (your user folder,
   Desktop, Documents, Downloads, OneDrive, a drive root: the app says so and offers a subfolder), nor in a folder that
   holds other repositories.
 - **Built-in tools**: a browser the agent drives in the app's preview panel (or in your own Chrome), web search, Word,
-  Excel, PowerPoint and PDF documents (a click on the card of a PDF or a picture shows it in that panel, also on the
+  Excel, PowerPoint and PDF documents (a click on the card of a PDF, a picture or a web page shows it in that panel, also on the
   phone), voice dictation, and a set of skills for disciplined work (tests first,
   systematic debugging, verification before claiming success).
 
@@ -71,10 +80,10 @@ and on two engines of our own derived from it. The app is in English and Italian
 - **From your phone.** The same interface on your phone, over your Wi-Fi or from outside with
   [Tailscale](https://tailscale.com). Off by default; when you turn it on, access needs a random key.
 - **The engine of another PC.** A PC with graphics cards can share its models with your other PCs, at home or with
-  Tailscale: off by default, with a random key in a code you copy ("Share the engine with my PCs", on the "Models and
-  engine" page). On the other PC, even a laptop without a graphics card, you paste the code in "Use the engine of another PC
-  of mine" (the first thing the first start offers): no model and no engine to download, and the way back to the engine of that
-  PC is one button.
+  Tailscale: off by default, with a random key in a code you copy ("Lend the engine to my PCs", in the settings under
+  Connections). On the other PC, even a laptop without a graphics card, you paste the code in "Use the engine of
+  another PC of mine" (on the Home of the first start, or under Connections): no model and no engine to download, and
+  the way back to the engine of that PC is one button.
 - **For other apps.** A documented HTTP contract and a TypeScript client let another app start conversations, follow
   their events, answer permissions and borrow the graphics cards from the model when they need them:
   [`docs/INTEGRATION.md`](docs/INTEGRATION.md).
@@ -84,8 +93,8 @@ and on two engines of our own derived from it. The app is in English and Italian
 
 | | |
 |---|---|
-| ![The agent writes a page and checks it in the built-in browser](docs/images/browser.png) | ![What the model reads: the token cost of every tool, switchable per folder](docs/images/prompt.png) |
-| The agent writes a page and checks it in the built-in browser. | What the model reads: the token cost of every tool, on or off per folder. |
+| ![The agent writes a page and checks it in the built-in browser](docs/images/browser.png) | ![What the model reads: the token cost of every tool, switchable per project](docs/images/prompt.png) |
+| The agent writes a page and checks it in the built-in browser. | What the model reads: the token cost of every tool, on or off per project. |
 | ![Mango Code fixing a bug with Qwen3.6 running locally](docs/images/chat.png) | ![Team mode: a cloud manager and cloud agents through OpenRouter](docs/images/team.png) |
 | Qwen3.6-35B-A3B, on the PC's own graphics cards, finds a bug, fixes it and runs the tests. | Team mode: a cloud manager and up to four cloud agents, through OpenRouter. |
 
@@ -97,7 +106,7 @@ the app starts it, real text cut to the exact number of tokens, temperature 0, n
 
 | Model | Context | Prefill 1k / 32k / 64k | Decode 1k / 32k / 64k |
 |---|---|---|---|
-| Qwen3.6-35B-A3B (MoE) | 128k | 518 / 637 / 474 | 61.6 / 49.5 / 39.5 |
+| Qwen3.6-35B-A3B (MoE) | 128k | 551 / 636 / 472 | 62.8 / 46.6 / 42.3 |
 | Qwen3.8-27B (dense) | 92k | 267 / 258 / 204 | 25.4 / 16.8 / 13.1 |
 | Ternary Bonsai 2 27B | 256k | 250 / 320 / 254 | 25.3 / 16.6 / 12.9 |
 | Qwen3.8-27B-TOQ-v1 | 120k | 567 / 649 / 533 | 27.5 / 26.5 / 23.2 |
@@ -116,7 +125,7 @@ measured noise and writes a profile for your hardware, which the app uses from t
 
 The skill brings the knowledge base behind our own profiles: what we measured on NVIDIA cards from three generations,
 the settings that paid off, the ones that did not and why. The installed app includes the skill and its measuring tool
-(`mango-tune`): the models page has a link to the skill's folder.
+(`mango-tune`): the settings, under Computer, have a link to the skill's folder ("How it is tuned").
 
 ## Install
 
@@ -127,8 +136,11 @@ the settings that paid off, the ones that did not and why. The installed app inc
 3. Open Mango Code. The installer is small: the engine and the models are downloaded at first run, only the ones that
    suit your PC.
 
+Closing the window with X keeps the app in the tray (it says so the first time); "Quit" in the tray icon's menu closes
+it, with the programs the agent left running.
+
 Once per start the app looks for a newer release and offers to install it; updates carry their own signature, which
-the app checks before installing.
+the app checks before installing. The automatic update can be turned off in the settings, under Help.
 
 ## Privacy
 
@@ -145,7 +157,7 @@ Access from your phone and sharing the engine with your other PCs are off by def
 
 ## Build from source
 
-Requirements: Windows, git, Bun 1.4.4 or later, Rust and Node.js.
+Requirements: Windows, git, Bun 1.4.4 or later, Rust and Node.js 24 or later (an older npm does not accept the lock files).
 
 ```powershell
 npm ci --prefix launcher; npm ci --prefix launcher/opencode-home   # the node packages of the resources
@@ -164,7 +176,7 @@ How to contribute and run the tests: [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ```
 mango-code/
-├── app/          the desktop app (Rust, Tauri): engine manager, first run, settings, voice, phone access
+├── app/          the desktop app (Rust, Tauri): engine manager, models and downloads, settings, voice, phone access
 ├── launcher/     what the app installs as resources: model catalog, profiles, agent plugins
 │                 and instructions, MCP servers, skills
 ├── packages/     the agent: opencode with Mango Code's changes

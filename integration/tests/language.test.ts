@@ -66,6 +66,17 @@ test("the agent's error texts follow the language", async () => {
   expect((await english.json()).error).toContain("must be");
 });
 
+test("a change of language makes the interface read the app's catalog and computer again", async () => {
+  const state = async () => (await fetch(`${env.engine}/control/state`)).json();
+  expect((await put({ language: "it" })).status).toBe(200);
+  const before = (await state()).catalog_revision;
+  expect((await state()).catalog_revision).toBe(before);
+  expect((await put({ language: "en" })).status).toBe(200);
+  // the sentences of the catalog and of the computer are in the new language: whoever shows them reads them again
+  expect((await state()).catalog_revision).toBe(before + 1);
+  expect((await state()).catalog_revision).toBe(before + 1);
+});
+
 test("null removes the choice (follow the system) and keeps the other keys", async () => {
   const response = await put({ language: null });
   expect(response.status).toBe(200);

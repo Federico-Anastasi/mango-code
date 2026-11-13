@@ -2,7 +2,6 @@ import { createEffect, createMemo, createSignal, Match, on, onCleanup, Show, Swi
 import { createStore } from "solid-js/store"
 import { Dynamic } from "solid-js/web"
 import { makeEventListener } from "@solid-primitives/event-listener"
-import type { FileSearchHandle } from "@opencode-ai/session-ui/file"
 import { useFileComponent } from "@opencode-ai/ui/context/file"
 import { cloneSelectedLineRange, previewSelectedLines } from "@opencode-ai/session-ui/pierre/selection-bridge"
 import { createLineCommentController } from "@opencode-ai/session-ui/line-comment-annotations"
@@ -236,14 +235,6 @@ function SessionFileViewV1(props: { tab: string }) {
     normalizeTab: (tab) => (tab.startsWith("file://") ? file.tab(tab) : tab),
   }).activeFileTab
 
-  let find: FileSearchHandle | null = null
-
-  const search = {
-    register: (handle: FileSearchHandle | null) => {
-      find = handle
-    },
-  }
-
   const path = createMemo(() => file.pathFromTab(props.tab))
   const state = createMemo(() => {
     const p = path()
@@ -390,22 +381,6 @@ function SessionFileViewV1(props: { tab: string }) {
     ),
   })
 
-  createEffect(() => {
-    if (typeof window === "undefined") return
-
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (activeFileTab() !== props.tab) return
-      if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey) return
-      if (event.key.toLowerCase() !== "f") return
-
-      event.preventDefault()
-      event.stopPropagation()
-      find?.focus()
-    }
-
-    makeEventListener(window, "keydown", onKeyDown, { capture: true })
-  })
-
   createEffect(
     on(
       path,
@@ -472,7 +447,6 @@ function SessionFileViewV1(props: { tab: string }) {
         onLineSelectionEnd={(range: SelectedLineRange | null) => {
           commentsUi.onLineSelectionEnd(range)
         }}
-        search={search}
         class="select-text"
         media={{
           mode: "auto",
@@ -520,14 +494,6 @@ function SessionFileViewV2(props: { tab: string }) {
     pathFromTab: file.pathFromTab,
     normalizeTab: (tab) => (tab.startsWith("file://") ? file.tab(tab) : tab),
   }).activeFileTab
-
-  let find: FileSearchHandle | null = null
-
-  const search = {
-    register: (handle: FileSearchHandle | null) => {
-      find = handle
-    },
-  }
 
   const path = createMemo(() => file.pathFromTab(props.tab))
   const state = createMemo(() => {
@@ -673,22 +639,6 @@ function SessionFileViewV2(props: { tab: string }) {
     ),
   })
 
-  createEffect(() => {
-    if (typeof window === "undefined") return
-
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (activeFileTab() !== props.tab) return
-      if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey) return
-      if (event.key.toLowerCase() !== "f") return
-
-      event.preventDefault()
-      event.stopPropagation()
-      find?.focus()
-    }
-
-    makeEventListener(window, "keydown", onKeyDown, { capture: true })
-  })
-
   createEffect(
     on(
       path,
@@ -763,7 +713,6 @@ function SessionFileViewV2(props: { tab: string }) {
         onLineNumberSelectionEnd={(range: SelectedLineRange | null) => {
           commentsUi.onLineNumberSelectionEnd(range)
         }}
-        search={search}
         class="select-text"
         media={{
           mode: "auto",

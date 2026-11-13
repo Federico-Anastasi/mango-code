@@ -96,6 +96,47 @@ const toPlatformError = (
 
 type ExitSignal = Deferred.Deferred<readonly [code: number | null, signal: NodeJS.Signals | null]>
 
+// mango-code: on Windows a program a process leaves running (`server &` in Git Bash, `start /b` in cmd) inherits its
+// stdout and stderr, so they stay open after the process exits and "close" comes only when that program ends. For a
+// command marked with `leavesRunning`, the process counts as ended once, after its own exit, its output has been quiet
+// this long and all that arrived has reached the reader (what still arrives is its own), and at most this long after
+// it; what that program writes later is read and dropped: a pipe nobody reads would block it once full, a pipe closed
+// under it makes its writes fail. Other callers (git, ripgrep, MCP servers) keep closing their pipes when they stop
+// reading.
+const HELD_OUTPUT_GRACE_MS = 1000
+const HELD_OUTPUT_MAX_MS = 10_000
+
+/**
+ * What became of a command marked with `leavesRunning`: `exited` the time its process exited, `held` when its end
+ * came while a program it left running still held its output (whose later writes are not read).
+ */
+type Held = { exited?: number; held: boolean }
+
+// The pieces of output taken from the pipes and those handed to the reader, and when the last one was taken.
+type Watch = Held & { taken: number; given: number; last: number }
+
+const holding = new WeakMap<ChildProcess.Command, Watch>()
+
+/**
+ * Marks a command that may leave programs running in the background (the agent's shell tool): on Windows it ends
+ * without waiting for them, and its output stays drained for them. The command's output is meant to be read whole
+ * (stdout, stderr or all). The record fills in as the command runs.
+ */
+export function leavesRunning(command: ChildProcess.StandardCommand): Readonly<Held> {
+  const watch: Watch = { held: false, taken: 0, given: 0, last: 0 }
+  holding.set(command, watch)
+  return watch
+}
+
+const exited = (proc: NodeChildProcess.ChildProcess) => proc.exitCode !== null || proc.signalCode !== null
+
+// With no reader left, a flowing stream drops what arrives until the last holder of the pipe ends.
+function drain(proc: NodeChildProcess.ChildProcess) {
+  ;[proc.stdout, proc.stderr].forEach((stream) => {
+    if (stream && !stream.destroyed) stream.resume()
+  })
+}
+
 export const make = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem
   const path = yield* Path.Path
@@ -244,43 +285,100 @@ export const make = Effect.gen(function* () {
     proc: NodeChildProcess.ChildProcess,
     out: ChildProcess.StdoutConfig,
     err: ChildProcess.StderrConfig,
+    held: Watch | undefined,
   ) => {
+    // The pipes are not closed under a program that may still hold them: the release drains them instead. What is taken
+    // from the pipes and what reaches the reader tell the end whether output is still on its way.
+    const read = (stream: Stream.Stream<Uint8Array, PlatformError.PlatformError>) =>
+      held
+        ? Stream.tap(stream, () =>
+            Effect.sync(() => {
+              held.taken++
+              held.last = Date.now()
+            }),
+          )
+        : stream
+    const give = <A, E>(stream: Stream.Stream<A, E>) =>
+      held ? Stream.tap(stream, () => Effect.sync(() => held.given++)) : stream
     let stdout = proc.stdout
-      ? NodeStream.fromReadable({
-          evaluate: () => proc.stdout!,
-          onError: (cause) => toPlatformError("fromReadable(stdout)", toError(cause), command),
-        })
+      ? read(
+          NodeStream.fromReadable({
+            evaluate: () => proc.stdout!,
+            onError: (cause) => toPlatformError("fromReadable(stdout)", toError(cause), command),
+            closeOnDone: !held,
+          }),
+        )
       : Stream.empty
     let stderr = proc.stderr
-      ? NodeStream.fromReadable({
-          evaluate: () => proc.stderr!,
-          onError: (cause) => toPlatformError("fromReadable(stderr)", toError(cause), command),
-        })
+      ? read(
+          NodeStream.fromReadable({
+            evaluate: () => proc.stderr!,
+            onError: (cause) => toPlatformError("fromReadable(stderr)", toError(cause), command),
+            closeOnDone: !held,
+          }),
+        )
       : Stream.empty
 
     if (Sink.isSink(out.stream)) stdout = Stream.transduce(stdout, out.stream)
     if (Sink.isSink(err.stream)) stderr = Stream.transduce(stderr, err.stream)
 
-    return { stdout, stderr, all: Stream.merge(stdout, stderr) }
+    return { stdout: give(stdout), stderr: give(stderr), all: give(Stream.merge(stdout, stderr)) }
   }
 
-  const spawn = (command: ChildProcess.StandardCommand, opts: NodeChildProcess.SpawnOptions) =>
+  const spawn = (command: ChildProcess.StandardCommand, opts: NodeChildProcess.SpawnOptions, held: Watch | undefined) =>
     Effect.callback<readonly [NodeChildProcess.ChildProcess, ExitSignal], PlatformError.PlatformError>((resume) => {
       const signal = Deferred.makeUnsafe<readonly [code: number | null, signal: NodeJS.Signals | null]>()
-      const proc = launch(command.command, command.args, opts)
+      // A program from the Microsoft Store (PowerShell 7 is one) is an app execution alias that cannot be read:
+      // cross-spawn does not see it is an executable and runs it through cmd, which drops an argument's text after its
+      // first line break. A full path to an executable needs nothing cross-spawn adds, so it is started directly.
+      // Neither does a command run by a shell, and there cross-spawn turns an exit code of 1 into a "missing program"
+      // error in place of "exit": a shell stopped by taskkill exits with 1, and its end would go unseen.
+      const direct =
+        process.platform === "win32" && (!!opts.shell || /^[A-Za-z]:[\\/].*\.(exe|com)$/i.test(command.command))
+      const proc = direct
+        ? NodeChildProcess.spawn(command.command, command.args, opts)
+        : launch(command.command, command.args, opts)
       let end = false
       let exit: readonly [code: number | null, signal: NodeJS.Signals | null] | undefined
-      proc.on("error", (err) => {
-        resume(Effect.fail(toPlatformError("spawn", err, command)))
-      })
-      proc.on("exit", (...args) => {
-        exit = args
-      })
-      proc.on("close", (...args) => {
+      const finish = (args: readonly [code: number | null, signal: NodeJS.Signals | null]) => {
         if (end) return
         end = true
         Deferred.doneUnsafe(signal, Exit.succeed(exit ?? args))
+      }
+      proc.on("error", (err) => {
+        resume(Effect.fail(toPlatformError("spawn", err, command)))
       })
+      // The end waits while output arrives or has not reached the reader, up to the limit; then a program holds the
+      // pipes. A loop that was busy runs its timers before reading what came meanwhile: one more look after its reads.
+      const settle = (
+        watch: Watch,
+        at: number,
+        args: readonly [code: number | null, signal: NodeJS.Signals | null],
+        looked = false,
+      ) => {
+        if (end) return
+        const now = Date.now()
+        const quiet = now - Math.max(at, watch.last)
+        const pending =
+          watch.taken > watch.given || [proc.stdout, proc.stderr].some((stream) => !!stream && stream.readableLength > 0)
+        if ((pending || quiet < HELD_OUTPUT_GRACE_MS) && now - at < HELD_OUTPUT_MAX_MS) {
+          setTimeout(() => settle(watch, at, args), pending ? 100 : HELD_OUTPUT_GRACE_MS - quiet).unref()
+          return
+        }
+        if (!looked && now - at < HELD_OUTPUT_MAX_MS) {
+          setImmediate(() => settle(watch, at, args, true)).unref()
+          return
+        }
+        watch.held = true
+        finish(args)
+      }
+      proc.on("exit", (...args) => {
+        exit = args
+        if (!held) return
+        held.exited = Date.now()
+        settle(held, held.exited, args)
+      })
+      proc.on("close", (...args) => finish(args))
       proc.on("spawn", () => {
         resume(Effect.succeed([proc, signal]))
       })
@@ -295,9 +393,12 @@ export const make = Effect.gen(function* () {
     signal: NodeJS.Signals,
   ) => {
     if (globalThis.process.platform === "win32") {
+      // An exited process's number may already belong to another program: taskkill would stop that one and its tree.
+      if (exited(proc)) return Effect.void
       return Effect.callback<void, PlatformError.PlatformError>((resume) => {
         NodeChildProcess.exec(`taskkill /pid ${proc.pid} /T /F`, { windowsHide: true }, (err) => {
-          if (err) return resume(Effect.fail(toPlatformError("kill", toError(err), command)))
+          // A process that ended while taskkill ran has been stopped all the same.
+          if (err && !exited(proc)) return resume(Effect.fail(toPlatformError("kill", toError(err), command)))
           resume(Effect.void)
         })
       })
@@ -369,21 +470,27 @@ export const make = Effect.gen(function* () {
           const serr = stdio(command.options, "stderr")
           const extra = fds(command.options)
           const dir = yield* cwd(command.options)
+          const held = process.platform === "win32" ? holding.get(command) : undefined
 
           const [proc, signal] = yield* Effect.acquireRelease(
-            spawn(command, {
-              cwd: dir,
-              env: env(command.options),
-              stdio: stdios(sin, sout, serr, extra),
-              detached: command.options.detached ?? process.platform !== "win32",
-              shell: command.options.shell,
-              windowsHide: process.platform === "win32",
-            }),
+            spawn(
+              command,
+              {
+                cwd: dir,
+                env: env(command.options),
+                stdio: stdios(sin, sout, serr, extra),
+                detached: command.options.detached ?? process.platform !== "win32",
+                shell: command.options.shell,
+                windowsHide: process.platform === "win32",
+              },
+              held,
+            ),
             Effect.fnUntraced(function* ([proc, signal]) {
               const done = yield* Deferred.isDone(signal)
               const kill = timeout(proc, command, command.options)
               if (done) {
                 const [code] = yield* Deferred.await(signal)
+                if (held) drain(proc)
                 if (process.platform === "win32") return yield* Effect.void
                 if (code !== 0 && Predicate.isNotNull(code)) return yield* Effect.ignore(kill(killGroup))
                 return yield* Effect.void
@@ -398,12 +505,13 @@ export const make = Effect.gen(function* () {
                     orElse: () => send("SIGKILL").pipe(Effect.andThen(Deferred.await(signal)), Effect.asVoid),
                   })
                 : attempt
-              return yield* Effect.ignore(escalated)
+              yield* Effect.ignore(escalated)
+              if (held) drain(proc)
             }),
           )
 
           const fd = yield* setupFds(command, proc, extra)
-          const out = setupOutput(command, proc, sout, serr)
+          const out = setupOutput(command, proc, sout, serr, held)
           let ref = true
           return makeHandle({
             pid: ProcessId(proc.pid!),

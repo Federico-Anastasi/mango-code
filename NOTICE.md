@@ -26,6 +26,7 @@ These parts keep their original licenses. The AGPL applies to the changes made f
 | [llama.cpp, PrismML fork](https://github.com/PrismML-Eng/llama.cpp) | engine `prism`, from our fork [mango-prism](https://github.com/Federico-Anastasi/mango-prism) | MIT, see [LICENSES/llama.cpp-MIT.txt](LICENSES/llama.cpp-MIT.txt) |
 | [ik_llama.cpp](https://github.com/ikawrakow/ik_llama.cpp) | engine `toq`, from our fork [mango-toq](https://github.com/Federico-Anastasi/mango-toq) | MIT, see [LICENSES/ik_llama.cpp-MIT.txt](LICENSES/ik_llama.cpp-MIT.txt) |
 | [whisper.cpp](https://github.com/ggml-org/whisper.cpp), voice dictation, built into the app through `whisper-rs` | `app/crates/voice/` | MIT, see [LICENSES/whisper.cpp-MIT.txt](LICENSES/whisper.cpp-MIT.txt) |
+| Paths of the icons `settings-gear` and `globe`, from the `settings` and `globe` icons of [Lucide](https://lucide.dev) | `packages/ui/src/v2/components/icon.tsx` | ISC, see [LICENSES/lucide-ISC.txt](LICENSES/lucide-ISC.txt) |
 | Skill `frontend-design` (shortened) | `launcher/mango-plugin/skills/` | Apache-2.0, see the `LICENSE.txt` in each folder |
 | Skills `debugging`, `test-first`, `verify-before-done`, shortened and adapted from [superpowers](https://github.com/obra/superpowers) | `launcher/mango-plugin/skills/` | MIT, see the `LICENSE.txt` in each folder |
 

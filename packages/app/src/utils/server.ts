@@ -7,6 +7,12 @@ export function authTokenFromCredentials(input: { username?: string; password: s
   return btoa(`${input.username ?? "opencode"}:${input.password}`)
 }
 
+/** The headers of a request to a server with its password, if it has one. */
+export function authHeaders(http: { username?: string; password?: string }): Record<string, string> {
+  if (!http.password) return {}
+  return { authorization: `Basic ${authTokenFromCredentials({ username: http.username, password: http.password })}` }
+}
+
 export function authFromToken(token: string | null) {
   const decoded = decode64(token ?? undefined)
   if (!decoded) return

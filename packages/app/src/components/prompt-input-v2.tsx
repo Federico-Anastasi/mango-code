@@ -3,7 +3,6 @@ import { useDialog } from "@opencode-ai/ui/context/dialog"
 import { ProviderIcon } from "@opencode-ai/ui/provider-icon"
 import { ButtonV2 } from "@opencode-ai/ui/v2/button-v2"
 import { Icon } from "@opencode-ai/ui/v2/icon"
-import { KeybindV2 } from "@opencode-ai/ui/v2/keybind-v2"
 import { TooltipV2 } from "@opencode-ai/ui/v2/tooltip-v2"
 import type { ReferenceInfo } from "@opencode-ai/sdk/v2/client"
 import { createEffect, createMemo, on, Show } from "solid-js"
@@ -29,6 +28,11 @@ import { createSessionTabs } from "@/pages/session/helpers"
 import { liveDictation } from "@/components/prompt-input/dictation"
 import { PromptVoiceButton } from "@/components/prompt-input/voice"
 import { showToast } from "@/utils/toast"
+import { MANGO_PROVIDER } from "@/utils/model-info"
+import { bringBackPending, failureText, useMango } from "@/context/mango"
+import { dismissReady, MangoStatusLine } from "@/components/mango-composer"
+import { composerParts, ModelLabel, modelTag } from "@/components/mango-model-bar"
+import { engineModel, messageWaits, noModel } from "@/utils/mango-state"
 import { PromptInputV2, type PromptInputV2Suggestion } from "@opencode-ai/session-ui/v2/prompt-input"
 import {
   createPromptInputV2Controller,
@@ -46,12 +50,23 @@ export type PromptInputV2ControllerProps = Omit<PromptInputProps, "class" | "sub
 export type PromptInputV2ComposerController = PromptInputV2Interaction & {
   readonly model: PromptInputProps["controls"]["model"]
   readonly agents: PromptInputProps["controls"]["agents"]
+  /** mango-code: the conversation whose messages wait for the model and whose engine line is shown. */
+  readonly pending: { sessionID: () => string | undefined }
 }
 
 export function PromptInputV2Composer(props: PromptInputV2ComposerProps) {
   const dialog = useDialog()
-  const command = useCommand()
   const language = useLanguage()
+  const mango = useMango()
+  // mango-code: a model of this PC is named from the app's state, as in the top bar (the engine's model, its load, the
+  // first model's download); a model of another provider or the other PC's engine by the conversation's choice.
+  const modelLabel = () => {
+    const current = props.controller.model.selection.current()
+    const state = mango.state()
+    if (state && state.model.phase !== "remote" && (!current || current.provider?.id === MANGO_PROVIDER))
+      return composerParts(state, language.t)
+    return { name: current?.name ?? language.t("dialog.model.select.title") }
+  }
   const dictation = liveDictation(props.controller.parts, (next) => {
     props.controller.onInput(next.value, next.parts, next.cursor)
     props.controller.restoreFocus()
@@ -59,13 +74,12 @@ export function PromptInputV2Composer(props: PromptInputV2ComposerProps) {
 
   return (
     <div class="flex flex-col gap-3">
+      <MangoStatusLine sessionID={props.controller.pending.sessionID()} />
       <PromptInputV2
         controller={props.controller}
         borderUnderlay={props.borderUnderlay}
         class={props.class}
         variantControlVisible={!props.controller.model.loading}
-        attachKeybind={command.keybindParts("file.attach")}
-        attachShortcut={command.keybind("file.attach")}
         trailingControl={
           <PromptVoiceButton onText={dictation.final} onPartial={dictation.partial} onClear={dictation.clear} />
         }
@@ -76,10 +90,10 @@ export function PromptInputV2Composer(props: PromptInputV2ComposerProps) {
               loading={props.controller.model.loading}
               paid={props.controller.model.paid}
               title={language.t("command.model.choose")}
-              keybind={command.keybindParts("model.choose")}
               model={props.controller.model.selection}
               providerID={props.controller.model.selection.current()?.provider?.id}
-              modelName={props.controller.model.selection.current()?.name ?? language.t("dialog.model.select.title")}
+              modelName={modelLabel().name}
+              modelStatus={modelLabel().status}
               onClose={props.controller.restoreFocus}
               onUnpaidClick={() =>
                 dialog.show(() => <DialogSelectModelUnpaidV2 model={props.controller.model.selection} />)
@@ -103,6 +117,7 @@ export function usePromptInputV2Controller(props: PromptInputV2ControllerProps):
   const language = useLanguage()
   const platform = usePlatform()
   const prompt = props.state ?? usePrompt()
+  const mango = useMango()
   let editor: HTMLDivElement | undefined
 
   const interaction = createPromptInputV2State()
@@ -150,10 +165,23 @@ export function usePromptInputV2Controller(props: PromptInputV2ControllerProps):
       t: (key, params) => language.t(key as Parameters<typeof language.t>[0], params as never),
     }),
   )
-  const designPlaceholder = () =>
-    promptDesignPlaceholder(mode(), placeholder(), (key, params) =>
+  // mango-code: the local model is not ready: what is sent waits for it.
+  const waits = () =>
+    messageWaits(mango.state()) && props.controls.model.selection.current()?.provider?.id === MANGO_PROVIDER
+  // mango-code: no model on the computer and none coming: a message would leave with a model that is not on the disk.
+  // The line above the box says it and leads to Models; a shell command needs no model.
+  const blocked = () =>
+    mode() === "normal" &&
+    noModel(mango.state(), mango.catalog()) &&
+    props.controls.model.selection.current()?.provider?.id === MANGO_PROVIDER
+  const designPlaceholder = () => {
+    const id = props.controls.session.id
+    if (mode() === "normal" && commentCount() === 0 && waits() && !(id && mango.pending.waiting(id).length > 0))
+      return language.t("mango.placeholder.waiting")
+    return promptDesignPlaceholder(mode(), placeholder(), (key, params) =>
       language.t(key as Parameters<typeof language.t>[0], params as never),
     )
+  }
 
   const historyComments = () => {
     const byID = new Map(comments.all().map((item) => [`${item.file}\n${item.id}`, item] as const))
@@ -223,8 +251,13 @@ export function usePromptInputV2Controller(props: PromptInputV2ControllerProps):
     onNewSessionWorktreeReset: props.onNewSessionWorktreeReset,
     shouldQueue: props.shouldQueue,
     onQueue: props.onQueue,
+    shouldWait: waits,
+    onWait: (draft) => mango.pending.add(draft),
     onAbort: props.onAbort,
-    onSubmit: props.onSubmit,
+    onSubmit: () => {
+      dismissReady(mango)
+      props.onSubmit?.()
+    },
     model: props.controls.model.selection,
   })
 
@@ -305,9 +338,7 @@ export function usePromptInputV2Controller(props: PromptInputV2ControllerProps):
       type: "custom" as const,
     })),
     ...command.options
-      .filter(
-        (item) => !item.disabled && !item.id.startsWith("suggested.") && item.slash,
-      )
+      .filter((item) => !item.disabled && item.slash)
       .map((item) => ({
         id: item.id,
         trigger: item.slash!,
@@ -324,7 +355,6 @@ export function usePromptInputV2Controller(props: PromptInputV2ControllerProps):
       trigger: item.trigger,
       title: item.title,
       description: item.description,
-      keybind: command.keybindParts(item.id),
     })),
   )
   const variants = createMemo(() => ["default", ...props.controls.model.selection.variant.list()])
@@ -407,7 +437,6 @@ export function usePromptInputV2Controller(props: PromptInputV2ControllerProps):
               options: () => props.controls.agents.options.map((name) => ({ id: name, label: name })),
               current: () => props.controls.agents.current,
               onSelect: (value: string) => props.controls.agents.select(value),
-              keybind: () => command.keybindParts("agent.cycle"),
             }
           : undefined
       },
@@ -415,11 +444,11 @@ export function usePromptInputV2Controller(props: PromptInputV2ControllerProps):
         options: () => variants().map((value) => ({ id: value, label: value })),
         current: () => props.controls.model.selection.variant.current() ?? "default",
         onSelect: (value) => props.controls.model.selection.variant.set(value === "default" ? undefined : value),
-        keybind: () => command.keybindParts("model.variant.cycle"),
       },
       submit: {
         stopping,
         working,
+        blocked,
         onSubmit: () => void submission.handleSubmit(new Event("submit")),
         onStop: () => void submission.abort(),
       },
@@ -428,32 +457,38 @@ export function usePromptInputV2Controller(props: PromptInputV2ControllerProps):
   Object.defineProperty(controller, "model", { get: () => props.controls.model })
   Object.defineProperty(controller, "agents", { get: () => props.controls.agents })
 
-  command.register("prompt-input", () => [
-    {
-      id: "file.attach",
-      title: language.t("prompt.action.attachFile"),
-      category: language.t("command.category.file"),
-      keybind: "mod+u",
-      disabled: controller.state.mode !== "normal",
-      onSelect: () => controller.attach(),
-    },
-    {
-      id: "prompt.mode.shell",
-      title: language.t("command.prompt.mode.shell"),
-      category: language.t("command.category.session"),
-      keybind: "mod+shift+x",
-      disabled: controller.state.mode === "shell",
-      onSelect: () => controller.dispatch({ type: "mode.shell" }),
-    },
-    {
-      id: "prompt.mode.normal",
-      title: language.t("command.prompt.mode.normal"),
-      category: language.t("command.category.session"),
-      keybind: "mod+shift+e",
-      disabled: controller.state.mode === "normal",
-      onSelect: () => controller.dispatch({ type: "mode.normal" }),
-    },
-  ])
+  const sessionID = () => props.controls.session.id
+  Object.defineProperty(controller, "pending", { get: () => ({ sessionID }) })
+  bringBackPending({ sessionID, pending: mango.pending, prompt, blank, focus: () => controller.restoreFocus() })
+  // One local model runs at a time: the conversation's model follows the one the engine is on or going to, so a message
+  // does not make the engine change model behind the user's back. While a model chosen in a menu is being asked it waits;
+  // if the app refuses it, the conversation goes back to the engine's model.
+  createEffect(
+    on(
+      () => [engineModel(mango.state()), props.controls.model.selection.current()?.id, mango.asked()] as const,
+      ([key, , asked]) => {
+        const selection = props.controls.model.selection
+        const current = selection.current()
+        if (!key || asked || current?.provider?.id !== MANGO_PROVIDER || current.id === key) return
+        selection.set({ modelID: key, providerID: MANGO_PROVIDER })
+      },
+    ),
+  )
+  // A model of another provider chosen for the conversation takes its waiting messages along: they leave with it now.
+  createEffect(
+    on(
+      () => {
+        const current = props.controls.model.selection.current()
+        return current?.provider?.id && current.provider.id !== MANGO_PROVIDER ? `${current.provider.id}/${current.id}` : undefined
+      },
+      (chosen) => {
+        const id = sessionID()
+        const current = props.controls.model.selection.current()
+        if (!chosen || !id || !current?.provider || mango.pending.waiting(id).length === 0) return
+        mango.pending.retarget(id, { providerID: current.provider.id, modelID: current.id })
+      },
+    ),
+  )
 
   createEffect(
     on(
@@ -486,21 +521,29 @@ export function usePromptInputV2Controller(props: PromptInputV2ControllerProps):
   return controller as PromptInputV2ComposerController
 }
 
-/** The app's provider of local models (agent-cfg `PROVIDER`): one model for each model on this PC. */
-const MANGO_PROVIDER = "mango"
-
 function PromptInputV2ModelControl(props: {
   loading: boolean
   paid: boolean
   title: string
-  keybind: string[]
   model: PromptInputV2ComposerController["model"]["selection"]
   providerID?: string
   modelName: string
+  /** mango-code: what the model of this PC is doing, kept in view when the name is cut. */
+  modelStatus?: string
   onClose: () => void
   onUnpaidClick: () => void
 }) {
   const language = useLanguage()
+  const mango = useMango()
+  // A model of this PC is used now; with the other PC's engine the choice is only the conversation's. If the app refuses
+  // it, the conversation goes back to the model it had.
+  const pick = (item: { id: string; provider: { id: string } }, before?: { modelID: string; providerID: string }) => {
+    if (item.provider.id !== MANGO_PROVIDER || !mango.available() || mango.state()?.model.phase === "remote") return
+    void mango.use(item.id).catch((error: unknown) => {
+      if (before) props.model.set(before)
+      showToast({ variant: "error", title: language.t("mango.use.failed"), description: failureText(error, language.t) })
+    })
+  }
   const shouldAnimate = createMemo<boolean>((previous) => previous ?? props.loading)
   const content = () => (
     <>
@@ -513,22 +556,27 @@ function PromptInputV2ModelControl(props: {
           />
         )}
       </Show>
-      <span class="truncate leading-4">{props.modelName}</span>
+      <ModelLabel class="leading-4" name={props.modelName} status={props.modelStatus} />
       <span class="-ml-0.5 -mr-1 flex shrink-0">
         <Icon name="chevron-down" />
       </span>
     </>
   )
-  // Mango Code app: the menu lists the models on this PC (the engine loads the chosen one at the next message) and
-  // ends with the app page that downloads more of them.
+  // Mango Code app: the menu lists the models on this PC, like the one in the top bar: choosing one uses it now, and
+  // «Manage models…» opens the settings on Models.
   if (inMangoDesktop()) {
     return (
       <Show when={!props.loading}>
         <ModelSelectorPopoverV2
           model={props.model}
           provider={MANGO_PROVIDER}
-          manageLabel={language.t("dialog.model.downloadMore")}
-          onManage={() => void window.__MANGO_DESKTOP__?.openModels()}
+          manageLabel={language.t("mango.menu.manage")}
+          onManage={mango.openModels}
+          onPick={pick}
+          tag={(item) => {
+            const state = mango.state()
+            return state && item.provider.id === MANGO_PROVIDER ? modelTag(item.id, state, language.t) : undefined
+          }}
           trigger={(triggerProps) => (
             <ButtonV2
               {...triggerProps}
@@ -539,7 +587,7 @@ function PromptInputV2ModelControl(props: {
               data-action="prompt-model"
               data-control-type="popover"
             >
-              <span class="truncate leading-4">{props.modelName}</span>
+              <ModelLabel class="leading-4" name={props.modelName} status={props.modelStatus} />
               <span class="-ml-0.5 -mr-1 flex shrink-0">
                 <Icon name="chevron-down" />
               </span>
@@ -552,16 +600,7 @@ function PromptInputV2ModelControl(props: {
   }
   return (
     <Show when={!props.loading}>
-      <TooltipV2
-        placement="top"
-        gutter={4}
-        value={
-          <>
-            {props.title}
-            <KeybindV2 keys={props.keybind} variant="neutral" />
-          </>
-        }
-      >
+      <TooltipV2 placement="top" gutter={4} value={props.title}>
         <Show
           when={props.paid}
           fallback={
@@ -581,6 +620,7 @@ function PromptInputV2ModelControl(props: {
         >
           <ModelSelectorPopoverV2
             model={props.model}
+            onPick={pick}
             trigger={(triggerProps) => (
               <ButtonV2
                 {...triggerProps}

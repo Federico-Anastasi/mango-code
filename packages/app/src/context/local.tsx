@@ -9,7 +9,7 @@ import { useProviders } from "@/hooks/use-providers"
 import { resolveDefaultModel } from "@/hooks/provider-catalog"
 import { Persist, persisted } from "@/utils/persist"
 import { hasCustomAgent, resolveAgent } from "./local-agent"
-import { cycleModelVariant, getConfiguredAgentVariant, resolveModelVariant } from "./model-variant"
+import { getConfiguredAgentVariant, resolveModelVariant } from "./model-variant"
 import { useSDK } from "./sdk"
 import { useSync } from "./sync"
 import { useServerSDK } from "./server-sdk"
@@ -358,17 +358,6 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
               if (model) {
                 models.variant.set({ providerID: model.provider.id, modelID: model.id }, value ?? undefined)
               }
-            }),
-          )
-        },
-        cycle() {
-          const items = this.list()
-          if (items.length === 0) return
-          this.set(
-            cycleModelVariant({
-              variants: items,
-              selected: this.selected(),
-              configured: this.configured(),
             }),
           )
         },

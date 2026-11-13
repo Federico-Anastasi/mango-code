@@ -64,15 +64,6 @@ type SharedProps<T> = {
   class?: string
   classList?: ComponentProps<"div">["classList"]
   media?: FileMediaOptions
-  search?: FileSearchControl
-}
-
-export type FileSearchHandle = {
-  focus: () => void
-}
-
-export type FileSearchControl = {
-  register: (handle: FileSearchHandle | null) => void
 }
 
 export type TextFileProps<T = {}> = FileOptions<T> &
@@ -117,7 +108,6 @@ const sharedKeys = [
   "annotations",
   "selectedLines",
   "commentedLines",
-  "search",
   "onLineSelected",
   "onLineSelectionEnd",
   "onLineNumberSelectionEnd",
@@ -431,23 +421,6 @@ function useModeViewer(config: ModeConfig, adapter: ModeAdapter) {
   })
 }
 
-function useSearchHandle(opts: {
-  search: () => FileSearchControl | undefined
-  find: ReturnType<typeof createFileFind>
-}) {
-  createEffect(() => {
-    const search = opts.search()
-    if (!search) return
-
-    const handle = {
-      focus: () => opts.find.focus(),
-    } satisfies FileSearchHandle
-
-    search.register(handle)
-    onCleanup(() => search.register(null))
-  })
-}
-
 function createLineCallbacks(opts: {
   viewer: Viewer
   normalize?: (range: SelectedLineRange | null) => SelectedLineRange | null | undefined
@@ -710,7 +683,6 @@ function ViewerShell(props: {
       ref={(el) => (props.viewer.wrapper = el)}
       tabIndex={0}
       onPointerDown={props.viewer.find.onPointerDown}
-      onFocus={props.viewer.find.onFocus}
     >
       <Show when={props.viewer.find.open()}>
         <FileSearchBar
@@ -896,11 +868,6 @@ function TextViewer<T>(props: TextFileProps<T>) {
       },
     })
   }
-
-  useSearchHandle({
-    search: () => local.search,
-    find: viewer.find,
-  })
 
   // -- render instance --
 
@@ -1101,11 +1068,6 @@ function DiffViewer<T>(props: DiffFileProps<T>) {
       },
     })
   }
-
-  useSearchHandle({
-    search: () => local.search,
-    find: viewer.find,
-  })
 
   // -- render instance --
 

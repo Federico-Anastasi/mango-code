@@ -1,5 +1,5 @@
 {
-  "id": "generale/toq",
+  "id": "general/toq",
   "model": "toq",
   "engine": "toq",
   "build": "cuda-12",

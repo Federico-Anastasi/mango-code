@@ -331,6 +331,20 @@ fn foreign_origin_and_non_numeric_address_are_refused() {
     assert!(a.received.try_recv().is_err());
 }
 
+/// From the phone too the model is read and chosen: the routes of the control server reach the agent.
+#[test]
+fn the_model_routes_pass() {
+    let a = agent(OK);
+    let p = fixture(&a);
+    p.t.set_enabled(true).unwrap();
+    let cookie = p.enter();
+    for line in ["GET /mango/state", "GET /mango/models", "GET /mango/computer", "POST /mango/model/use", "POST /mango/model/retry"] {
+        let r = p.send(&format!("{line} HTTP/1.1\r\nHost: {{host}}\r\nCookie: mango_phone={cookie}\r\nContent-Length: 0\r\n\r\n"));
+        assert_eq!(status(&r), "200", "{line}");
+        assert!(a.received.recv_timeout(Duration::from_secs(5)).unwrap().starts_with(&format!("{line} ")), "{line}");
+    }
+}
+
 #[test]
 fn app_routes_methods_and_chunked_bodies_are_refused() {
     let a = agent(OK);
@@ -338,7 +352,7 @@ fn app_routes_methods_and_chunked_bodies_are_refused() {
     p.t.set_enabled(true).unwrap();
     let cookie = p.enter();
     let with = |line: &str, others: &str| p.send(&format!("{line} HTTP/1.1\r\nHost: {{host}}\r\nCookie: mango_phone={cookie}\r\n{others}\r\n"));
-    assert_eq!(status(&with("POST /mango/warmup?directory=C%3A%5Cp", "")), "403");
+    assert_eq!(status(&with("POST /mango/reload", "")), "403");
     assert_eq!(status(&with("PUT /mango/%65xtra-folders", "")), "403");
     assert_eq!(status(&with("TRACE /session", "")), "405");
     assert_eq!(status(&with("CONNECT /session", "")), "405");

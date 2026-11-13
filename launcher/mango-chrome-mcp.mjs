@@ -5,17 +5,20 @@
 // public web, blind to anything behind a login - which is half of the useful web. We need to drive
 // the REAL browser, with the sessions already open.
 //
-// WHAT THIS FILE DOES. It launches nothing new: it decides WHICH Chrome to attach to, in a
-// cascade, and then loads Google's MCP server with the right flags. The levels, best first:
-//
-//   0. "Use my Chrome", if the user chose it in the app settings: their profile, their logins.
-//      It needs remote debugging turned on by hand (chrome://inspect), and Chrome shows a banner
-//      at every connection.
+// WHAT THIS FILE DOES. It launches nothing new: it decides WHICH Chrome to attach to and then loads Google's MCP
+// server with the right flags. Every page the agent opens goes to the same place, the first that is there:
 //
 //   1. THE PREVIEW PANEL of the desktop app: a webview inside the window, next to the chat.
-//      Its own profile, no banner, no Chrome needed. It is the agent's default browser.
+//      Its own profile, no banner, no Chrome needed. It is the agent's browser.
 //
-//   2. Fallback, when neither is there: a browser of its own, started now with an empty profile (no logins).
+//   2. Fallback, when there is no panel: a browser of its own, started now with an empty profile (no logins).
+//
+// The user's own Chrome (their profile, their logins) is the exception, and the agent has to ask for it on purpose:
+// `new_page` with `userChrome: true`, when the user turned on "Use my Chrome" in the app settings and Chrome has remote
+// debugging on (turned on by hand in chrome://inspect; Chrome shows a banner at every connection). The page is
+// always a NEW tab there, and `navigate_page` with an address only works on a tab the agent opened itself in this
+// session: it never sends a tab of the user's to an address (see `route` and `prepare`). When the connection to that Chrome
+// fails, or the user turns "Use my Chrome" off, the server goes back to the agent's browser.
 //
 // WHY A WRAPPER AND NOT FLAGS IN THE CONFIG. The flags are static, the choice is not: it depends on
 // what is running at that moment. And the MCP server with --browserUrl on a dead port doesn't fall
@@ -96,10 +99,9 @@ function realTarget() {
   }
 }
 
-const MINE = () => ({
-  flags: ["--userDataDir", PROFILE, "--viewport", "1280x800"],
-  mode: "mango-code browser, profile EMPTY (logged out)",
-});
+// A browser to attach to is { browserUrl } or { wsEndpoint }; without either, the one of our own (a profile, no logins).
+const flagsOf = (s) =>
+  s.browserUrl ? ["--browserUrl", s.browserUrl] : s.wsEndpoint ? ["--wsEndpoint", s.wsEndpoint] : ["--userDataDir", PROFILE, "--viewport", "1280x800"];
 
 // THE PREVIEW PANEL. In the desktop app the agent's browser is a webview inside the window (the
 // preview panel): the user watches the work live, Chrome doesn't need to be installed and there is
@@ -139,38 +141,53 @@ async function showsMangoCode(port) {
   }
 }
 
-async function decide() {
-  // 0. "Use my Chrome": the user's explicit choice beats the panel. If Chrome's remote debugging
-  //    no longer answers (Chrome restarted without it), fall back to the panel: a browser is
-  //    better than none.
-  if (myChrome()) {
-    const real = realTarget();
-    if (real && (await alive(real.port))) {
-      if (await hasHttpJson(real.port)) {
-        return { flags: ["--browserUrl", "http://127.0.0.1:" + real.port], mode: "user's Chrome via HTTP (port " + real.port + ")" };
-      }
-      if (real.wsPath) {
-        return {
-          flags: ["--wsEndpoint", "ws://127.0.0.1:" + real.port + real.wsPath],
-          mode: "user's Chrome via WebSocket (port " + real.port + ")",
-        };
-      }
-    }
-    process.stderr.write("mango-chrome-mcp | \"Use my Chrome\" is on but remote debugging doesn't answer: using the panel\n");
-  }
+// Where a page without userChrome goes, in the sentences the agent reads.
+const AGENTS_BROWSER = "the app's panel (or the agent's own browser if there is no panel)";
 
-  // 1. the app's preview panel: it is the agent's browser.
+// The user's Chrome, when "Use my Chrome" is on and its remote debugging answers. Otherwise `{ refusal }`: the sentence the
+// agent gets back, which says what to do instead of silently opening the page somewhere else.
+async function usersChrome() {
+  if (!myChrome()) {
+    return {
+      refusal:
+        'The user has not allowed the use of their Chrome ("Use my Chrome" in the settings, "Usa il mio Chrome" in Italian). Open the page without userChrome: it opens in ' +
+        AGENTS_BROWSER +
+        ". If the page needs the user's sign-ins, tell the user to turn that setting on.",
+    };
+  }
+  const real = realTarget();
+  if (real && (await alive(real.port))) {
+    if (await hasHttpJson(real.port)) {
+      return { browserUrl: "http://127.0.0.1:" + real.port, mode: "user's Chrome via HTTP (port " + real.port + ")", users: true };
+    }
+    if (real.wsPath) {
+      return { wsEndpoint: "ws://127.0.0.1:" + real.port + real.wsPath, mode: "user's Chrome via WebSocket (port " + real.port + ")", users: true };
+    }
+  }
+  return {
+    refusal:
+      "The user's Chrome does not answer: it is closed or its remote debugging is off. Tell the user to open Chrome and turn on remote debugging (chrome://inspect, \"Allow remote debugging\"), or open the page without userChrome, in " +
+      AGENTS_BROWSER +
+      ".",
+  };
+}
+
+// The app's preview panel: it is the agent's browser.
+async function thePanel() {
   const panel = panelPort();
-  if (panel && (await alive(panel))) {
-    if (!(await showsMangoCode(panel))) {
-      return { flags: ["--browserUrl", "http://127.0.0.1:" + panel], mode: "app preview panel (port " + panel + ")" };
-    }
+  if (!panel || !(await alive(panel))) return null;
+  if (await showsMangoCode(panel)) {
     process.stderr.write("mango-chrome-mcp | port " + panel + " shows Mango Code's own window, not the panel: not used\n");
+    return null;
   }
+  return { browserUrl: "http://127.0.0.1:" + panel, mode: "app preview panel (port " + panel + ")" };
+}
 
-  // 2. fallback.
-  fs.mkdirSync(PROFILE, { recursive: true });
-  return MINE();
+const OWN_BROWSER = { mode: "mango-code browser, profile EMPTY (logged out)" };
+
+// Where the agent's pages go: the panel, or a browser of its own when there is none.
+async function agentsBrowser() {
+  return (await thePanel()) ?? OWN_BROWSER;
 }
 
 // --- THE TIMEOUT THAT MUST LOSE FIRST --------------------------------------------------------
@@ -190,15 +207,33 @@ try {
     const orig = tp.puppeteer[m].bind(tp.puppeteer);
     tp.puppeteer[m] = (opts = {}) => orig({ protocolTimeout: PROTOCOL_TIMEOUT, ...opts });
   }
+  // A CONNECTION THAT NEVER OPENS. The WebSocket handshake has no time limit of its own: a Chrome that holds it (its
+  // "Allow remote debugging?" left unanswered, a port that accepts and never replies) would keep the call, and every call
+  // queued behind it, waiting forever. It gives up after the same time; a connection that opens later is dropped at once.
+  const connect = tp.puppeteer.connect;
+  tp.puppeteer.connect = (opts) => {
+    const opening = connect(opts);
+    let timer;
+    const late = new Promise((_, fail) => {
+      timer = setTimeout(() => fail(new Error("the connection did not open in " + PROTOCOL_TIMEOUT + " ms")), PROTOCOL_TIMEOUT);
+    });
+    return Promise.race([opening, late])
+      .finally(() => clearTimeout(timer))
+      .catch((e) => {
+        opening.then((b) => b.disconnect()).catch(() => {});
+        throw e;
+      });
+  };
   // THE PANEL IS A SINGLE SURFACE. WebView2 has no tabs: every Target.createTarget the MCP server
   // asks for (the new_page tool) becomes a WINDOW of its own, outside the app window, and the
   // panel stays empty while the user looks at an external browser that has nothing to do with it.
   // When attached to the panel, new_page reuses its page: navigation ends up where the user sees
-  // it. Without a panel the original behaviour applies.
-  if (Number(process.env.MANGO_PANEL_CDP || 0) > 0) {
+  // it. Attached to anything else (the user's Chrome: a page of theirs would be replaced) the original behaviour applies.
+  if (panelPort() > 0) {
     const origConnect = tp.puppeteer.connect;
     tp.puppeteer.connect = async (opts = {}) => {
       const browser = await origConnect(opts);
+      if (opts.browserURL !== "http://127.0.0.1:" + panelPort()) return browser;
       const origNewPage = browser.newPage.bind(browser);
       browser.newPage = async () => {
         const pages = await browser.pages();
@@ -225,8 +260,12 @@ const CUT = ["--no-category-performance", "--no-category-emulation"];
 // reasons in coordinates makes the model click off target.
 const VISION = ["--experimentalVision", "--screenshotFormat", "jpeg", "--screenshotQuality", "80"];
 
-const { flags: picked, mode } = await decide();
-const flags = [...picked, ...CUT, ...VISION];
+let current = await agentsBrowser();
+// A browser of its own can be returned to only if the server started with it: its profile and window size are among the flags.
+const startedOwn = current === OWN_BROWSER;
+const START = current;
+let mode = current.mode;
+const flags = [...flagsOf(current), ...CUT, ...VISION];
 // Never on stdout: the MCP protocol goes there and one extra byte breaks it. And since 2026-08-26
 // not on the stderr pipe either - see the redirection at the top: it ends up in mcp-chrome.err.log.
 process.stderr.write("mango-chrome-mcp | " + mode + "\n");
@@ -357,6 +396,168 @@ trace("browser: " + mode);
     process.stderr.write("mango-chrome-mcp | trace not active: " + e.message + "\n");
     trace("trace NOT active: " + e.message + " - stdout stays on the main thread (freeze risk)");
   }
+}
+
+// --- THE USER'S CHROME ONLY ON REQUEST -----------------------------------------------------------------
+// The server holds a single browser connection. Every `new_page` says where its page goes: the panel (or the browser of its
+// own), or, with `userChrome: true`, a new tab in the user's Chrome. Switching closes the connection (the user's Chrome is
+// only disconnected, never closed) and points the server's arguments at the other browser: the next call connects there.
+// The tool calls run one at a time, and the choice of the browser runs inside the same turn as the call it is for: two
+// `new_page` sent together can never land in the browser chosen for the other one.
+// The server leaves the user's Chrome for the agent's browser when a call cannot connect to it (Chrome closed, its "Allow
+// remote debugging?" denied or left unanswered) and when the user turns "Use my Chrome" off: re-read at every call.
+// In the user's Chrome the agent never takes over a tab of the user's: `navigate_page` with an address works only on the
+// tabs this server opened there (`agentTabs`).
+{
+  const MAIN_URL = pathToFileURL(MAIN).href;
+  const sources = path.join(SELF, "node_modules", "chrome-devtools-mcp", "build", "src");
+  const { ToolHandler } = await import(pathToFileURL(path.join(sources, "ToolHandler.js")).href);
+  const { McpContext } = await import(pathToFileURL(path.join(sources, "McpContext.js")).href);
+  const { closeBrowser } = await import(pathToFileURL(path.join(sources, "browser.js")).href);
+  const { McpServer, Mutex, zod } = await import(pathToFileURL(TP).href);
+
+  const PANEL_GONE = "The app's panel does not answer, so no page can be opened or used there. Tell the user the panel is not available.";
+  const CHROME_LOST =
+    "The connection to the user's Chrome failed: Chrome was closed, or its \"Allow remote debugging?\" request was denied or not answered. The user's tabs cannot be reached any more; pages now open in " +
+    AGENTS_BROWSER +
+    ". To use their Chrome again, ask the user to open it and accept the request, then open the page with new_page and userChrome: true.";
+  const TURNED_OFF =
+    'The user turned off "Use my Chrome": the connection to their Chrome is closed and its tabs cannot be used any more. Pages now open in ' +
+    AGENTS_BROWSER +
+    ": open the page there with new_page, or call list_pages.";
+
+  // `new_page` is the only tool that gets a parameter of ours, added to the schema the model sees.
+  const registerTool = McpServer.prototype.registerTool;
+  McpServer.prototype.registerTool = function (name, config, callback) {
+    if (name !== "new_page") return registerTool.call(this, name, config, callback);
+    const withUserChrome = {
+      ...config,
+      description: config.description + " The page opens in " + AGENTS_BROWSER + ".",
+      inputSchema: config.inputSchema.extend({
+        userChrome: zod
+          .boolean()
+          .optional()
+          .describe(
+            "true opens the page as a new tab in the user's own Chrome, only when it needs their sign-ins (their mail, an account). Leave it out otherwise.",
+          ),
+      }),
+    };
+    return registerTool.call(this, name, withUserChrome, callback);
+  };
+
+  // The tabs this server opened in the user's Chrome. Puppeteer's target id is the same for a tab across reconnections
+  // (the connection is dropped every time the agent goes to the panel and back), the page object is not.
+  const agentTabs = new Set();
+  const tabId = (page) => page.target()._targetId;
+  const newPage = McpContext.prototype.newPage;
+  McpContext.prototype.newPage = async function (...rest) {
+    const page = await newPage.apply(this, rest);
+    if (current.users) agentTabs.add(tabId(page.pptrPage));
+    return page;
+  };
+
+  const serial = new Mutex();
+  // Set when the call could not get a browser: the connection, not the tool, failed.
+  let connectFailed = false;
+
+  const handle = ToolHandler.prototype.handle;
+  ToolHandler.prototype.handle = async function (params) {
+    prepare(this);
+    const guard = await serial.acquire();
+    try {
+      const turnedOff = current.users && !myChrome();
+      if (turnedOff) await switchTo(await agentsPlace(), '"Use my Chrome" turned off');
+      if (turnedOff && this.tool.name !== "new_page") return refuse(TURNED_OFF);
+      if (this.tool.name === "new_page") {
+        // our parameter, not the tool's: the tool rejects what is not in its own schema
+        const wantsUserChrome = params.userChrome === true;
+        delete params.userChrome;
+        const refusal = await route(wantsUserChrome, params.url);
+        if (refusal) return refuse(refusal);
+      }
+      connectFailed = false;
+      const result = await handle.call(this, params);
+      if (!connectFailed) return result;
+      trace("no connection to " + current.mode + ": " + result.content.map((c) => c.text).join(" ").slice(0, 300));
+      if (current.users) {
+        await switchTo(await agentsPlace(), "the user's Chrome could not be reached");
+        return refuse(CHROME_LOST);
+      }
+      // the panel; the browser of its own failing to start keeps the tool's own answer
+      return current.browserUrl ? refuse(PANEL_GONE) : result;
+    } finally {
+      guard[Symbol.dispose]();
+    }
+  };
+
+  // Returns the refusal (a sentence for the agent) when the page cannot go where it was asked.
+  async function route(wantsUserChrome, address) {
+    const wanted = wantsUserChrome ? await usersChrome() : await agentsPlace();
+    if (wanted.refusal) return wanted.refusal;
+    if (wanted.mode !== current.mode) await switchTo(wanted, "for " + address.slice(0, 80));
+  }
+
+  // Where the agent's own pages go: the panel, or the browser of its own if the server started with it. With no panel
+  // answering and no browser of its own, still the panel: the call that tries it says the panel is not available.
+  async function agentsPlace() {
+    const browser = await agentsBrowser();
+    return browser === OWN_BROWSER && !startedOwn ? START : browser;
+  }
+
+  async function switchTo(wanted, why) {
+    const { args } = await import(MAIN_URL);
+    await closeBrowser();
+    args.browserUrl = wanted.browserUrl;
+    args.wsEndpoint = wanted.wsEndpoint;
+    trace("browser: " + wanted.mode + " (was " + current.mode + ") " + why);
+    current = wanted;
+  }
+
+  function refuse(text) {
+    return { content: [{ type: "text", text }], isError: true };
+  }
+
+  // Once per tool: the connection watch on its context, and the guard on `navigate_page`.
+  const prepared = new WeakSet();
+  function prepare(handler) {
+    if (prepared.has(handler)) return;
+    prepared.add(handler);
+    const getContext = handler.getContext;
+    handler.getContext = () =>
+      getContext().catch((e) => {
+        connectFailed = true;
+        throw e;
+      });
+    if (handler.tool.name !== "navigate_page") return;
+    const run = handler.tool.handler;
+    handler.tool.handler = async (request, response, context) => {
+      // with an address and no type the tool navigates to the address
+      const toAddress = request.params.type === "url" || (!request.params.type && request.params.url);
+      if (current.users && toAddress && !agentTabs.has(tabId(request.page.pptrPage))) {
+        throw new Error(
+          "This is one of the user's own tabs: it cannot be taken over. Open the address in a new tab with new_page and userChrome: true, or in " +
+            AGENTS_BROWSER +
+            " with new_page.",
+        );
+      }
+      return run(request, response, context);
+    };
+  }
+}
+
+// --- A PATH WITH NO FOLDER BEFORE IT IS INSIDE THE PROJECT -----------------------------------------
+// The server runs in Mango Code's own folder, so a relative path (`mail\last-run.json`) would point there and be refused
+// as outside the project. A small model writes the path its instructions show and does not know the project's full
+// path: the relative one is taken from the project folder, the first of the folders the agent declares (`roots`; the
+// last is always the temp folder, alone when the client declares none). The check that the path stays inside comes after.
+{
+  const { McpContext } = await import(pathToFileURL(path.join(SELF, "node_modules", "chrome-devtools-mcp", "build", "src", "McpContext.js")).href);
+  const validatePath = McpContext.prototype.validatePath;
+  McpContext.prototype.validatePath = function (filePath) {
+    const roots = this.roots();
+    const relative = typeof filePath === "string" && !path.isAbsolute(filePath) && roots.length > 1;
+    return validatePath.call(this, relative ? path.join(fileURLToPath(roots[0].uri), filePath) : filePath);
+  };
 }
 
 // Arguments after "--" in the config (if ever needed) pass through untouched.

@@ -44,13 +44,12 @@ const HAS_FLAG = new Set([
   "chrome-devtools_upload_file",
 ]);
 
-// A model that cannot see images is not advised to take screenshots. MANGO_IMAGE_MODELS: the ids of
-// the models that can (see mango-discipline.js).
-const IMAGE_MODELS = new Set((process.env.MANGO_IMAGE_MODELS || "").split(",").map((s) => s.trim()).filter(Boolean));
-const noteOff = (modelID) =>
+// A model that cannot see images is not advised to take screenshots. Whether it can is in the request's model, as the
+// configuration says it (see mango-discipline.js): a model added without restarting the agent counts too.
+const noteOff = (images) =>
   "[mango-code: includeSnapshot turned off. The page tree costs ~8k tokens and repeating it at every " +
   "move exhausts the context. " +
-  (IMAGE_MODELS.has(modelID)
+  (images
     ? "If you need the updated uids call chrome-devtools_take_snapshot; " +
       "if you only need to see how it went, chrome-devtools_take_screenshot costs a fifth.]"
     : "To see how it went call chrome-devtools_take_snapshot.]");
@@ -61,11 +60,11 @@ const NOTE_CUT =
 
 export const MangoWebDiet = async () => {
   const downgraded = new Set(); // callIDs on which we turned the flag off
-  const modelOf = new Map(); // sessionID -> modelID
+  const sees = new Map(); // sessionID -> whether the model of its latest request sees images
 
   return {
-    "chat.message": async (input) => {
-      if (input.model?.modelID) modelOf.set(input.sessionID, input.model.modelID);
+    "experimental.chat.system.transform": async (input) => {
+      if (input.sessionID) sees.set(input.sessionID, Boolean(input.model?.capabilities?.input?.image));
     },
 
     "tool.execute.before": async (input, output) => {
@@ -82,7 +81,7 @@ export const MangoWebDiet = async () => {
 
       if (input.callID && downgraded.has(input.callID)) {
         downgraded.delete(input.callID);
-        const note = noteOff(modelOf.get(input.sessionID));
+        const note = noteOff(sees.get(input.sessionID));
         output.output = text ? text + "\n\n" + note : note;
         return;
       }

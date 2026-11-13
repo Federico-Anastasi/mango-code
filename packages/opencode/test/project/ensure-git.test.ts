@@ -43,6 +43,34 @@ describe("Project.fromDirectory with MANGO_PROJECTS_GIT", () => {
     }),
   )
 
+  // The project's identity is its first commit: two first commits made in the same second, with the same author,
+  // message and empty tree, would be the same commit, and the two folders one project. The clock is held still here.
+  it.live("two folders opened in the same second are two projects", () =>
+    Effect.gen(function* () {
+      yield* withProjectsGit
+      yield* Effect.acquireRelease(
+        Effect.sync(() => {
+          const before = [process.env.GIT_AUTHOR_DATE, process.env.GIT_COMMITTER_DATE]
+          process.env.GIT_AUTHOR_DATE = process.env.GIT_COMMITTER_DATE = "2026-11-12T06:00:00+01:00"
+          return before
+        }),
+        (before) =>
+          Effect.sync(() => {
+            if (before[0] === undefined) delete process.env.GIT_AUTHOR_DATE
+            else process.env.GIT_AUTHOR_DATE = before[0]
+            if (before[1] === undefined) delete process.env.GIT_COMMITTER_DATE
+            else process.env.GIT_COMMITTER_DATE = before[1]
+          }),
+      )
+      const project = yield* Project.Service
+      const first = yield* project.fromDirectory(yield* tmpdirScoped())
+      const second = yield* project.fromDirectory(yield* tmpdirScoped())
+
+      expect(first.project.id).not.toBe("global")
+      expect(second.project.id).not.toBe(first.project.id)
+    }),
+  )
+
   it.live("a folder too broad to be a project (here, the OneDrive folder) is never turned into a repository", () =>
     Effect.gen(function* () {
       yield* withProjectsGit

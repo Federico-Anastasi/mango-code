@@ -329,14 +329,6 @@ export const SessionQuestionDock: Component<{ request: QuestionRequest; onSubmit
       return
     }
 
-    const mod = (event.metaKey || event.ctrlKey) && !event.altKey
-    if (mod && event.key === "Enter") {
-      if (event.repeat) return
-      event.preventDefault()
-      next()
-      return
-    }
-
     const target =
       event.target instanceof HTMLElement ? event.target.closest('[data-slot="question-options"]') : undefined
     if (store.editing) return
@@ -620,8 +612,8 @@ export const SessionQuestionDock: Component<{ request: QuestionRequest; onSubmit
                       focus(options().length)
                       return
                     }
-                    if ((e.metaKey || e.ctrlKey) && !e.altKey) return
-                    if (e.key !== "Enter" || e.shiftKey) return
+                    // Only Enter alone answers: Shift+Enter is a new line, Enter with Ctrl or Cmd does nothing.
+                    if (e.key !== "Enter" || e.shiftKey || e.ctrlKey || e.metaKey) return
                     e.preventDefault()
                     commitCustom()
                   }}

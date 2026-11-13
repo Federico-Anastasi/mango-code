@@ -1,6 +1,7 @@
 import { Effect, Stream } from "effect"
 import os from "os"
 import { createWriteStream } from "node:fs"
+import { randomUUID } from "node:crypto"
 import * as Tool from "./tool"
 import path from "path"
 import { containsPath, type InstanceContext } from "../project/instance-context"
@@ -19,7 +20,13 @@ import * as Truncate from "./truncate"
 import { Plugin } from "@/plugin"
 import { ChildProcess } from "effect/unstable/process"
 import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
+import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
 import { ShellPrompt, type Parameters } from "./shell/prompt"
+import { BashHabits } from "./shell/bash-habits"
+import { LeftRunning } from "./shell/left-running"
+import { Session } from "@/session/session"
+import type { SessionID } from "@/session/schema"
+import { which } from "@opencode-ai/core/util/which"
 import { BashArity } from "@/permission/arity"
 
 export { Parameters } from "./shell/prompt"
@@ -290,11 +297,45 @@ const ask = Effect.fn("ShellTool.ask")(function* (ctx: Tool.Context, scan: Scan,
   })
 })
 
+// PowerShell writes in the code page of the computer (850 on an Italian one), but its output is read as UTF-8: the
+// accented letters of its errors reach the model as a replacement character. So it is asked for UTF-8 before the
+// command. In PowerShell 7 on the same line: it prints a longer error for a script of several lines. PowerShell 5.1
+// quotes the whole line of an error, so there the command starts on a line of its own and the quote is only the
+// model's text; its errors then count lines from 2, and the notes of the prompt say so. Running the command as a
+// script block keeps line 1 but changes exit codes, parse errors and `return`: measured and left out.
+const PS_UTF8 = "[Console]::OutputEncoding=[Text.Encoding]::UTF8;"
+
+// cmd has the same trouble: its messages and the programs that follow the console are written in the code page of the
+// computer. `chcp` changes the page, but a cmd takes it once, when it starts, and converts everything it writes with
+// that: so the command runs in a second cmd, started after the change. The command reaches it through the environment
+// and not through this line: written here, its quotes and `&` would be read by the first cmd. `!...!` puts it in place
+// after the line is read and without reading it again, so the second cmd gets it as written. The variable has a name
+// of its own, outside the MANGO_ ones the user or the launcher may set.
+const CMD_UTF8 = 'chcp 65001>nul&cmd /d /v:on /s /c "cmd /d /s /c "!__MANGO_SHELL_TOOL_COMMAND!""'
+
+// cmd reads a line of at most 8191 characters, and the line of the second cmd is the command inside
+// `cmd /d /s /c "..."`: measured, 8175 characters run and 8176 do not. From 8181 on the second cmd runs nothing and
+// says nothing, often with exit code 0, so the tool refuses a longer command itself.
+const CMD_MAX = 8175
+
 function cmd(shell: string, command: string, cwd: string, env: NodeJS.ProcessEnv) {
   if (process.platform === "win32" && Shell.ps(shell)) {
-    return ChildProcess.make(shell, ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command], {
+    const name = Shell.name(shell)
+    const prefix = name === "powershell" ? PS_UTF8 + "\n" : PS_UTF8
+    return ChildProcess.make(shell, ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", prefix + command], {
       cwd,
-      env,
+      // PowerShell 7 colours its errors with escape codes even when nobody is looking: the model reads them as text.
+      env: name === "pwsh" ? { ...env, NO_COLOR: "1" } : env,
+      stdin: "ignore",
+      detached: false,
+    })
+  }
+
+  if (process.platform === "win32" && Shell.name(shell) === "cmd") {
+    return ChildProcess.make(CMD_UTF8, [], {
+      shell,
+      cwd,
+      env: { ...env, __MANGO_SHELL_TOOL_COMMAND: command },
       stdin: "ignore",
       detached: false,
     })
@@ -344,6 +385,7 @@ export const ShellTool = Tool.define(
     const trunc = yield* Truncate.Service
     const plugin = yield* Plugin.Service
     const flags = yield* RuntimeFlags.Service
+    const sessions = yield* Session.Service
     const defaultTimeoutMs = flags.bashDefaultTimeoutMs ?? 2 * 60 * 1000
 
     const cygpath = Effect.fn("ShellTool.cygpath")(function* (shell: string, text: string) {
@@ -425,6 +467,16 @@ export const ShellTool = Tool.define(
       }
     })
 
+    // The conversation at the top of a chain of subagents. One that is not in the database is taken as it is.
+    const rootSession = Effect.fn("ShellTool.rootSession")(function* (sessionID: SessionID) {
+      let id = sessionID
+      while (true) {
+        const info = yield* sessions.get(id).pipe(Effect.option)
+        if (info._tag === "None" || !info.value.parentID) return id
+        id = info.value.parentID
+      }
+    })
+
     const run = Effect.fn("ShellTool.run")(function* (
       input: {
         shell: string
@@ -432,6 +484,7 @@ export const ShellTool = Tool.define(
         cwd: string
         env: NodeJS.ProcessEnv
         timeout: number
+        notes: string[]
       },
       ctx: Tool.Context,
     ) {
@@ -478,10 +531,39 @@ export const ShellTool = Tool.define(
         },
       })
 
-      const code: number | null = yield* Effect.scoped(
+      const start = Date.now()
+      // What the command leaves running (a server in the background) is listed in the side panel of the conversation
+      // the user sees: a subagent's command belongs to the conversation that started the subagent. It is recorded
+      // however the command ends (timeout, interruption). Windows only (see left-running.ts).
+      const mark = process.platform === "win32" ? randomUUID() : undefined
+      const command = cmd(
+        input.shell,
+        input.command,
+        input.cwd,
+        mark ? { ...input.env, [LeftRunning.MARK]: mark } : input.env,
+      )
+      const held = CrossSpawnSpawner.leavesRunning(command)
+      let pid: number | undefined
+      const remember = Effect.gen(function* () {
+        const shell = pid
+        if (!mark || shell === undefined) return
+        const sessionID = yield* rootSession(ctx.sessionID)
+        yield* Effect.tryPromise(() =>
+          LeftRunning.record({
+            sessionID,
+            mark,
+            pid: shell,
+            start,
+            end: held.exited ?? Date.now(),
+            command: input.command,
+          }),
+        ).pipe(Effect.catch((error) => Effect.logWarning("the runs that left nothing were not forgotten", { error })))
+      })
+      const ran: { code: number | null } = yield* Effect.scoped(
         Effect.gen(function* () {
           yield* Effect.addFinalizer(closeSink)
-          const handle = yield* spawner.spawn(cmd(input.shell, input.command, input.cwd, input.env))
+          const handle = yield* spawner.spawn(command)
+          pid = handle.pid
 
           yield* Effect.forkScoped(
             Stream.runForEach(Stream.decodeText(handle.all), (chunk) => {
@@ -554,17 +636,19 @@ export const ShellTool = Tool.define(
             yield* handle.kill({ forceKillAfter: "3 seconds" }).pipe(Effect.orDie)
           }
 
-          return exit.kind === "exit" ? exit.code : null
+          return { code: exit.kind === "exit" ? exit.code : null }
         }),
-      ).pipe(Effect.orDie)
+      ).pipe(Effect.orDie, Effect.ensuring(remember))
 
-      const meta: string[] = []
+      const meta = [...input.notes]
       if (expired) {
         meta.push(
           `shell tool terminated command after exceeding timeout ${input.timeout} ms. If this command is expected to take longer and is not waiting for interactive input, retry with a larger timeout value in milliseconds.`,
         )
       }
       if (aborted) meta.push("User aborted the command")
+      if (held.held)
+        meta.push("A program this command started is still running in the background; its later output is not read.")
       const raw = list.map((item) => item.text).join("")
       const end = tail(raw, limits.maxLines, limits.maxBytes)
       if (end.cut) cut = true
@@ -586,7 +670,7 @@ export const ShellTool = Tool.define(
         title: input.command,
         metadata: {
           output: last || preview(output),
-          exit: code,
+          exit: ran.code,
           truncated: cut,
           ...(cut && file ? { outputPath: file } : {}),
         },
@@ -617,9 +701,15 @@ export const ShellTool = Tool.define(
               }
               const timeout = params.timeout ?? defaultTimeoutMs
               const ps = Shell.ps(shell)
+              const command = name === "powershell" ? BashHabits.chain(params.command) : params.command
+              if (process.platform === "win32" && name === "cmd" && command.length > CMD_MAX) {
+                throw new Error(
+                  `The command is ${command.length} characters long and cmd runs at most ${CMD_MAX}: write the long part to a file and pass the file, or split the command.`,
+                )
+              }
               yield* Effect.scoped(
                 Effect.gen(function* () {
-                  const tree = yield* Effect.acquireRelease(parse(params.command, ps), (tree) =>
+                  const tree = yield* Effect.acquireRelease(parse(command, ps), (tree) =>
                     Effect.sync(() => tree.delete()),
                   )
                   const scan = yield* collect(tree.rootNode, cwd, ps, shell, instanceCtx)
@@ -628,13 +718,15 @@ export const ShellTool = Tool.define(
                 }),
               )
 
+              const env = yield* shellEnv(ctx, cwd)
               return yield* run(
                 {
                   shell,
-                  command: params.command,
+                  command,
                   cwd,
-                  env: yield* shellEnv(ctx, cwd),
+                  env,
                   timeout,
+                  notes: ps ? BashHabits.notes({ command, shell: name, missing: (program) => !which(program, env) }) : [],
                 },
                 ctx,
               )

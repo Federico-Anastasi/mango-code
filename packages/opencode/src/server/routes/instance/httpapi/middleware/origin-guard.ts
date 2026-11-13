@@ -33,6 +33,17 @@ export function isForeignApiNavigation(headers: Record<string, string | undefine
   return pathname === "/api" || pathname.startsWith("/api/")
 }
 
+// A POST to the agent's own routes (`/mango/*`) must say it carries JSON, or the dictation's audio. Sent by a page of
+// another site, such a request needs a preflight, which CORS refuses; a "simple" one (text/plain, a form, no type)
+// would leave without asking.
+const AGENT_POST_TYPES = new Set(["application/json", "application/octet-stream"])
+
+export function isSimpleAgentPost(method: string, url: string, contentType: string | undefined): boolean {
+  if (method !== "POST") return false
+  if (!new URL(url, "http://localhost").pathname.startsWith("/mango/")) return false
+  return !AGENT_POST_TYPES.has((contentType ?? "").split(";")[0].trim().toLowerCase())
+}
+
 const LOOPBACK = new Set(["127.0.0.1", "localhost", "[::1]"])
 
 export function isLocalHost(host: string): boolean {
@@ -62,6 +73,11 @@ export const originGuard = HttpRouter.middleware(
             { status: 403 },
           )
         }
+        if (isSimpleAgentPost(request.method, request.url, request.headers["content-type"]))
+          return HttpServerResponse.jsonUnsafe(
+            { error: tr("la richiesta deve essere in JSON", "the request must be JSON") },
+            { status: 415 },
+          )
         return yield* effect
       })
   }),

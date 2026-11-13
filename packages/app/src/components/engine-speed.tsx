@@ -17,7 +17,7 @@ import { useLanguage } from "@/context/language"
 import { useServerSDK } from "@/context/server-sdk"
 import { useSync } from "@/context/sync"
 import { useSessionLayout } from "@/pages/session/session-layout"
-import { authTokenFromCredentials } from "@/utils/server"
+import { authHeaders } from "@/utils/server"
 import {
   formatRate,
   engineTurn,
@@ -56,10 +56,7 @@ let stopPolling: (() => void) | undefined
 /** GET of a Mango Code route of the agent server; undefined if it is missing or does not answer. */
 async function fetchServerJson(serverSDK: ReturnType<typeof useServerSDK>, path: string, timeoutMs: number) {
   const sdk = serverSDK()
-  const headers: Record<string, string> = {}
-  if (sdk.server.http.password)
-    headers.authorization = `Basic ${authTokenFromCredentials({ username: sdk.server.http.username, password: sdk.server.http.password })}`
-  return fetch(new URL(path, sdk.url), { headers, signal: AbortSignal.timeout(timeoutMs) })
+  return fetch(new URL(path, sdk.url), { headers: authHeaders(sdk.server.http), signal: AbortSignal.timeout(timeoutMs) })
     .then((response) => (response.ok ? response.json() : undefined))
     .catch(() => undefined)
 }

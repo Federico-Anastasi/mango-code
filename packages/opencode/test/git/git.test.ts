@@ -164,6 +164,46 @@ describe("Git", () => {
     }),
   )
 
+  // A working folder inside the repository (a space and an accent in its name): the listings name files from it, only
+  // the patch for `git apply` names them from the repository root.
+  it.live("status(), diff(), stats() and patches name files from a working folder inside the repository", () =>
+    Effect.gen(function* () {
+      const tmp = yield* scopedTmpdir({ git: true })
+      const sub = path.join(tmp.path, "Contabilità prova B")
+      yield* Effect.promise(() => fs.mkdir(path.join(sub, "inner"), { recursive: true }))
+      yield* Effect.promise(() => fs.writeFile(path.join(sub, "inner", "a.txt"), "before\n", "utf-8"))
+      yield* Effect.promise(() => fs.writeFile(path.join(tmp.path, "root.txt"), "old\n", "utf-8"))
+      yield* Effect.promise(() => $`git add .`.cwd(tmp.path).quiet())
+      yield* Effect.promise(() => $`git commit --no-gpg-sign -m "add files"`.cwd(tmp.path).quiet())
+      yield* Effect.promise(() => fs.writeFile(path.join(sub, "inner", "a.txt"), "after\n", "utf-8"))
+      yield* Effect.promise(() => fs.writeFile(path.join(sub, "new.txt"), "new\n", "utf-8"))
+      yield* Effect.promise(() => fs.writeFile(path.join(tmp.path, "root.txt"), "new\n", "utf-8"))
+
+      const git = yield* Git.Service
+      const [status, diff, stats, patch, all, root] = yield* Effect.all([
+        git.status(sub),
+        git.diff(sub, "HEAD"),
+        git.stats(sub, "HEAD"),
+        git.patch(sub, "HEAD", "inner/a.txt"),
+        git.patchAll(sub, "HEAD"),
+        git.patchAll(sub, "HEAD", { fromRoot: true }),
+      ])
+
+      expect(status.map((item) => [item.file, item.status])).toEqual([
+        ["inner/a.txt", "modified"],
+        ["new.txt", "added"],
+      ])
+      expect(diff.map((item) => [item.file, item.status])).toEqual([["inner/a.txt", "modified"]])
+      expect(stats).toEqual([{ file: "inner/a.txt", additions: 1, deletions: 1 }])
+      expect(patch.text).toContain("+++ b/inner/a.txt")
+      expect(patch.text).toContain("+after")
+      expect(all.text).toContain("+++ b/inner/a.txt")
+      expect(all.text).not.toContain("root.txt")
+      expect(root.text).toContain("+++ b/Contabilità prova B/inner/a.txt")
+      expect(root.text).not.toContain("root.txt")
+    }),
+  )
+
   it.live("show() returns empty text for binary blobs", () =>
     Effect.gen(function* () {
       const tmp = yield* scopedTmpdir({ git: true })

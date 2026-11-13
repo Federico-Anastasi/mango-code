@@ -20,6 +20,9 @@ import { testEffect } from "../lib/effect"
 import { Tool } from "@/tool/tool"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { InstanceStore } from "@/project/instance-store"
+import { LeftRunning } from "@/tool/shell/left-running"
+import { Session } from "@/session/session"
+import { SessionProjector } from "@opencode-ai/core/session/projector"
 
 const shellLayer = Layer.mergeAll(
   LayerNode.compile(
@@ -31,6 +34,8 @@ const shellLayer = Layer.mergeAll(
       Config.node,
       Agent.node,
       RuntimeFlags.node,
+      Session.node,
+      SessionProjector.node,
     ]),
   ),
   testInstanceStoreLayer,
@@ -192,6 +197,341 @@ describe("tool.shell", () => {
       }),
     ),
   )
+
+  for (const item of ps) {
+    it.live(`runs a bash chain written for PowerShell [${item.label}]`, () =>
+      withShell(
+        item,
+        runIn(
+          projectRoot,
+          Effect.gen(function* () {
+            const both = yield* run({ command: "cd . && echo chained" })
+            expect(both.metadata.exit).toBe(0)
+            expect(both.output).toContain("chained")
+            expect(both.output).not.toContain("shell_metadata")
+            const stopped = yield* run({ command: "cmd /c exit 2 && echo second" })
+            expect(stopped.metadata.exit).not.toBe(0)
+            expect(stopped.output).not.toContain("second")
+          }),
+        ),
+      ),
+    )
+
+    it.live(`says what to use instead of a heredoc [${item.label}]`, () =>
+      withShell(
+        item,
+        runIn(
+          projectRoot,
+          Effect.gen(function* () {
+            const result = yield* run({ command: "cat > heredoc-probe.txt << 'EOF'\nhello\nEOF" })
+            expect(result.metadata.exit).not.toBe(0)
+            expect(result.output).toContain("<shell_metadata>")
+            expect(result.output).toContain("no heredoc")
+            expect(result.output).toContain("Write tool")
+            expect(yield* Effect.promise(() => Bun.file(path.join(projectRoot, "heredoc-probe.txt")).exists())).toBe(false)
+          }),
+        ),
+      ),
+    )
+
+    it.live(`gives the model an error without colour codes [${item.label}]`, () =>
+      withShell(
+        item,
+        runIn(
+          projectRoot,
+          Effect.gen(function* () {
+            const result = yield* run({ command: "Write-Item -Path nothing.txt" })
+            expect(result.output).toContain("Write-Item")
+            expect(result.output).not.toContain("\u001b[")
+          }),
+        ),
+      ),
+    )
+
+    // What a command leaves in the background is listed for its conversation (the side panel) and can be stopped.
+    it.live(`lists a program a command leaves running, for its conversation [${item.label}]`, () =>
+      withShell(
+        item,
+        runIn(
+          projectRoot,
+          Effect.gen(function* () {
+            const sessionID = SessionID.make(`ses_left_${item.label}`)
+            const command = "Start-Process ping -ArgumentList '-n','120','127.0.0.1' -WindowStyle Hidden"
+            yield* run({ command }, { ...ctx, sessionID })
+            const left = yield* Effect.promise(() => LeftRunning.list(sessionID))
+            const stopped = yield* Effect.promise(() =>
+              Promise.all(
+                left.map((program) => LeftRunning.stop({ sessionID, pid: program.pid, started: program.started })),
+              ),
+            )
+            expect(left.map((program) => [program.name.toLowerCase(), program.asked])).toEqual([["ping.exe", command]])
+            expect(stopped).toEqual(["stopped"])
+            expect(yield* Effect.promise(() => LeftRunning.list(sessionID))).toEqual([])
+          }),
+        ),
+      ),
+      30_000,
+    )
+
+    // The side panel shows the conversation the user opened: what a subagent starts is listed there, not in the
+    // subagent's own conversation.
+    it.live(`lists what a subagent leaves running in the conversation that started it [${item.label}]`, () =>
+      withShell(
+        item,
+        runIn(
+          projectRoot,
+          Effect.gen(function* () {
+            const sessions = yield* Session.Service
+            const parent = yield* sessions.create({ title: "parent" })
+            const child = yield* sessions.create({ parentID: parent.id, title: "subagent" })
+            const command = "Start-Process ping -ArgumentList '-n','120','127.0.0.1' -WindowStyle Hidden"
+            yield* run({ command }, { ...ctx, sessionID: child.id })
+            const left = yield* Effect.promise(() => LeftRunning.list(parent.id))
+            const stopped = yield* Effect.promise(() =>
+              Promise.all(
+                left.map((program) =>
+                  LeftRunning.stop({ sessionID: parent.id, pid: program.pid, started: program.started }),
+                ),
+              ),
+            )
+            expect(left.map((program) => [program.name.toLowerCase(), program.asked])).toEqual([["ping.exe", command]])
+            expect(stopped).toEqual(["stopped"])
+            expect(yield* Effect.promise(() => LeftRunning.list(child.id))).toEqual([])
+          }),
+        ),
+      ),
+      30_000,
+    )
+
+    // The shell writes in the code page of its console (850 on an Italian Windows), not in UTF-8.
+    it.live(`gives the model accented letters whole, from stdout, stderr and a program [${item.label}]`, () =>
+      withShell(
+        item,
+        runIn(
+          projectRoot,
+          Effect.gen(function* () {
+            const result = yield* run({
+              command: `Write-Output 'out àèéìòù'; [Console]::Error.WriteLine('err àèéìòù'); & ${bin} -e "console.log('bun àèéìòù')"`,
+            })
+            expect(result.output).toContain("out àèéìòù")
+            expect(result.output).toContain("err àèéìòù")
+            expect(result.output).toContain("bun àèéìòù")
+            expect(result.output).not.toContain("\ufffd")
+          }),
+        ),
+      ),
+    )
+
+    // PowerShell 5.1 quotes the line of an error, and the line has the encoding prefix in it. There the command starts on
+    // the line after the prefix: the second line of the command is line 3, as the PowerShell notes of the prompt say.
+    it.live(`quotes only the model's command in an error [${item.label}]`, () =>
+      withShell(
+        item,
+        runIn(
+          projectRoot,
+          Effect.gen(function* () {
+            const one = yield* run({ command: "Write-Item -Path nothing.txt" })
+            expect(one.metadata.exit).toBe(1)
+            expect(one.output).toContain("Write-Item")
+            expect(one.output).not.toContain("OutputEncoding")
+
+            const two = yield* run({ command: "Write-Output first\nWrite-Item -Path nothing.txt" })
+            expect(two.metadata.exit).toBe(1)
+            expect(two.output).toContain("first")
+            expect(two.output).toContain("Write-Item")
+            expect(two.output).not.toContain("OutputEncoding")
+            if (item.label === "powershell") expect(two.output).toMatch(/:3 \S+:1\b/)
+          }),
+        ),
+      ),
+    )
+  }
+
+  // What a command leaves running in Git Bash or cmd keeps the command's output open after the shell has ended, and its
+  // parent has ended too: the command still returns, says so to the model, and the program is listed for its
+  // conversation and stopped. A ping the list missed is found by its own `-w` value and the variable of the shell tool,
+  // created during the test, and stopped by PID and creation time.
+  const leftBehind = (
+    label: string,
+    item: { label: string; shell: string } | undefined,
+    command: (ping: string) => string,
+    wait: number,
+    stop?: { timeout?: number; abortAfter?: number },
+  ) =>
+    it.live(
+      `lists ${label} [${item?.label}]`,
+      () => {
+        if (process.platform !== "win32" || !item) return Effect.void
+        const ping = `ping -n 120 -w ${wait} 127.0.0.1`
+        const started = Date.now()
+        const strays = Effect.promise(async () =>
+          (await LeftRunning.readTable(started))
+            .filter((proc) => proc.mark && proc.command.includes(`-w ${wait} `))
+            .forEach(LeftRunning.terminate),
+        )
+        return withShell(
+          item,
+          runIn(
+            projectRoot,
+            Effect.gen(function* () {
+              const sessionID = SessionID.make(`ses_left_${item.label}_${label.replaceAll(" ", "_")}`)
+              const abort = new AbortController()
+              if (stop?.abortAfter) setTimeout(() => abort.abort(), stop.abortAfter)
+              const result = yield* run(
+                { command: command(ping), timeout: stop?.timeout ?? 60_000 },
+                { ...ctx, sessionID, abort: abort.signal },
+              )
+              const took = Date.now() - started
+              const left = yield* Effect.promise(() => LeftRunning.list(sessionID))
+              const stopped = yield* Effect.promise(() =>
+                Promise.all(
+                  left.map((program) => LeftRunning.stop({ sessionID, pid: program.pid, started: program.started })),
+                ),
+              )
+              expect(took).toBeLessThan(15_000)
+              expect(result.output).toContain("still running in the background")
+              expect(left.map((program) => [program.name.toLowerCase(), program.asked])).toEqual([
+                ["ping.exe", command(ping)],
+              ])
+              expect(stopped).toEqual(["stopped"])
+              expect(yield* Effect.promise(() => LeftRunning.list(sessionID))).toEqual([])
+            }).pipe(Effect.ensuring(strays)),
+          ),
+        )
+      },
+      60_000,
+    )
+  const gitBash = shells.find((item) => item.label === "bash")
+  leftBehind("a program started with &", gitBash, (ping) => `${ping} &`, 3001)
+  leftBehind(
+    "a program left running by a command that timed out",
+    gitBash,
+    (ping) => `(${ping} &); sleep 60`,
+    3002,
+    { timeout: 3_000 },
+  )
+  leftBehind(
+    "a program left running by an interrupted command",
+    gitBash,
+    (ping) => `(${ping} &); sleep 60`,
+    3003,
+    { abortAfter: 3_000 },
+  )
+  leftBehind("a program started with start /b", cmdShell, (ping) => `start /b ${ping}`, 3004)
+
+  if (cmdShell) {
+    // A command started without a window gets a console in the code page of the computer (850 on an Italian Windows).
+    // A program that writes UTF-8 itself is not touched by that, a program that writes raw bytes of the page is not
+    // converted: only what cmd and the console programs write follows the page. cmd's message for a missing program
+    // quotes its name in every language of Windows, so the name carries the accents of the message.
+    it.live("gives the model accented letters whole, from cmd's own output and messages and from a program [cmd]", () =>
+      withShell(
+        cmdShell,
+        runIn(
+          projectRoot,
+          Effect.gen(function* () {
+            const result = yield* run({
+              command: `echo out \u00e0\u00e8\u00e9\u00ec\u00f2\u00f9 & notaprogram_\u00e0\u00e8\u00e9\u00ec\u00f2\u00f9 & ${bin} -e "console.log('bun \u00e0\u00e8\u00e9\u00ec\u00f2\u00f9')"`,
+            })
+            expect(result.output).toContain("out \u00e0\u00e8\u00e9\u00ec\u00f2\u00f9")
+            expect(result.output).toContain("notaprogram_\u00e0\u00e8\u00e9\u00ec\u00f2\u00f9")
+            expect(result.output).toContain("bun \u00e0\u00e8\u00e9\u00ec\u00f2\u00f9")
+            expect(result.output).not.toContain("\ufffd")
+          }),
+        ),
+      ),
+    )
+
+    // The command goes through two cmd: it must reach the second one exactly as written.
+    it.live("runs the command as written, with its quotes, operators, variables and exit code [cmd]", () =>
+      withShell(
+        cmdShell,
+        runIn(
+          projectRoot,
+          Effect.gen(function* () {
+            const result = yield* run({ command: `echo "a & b" & echo %CD:~0,1%x ^& !y! ^^ & exit /b 3` })
+            expect(result.metadata.exit).toBe(3)
+            expect(result.output).toContain('"a & b"')
+            expect(result.output).toMatch(/[A-Za-z]x & !y! \^/)
+
+            // cmd runs only the first line of a command, as it did when the command was its own line.
+            const lines = yield* run({ command: "echo [%OS%] [%NOT_DEFINED_XYZ%] a^!b ^^!\necho second" })
+            expect(lines.metadata.exit).toBe(0)
+            expect(lines.output).toContain("[Windows_NT] [%NOT_DEFINED_XYZ%] a!b ^!")
+            expect(lines.output).not.toContain("second")
+          }),
+        ),
+      ),
+    )
+
+    // Past the longest line cmd reads, the second cmd runs nothing and says nothing: the tool says it instead.
+    it.live("runs a command as long as cmd takes and refuses a longer one with the reason [cmd]", () =>
+      withShell(
+        cmdShell,
+        runIn(
+          projectRoot,
+          Effect.gen(function* () {
+            const longest = yield* run({ command: "echo " + "x".repeat(8170) })
+            expect(longest.metadata.exit).toBe(0)
+            expect(longest.output.trim()).toBe("x".repeat(8170))
+
+            const err = yield* fail({ command: "echo " + "x".repeat(9000) })
+            expect(err.message).toContain("9005 characters long and cmd runs at most 8175")
+          }),
+        ),
+      ),
+    )
+
+    // cmd reads a batch file in the code page of the console: in 65001 a file saved in UTF-8, the default of Notepad,
+    // gives the right names to what it creates. Labels, jumps and calls after multi-byte letters still land right.
+    it.live("runs a batch file saved in UTF-8 with accented letters, labels and calls [cmd]", () =>
+      withShell(
+        cmdShell,
+        Effect.gen(function* () {
+          const tmp = yield* tmpdirScoped()
+          yield* Effect.promise(() =>
+            Bun.write(
+              path.join(tmp, "prova.bat"),
+              [
+                "@echo off",
+                "echo bat \u00e0\u00e8\u00e9\u00ec\u00f2\u00f9",
+                "mkdir citt\u00e0",
+                "goto :avanti",
+                "echo never",
+                ":indietro",
+                "echo indietro \u00e0\u00e8",
+                "goto :fine",
+                ":avanti",
+                "call :sub \u00f2\u00f2",
+                "goto :indietro",
+                ":sub",
+                "echo sub %1",
+                "exit /b 0",
+                ":fine",
+                "echo fine",
+                "",
+              ].join("\r\n"),
+            ),
+          )
+          yield* runIn(
+            tmp,
+            Effect.gen(function* () {
+              const result = yield* run({ command: ".\\prova.bat" })
+              expect(result.metadata.exit).toBe(0)
+              expect(result.output.split("\r\n")).toEqual([
+                "bat \u00e0\u00e8\u00e9\u00ec\u00f2\u00f9",
+                "sub \u00f2\u00f2",
+                "indietro \u00e0\u00e8",
+                "fine",
+                "",
+              ])
+              expect(yield* Effect.promise(() => Filesystem.isDir(path.join(tmp, "citt\u00e0")))).toBe(true)
+            }),
+          )
+        }),
+      ),
+    )
+  }
 
   it.live("falls back from terminal-only configured shell", () =>
     Effect.gen(function* () {

@@ -62,8 +62,8 @@ fn free_port() -> u16 {
 fn fixture() -> Fixture {
     let dir = tempfile::tempdir().unwrap();
     let log = dir.path().join("requests.jsonl");
-    let m = EngineManager::new(planner(log.clone()), Box::new(Vec::new), dir.path(), None);
-    engine::http::serve(m.clone(), free_port()).unwrap();
+    let m = EngineManager::new(planner(log.clone()), Box::new(Vec::new), dir.path());
+    engine::http::serve(m.clone(), free_port(), None).unwrap();
     let port = free_port();
     let share = Share::new(dir.path(), m.clone(), port, true).unwrap();
     share.set_models(vec![SharedModel { key: "a".into(), label: "Model A".into(), context: 4096, images: false }]);
@@ -196,6 +196,8 @@ fn only_the_shared_routes_pass_with_the_right_key() {
         ("GET", "//engine/release"),
         ("GET", "/Engine"),
         ("GET", "/"),
+        ("GET", "/control/state"),
+        ("POST", "/control/model/use"),
     ] {
         let (status, body) = b.with_key(method, path, &key, "{}");
         assert_eq!(status, 403, "{method} {path}: {body}");
@@ -215,6 +217,8 @@ fn a_web_page_and_a_name_are_refused_even_with_the_key() {
     let mut text = String::new();
     let _ = s.read_to_string(&mut text);
     assert!(text.starts_with("HTTP/1.1 403"), "{text}");
+    // the sentence says what to do, without an example address
+    assert!(text.contains(&mango_common::tr!("copia di nuovo il codice", "copy the code again")) && !text.contains("192.168"), "{text}");
 }
 
 #[test]
@@ -346,7 +350,6 @@ fn the_code_the_settings_give_is_read_back_and_never_shows_its_key() {
     let home = state.home.unwrap();
     let code = Code::parse(&home.code).unwrap();
     assert_eq!(code.address, home.address);
-    assert_eq!(code.ip(), "127.0.0.1");
     assert_eq!(code.base(), format!("http://{}", home.address));
     assert_eq!(home.code, format!("mango://{}/{}", code.address, code.key));
     // The surrounding spaces and line breaks of a paste are not part of it.
@@ -418,6 +421,79 @@ fn a_pc_that_does_not_answer_is_told_with_what_to_check() {
     assert!(!sentence.contains(&code.key) && !sentence.contains("127.0.0.1"), "{sentence}");
 }
 
+/// The PC that uses the engine keeps knowing whether the other answers: a renewed key is an answer, sharing turned off is
+/// not. The watch ends when nobody holds what it writes.
+#[test]
+fn whether_the_other_pc_answers_is_watched_while_its_engine_is_in_use() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+    let until = |what: &str, done: &dyn Fn() -> bool| {
+        let t0 = Instant::now();
+        while !done() {
+            assert!(t0.elapsed() < Duration::from_secs(10), "{what}: not within 10 s");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    };
+    let b = fixture();
+    let code = b.code();
+    let reachable = Arc::new(AtomicBool::new(false));
+    let watching = remote::watch(code, Arc::downgrade(&reachable), Duration::from_millis(50), Duration::from_millis(50));
+    until("it answers", &|| reachable.load(Ordering::SeqCst));
+    b.share.new_key().unwrap();
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(reachable.load(Ordering::SeqCst), "a refused key is an answer");
+    b.share.set_enabled(false).unwrap();
+    until("it does not answer", &|| !reachable.load(Ordering::SeqCst));
+    b.share.set_enabled(true).unwrap();
+    until("it answers again", &|| reachable.load(Ordering::SeqCst));
+    drop(reachable);
+    let t0 = Instant::now();
+    while !watching.is_finished() {
+        assert!(t0.elapsed() < Duration::from_secs(10), "the watch goes on with nobody reading it");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+/// A refused key slows the watch down (each ask is a refusal in the other PC's log), and an answer that changes brings it
+/// back to its pace.
+#[test]
+fn a_refused_key_is_asked_again_seldom_until_the_answer_changes() {
+    use std::sync::atomic::{AtomicBool, AtomicU16, AtomicUsize, Ordering};
+    use std::sync::Arc;
+    let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let code = Code::parse(&format!("mango://{}/{}", listener.local_addr().unwrap(), "ab".repeat(24))).unwrap();
+    let (status, asked) = (Arc::new(AtomicU16::new(401)), Arc::new(AtomicUsize::new(0)));
+    let (s, a) = (status.clone(), asked.clone());
+    std::thread::spawn(move || {
+        for c in listener.incoming() {
+            let mut c = c.unwrap();
+            let mut head = String::new();
+            let mut r = BufReader::new(c.try_clone().unwrap());
+            while r.read_line(&mut head).unwrap() > 2 {}
+            a.fetch_add(1, Ordering::SeqCst);
+            let _ = write!(c, "HTTP/1.1 {} X\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{{}}", s.load(Ordering::SeqCst));
+        }
+    });
+    let until = |what: &str, done: &dyn Fn() -> bool| {
+        let t0 = Instant::now();
+        while !done() {
+            assert!(t0.elapsed() < Duration::from_secs(10), "{what}: not within 10 s");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    };
+    let reachable = Arc::new(AtomicBool::new(false));
+    let _watching = remote::watch(code, Arc::downgrade(&reachable), Duration::from_millis(20), Duration::from_millis(600));
+    until("the first ask", &|| asked.load(Ordering::SeqCst) == 1);
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(asked.load(Ordering::SeqCst), 1, "a refused key is not asked again every 20 ms");
+    assert!(reachable.load(Ordering::SeqCst), "a refused key is an answer");
+    status.store(200, Ordering::SeqCst);
+    until("the slow ask", &|| asked.load(Ordering::SeqCst) == 2);
+    let t0 = Instant::now();
+    until("the pace again", &|| asked.load(Ordering::SeqCst) >= 7);
+    assert!(t0.elapsed() < Duration::from_millis(1000), "{:?} for five asks", t0.elapsed());
+}
+
 #[test]
 fn a_pc_that_accepts_and_never_answers_is_given_up_after_five_seconds() {
     let silent = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
@@ -470,4 +546,12 @@ fn the_code_is_kept_across_restarts_and_forgotten_for_good() {
     // …and a saved file that is not a code (edited by hand) is not trusted either.
     std::fs::write(dir.path().join("remote-engine.json"), r#"{"address":"pc.example:1","key":"x"}"#).unwrap();
     assert!(remote::saved(dir.path()).is_err());
+
+    // A code that cannot be saved says so in a sentence without the path, which stays in the detail for the log.
+    std::fs::remove_file(dir.path().join("remote-engine.json")).unwrap();
+    std::fs::create_dir(dir.path().join("remote-engine.json")).unwrap();
+    let e = remote::save(dir.path(), &code).unwrap_err();
+    let phrase = mango_common::user_phrase(&e);
+    assert!(says(&phrase, "Non riesco a salvare il codice", "I can't save the other PC's code") && !phrase.contains("remote-engine.json"), "{phrase}");
+    assert!(format!("{e:#}").contains("remote-engine.json"), "{e:#}");
 }

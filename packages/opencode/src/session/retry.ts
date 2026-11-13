@@ -4,6 +4,7 @@ import { Cause, Clock, Duration, Effect, Schedule } from "effect"
 import { MessageV2 } from "./message-v2"
 import { iife } from "@/util/iife"
 import { isRecord } from "@/util/record"
+import { tr } from "@/util/mango-language"
 
 export type Err = ReturnType<NamedError["toObject"]>
 
@@ -142,6 +143,15 @@ export function retryable(error: Err, provider: string) {
         },
       }
     }
+    // mango-code: this PC's model closed in the middle of the answer (`MessageV2.fromError`): while the agent tries again
+    // the engine is being loaded
+    if (error.data.metadata?.engine === "closed")
+      return {
+        message: tr(
+          "Il modello si è chiuso a metà risposta: Mango Code lo sta ricaricando.",
+          "The model closed in the middle of the answer: Mango Code is loading it again.",
+        ),
+      }
     return { message: error.data.message.includes("Overloaded") ? "Provider is overloaded" : error.data.message }
   }
 

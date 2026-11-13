@@ -2,14 +2,52 @@
 //! the user's own from `<data>/user-models.json` (same format as the entries of `models`). The user's models are
 //! added to the Mango Code catalog and don't replace it: a key that is already taken is an error.
 
+use crate::i18n::{lang, Lang};
 use crate::{tr, user_error, Paths};
 use anyhow::Result;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::collections::BTreeMap;
 
 /// The user's models file, in the app's data dir.
 pub const USER_FILE: &str = "user-models.json";
+
+/// A line for the user about a catalog model (`about` in `mango-models.json`), in both languages.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct About {
+    pub it: String,
+    pub en: String,
+}
+
+impl About {
+    /// The line in the language of the app.
+    pub fn text(&self) -> &str {
+        match lang() {
+            Lang::It => &self.it,
+            Lang::En => &self.en,
+        }
+    }
+}
+
+/// The sampling values recommended by whoever made the model (`sampling` in `mango-models.json`); a value the model
+/// card doesn't give is missing.
+#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Sampling {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub temperature: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub top_p: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub top_k: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_p: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub presence_penalty: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repeat_penalty: Option<f64>,
+}
 
 /// The merged catalog: the root of `mango-models.json` with the user's entries also in `models`.
 #[derive(Debug)]
@@ -239,6 +277,18 @@ mod tests {
         assert!(e.contains(&not_in_list()), "Mango Code models are not removed: {e}");
         remove_user(&p, "y").unwrap();
         assert!(read(&p).unwrap().user.is_empty());
+    }
+
+    /// `about` and `sampling` are typed: a missing value stays missing, a misspelled one is an error and not a silent gap.
+    #[test]
+    fn about_and_sampling_read_what_the_catalog_says() {
+        let s: Sampling = serde_json::from_str(r#"{ "temperature": 1.0, "top_p": 0.95, "top_k": 20 }"#).unwrap();
+        assert_eq!((s.temperature, s.top_p, s.top_k, s.min_p, s.presence_penalty, s.repeat_penalty), (Some(1.0), Some(0.95), Some(20), None, None, None));
+        assert_eq!(serde_json::to_string(&s).unwrap(), r#"{"temperature":1.0,"top_p":0.95,"top_k":20}"#, "what the card doesn't give isn't written");
+        assert!(serde_json::from_str::<Sampling>(r#"{ "temprature": 1.0 }"#).is_err());
+        let a: About = serde_json::from_str(r#"{ "it": "Piccolo.", "en": "Small." }"#).unwrap();
+        assert_eq!((a.it.as_str(), a.en.as_str()), ("Piccolo.", "Small."));
+        assert!(serde_json::from_str::<About>(r#"{ "it": "Piccolo." }"#).is_err(), "both languages or none");
     }
 
     #[test]

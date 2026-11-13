@@ -8,10 +8,10 @@ mod engine;
 #[cfg(test)]
 mod fake_server;
 
-pub use model::install_model;
-pub use engine::{engine_size, install_engine, installed_engine};
+pub use model::{discard_partial, install_model, remove_model, users_file};
+pub use engine::{engine_size, has_build, install_engine, installed_engine, older_engine, remove_old_engines, EngineUnusable};
 
-use crate::tr;
+use crate::{tr, user_text};
 use anyhow::{bail, Context, Result};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
@@ -42,21 +42,56 @@ const MARGIN: u64 = 1 << 30;
 
 /// A clear error, before starting, if the disk of `dir` can't hold `needed` bytes (plus the margin).
 fn enough_space(needed: u64, free: u64, dir: &Path) -> Result<()> {
-    let gb = |b: u64| b as f64 / (1u64 << 30) as f64;
     if free < needed + MARGIN {
-        bail!(
-            "{}",
-            tr!(
-                "sul disco di {} non c'è spazio: servono {:.1} GB (più 1 GB di margine), liberi {:.1} GB. Libera spazio e riprova.",
-                "not enough space on the disk of {}: {:.1} GB needed (plus 1 GB of margin), {:.1} GB free. Free some space and try again.",
-                dir.display(),
-                gb(needed),
-                gb(free)
-            )
-        );
+        return Err(NoSpace { needed: needed + MARGIN, free, dir: dir.to_path_buf() }.into());
     }
     Ok(())
 }
+
+/// Why a download did not end with the right file, so the app can say what to do. The text is the whole detail, for the
+/// log.
+#[derive(Debug)]
+pub enum Trouble {
+    /// The connection: none, dropped, or silent for too long. The partial file stays, to be resumed.
+    Network(String),
+    /// The server answers but does not give the file (it is not there, the repo is gated).
+    Server(String),
+    /// What arrived is not the catalog's file (another hash, more bytes): it was discarded.
+    WrongFile(String),
+}
+
+impl std::fmt::Display for Trouble {
+    fn fmt(&self, out: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Trouble::Network(t) | Trouble::Server(t) | Trouble::WrongFile(t) => out.write_str(t),
+        }
+    }
+}
+
+impl std::error::Error for Trouble {}
+
+/// The disk of `dir` has no room for a download: the bytes it takes, the margin included, and those free.
+#[derive(Debug)]
+pub struct NoSpace {
+    pub needed: u64,
+    pub free: u64,
+    pub dir: PathBuf,
+}
+
+impl std::fmt::Display for NoSpace {
+    fn fmt(&self, out: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let gb = |b: u64| b as f64 / (1u64 << 30) as f64;
+        out.write_str(&tr!(
+            "sul disco di {} non c'è spazio: servono {:.1} GB (più 1 GB di margine), liberi {:.1} GB. Libera spazio e riprova.",
+            "not enough space on the disk of {}: {:.1} GB needed (plus 1 GB of margin), {:.1} GB free. Free some space and try again.",
+            self.dir.display(),
+            gb(self.needed - MARGIN),
+            gb(self.free)
+        ))
+    }
+}
+
+impl std::error::Error for NoSpace {}
 
 /// The free bytes on the disk of `dir` for this user.
 fn free_space(dir: &Path) -> Result<u64> {
@@ -78,15 +113,6 @@ fn free_space(dir: &Path) -> Result<u64> {
     Ok(free)
 }
 
-/// Downloads `f` to `dest`. A `<dest>.part` left by an interrupted attempt resumes from where it was; once the
-/// file is whole the hash must match, and only then does the `.part` take the name `dest` (atomic rename: either
-/// the right file is there, or it isn't). A file that is wrong in size or hash is discarded; one interrupted by
-/// the network stays, to be resumed.
-/// `progress(downloaded, total)` starts from the point already reached and ends with `(size, size)`.
-pub fn download(f: &RemoteFile, dest: &Path, progress: &mut dyn FnMut(u64, u64)) -> Result<()> {
-    download_stoppable(f, dest, &AtomicBool::new(false), progress)
-}
-
 /// The error of a download that `stop` ended: the `.part` stays, for whoever stopped it to resume or delete.
 #[derive(Debug)]
 pub struct Stopped;
@@ -99,7 +125,11 @@ impl std::fmt::Display for Stopped {
 
 impl std::error::Error for Stopped {}
 
-/// Like `download`, but when `stop` becomes true it ends between two blocks with `Stopped`.
+/// Downloads `f` to `dest`. A `<dest>.part` left by an interrupted attempt resumes from where it was; once the
+/// file is whole the hash must match, and only then does the `.part` take the name `dest` (atomic rename: either
+/// the right file is there, or it isn't). A file that is wrong in size or hash is discarded; one interrupted by
+/// the network stays, to be resumed. When `stop` becomes true it ends between two blocks with `Stopped`.
+/// `progress(downloaded, total)` starts from the point already reached and ends with `(size, size)`.
 pub fn download_stoppable(f: &RemoteFile, dest: &Path, stop: &AtomicBool, progress: &mut dyn FnMut(u64, u64)) -> Result<()> {
     download_with_timeout(f, dest, MAX_WAIT, stop, progress)
 }
@@ -122,7 +152,7 @@ fn download_with_timeout(f: &RemoteFile, dest: &Path, max_wait: Duration, stop: 
         bail!("{}", tr!("{name}: nel catalogo manca la dimensione di {}", "{name}: the catalog has no size for {}", f.url));
     }
     if let Some(dir) = dest.parent() {
-        fs::create_dir_all(dir).with_context(|| tr!("non riesco a creare {}", "can't create {}", dir.display()))?;
+        fs::create_dir_all(dir).with_context(|| user_text(&tr!("Non riesco a creare la cartella dei file scaricati.", "I can't create the folder of the downloaded files."), dir.display()))?;
     }
     let part = part_path(dest);
     let mut hasher = Sha256::new();
@@ -179,24 +209,20 @@ fn download_with_timeout(f: &RemoteFile, dest: &Path, max_wait: Duration, stop: 
                         Some(ureq::Error::Timeout(ureq::Timeout::PerRead))
                     );
                     if silent {
-                        bail!(
-                            "{}",
-                            tr!(
+                        return Err(Trouble::Network(tr!(
                                 "{name}: nessun dato dalla rete da {} s, dopo {done} byte su {}; controlla la connessione, riprovando riparte da lì",
                                 "{name}: no data from the network for {} s, after {done} bytes of {}; check the connection, trying again resumes from there",
                                 max_wait.as_secs_f64(),
                                 f.size
-                            )
-                        );
+                        ))
+                        .into());
                     }
-                    bail!(
-                        "{}",
-                        tr!(
+                    return Err(Trouble::Network(tr!(
                             "{name}: connessione interrotta dopo {done} byte su {} ({e}); riprovando riparte da lì",
                             "{name}: connection interrupted after {done} bytes of {} ({e}); trying again resumes from there",
                             f.size
-                        )
-                    );
+                    ))
+                    .into());
                 }
             };
             out.write_all(&buf[..n])?;
@@ -205,14 +231,12 @@ fn download_with_timeout(f: &RemoteFile, dest: &Path, max_wait: Duration, stop: 
             if done > f.size {
                 drop(out);
                 fs::remove_file(&part)?;
-                bail!(
-                    "{}",
-                    tr!(
+                return Err(Trouble::WrongFile(tr!(
                         "{name}: il server manda più byte dei {} che dice il catalogo; file scartato",
                         "{name}: the server sends more bytes than the {} the catalog says; file discarded",
                         f.size
-                    )
-                );
+                ))
+                .into());
             }
             if last.elapsed() >= PROGRESS_INTERVAL {
                 progress(done, f.size);
@@ -221,14 +245,12 @@ fn download_with_timeout(f: &RemoteFile, dest: &Path, max_wait: Duration, stop: 
         }
         out.sync_all()?;
         if done < f.size {
-            bail!(
-                "{}",
-                tr!(
+            return Err(Trouble::Network(tr!(
                     "{name}: il server ha chiuso dopo {done} byte su {}; riprovando riparte da lì",
                     "{name}: the server closed after {done} bytes of {}; trying again resumes from there",
                     f.size
-                )
-            );
+            ))
+            .into());
         }
     }
     progress(f.size, f.size);
@@ -237,20 +259,18 @@ fn download_with_timeout(f: &RemoteFile, dest: &Path, max_wait: Duration, stop: 
     if actual != expected {
         // a wrong partial is not resumed: it's thrown away, the next attempt starts clean
         fs::remove_file(&part)?;
-        bail!(
-            "{}",
-            tr!(
+        return Err(Trouble::WrongFile(tr!(
                 "{name}: impronta sha256 {actual} diversa da quella del catalogo {expected}; file scartato",
                 "{name}: sha256 hash {actual} differs from the catalog's {expected}; file discarded"
-            )
-        );
+        ))
+        .into());
     }
-    fs::rename(&part, dest).with_context(|| tr!("non riesco a rinominare {} in {}", "can't rename {} to {}", part.display(), dest.display()))
+    fs::rename(&part, dest).with_context(|| user_text(&tr!("Non riesco a completare un file scaricato.", "I can't complete a downloaded file."), format!("{} -> {}", part.display(), dest.display())))
 }
 
 /// Hex sha256 of a file, read in blocks.
 pub fn sha256_file(path: &Path) -> Result<String> {
-    let mut f = File::open(path).with_context(|| tr!("non riesco ad aprire {}", "can't open {}", path.display()))?;
+    let mut f = File::open(path).with_context(|| user_text(&tr!("Non riesco a controllare un file scaricato.", "I can't check a downloaded file."), path.display()))?;
     let mut h = Sha256::new();
     let mut buf = vec![0u8; 1 << 20];
     loop {
@@ -263,7 +283,7 @@ pub fn sha256_file(path: &Path) -> Result<String> {
     Ok(h.finalize().iter().map(|b| format!("{b:02x}")).collect())
 }
 
-fn part_path(dest: &Path) -> PathBuf {
+pub(crate) fn part_path(dest: &Path) -> PathBuf {
     with_suffix(dest, ".part")
 }
 
@@ -298,17 +318,15 @@ fn request(f: &RemoteFile, from: u64, max_wait: Duration) -> Result<ureq::http::
     }
     match req.call() {
         Ok(r) => Ok(r),
-        Err(ureq::Error::StatusCode(c @ (401 | 403))) if f.url.starts_with(HF) => bail!(
-            "{}",
-            tr!(
+        Err(ureq::Error::StatusCode(c @ (401 | 403))) if f.url.starts_with(HF) => Err(Trouble::Server(tr!(
                 "il server risponde {c}: il repo è protetto; accetta i termini sulla sua pagina su Hugging Face \
                  e salva il tuo token in «Altri modelli» (o mettilo in HF_TOKEN, o in %USERPROFILE%\\.cache\\huggingface\\token)",
                 "the server answers {c}: the repo is gated; accept its terms on its Hugging Face page \
                  and save your token in «Other models» (or put it in HF_TOKEN, or in %USERPROFILE%\\.cache\\huggingface\\token)"
-            )
-        ),
-        Err(ureq::Error::StatusCode(c)) => bail!("{}", tr!("il server risponde {c}", "the server answers {c}")),
-        Err(e) => Err(crate::internet::network_failure(e, &f.url)),
+        ))
+        .into()),
+        Err(ureq::Error::StatusCode(c)) => Err(Trouble::Server(tr!("il server risponde {c}", "the server answers {c}")).into()),
+        Err(e) => Err(Trouble::Network(crate::internet::network_failure(e, &f.url).to_string()).into()),
     }
 }
 
@@ -331,6 +349,12 @@ fn http_agent(url: &str, max_wait: Option<Duration>) -> ureq::Agent {
 
 const HF: &str = "https://huggingface.co/";
 
+/// Where Hugging Face is asked, for the files and for searches and repos alike. A development build asks
+/// `MANGO_HF_URL` instead, if set: the tests serve Hugging Face themselves and see what the app asks of it.
+fn hugging_face_url() -> String {
+    std::env::var("MANGO_HF_URL").ok().filter(|_| cfg!(debug_assertions)).unwrap_or_else(|| HF.trim_end_matches('/').to_string())
+}
+
 /// Where the Hugging Face token is saved in the Credential Manager.
 pub const HF_CREDENTIAL: &str = "HF_TOKEN";
 
@@ -352,6 +376,10 @@ fn hugging_face_token(url: &str) -> Option<String> {
 mod tests {
     use super::fake_server::{FakeServer, Route};
     use super::*;
+
+    fn download(f: &RemoteFile, dest: &Path, progress: &mut dyn FnMut(u64, u64)) -> Result<()> {
+        download_stoppable(f, dest, &AtomicBool::new(false), progress)
+    }
 
     #[test]
     fn without_disk_space_the_error_says_so_before_starting() {

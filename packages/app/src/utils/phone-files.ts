@@ -1,4 +1,4 @@
-import { PREVIEW_MAX_BYTES, previewKind, projectFileKind } from "@opencode-ai/session-ui/project-file"
+import { PREVIEW_MAX_BYTES, previewKind } from "@opencode-ai/session-ui/project-file"
 import type { ProjectFiles } from "@opencode-ai/session-ui/context"
 import { phonePreview } from "@/utils/phone-preview"
 
@@ -18,8 +18,8 @@ export function phoneProjectFiles(directory: string): ProjectFiles | undefined {
       throw { code: response.status === 404 ? "not_found" : "io", message: response.statusText }
     },
     async open(path) {
-      if (projectFileKind(path) === "web") return phonePreview.openPage({ directory, path })
       const kind = previewKind(path)
+      if (kind === "web") return phonePreview.openPage({ directory, path })
       if (kind && (kind === "image" || navigator.pdfViewerEnabled)) return showFile(files, address(path), path, kind)
       const link = document.createElement("a")
       link.href = address(path)

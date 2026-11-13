@@ -1,11 +1,9 @@
 import type { Session } from "@opencode-ai/sdk/v2/client"
 import { preloadMarkdown } from "@opencode-ai/session-ui/markdown-cache"
-import { useDialog } from "@opencode-ai/ui/context/dialog"
 import { useQuery } from "@tanstack/solid-query"
 import { DateTime } from "luxon"
 import { type Accessor, createEffect, createMemo, createRoot, createSignal, type JSX, startTransition } from "solid-js"
 import { produce } from "solid-js/store"
-import { useCommand } from "@/context/command"
 import {
   loadHomeSessionIndex,
   parseArchivedSessions,
@@ -47,8 +45,6 @@ export type HomeSessionView = "active" | "archived"
 
 export function createHomeSessionsController(home: HomeController) {
   const tabs = useTabs()
-  const command = useCommand()
-  const dialog = useDialog()
   const language = useLanguage()
   const projectDirectories = createMemo(() => {
     const project = home.project.selected()
@@ -91,6 +87,8 @@ export function createHomeSessionsController(home: HomeController) {
   // mango-code: the project list lives in the browser, but the agent knows every project ever opened, from the computer or
   // from another browser. A browser that does not have them (the phone, the first time or after a project was opened on
   // the computer) adds them every time Home opens, except the ones the user closed here; the app on the PC keeps its own.
+  // `projectsRead`: the agent has answered, so an empty list of projects is the computer's and not one still on its way.
+  const [projectsRead, setProjectsRead] = createSignal(false)
   createEffect(() => {
     const ctx = home.server.focusedContext()
     if (inMangoDesktop() || !ctx) return
@@ -101,6 +99,7 @@ export function createHomeSessionsController(home: HomeController) {
         ctx.projects.list().map((project) => project.worktree),
         ctx.projects.recentlyClosed().map((project) => project.worktree),
       ).forEach((directory) => ctx.projects.open(directory))
+      setProjectsRead(true)
     })
   })
   const refreshSessions = () => void sessionLoad.refetch()
@@ -192,38 +191,6 @@ export function createHomeSessionsController(home: HomeController) {
       })
   })
 
-  command.register("home.palette", () => [
-    {
-      id: "command.palette",
-      title: language.t("command.palette"),
-      hidden: true,
-      onSelect: async () => {
-        const conn = home.server.focused()
-        if (!conn) return
-        const ctx = home.server.focusedContext()
-        if (!ctx) return
-        const { DialogHomeCommandPaletteV2 } = await import("@/components/dialog-command-palette-v2")
-        void dialog.show(() => (
-          <DialogHomeCommandPaletteV2
-            server={conn}
-            onSelectSession={(entry) => {
-              if (!entry.sessionID || !entry.directory || !entry.server) return
-              const sessionID = entry.sessionID
-              const server = entry.server
-              const directory = entry.project?.worktree ?? entry.directory
-              ctx.projects.open(directory)
-              ctx.projects.touch(directory)
-              void startTransition(() => {
-                const tab = tabs.addSessionTab({ server, sessionId: sessionID })
-                tabs.select(tab)
-              })
-            }}
-          />
-        ))
-      },
-    },
-  ])
-
   return {
     copy: {
       language,
@@ -232,6 +199,7 @@ export function createHomeSessionsController(home: HomeController) {
       records,
       groups,
       loading: () => sessionLoad.isLoading,
+      projectsRead,
       archived: archivedRecords,
       archivedLoading: () => archivedLoad.isLoading,
       archivedFailed: () => archivedLoad.isError,

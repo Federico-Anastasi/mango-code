@@ -1,7 +1,6 @@
-//! Dictation (the microphone in the chat) is a choice of the user, off until they turn it on, from the first start page
-//! or from the settings. Turned on, its models (465 MB) download in the background once the app is ready, with the progress
-//! shown where it was turned on, and the service starts when they are there; turned off, the service stops and the models are
-//! deleted. Who updates from a version that already had the models finds it on. The state goes to the web UI through the
+//! Dictation (the microphone in the chat) is a choice of the user, off until they turn it on from the settings. Turned
+//! on, its models (465 MB) download in the background once the app is ready, with the progress shown where it was turned
+//! on, and the service starts when they are there; turned off, the service stops and the models are deleted. Who updates from a version that already had the models finds it on. The state goes to the web UI through the
 //! bridge (`dictation.state()` and the `mango-dictation` event).
 
 use crate::bridge::{err, BridgeError};
@@ -335,7 +334,7 @@ impl Backend for Pretend {
     }
 }
 
-/// The manager of this run, with the service on `port`. Before the first start page, so the page can already ask.
+/// The manager of this run, with the service on `port`. Before any page of the app, so a page can already ask.
 pub fn install(app: &AppHandle, paths: &Paths, port: u16) {
     let state = app.state::<crate::AppState>();
     let url = format!("http://127.0.0.1:{port}");

@@ -7,7 +7,6 @@ import { useI18n } from "@opencode-ai/ui/context/i18n"
 import { ButtonV2 } from "@opencode-ai/ui/v2/button-v2"
 import { Icon as IconV2 } from "@opencode-ai/ui/v2/icon"
 import { IconButtonV2 } from "@opencode-ai/ui/v2/icon-button-v2"
-import { KeybindV2 } from "@opencode-ai/ui/v2/keybind-v2"
 import { MenuV2 } from "@opencode-ai/ui/v2/menu-v2"
 import { TooltipV2 } from "@opencode-ai/ui/v2/tooltip-v2"
 import { AttachmentCardV2 } from "../attachment-card-v2"
@@ -44,8 +43,6 @@ export type PromptInputV2Props = {
   // Controls next to the send button (mango-code: dictation).
   trailingControl?: JSX.Element
   variantControlVisible?: boolean
-  attachKeybind?: string[]
-  attachShortcut?: string
 }
 
 export function PromptInputV2(props: PromptInputV2Props) {
@@ -208,9 +205,7 @@ export function PromptInputV2(props: PromptInputV2Props) {
             <PromptInputV2AddMenu
               disabled={state.mode === "shell"}
               title={i18n.t("ui.promptInput.add")}
-              keybind={props.attachKeybind ?? ["Mod", "U"]}
               attachLabel={i18n.t("ui.promptInput.attachments")}
-              attachShortcut={props.attachShortcut ?? "Mod+U"}
               commandsLabel={i18n.t("ui.promptInput.commands")}
               contextLabel={i18n.t("ui.promptInput.context")}
               shellLabel={i18n.t("ui.promptInput.shell")}
@@ -221,11 +216,7 @@ export function PromptInputV2(props: PromptInputV2Props) {
             />
             <Show when={view.agent} keyed>
               {(control) => (
-                <PromptInputV2ConfiguredSelect
-                  title={i18n.t("ui.promptInput.chooseAgent")}
-                  keybind={["Mod", "."]}
-                  control={control}
-                />
+                <PromptInputV2ConfiguredSelect title={i18n.t("ui.promptInput.chooseAgent")} control={control} />
               )}
             </Show>
             <Show
@@ -235,7 +226,6 @@ export function PromptInputV2(props: PromptInputV2Props) {
                   {(control) => (
                     <PromptInputV2ConfiguredSelect
                       title={i18n.t("ui.promptInput.chooseModel")}
-                      keybind={["Mod", "M"]}
                       control={control}
                       model
                     />
@@ -248,11 +238,7 @@ export function PromptInputV2(props: PromptInputV2Props) {
             <Show when={(props.variantControlVisible ?? true) && view.variant} keyed>
               {(control) => (
                 <Show when={control.options().length > 1}>
-                  <PromptInputV2ConfiguredSelect
-                    title={i18n.t("ui.promptInput.chooseVariant")}
-                    keybind={["Shift", "Mod", "D"]}
-                    control={control}
-                  />
+                  <PromptInputV2ConfiguredSelect title={i18n.t("ui.promptInput.chooseVariant")} control={control} />
                 </Show>
               )}
             </Show>
@@ -490,9 +476,7 @@ export function PromptInputV2Attachments(props: {
 export function PromptInputV2AddMenu(props: {
   disabled?: boolean
   title: string
-  keybind?: string[]
   attachLabel: string
-  attachShortcut?: string
   commandsLabel: string
   contextLabel: string
   shellLabel: string
@@ -502,15 +486,7 @@ export function PromptInputV2AddMenu(props: {
   onShell: () => void
 }) {
   return (
-    <TooltipV2
-      placement="top"
-      value={
-        <>
-          {props.title}
-          <KeybindV2 keys={props.keybind ?? []} variant="neutral" />
-        </>
-      }
-    >
+    <TooltipV2 placement="top" value={props.title}>
       <MenuV2 gutter={6} modal={false} placement="top-start">
         <MenuV2.Trigger
           as={IconButtonV2}
@@ -524,9 +500,7 @@ export function PromptInputV2AddMenu(props: {
         />
         <MenuV2.Portal>
           <MenuV2.Content style={{ "min-width": "180px" }}>
-            <MenuV2.Item onSelect={props.onAttach} shortcut={props.attachShortcut}>
-              {props.attachLabel}
-            </MenuV2.Item>
+            <MenuV2.Item onSelect={props.onAttach}>{props.attachLabel}</MenuV2.Item>
             <MenuV2.Separator />
             <MenuV2.Item onSelect={props.onCommands} shortcut="/">
               {props.commandsLabel}
@@ -544,18 +518,12 @@ export function PromptInputV2AddMenu(props: {
   )
 }
 
-function PromptInputV2ConfiguredSelect(props: {
-  title: string
-  keybind?: string[]
-  control: PromptInputV2SelectControl
-  model?: boolean
-}) {
+function PromptInputV2ConfiguredSelect(props: { title: string; control: PromptInputV2SelectControl; model?: boolean }) {
   const current = () => props.control.current()
   const providerID = () => props.control.options().find((option) => option.id === current())?.providerID
   return (
     <PromptInputV2Select
       title={props.title}
-      keybind={props.control.keybind?.() ?? props.keybind}
       options={props.control.options()}
       current={current()}
       currentIcon={
@@ -570,7 +538,6 @@ function PromptInputV2ConfiguredSelect(props: {
 
 export function PromptInputV2Select(props: {
   title: string
-  keybind?: string[]
   options: PromptInputV2Option[]
   current: string
   currentIcon?: JSX.Element
@@ -579,15 +546,7 @@ export function PromptInputV2Select(props: {
   onSelect: (id: string) => void
 }) {
   return (
-    <TooltipV2
-      placement="top"
-      value={
-        <>
-          {props.title}
-          <KeybindV2 keys={props.keybind ?? []} variant="neutral" />
-        </>
-      }
-    >
+    <TooltipV2 placement="top" value={props.title}>
       <MenuV2 gutter={6} modal={false} placement="top-start" onOpenChange={props.onOpenChange}>
         <MenuV2.Trigger
           as={ButtonV2}
@@ -678,9 +637,6 @@ export function PromptInputV2Popover(props: {
                   <span class="min-w-0 truncate text-v2-text-text-muted">{item.description}</span>
                 </Show>
               </div>
-              <Show when={item.keybind?.length}>
-                <span class="shrink-0 text-v2-text-text-muted">{item.keybind?.join("+")}</span>
-              </Show>
             </button>
           )}
         </For>

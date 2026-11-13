@@ -29,8 +29,7 @@ test("freeing the space deletes models, engines and logs, and leaves conversatio
       "agent/data/opencode/opencode.db": "chat",
       "agent/config/c": "c",
       "settings.json": "{}",
-      "model.txt": "model",
-      "first-run.json": "{}",
+      "choices.json": "{}",
       "user-models.json": "[]",
     }
     const data = path.join(work, "data")
@@ -43,7 +42,7 @@ test("freeing the space deletes models, engines and logs, and leaves conversatio
     assert.equal(ran.status, 0)
 
     const left = Object.keys(files).filter((name) => fs.existsSync(path.join(data, name)))
-    assert.deepEqual(left, ["agent/data/opencode/opencode.db", "agent/config/c", "settings.json", "model.txt", "first-run.json", "user-models.json"])
+    assert.deepEqual(left, ["agent/data/opencode/opencode.db", "agent/config/c", "settings.json", "choices.json", "user-models.json"])
   } finally {
     fs.rmSync(work, { recursive: true, force: true })
   }

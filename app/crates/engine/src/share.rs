@@ -1,4 +1,4 @@
-//! The engine shared with the user's other PCs ("Share the engine with my PCs" on the "Models and engine" page).
+//! The engine shared with the user's other PCs ("Share the engine with my PCs", in the settings' Connections).
 //!
 //! **Off by default.** When on, a thread opens a port (`<port>`) on each address the page shows (the home network's and
 //! Tailscale's, never all the networks), re-reading the addresses every few seconds because the Wi-Fi changes them. The
@@ -216,10 +216,11 @@ impl Share {
 impl Inner {
     fn write(&self, saved: &Saved) -> Result<()> {
         let text = serde_json::to_string_pretty(saved)?;
+        let unsaved = || mango_common::user_text(&tr!("Non riesco a salvare la condivisione del motore.", "I can't save the sharing of the engine."), self.file.display());
         if let Some(folder) = self.file.parent() {
-            std::fs::create_dir_all(folder)?;
+            std::fs::create_dir_all(folder).with_context(unsaved)?;
         }
-        mango_common::write_atomic(&self.file, text).with_context(|| tr!("scrittura di {}", "writing {}", self.file.display()))
+        mango_common::write_atomic(&self.file, text).with_context(unsaved)
     }
 
     /// True if it is the current key.

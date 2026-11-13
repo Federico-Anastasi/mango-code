@@ -684,31 +684,41 @@ const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Service | C
               const result: FileDiff[] = []
               const status = new Map<string, "added" | "deleted" | "modified">()
 
+              // -z: names as they are, never between quotes (a quote, a backslash, a tab or a newline in a name), so
+              // the project's prefix can be cut from them below.
               const statuses = yield* git(
-                [...quote, ...args(["diff", "--no-ext-diff", "--name-status", "--no-renames", from, to, "--", "."])],
+                [
+                  ...quote,
+                  ...args(["diff", "--no-ext-diff", "--name-status", "--no-renames", "-z", from, to, "--", "."]),
+                ],
                 { cwd: state.directory },
               )
 
-              for (const line of statuses.text.trim().split("\n")) {
-                if (!line) continue
-                const [code, file] = line.split("\t")
+              const fields = statuses.text.split("\0")
+              for (let i = 0; i + 1 < fields.length; i += 2) {
+                const code = fields[i]
+                const file = fields[i + 1]
                 if (!code || !file) continue
                 status.set(file, code.startsWith("A") ? "added" : code.startsWith("D") ? "deleted" : "modified")
               }
 
               const numstat = yield* git(
-                [...quote, ...args(["diff", "--no-ext-diff", "--no-renames", "--numstat", from, to, "--", "."])],
+                [...quote, ...args(["diff", "--no-ext-diff", "--no-renames", "--numstat", "-z", from, to, "--", "."])],
                 {
                   cwd: state.directory,
                 },
               )
 
               const rows = numstat.text
-                .trim()
-                .split("\n")
+                .split("\0")
                 .filter(Boolean)
                 .flatMap((line) => {
-                  const [adds, dels, file] = line.split("\t")
+                  const a = line.indexOf("\t")
+                  const b = line.indexOf("\t", a + 1)
+                  if (a === -1 || b === -1) return []
+                  const adds = line.slice(0, a)
+                  const dels = line.slice(a + 1, b)
+                  const file = line.slice(b + 1)
                   if (!file) return []
                   const binary = adds === "-" && dels === "-"
                   const additions = binary ? 0 : parseInt(adds)
@@ -736,6 +746,16 @@ const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Service | C
               const patch = (file: string, before: string, after: string) =>
                 formatPatch(structuredPatch(file, file, before, after, "", "", { context: Number.MAX_SAFE_INTEGER }))
 
+              // Git names the files from the repository root, which is what the snapshot trees and the ignore rules
+              // read; the app opens them from the project folder. The "." pathspec keeps them all under it.
+              const top = yield* git(args(["rev-parse", "--show-prefix"]), { cwd: state.directory })
+              if (top.code !== 0)
+                yield* Effect.logWarning("failed to read the project's path inside the repository", {
+                  exitCode: top.code,
+                  stderr: top.stderr,
+                })
+              const prefix = top.code === 0 ? top.text.replace(/\r?\n$/, "") : ""
+
               for (let i = 0; i < rows.length; i += step) {
                 const run = rows.slice(i, i + step)
                 const text = yield* load(run)
@@ -743,9 +763,10 @@ const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Service | C
                 for (const row of run) {
                   const hit = text?.get(row.file) ?? { before: "", after: "" }
                   const [before, after] = row.binary ? ["", ""] : text ? [hit.before, hit.after] : yield* show(row)
+                  const file = row.file.startsWith(prefix) ? row.file.slice(prefix.length) : row.file
                   result.push({
-                    file: row.file,
-                    patch: row.binary ? "" : patch(row.file, before, after),
+                    file,
+                    patch: row.binary ? "" : patch(file, before, after),
                     additions: row.additions,
                     deletions: row.deletions,
                     status: row.status,

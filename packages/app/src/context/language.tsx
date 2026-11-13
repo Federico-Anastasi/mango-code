@@ -4,7 +4,7 @@ import { createStore } from "solid-js/store"
 import { createSimpleContext } from "@opencode-ai/ui/context"
 import { pluralCategory, type UiI18nPluralKey } from "@opencode-ai/ui/context/i18n"
 import { Persist, persisted } from "@/utils/persist"
-import { authTokenFromCredentials } from "@/utils/server"
+import { authHeaders } from "@/utils/server"
 import { showToast } from "@/utils/toast"
 import { dict as en } from "@/i18n/en"
 import { dict as uiEn } from "@opencode-ai/ui/i18n/en"
@@ -31,6 +31,11 @@ type PluralKey =
   | "session.question.pending"
   | "session.followupDock.summary"
   | "session.revertDock.summary"
+  | "settings.computer.tailored.models"
+  | "settings.agent.count.tools"
+  | "settings.agent.count.mcp"
+  | "settings.agent.count.skills"
+  | "settings.agent.count.files"
 type Source = { dict: Record<string, string> }
 
 function cookie(locale: Locale) {
@@ -108,6 +113,19 @@ async function readServerLanguage(server: NonNullable<typeof languageServer>) {
   }
 }
 
+const savedListeners = new Set<() => void>()
+
+/**
+ * Runs `listener` each time a choice of language reaches the server: what the app's server says from then on (the catalog,
+ * the computer) is in that language. It returns the function that stops it.
+ */
+export function onLanguageSaved(listener: () => void) {
+  savedListeners.add(listener)
+  return () => {
+    savedListeners.delete(listener)
+  }
+}
+
 async function writeServerLanguage(choice: LanguageChoice) {
   if (!languageServer) throw new Error("language server not set")
   const response = await fetch(languageServer.url, {
@@ -125,7 +143,7 @@ async function writeServerLanguage(choice: LanguageChoice) {
 export async function loadInitialLocale(server: { url: string; auth?: { username: string; password: string } }) {
   languageServer = {
     url: new URL(LANGUAGE_PATH, server.url),
-    headers: server.auth ? { authorization: `Basic ${authTokenFromCredentials(server.auth)}` } : {},
+    headers: authHeaders(server.auth ?? {}),
   }
   const chosen = await readServerLanguage(languageServer)
   initialChoice = chosen ?? "system"
@@ -212,8 +230,9 @@ export const { use: useLanguage, provider: LanguageProvider } = createSimpleCont
       setChoice(next: LanguageChoice) {
         setChoice(next)
         setStore("locale", next === "system" ? detectLocale() : next)
-        writeServerLanguage(next).catch(() =>
-          showToast({ variant: "error", title: t("settings.general.row.language.saveError") }),
+        writeServerLanguage(next).then(
+          () => savedListeners.forEach((listener) => listener()),
+          () => showToast({ variant: "error", title: t("settings.general.row.language.saveError") }),
         )
       },
       setDirection(next: Direction) {

@@ -42,8 +42,9 @@ test("the selector says the model does not fit", async () => {
   expect(local.models.fake.name).toBe("Fake model");
   expect(local.models.huge.name).toBe("Model huge");
   // the menu says it from what the agent tells (see model-menu.test.ts)
-  const info = await (await fetch(`${env.agent}/mango/models/info`)).json();
-  expect(info.huge).toMatchObject({ place: "none", bytes: 10 * 2 ** 40 });
+  const catalog = await (await fetch(`${env.agent}/mango/models`)).json();
+  const huge = catalog.models.find((m: { key: string }) => m.key === "huge");
+  expect(huge).toMatchObject({ present: true, bytes: 10 * 2 ** 40, verdict: { fits: false, where: null } });
 }, 60_000);
 
 test("chosen in the web UI, the conversation shows at once why it does not start and what to do", async () => {

@@ -36,6 +36,14 @@ fn planner(log: PathBuf, save: bool, chunk_ms: u64, start_ms: u64, save_ms: u64)
         if gpus.is_empty() {
             bail!("no GPU left");
         }
+        // A test makes the plan slow by writing how many milliseconds it takes: the hardware read of a busy computer.
+        if let Some(ms) = std::fs::read_to_string(log.with_file_name("plan_ms")).ok().and_then(|v| v.trim().parse().ok()) {
+            std::thread::sleep(Duration::from_millis(ms));
+        }
+        // A test makes the plan of a model refuse it by writing its key in a file: a choice that does not fit.
+        if std::fs::read_to_string(log.with_file_name("refuse")).is_ok_and(|k| k.trim() == key) {
+            bail!("«{key}» does not fit with these choices");
+        }
         if let Some(i) = gpus.iter().find(|i| excluded.contains(i)) {
             bail!("it needs GPU {i}, which has been released");
         }
@@ -69,7 +77,8 @@ fn planner(log: PathBuf, save: bool, chunk_ms: u64, start_ms: u64, save_ms: u64)
             },
             url,
             label: format!("Model {}", key.to_uppercase()),
-            ctx: 4096,
+            // A test changes the context the plan gives by writing it in a file: the user's choice.
+            ctx: std::fs::read_to_string(log.with_file_name("context")).ok().and_then(|c| c.trim().parse().ok()).unwrap_or(4096),
             images: false,
             gpus_used: gpus.into_iter().map(gpu).collect(),
             gguf: format!(r"C:\fake\{key}.gguf").into(),
@@ -84,6 +93,15 @@ struct Fixture {
     port: u16,
     log: PathBuf,
     _dir: tempfile::TempDir,
+}
+
+/// The app's routes in the tests: they answer what they were asked.
+struct Echo;
+
+impl http::Control for Echo {
+    fn handle(&self, method: &str, path: &str, body: &[u8]) -> (u16, Value) {
+        (200, json!({ "method": method, "path": path, "body": String::from_utf8_lossy(body) }))
+    }
 }
 
 fn fixture() -> Fixture {
@@ -106,10 +124,9 @@ fn fixture_full(chunk_ms: u64, start_ms: u64, save_ms: u64) -> Fixture {
         planner(log.clone(), true, chunk_ms, start_ms, save_ms),
         Box::new(|| vec![(0, 4000, 8192), (1, 10, 8192), (2, 3000, 8192)]),
         dir.path(),
-        Some(dir.path().join("model.txt")),
     );
     let port = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap().local_addr().unwrap().port();
-    http::serve(m.clone(), port).unwrap();
+    http::serve(m.clone(), port, Some(std::sync::Arc::new(Echo))).unwrap();
     Fixture { m, port, log, _dir: dir }
 }
 
@@ -208,8 +225,6 @@ fn starts_the_requested_model_and_switches_when_another_is_needed() {
         b.routes_to_engine(),
         ["a POST /v1/chat/completions", "a POST /slots/0?action=persist", "b POST /v1/chat/completions"]
     );
-    // The last running model is remembered for the next start.
-    assert_eq!(b.m.remembered().as_deref(), Some("b"));
 }
 
 #[test]
@@ -308,12 +323,25 @@ fn a_foreign_host_is_rejected() {
 fn every_route_rejects_web_pages() {
     let b = fixture();
     assert_eq!(code_of(&get(&b.url("/engine"), &[("Origin", "https://example.com")])), 403);
+    assert_eq!(code_of(&get(&b.url("/control/state"), &[("Origin", "https://example.com")])), 403);
     // The model too: a page sends a "simple" request (text/plain) that CORS doesn't stop.
     let r = post(&b.url("/v1/chat/completions"), &[("Origin", "https://example.com"), ("Content-Type", "text/plain")], &json!({ "model": "a", "messages": [] }).to_string());
     assert_eq!(code_of(&r), 403);
     assert_eq!(b.m.state().phase, Phase::Stopped, "the rejected request must not start the engine");
     let v = json_of(ok(get(&b.url("/engine"), &[])));
     assert_eq!(v["phase"], json!("stopped"));
+}
+
+/// What is under `/control/` goes to the app that started the manager, with the method, the path without the query and
+/// the body; the engine does not start for it.
+#[test]
+fn the_control_routes_are_the_apps() {
+    let b = fixture();
+    let (status, v) = b.control("/control/model/use?x=1", json!({ "model": "a" }));
+    assert_eq!(status, 200);
+    assert_eq!(v, json!({ "method": "POST", "path": "/control/model/use", "body": json!({ "model": "a" }).to_string() }));
+    assert_eq!(json_of(ok(get(&b.url("/control/state"), &[])))["method"], json!("GET"));
+    assert_eq!(b.m.state().phase, Phase::Stopped);
 }
 
 /// Releasing a GPU of a model that also fits without it: `release` replies as soon as the GPU is free, not when the
@@ -584,16 +612,18 @@ fn the_memory_is_saved_and_restored_at_every_step() {
     assert_eq!(events(&b, "save"), ["a 200", "a 300", "b 100"]);
 }
 
-/// The warm-up request (system prompt base) reaches the engine with its header: it's what tells it to answer at
-/// once if the base is already on disk.
+/// A slow start has two possible causes (the model loads slowly, the saved conversation comes back slowly): the
+/// `restore` line tells how long each took, not only the sum.
 #[test]
-fn the_warmup_request_reaches_the_engine_as_such() {
-    let b = fixture();
-    let r = ok(post(&b.url("/v1/chat/completions"), &[("Content-Type", "application/json"), ("x-mango-warmup", "1")], &json!({ "model": "a", "messages": [] }).to_string()));
-    assert_eq!(code_of(&r), 200);
-    let lines = std::fs::read_to_string(&b.log).unwrap();
-    let chat = lines.lines().map(|l| serde_json::from_str::<Value>(l).unwrap()).find(|v| v["route"] == "/v1/chat/completions").unwrap();
-    assert_eq!(chat["headers"]["x-mango-warmup"], json!("1"), "{chat}");
+fn the_restore_line_tells_the_load_from_the_restore() {
+    let b = fixture_slow(30, 600);
+    b.text("a");
+    let lines = std::fs::read_to_string(b._dir.path().join("manager.log")).unwrap();
+    let restore = lines.lines().map(|l| serde_json::from_str::<Value>(l).unwrap()).find(|v| v["event"] == "restore").expect("no «restore» line in the log");
+    let (load, back, total) = (restore["load_ms"].as_u64(), restore["restore_ms"].as_u64(), restore["ms"].as_u64().unwrap());
+    assert!(load.is_some_and(|ms| ms >= 600), "the engine was not ready for 600 ms: {restore}");
+    assert!(back.is_some_and(|ms| ms < 600), "the restore is not the load: {restore}");
+    assert!(total >= load.unwrap() + back.unwrap(), "{restore}");
 }
 
 /// The engine starts with the logs folder as working folder: `llama.log` ends up there, not where the app started.
@@ -737,7 +767,6 @@ fn an_engine_that_runs_out_of_memory_says_so_in_a_sentence() {
         }),
         Box::new(Vec::new),
         dir.path(),
-        None,
     );
     let e = format!("{:#}", m.start("a", &mut |_| {}).unwrap_err());
     // The sentences are asserted in the language the manager is using, whatever it is on this PC.
@@ -745,4 +774,608 @@ fn an_engine_that_runs_out_of_memory_says_so_in_a_sentence() {
     let advice = tr!("scegli un modello più piccolo", "choose a smaller model");
     assert!(e.starts_with(&sentence) && e.contains(&advice), "{e}");
     assert!(e.contains(&tr!("dettaglio tecnico", "technical detail")) && e.contains("out of memory"), "{e}");
+}
+
+fn until(what: &str, limit: Duration, done: impl Fn() -> bool) {
+    let t0 = Instant::now();
+    while !done() {
+        assert!(t0.elapsed() < limit, "{what}: not within {limit:?}");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+impl Fixture {
+    /// The models whose fake engine process is alive: the ones started by this fixture carry its folder in their command line.
+    fn engines_alive(&self) -> Vec<String> {
+        let out = std::process::Command::new("powershell")
+            .args(["-NoProfile", "-Command", "Get-CimInstance Win32_Process -Filter \"Name='fake-engine.exe'\" | ForEach-Object CommandLine"])
+            .creation_flags(mango_common::CREATE_NO_WINDOW)
+            .output()
+            .unwrap();
+        let folder = self._dir.path().display().to_string();
+        let mut keys: Vec<String> = String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .filter(|l| l.contains(&folder))
+            .filter_map(|l| Some(l.split_once(r"C:\fake\")?.1.split_once(".gguf")?.0.to_string()))
+            .collect();
+        keys.sort();
+        keys
+    }
+
+    fn loading(&self, key: &str) -> bool {
+        let s = self.m.state();
+        s.phase == Phase::Starting && s.model.as_deref() == Some(key)
+    }
+
+    fn running(&self, key: &str) -> bool {
+        let s = self.m.state();
+        s.phase == Phase::Running && s.model.as_deref() == Some(key)
+    }
+}
+
+/// The chat requests reach the engine with the defaults of their model where they did not say them; the other routes
+/// and what the request says stay as they came.
+#[test]
+fn a_chat_request_reaches_the_engine_with_the_defaults_of_its_model() {
+    let b = fixture();
+    b.m.set_request_defaults(Box::new(|key| Ok(json!({ "temperature": if key == "a" { 0.3 } else { 1.1 }, "chat_template_kwargs": { "enable_thinking": false } }).as_object().unwrap().clone())));
+    let chat = |body: Value| {
+        ok(post(&b.url("/v1/chat/completions"), &[("Content-Type", "application/json")], &body.to_string()));
+        let lines = std::fs::read_to_string(&b.log).unwrap();
+        lines.lines().map(|l| serde_json::from_str::<Value>(l).unwrap()).filter(|v| v["route"] == "/v1/chat/completions").last().unwrap()["body"].clone()
+    };
+    let got = chat(json!({ "model": "a", "messages": [] }));
+    assert_eq!((got["temperature"].as_f64(), &got["chat_template_kwargs"]), (Some(0.3), &json!({ "enable_thinking": false })), "{got}");
+    let got = chat(json!({ "model": "a", "messages": [], "temperature": 0.9 }));
+    assert_eq!(got["temperature"].as_f64(), Some(0.9), "what the request says stays: {got}");
+    assert_eq!(chat(json!({ "model": "b", "messages": [] }))["temperature"].as_f64(), Some(1.1));
+}
+
+/// The user's choices changed the plan of the running model: it is loaded again when its answer in progress has ended,
+/// not before; with the same plan nothing happens. A model taken off the computer is stopped and forgotten.
+#[test]
+fn a_running_model_is_loaded_again_when_its_plan_changed_and_no_request_is_in_progress() {
+    let b = fixture_slow(60, 0);
+    b.text("a");
+    let loads = || events(&b, "restore").len();
+    assert_eq!(loads(), 1);
+    b.m.reload_if_changed();
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(loads(), 1, "the same plan: nothing to load again");
+
+    std::fs::write(b._dir.path().join("context"), "2048").unwrap();
+    let end_of_answer = std::thread::scope(|sc| {
+        let answering = sc.spawn(|| b.ask("a").last().unwrap().0);
+        std::thread::sleep(Duration::from_millis(100));
+        b.m.reload_if_changed();
+        assert_eq!(b.m.state().context, Some(4096), "the answer in progress keeps its engine");
+        answering.join().unwrap()
+    });
+    until("«a» loaded again", Duration::from_secs(5), || b.m.state().context == Some(2048) && b.running("a"));
+    assert!(Instant::now() > end_of_answer);
+    assert_eq!(loads(), 2);
+    assert_eq!(b.text("a"), "I am the engine a");
+
+    b.m.unload();
+    let s = b.m.state();
+    assert_eq!((s.phase, s.model), (Phase::Stopped, None));
+    assert!(b.engines_alive().is_empty());
+}
+
+/// Stopping the engine while a model loads stops the load: the model does not come up afterwards.
+#[test]
+fn stopping_the_engine_stops_a_load_in_progress() {
+    let b = fixture_slow(30, 4_000);
+    b.m.choose("a");
+    until("«a» loading", Duration::from_secs(3), || b.loading("a") && b.engines_alive() == ["a"]);
+    b.m.stop();
+    assert_eq!(b.m.state().phase, Phase::Stopped);
+    until("the process of «a» gone", Duration::from_secs(3), || b.engines_alive().is_empty());
+    std::thread::sleep(Duration::from_millis(600));
+    assert_eq!(b.m.state().phase, Phase::Stopped, "the stopped load must not end as running");
+}
+
+/// The user picks another model while one is still loading: that load stops, its process is gone, and the chosen
+/// model starts at once instead of after the first has finished loading.
+#[test]
+fn choosing_another_model_stops_the_load_in_progress() {
+    let b = fixture_slow(30, 4_000);
+    b.m.choose("a");
+    until("«a» loading", Duration::from_secs(3), || b.loading("a") && b.engines_alive() == ["a"]);
+    let state = serde_json::to_value(b.m.state()).unwrap();
+    assert_eq!((state["loading"]["name"].as_str(), state["loading"]["context"].as_u64()), (Some("Model A"), Some(4096)), "{state}");
+    assert_eq!(state["loading"]["gpus"], json!(["GPU 0", "GPU 2"]), "{state}");
+    let t0 = Instant::now();
+    b.m.choose("b");
+    until("«b» running", Duration::from_secs(9), || b.running("b"));
+    // «b» alone takes 4 s to load: after the rest of «a» it would have been almost 8.
+    assert!(t0.elapsed() < Duration::from_millis(6_000), "{:?}", t0.elapsed());
+    assert_eq!(b.engines_alive(), ["b"]);
+    assert_eq!(serde_json::to_value(b.m.state()).unwrap()["loading"], Value::Null);
+    // A load that was stopped has no conversation to save.
+    assert!(!b.routes_to_engine().iter().any(|r| r.starts_with("a ")), "{:?}", b.routes_to_engine());
+    assert_eq!(b.text("b"), "I am the engine b");
+}
+
+/// A request that was waiting for the model whose load the user stopped is told so, with an answer nobody retries:
+/// retried, it would stop in turn the model the user has just picked.
+#[test]
+fn a_request_waiting_for_a_stopped_load_is_told_and_not_retried() {
+    let b = fixture_slow(30, 3_000);
+    b.m.choose("a");
+    until("«a» loading", Duration::from_secs(3), || b.loading("a"));
+    let url = b.url("/v1/chat/completions");
+    let waiting = std::thread::spawn(move || {
+        let r = post(&url, &[("Content-Type", "application/json")], &json!({ "model": "a", "messages": [] }).to_string());
+        (code_of(&r), json_of(r))
+    });
+    std::thread::sleep(Duration::from_millis(400));
+    b.m.choose("b");
+    let (code, v) = waiting.join().unwrap();
+    assert_eq!(code, 422, "{v}");
+    assert!(!v["error"]["message"].as_str().unwrap_or("").is_empty(), "{v}");
+    until("«b» running", Duration::from_secs(8), || b.running("b"));
+    assert_eq!(b.engines_alive(), ["b"]);
+}
+
+/// Only the user's choice stops a load. A request that names another model waits for the load to finish, as it
+/// always did, and then switches.
+#[test]
+fn a_request_for_another_model_does_not_stop_a_load() {
+    let b = fixture_slow(30, 1_500);
+    b.m.choose("a");
+    until("«a» loading", Duration::from_secs(3), || b.loading("a"));
+    assert_eq!(b.text("b"), "I am the engine b");
+    // «a» was saved when it stopped: it had finished loading.
+    assert_eq!(b.routes_to_engine(), ["a POST /slots/0?action=persist", "b POST /v1/chat/completions"]);
+}
+
+/// Picking the model that is already running, or already loading, starts nothing.
+#[test]
+fn choosing_the_model_already_there_does_nothing() {
+    let b = fixture_slow(30, 1_000);
+    b.m.choose("a");
+    until("«a» loading", Duration::from_secs(3), || b.loading("a"));
+    b.m.choose("a");
+    until("«a» running", Duration::from_secs(5), || b.running("a"));
+    b.m.choose("a");
+    std::thread::sleep(Duration::from_millis(500));
+    assert!(b.running("a"));
+    assert_eq!(b.engines_alive(), ["a"]);
+    assert_eq!(b.routes_to_engine(), Vec::<String>::new(), "«a» was started once and never stopped");
+}
+
+/// A choice the plan refuses leaves the reason in the state, and the model that was running stays.
+#[test]
+fn a_choice_that_does_not_start_says_why() {
+    let b = fixture();
+    b.m.choose("ghost");
+    until("the error", Duration::from_secs(3), || b.m.state().phase == Phase::Error);
+    let s = b.m.state();
+    assert_eq!(s.model.as_deref(), Some("ghost"));
+    assert!(s.error.as_deref().unwrap_or("").contains("ghost"), "{s:?}");
+}
+
+impl Fixture {
+    /// The user's choices give model plans this context from now on.
+    fn context(&self, ctx: u32) {
+        std::fs::write(self._dir.path().join("context"), ctx.to_string()).unwrap();
+    }
+
+    /// The user's choices no longer fit `key` (`None`: everything fits again).
+    fn refuse(&self, key: Option<&str>) {
+        let f = self._dir.path().join("refuse");
+        match key {
+            Some(k) => std::fs::write(f, k).unwrap(),
+            None => drop(std::fs::remove_file(f)),
+        }
+    }
+
+    /// Waits until a request is in progress.
+    fn answering(&self) {
+        until("the answer in progress", Duration::from_secs(3), || self.m.state().requests_in_flight == 1);
+    }
+
+    fn loads(&self) -> Vec<String> {
+        events(self, "restore").into_iter().map(|e| e.split(' ').next().unwrap().to_string()).collect()
+    }
+}
+
+/// A reload asked while «a» answered is not done once the user has picked «b» meanwhile, nor after the engine was
+/// stopped: it never brings back the model before.
+#[test]
+fn a_pending_reload_never_brings_back_the_model_before() {
+    let b = fixture_slow(80, 0);
+    b.text("a");
+    b.context(2048);
+    std::thread::scope(|sc| {
+        let answering = sc.spawn(|| b.text("a"));
+        b.answering();
+        b.m.reload_if_changed();
+        b.m.choose("b");
+        answering.join().unwrap();
+    });
+    until("«b» running", Duration::from_secs(5), || b.running("b"));
+    std::thread::sleep(Duration::from_millis(1_500));
+    assert!(b.running("b"), "{:?}", b.m.state());
+    assert_eq!(b.loads(), ["a", "b"]);
+
+    // the same with the engine stopped while the reload waits: nothing starts again
+    b.context(1024);
+    std::thread::scope(|sc| {
+        let answering = sc.spawn(|| b.ask("b"));
+        b.answering();
+        b.m.reload_if_changed();
+        b.m.unload();
+        answering.join().unwrap();
+    });
+    std::thread::sleep(Duration::from_millis(1_500));
+    assert_eq!(b.m.state().phase, Phase::Stopped);
+    assert!(b.engines_alive().is_empty());
+    assert_eq!(b.loads(), ["a", "b"]);
+}
+
+/// The context changed while the model loaded, twice: the load ends with the plan it began with, then the model is
+/// loaded once more with the last choice.
+#[test]
+fn a_choice_changed_while_the_model_loads_is_applied_when_the_load_ends() {
+    let b = fixture_slow(30, 1_500);
+    b.m.choose("a");
+    until("«a» loading", Duration::from_secs(3), || b.loading("a"));
+    b.context(2048);
+    b.m.reload_if_changed();
+    b.context(1024);
+    b.m.reload_if_changed();
+    until("«a» running with the last context", Duration::from_secs(8), || b.running("a") && b.m.state().context == Some(1024));
+    assert_eq!(b.loads(), ["a", "a"]);
+    assert_eq!(b.engines_alive(), ["a"]);
+}
+
+/// A changed choice that does not fit leaves the model running and says why; back to the choice it runs with, the
+/// failure is gone and nothing is loaded again. A choice changed and changed back while the model answers loads
+/// nothing again either.
+#[test]
+fn going_back_to_the_choice_in_use_clears_the_failure_and_reloads_nothing() {
+    let b = fixture_slow(80, 0);
+    b.text("a");
+    b.refuse(Some("a"));
+    b.m.reload_if_changed();
+    until("the failure", Duration::from_secs(3), || b.m.state().failed.is_some());
+    assert!(b.running("a"));
+    b.refuse(None);
+    b.m.reload_if_changed();
+    assert!(b.m.state().failed.is_none(), "{:?}", b.m.state());
+
+    std::thread::scope(|sc| {
+        let answering = sc.spawn(|| b.text("a"));
+        std::thread::sleep(Duration::from_millis(100));
+        b.context(2048);
+        b.m.reload_if_changed();
+        b.context(4096);
+        b.m.reload_if_changed();
+        answering.join().unwrap();
+    });
+    std::thread::sleep(Duration::from_millis(1_000));
+    assert!(b.running("a"));
+    assert_eq!(b.loads(), ["a"], "the same plan: nothing loaded again");
+}
+
+/// A model picked while all the cards are lent is the one that starts when they come back: meanwhile the state says the
+/// cards are lent, not that it loads.
+#[test]
+fn a_model_picked_while_the_cards_are_lent_waits_as_lent() {
+    let b = fixture();
+    b.text("a");
+    assert_eq!(b.control("/engine/release", json!({})).0, 200);
+    b.m.choose("b");
+    std::thread::sleep(Duration::from_millis(500));
+    let s = b.m.state();
+    assert_eq!((s.phase, s.chosen.as_deref(), s.model.as_deref()), (Phase::Released, None, Some("b")), "{s:?}");
+    b.m.resume(&mut |_| {}).unwrap();
+    until("«b» running", Duration::from_secs(5), || b.running("b"));
+    assert_eq!(b.engines_alive(), ["b"]);
+}
+
+/// While a model is being taken off the computer nothing starts it: a request gets 422 with a sentence, a choice leaves
+/// nothing picked, a reload does not run. Once the guard is dropped it starts again.
+#[test]
+fn a_model_being_removed_is_not_started() {
+    let b = fixture();
+    b.text("a");
+    let removing = b.m.block_starts("b");
+    let (code, v) = b.control("/v1/chat/completions", json!({ "model": "b", "messages": [] }));
+    assert_eq!(code, 422, "{v}");
+    assert!(v["error"]["message"].as_str().unwrap().contains("«b»"), "{v}");
+    b.m.choose("b");
+    std::thread::sleep(Duration::from_millis(300));
+    let s = b.m.state();
+    assert_eq!((s.chosen, s.failed.is_none()), (None, true));
+    assert!(b.running("a"));
+
+    let removing_a = b.m.block_starts("a");
+    b.context(2048);
+    b.m.reload_if_changed();
+    std::thread::sleep(Duration::from_millis(500));
+    assert_eq!(b.loads(), ["a"], "the reload did not start «a» again");
+    b.m.unload();
+    assert_eq!(b.control("/v1/chat/completions", json!({ "model": "a", "messages": [] })).0, 422);
+    assert!(b.engines_alive().is_empty());
+
+    drop(removing);
+    drop(removing_a);
+    assert_eq!(b.text("b"), "I am the engine b");
+}
+
+/// «a» has to be loaded again and «b» is picked meanwhile, but «b» does not start: «a» stays and takes the changed choice.
+#[test]
+fn the_model_that_stays_after_a_failed_switch_takes_the_changed_choice() {
+    let b = fixture_slow(80, 0);
+    b.text("a");
+    b.refuse(Some("b"));
+    std::thread::scope(|sc| {
+        let answering = sc.spawn(|| b.text("a"));
+        b.answering();
+        b.context(2048);
+        b.m.reload_if_changed();
+        b.m.choose("b");
+        answering.join().unwrap();
+    });
+    until("«a» with the new context", Duration::from_secs(5), || b.running("a") && b.m.state().context == Some(2048));
+    assert_eq!(b.loads(), ["a", "a"]);
+}
+
+/// The guard stops nothing by itself: a model loading when it is taken comes up and answers, and so does a running one
+/// whose choices changed, as it is. `/engine/model` and `resume` that would start a blocked model are refused; once the
+/// guards are gone it starts again.
+#[test]
+fn a_model_being_removed_answers_while_it_runs_and_nothing_starts_it_again() {
+    let b = fixture_slow(30, 1_000);
+    b.m.choose("a");
+    until("«a» loading", Duration::from_secs(3), || b.loading("a"));
+    let removing = b.m.block_starts("a");
+    until("«a» running", Duration::from_secs(5), || b.running("a"));
+    assert_eq!(b.text("a"), "I am the engine a");
+
+    b.context(2048);
+    b.m.reload_if_changed();
+    std::thread::sleep(Duration::from_millis(500));
+    assert_eq!(b.text("a"), "I am the engine a");
+    assert_eq!((b.m.state().context, b.loads()), (Some(4096), vec!["a".to_string()]));
+
+    let removing_b = b.m.block_starts("b");
+    assert_eq!(b.control("/engine/model", json!({ "model": "b" })).0, 422);
+    assert_eq!(b.control("/engine/release", json!({})).0, 200);
+    assert!(b.m.resume(&mut |_| {}).unwrap_err().is::<engine::BeingRemoved>());
+    assert!(b.engines_alive().is_empty());
+
+    drop(removing);
+    drop(removing_b);
+    assert_eq!(b.text("a"), "I am the engine a");
+    assert_eq!(b.m.state().context, Some(2048));
+}
+
+/// Two models picked one after the other while all the cards are lent: the last one starts when they come back.
+#[test]
+fn the_last_model_picked_while_the_cards_are_lent_is_the_one_that_starts() {
+    let b = fixture();
+    b.text("a");
+    assert_eq!(b.control("/engine/release", json!({})).0, 200);
+    b.m.choose("b");
+    b.m.choose("c");
+    until("«c» waits for the cards", Duration::from_secs(3), || {
+        let s = b.m.state();
+        s.chosen.is_none() && s.model.as_deref() == Some("c")
+    });
+    b.m.resume(&mut |_| {}).unwrap();
+    until("«c» running", Duration::from_secs(5), || b.running("c"));
+    std::thread::sleep(Duration::from_millis(500));
+    assert_eq!(b.engines_alive(), ["c"]);
+}
+
+/// A model picked while part of the cards is lent, and that does not fit on the rest: a request that starts another model
+/// on the cards that remain does not take its place, and the picked one starts when the cards come back.
+#[test]
+fn a_request_on_the_cards_that_remain_does_not_replace_the_model_picked() {
+    let b = fixture();
+    b.text("a");
+    assert_eq!(b.control("/engine/release", json!({ "gpus": [2] })).0, 200);
+    b.m.choose("b");
+    until("«b» waits for the cards", Duration::from_secs(3), || {
+        let s = b.m.state();
+        s.chosen.is_none() && s.failed.is_none() && s.model.as_deref() == Some("b")
+    });
+    assert_eq!(b.text("c"), "I am the engine c");
+    b.m.resume(&mut |_| {}).unwrap();
+    until("«b» running", Duration::from_secs(5), || b.running("b"));
+    std::thread::sleep(Duration::from_millis(500));
+    assert_eq!(b.engines_alive(), ["b"]);
+}
+
+/// «a» has to be loaded again while it answers; a model picked meanwhile is refused (it is being removed): the reload is
+/// still done when the answer ends.
+#[test]
+fn a_reload_waits_for_a_picked_model_that_never_starts_and_then_runs() {
+    let b = fixture_slow(80, 0);
+    b.text("a");
+    let _removing = b.m.block_starts("b");
+    std::thread::scope(|sc| {
+        let answering = sc.spawn(|| b.text("a"));
+        b.answering();
+        b.context(2048);
+        b.m.reload_if_changed();
+        b.m.choose("b");
+        answering.join().unwrap();
+    });
+    until("«a» with the new context", Duration::from_secs(5), || b.running("a") && b.m.state().context == Some(2048));
+}
+
+/// The state never says «starting» without saying what loads: while the plan is made (slow here, as the hardware read of a
+/// busy computer) the phase is still the one before.
+#[test]
+fn the_state_never_says_starting_without_what_loads() {
+    let b = fixture_slow(30, 500);
+    std::fs::write(b._dir.path().join("plan_ms"), "800").unwrap();
+    b.m.choose("a");
+    let t0 = Instant::now();
+    let mut seen_loading = false;
+    while t0.elapsed() < Duration::from_secs(4) && !b.running("a") {
+        let s = b.m.state();
+        if s.phase == Phase::Starting {
+            assert!(s.loading.is_some(), "starting without loading: {s:?}");
+            seen_loading = true;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(seen_loading && b.running("a"), "{:?}", b.m.state());
+}
+
+// --- room beside the other programs -------------------------------------------------------------------------------
+
+/// The memory used on the three GPUs as a test sets it: what the other programs hold, and an engine of ours until it lets go.
+type Cards = std::sync::Arc<std::sync::Mutex<Vec<(u32, u64, u64)>>>;
+type Count = std::sync::Arc<std::sync::atomic::AtomicUsize>;
+
+fn cards(used: &[(u32, u64)]) -> Cards {
+    std::sync::Arc::new(std::sync::Mutex::new(used.iter().map(|&(i, u)| (i, u, 8192)).collect()))
+}
+
+fn count(c: &Count) -> usize {
+    c.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+/// The fake models with the app's check reduced to a rule: a GPU of the model with more than 2 GB in use has no room for it.
+/// The answer is the fixture and how many times the check was asked. `start_ms`: how long a model takes to load.
+fn fixture_with_cards(used: Cards, start_ms: u64) -> (Fixture, Count) {
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("requests.jsonl");
+    let read = used.clone();
+    let m = EngineManager::new(planner(log.clone(), true, 30, start_ms, 0), Box::new(move || read.lock().unwrap().clone()), dir.path());
+    let checks = Count::default();
+    let counted = checks.clone();
+    m.set_room_check(Box::new(move |key, _, used| {
+        counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let gpus: &[u32] = if key == "a" { &[0, 2] } else { &[0, 1, 2] };
+        let held: Vec<u32> = used.iter().filter(|u| u.1 > 2048 && gpus.contains(&u.0)).map(|u| u.0).collect();
+        Ok((!held.is_empty()).then(|| engine_cfg::CardsTaken { sentence: format!("Another program holds GPU {held:?}."), cards: held }))
+    }));
+    let port = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap().local_addr().unwrap().port();
+    http::serve(m.clone(), port, Some(std::sync::Arc::new(Echo))).unwrap();
+    (Fixture { m, port, log, _dir: dir }, checks)
+}
+
+/// GPU `gpu` gives back its memory (what an engine of ours held there) once the check has been asked again: the start
+/// that follows the closing of an engine found it still held, and waits for it.
+fn given_back_after_the_next_check(used: &Cards, gpu: usize, checks: &Count) -> std::thread::JoinHandle<()> {
+    let (used, checks, before) = (used.clone(), checks.clone(), count(checks));
+    std::thread::spawn(move || {
+        until("the check asked again", Duration::from_secs(20), || count(&checks) > before);
+        used.lock().unwrap()[gpu].1 = 300;
+    })
+}
+
+/// Another program holds GPU 1. «a» does not use it and starts; «b» uses it and does not start: no engine is opened, the
+/// state says which card in `taken` and keeps the detail in `reason`, and a request that names «b» gets 422, which the
+/// agent does not retry. «Riprova» (`retry`) starts «b» anyway, without asking the check again.
+#[test]
+fn a_model_without_room_beside_another_program_does_not_start_until_retry() {
+    let (b, checks) = fixture_with_cards(cards(&[(0, 300), (1, 4900), (2, 0)]), 300);
+    b.m.choose("a");
+    until("«a» running", Duration::from_secs(5), || b.running("a"));
+
+    b.m.choose("b");
+    until("«b» refused", Duration::from_secs(5), || b.m.state().failed.is_some());
+    let s = b.m.state();
+    let failed = s.failed.clone().unwrap();
+    assert_eq!((failed.model.as_str(), failed.taken.as_deref()), ("b", Some("Another program holds GPU [1].")), "{s:?}");
+    assert!(failed.reason.starts_with("Another program holds GPU [1].") && failed.reason.contains("4900"), "{}", failed.reason);
+    assert_eq!(s.phase, Phase::Error, "«a» stopped for «b», as with any switch");
+    assert!(b.engines_alive().is_empty(), "«b» was never opened");
+
+    let (code, v) = b.control("/v1/chat/completions", json!({ "model": "b", "messages": [] }));
+    assert_eq!(code, 422, "{v}");
+
+    let asked = count(&checks);
+    b.m.retry("b");
+    until("«b» running", Duration::from_secs(5), || b.running("b"));
+    assert_eq!(count(&checks), asked, "«Riprova» does not ask again");
+    assert_eq!(b.m.state().failed.map(|f| f.model), None);
+}
+
+/// Memory that cannot be read does not block the start: the model starts as before, and the log says it was not looked at.
+#[test]
+fn a_model_starts_as_before_when_the_memory_cannot_be_read() {
+    let (b, checks) = fixture_with_cards(cards(&[]), 300);
+    b.m.choose("b");
+    until("«b» running", Duration::from_secs(5), || b.running("b"));
+    assert_eq!(count(&checks), 0);
+    let log = std::fs::read_to_string(b._dir.path().join("manager.log")).unwrap();
+    assert!(log.contains("\"event\":\"room\"") && log.contains("cannot be read"), "{log}");
+}
+
+/// The engine of «a» that the switch stops still holds GPU 0 when «b» looks: that is not another program, and «b» starts
+/// once it is given back. A GPU the stopped engine did not use is another program's at once: the check is asked once.
+#[test]
+fn the_memory_of_the_engine_just_stopped_is_not_another_programs() {
+    let used = cards(&[(0, 300), (1, 0), (2, 0)]);
+    let (b, checks) = fixture_with_cards(used.clone(), 300);
+    b.m.choose("a");
+    until("«a» running", Duration::from_secs(5), || b.running("a"));
+    used.lock().unwrap()[0].1 = 7000;
+    let given_back = given_back_after_the_next_check(&used, 0, &checks);
+    b.m.choose("b");
+    until("«b» running", Duration::from_secs(20), || b.running("b"));
+    given_back.join().unwrap();
+    assert_eq!(b.m.state().failed.map(|f| f.model), None);
+
+    b.m.choose("a");
+    until("«a» running", Duration::from_secs(5), || b.running("a"));
+    used.lock().unwrap()[1].1 = 4900;
+    let asked = count(&checks);
+    b.m.choose("b");
+    until("«b» refused", Duration::from_secs(20), || b.m.state().failed.is_some());
+    assert_eq!(count(&checks), asked + 1, "GPU 1 was not «a»'s: nothing to wait for");
+}
+
+/// A load the user stops by picking another model closes its engine too: what it held on GPU 0 is not another program's,
+/// and the model picked starts once it is given back.
+#[test]
+fn the_memory_of_a_load_that_was_stopped_is_not_another_programs() {
+    let used = cards(&[(0, 300), (1, 0), (2, 0)]);
+    let (b, checks) = fixture_with_cards(used.clone(), 4_000);
+    b.m.choose("a");
+    until("«a» loading", Duration::from_secs(5), || b.loading("a") && b.engines_alive() == ["a"]);
+    used.lock().unwrap()[0].1 = 7000;
+    let given_back = given_back_after_the_next_check(&used, 0, &checks);
+    b.m.choose("b");
+    until("«b» running", Duration::from_secs(30), || b.running("b"));
+    given_back.join().unwrap();
+    assert_eq!(b.m.state().failed.map(|f| f.model), None);
+}
+
+/// An engine that closed by itself: the request that starts it again finds its memory still on GPU 0, which is not another
+/// program's, and gets its answer once it is given back.
+#[test]
+fn the_memory_of_an_engine_that_closed_by_itself_is_not_another_programs() {
+    let used = cards(&[(0, 300), (1, 0), (2, 0)]);
+    let (b, checks) = fixture_with_cards(used.clone(), 300);
+    b.text("a");
+    let _ = post(&b.url("/test/crash"), &[], ""); // the fake engine exits with code 3
+    until("the engine of «a» gone", Duration::from_secs(10), || b.engines_alive().is_empty());
+    used.lock().unwrap()[0].1 = 7000;
+    let given_back = given_back_after_the_next_check(&used, 0, &checks);
+    assert_eq!(b.text("a"), "I am the engine a");
+    given_back.join().unwrap();
+}
+
+/// A model started with «Riprova» beside another program is in use: a change of its context loads it again, without the
+/// check that would turn it off.
+#[test]
+fn a_model_in_use_is_loaded_again_beside_another_program() {
+    let (b, checks) = fixture_with_cards(cards(&[(0, 300), (1, 4900), (2, 0)]), 300);
+    b.m.retry("b");
+    until("«b» running", Duration::from_secs(5), || b.running("b"));
+    b.context(2048);
+    b.m.reload_if_changed();
+    until("«b» with the new context", Duration::from_secs(10), || b.running("b") && b.m.state().context == Some(2048));
+    assert_eq!((count(&checks), b.m.state().failed.map(|f| f.model)), (0, None));
 }

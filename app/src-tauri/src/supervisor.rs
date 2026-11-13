@@ -5,6 +5,7 @@
 //! engines holding the VRAM. A process started with CREATE_BREAKAWAY_FROM_JOB leaves it (the job allows it): the
 //! installer of an update (`updater.rs`), which must outlive the app it replaces, and the programs the app opens for
 //! the user (`open_outside_job`).
+//! The Job does not hold what the Store's PowerShell 7 starts: at quit `stop_stragglers` stops those (`stragglers.rs`).
 
 use anyhow::{bail, Context, Result};
 use mango_common::{tail, tr, ProcSpec, CREATE_NO_WINDOW};
@@ -25,8 +26,12 @@ use windows::Win32::System::Threading::GetCurrentProcess;
 /// The process leaves the app's job (which allows it): it survives the app.
 pub const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x0100_0000;
 
+/// Names this run of the app in the environment of the agent, and so of every process the agent starts (`stragglers.rs`).
+const RUN_VAR: &str = "MANGO_APP_RUN";
+
 pub struct Supervisor {
     _job: HANDLE,
+    run: String,
     children: Mutex<Vec<Running>>,
     logs: PathBuf,
 }
@@ -58,7 +63,7 @@ impl Supervisor {
                 .context("AssignProcessToJobObject (app)")?;
             job
         };
-        Ok(Self { _job: job, children: Mutex::new(Vec::new()), logs: logs.to_path_buf() })
+        Ok(Self { _job: job, run: mango_common::random_hex(16), children: Mutex::new(Vec::new()), logs: logs.to_path_buf() })
     }
 
     /// Starts the process hidden, with stdout and stderr on `<logs>/<name>.log`.
@@ -71,7 +76,8 @@ impl Supervisor {
             .stdin(Stdio::null())
             .stdout(out)
             .stderr(err)
-            .creation_flags(CREATE_NO_WINDOW);
+            .creation_flags(CREATE_NO_WINDOW)
+            .env(RUN_VAR, &self.run);
         for k in &spec.env_remove {
             cmd.env_remove(k);
         }
@@ -148,6 +154,13 @@ impl Supervisor {
             let _ = r.child.kill();
             let _ = r.child.wait();
         }
+    }
+}
+
+impl Supervisor {
+    /// At quit: stops what the agent started and the Job did not hold (`stragglers.rs`).
+    pub fn stop_stragglers(&self) -> usize {
+        crate::stragglers::kill_with_env(RUN_VAR, &self.run)
     }
 }
 

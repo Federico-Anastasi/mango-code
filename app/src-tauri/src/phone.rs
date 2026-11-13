@@ -3,7 +3,7 @@
 //! sees them, the phone does not. `PhoneComputer` is what the phone service asks of the app: the page the browser panel
 //! shows, opening one in it, and the project folders.
 
-use crate::bridge::{err, BridgeError};
+use crate::bridge::{err, shown, BridgeError};
 use mango_common::tr;
 use tauri::{AppHandle, Manager};
 use phone::{Computer, Page, Phone, Shown, State};
@@ -41,12 +41,12 @@ pub fn phone_state(app: AppHandle) -> Result<State, BridgeError> {
 
 #[tauri::command]
 pub fn phone_set_enabled(app: AppHandle, enabled: bool) -> Result<State, BridgeError> {
-    service(&app)?.set_enabled(enabled).map_err(|e| err("io", format!("{e:#}")))
+    service(&app)?.set_enabled(enabled).map_err(|e| shown(&app, "io", "phone", e))
 }
 
 #[tauri::command]
 pub fn phone_new_key(app: AppHandle) -> Result<State, BridgeError> {
-    service(&app)?.new_key().map_err(|e| err("io", format!("{e:#}")))
+    service(&app)?.new_key().map_err(|e| shown(&app, "io", "phone", e))
 }
 
 /// What the phone service asks of the app (`phone::Computer`).

@@ -2,6 +2,7 @@ import { parseCommentNote, readCommentMetadata } from "@/utils/comment-note"
 import type { SessionMessageInfo } from "@opencode-ai/client/promise"
 import { AssistantMessage, Part, SessionStatus, UserMessage } from "@opencode-ai/sdk/v2"
 import { groupParts, renderable, type PartGroup } from "@opencode-ai/session-ui/message-part"
+import { HIDDEN_TOOLS, hasContent } from "@opencode-ai/session-ui/message-part-text"
 import { TimelineRow, type SummaryDiff } from "./timeline-row"
 import { uniqueSummaryDiffs } from "./summary-diffs"
 import { producedFiles } from "./produced-files"
@@ -28,7 +29,7 @@ export type TimelineRowMap = {
     group: PartGroup
     previousAssistantPart: boolean
   }
-  Thinking: { userMessageID: string; since: number; afterParts: boolean }
+  Thinking: { userMessageID: string; since: number | undefined; afterParts: boolean }
   Retry: { userMessageID: string }
   DiffSummary: { userMessageID: string; diffs: SummaryDiff[]; produced: string[] }
   Error: { userMessageID: string; text: string }
@@ -189,24 +190,26 @@ export namespace Timeline {
       assistantGroupIndex += 1
     })
 
-    const waiting =
-      isActive && status === "busy" && !error
-        ? waitingState(userMessage, assistantMessages, getMessageParts)
-        : undefined
-    if (waiting) {
+    // The row stays for the whole turn: when it appears and disappears at every quick action, the chat rises and falls by its height.
+    if (isActive && status === "busy" && !error) {
+      const waiting = waitingState(userMessage, assistantMessages, getMessageParts)
       rows.push(
         new TimelineRow.Thinking({
           userMessageID: userMessage.id,
-          since: waiting.since,
-          afterParts: waiting.afterParts,
+          since: waiting?.since,
+          afterParts: waiting?.afterParts ?? true,
         }),
       )
     }
 
     if (isActive && status === "retry") rows.push(new TimelineRow.Retry({ userMessageID: userMessage.id }))
 
+    const finished = !(isActive && status !== "idle")
+    if (finished && !error && !interrupted && !compaction && silent(assistantMessages, getMessageParts))
+      rows.push(new TimelineRow.EmptyAnswer({ userMessageID: userMessage.id }))
+
     // mango-code: duration and speed of the engine under the finished answer
-    if (!(isActive && status !== "idle") && assistantMessages.some((message) => message.timings))
+    if (finished && assistantMessages.some((message) => message.timings))
       rows.push(new TimelineRow.TurnStats({ userMessageID: userMessage.id }))
 
     const diffs = uniqueSummaryDiffs(userMessage.summary?.diffs)
@@ -227,6 +230,8 @@ export namespace Timeline {
         new TimelineRow.Error({
           userMessageID: userMessage.id,
           overflow: error.name === "ContextOverflowError",
+          // mango-code: this PC's model closed in the middle of the answer (the agent marks it): «Riprova» sends it again
+          retry: error.name === "APIError" && error.data?.metadata?.engine === "closed",
           text: unwrapErrorMessage(
             typeof data === "string" ? data : data === undefined || data === null ? "" : String(data),
           ),
@@ -235,6 +240,20 @@ export namespace Timeline {
     }
 
     return rows
+  }
+
+  /**
+   * The model finished its answer without a word and without an action the chat shows (it may have reasoned, or only
+   * used a tool that is not drawn, like the todo list).
+   */
+  function silent(assistantMessages: AssistantMessage[], getMessageParts: (messageID: string) => Part[]) {
+    if (typeof assistantMessages.at(-1)?.time.completed !== "number") return false
+    return !assistantMessages
+      .flatMap((message) => getMessageParts(message.id))
+      .some(
+        (part) =>
+          (part.type === "tool" && !HIDDEN_TOOLS.has(part.tool)) || (part.type === "text" && hasContent(part.text)),
+      )
   }
 
   function unwrapErrorMessage(message: string) {

@@ -1,5 +1,4 @@
 import { TooltipV2 } from "./tooltip-v2"
-import { KeybindV2 } from "./keybind-v2"
 
 const docs = `### Overview
 Floating tooltip built on Kobalte's tooltip primitive with v2 styling.
@@ -33,23 +32,6 @@ export const Simple = {
   render: () => (
     <div style={{ padding: "80px", display: "flex", "justify-content": "center" }}>
       <TooltipV2 value="Tooltip Text">
-        <span>Hover me</span>
-      </TooltipV2>
-    </div>
-  ),
-}
-
-export const WithKeybind = {
-  render: () => (
-    <div style={{ padding: "80px", display: "flex", "justify-content": "center" }}>
-      <TooltipV2
-        value={
-          <>
-            Tooltip Text
-            <KeybindV2 keys={["⌘", "⌘"]} variant="neutral" />
-          </>
-        }
-      >
         <span>Hover me</span>
       </TooltipV2>
     </div>

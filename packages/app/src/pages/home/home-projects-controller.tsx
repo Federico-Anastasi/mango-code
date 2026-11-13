@@ -1,7 +1,7 @@
 import { useDirectoryPicker } from "@/components/directory-picker"
 import { useNewProject } from "@/components/dialog-new-project"
 import { useServerManagementController } from "@/components/dialog-select-server"
-import { useSettingsCommand } from "@/components/settings-dialog"
+import { useSettingsCommand } from "@/components/settings-page/open"
 import { DialogServerV2 } from "@/components/settings-v2/dialog-server-v2"
 import { type LocalProject } from "@/context/layout"
 import { useLanguage } from "@/context/language"

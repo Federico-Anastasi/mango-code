@@ -7,12 +7,10 @@ export type FindHost = {
   element: () => HTMLElement | undefined
   open: () => void
   close: () => void
-  next: (dir: 1 | -1) => void
   isOpen: () => boolean
 }
 
 const hosts = new Set<FindHost>()
-let target: FindHost | undefined
 let current: FindHost | undefined
 let installed = false
 
@@ -40,32 +38,21 @@ function installShortcuts() {
     "keydown",
     (event) => {
       if (event.defaultPrevented) return
+      if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== "f") return
+
+      // In the bar of a file's find, Ctrl+F stays there: it selects the text to search again.
+      const bar = event.target instanceof Element && event.target.closest('[data-component="file-search-bar"]')
+      if (bar && current?.isOpen()) {
+        event.preventDefault()
+        event.stopPropagation()
+        current.open()
+        return
+      }
       if (isEditable(event.target)) return
 
-      const mod = event.metaKey || event.ctrlKey
-      if (!mod) return
-
-      const key = event.key.toLowerCase()
-      if (key === "g") {
-        const host = current
-        if (!host || !host.isOpen()) return
-        event.preventDefault()
-        event.stopPropagation()
-        host.next(event.shiftKey ? -1 : 1)
-        return
-      }
-
-      if (key !== "f") return
-
-      const active = current
-      if (active && active.isOpen()) {
-        event.preventDefault()
-        event.stopPropagation()
-        active.open()
-        return
-      }
-
-      const host = hostForNode(document.activeElement) ?? hostForNode(event.target) ?? target ?? Array.from(hosts)[0]
+      // Only a file the user is in, even with its bar open: otherwise Ctrl+F belongs to the page (the search in
+      // the conversation).
+      const host = hostForNode(document.activeElement) ?? hostForNode(event.target)
       if (!host) return
 
       event.preventDefault()
@@ -360,7 +347,6 @@ export function createFileFind(opts: CreateFileFindOptions) {
   const focus = () => {
     if (current && current !== host) current.close()
     current = host
-    target = host
     if (!open()) setState("open", true)
     requestAnimationFrame(() => {
       apply({ scroll: true })
@@ -399,7 +385,6 @@ export function createFileFind(opts: CreateFileFindOptions) {
   const host: FindHost = {
     element: opts.wrapper,
     isOpen: () => open(),
-    next,
     open: focus,
     close,
   }
@@ -412,7 +397,6 @@ export function createFileFind(opts: CreateFileFindOptions) {
     mode = supportsHighlights() ? "highlights" : "overlay"
     installShortcuts()
     hosts.add(host)
-    if (!target) target = host
 
     onCleanup(() => {
       hosts.delete(host)
@@ -420,7 +404,6 @@ export function createFileFind(opts: CreateFileFindOptions) {
         current = undefined
         clearHighlightFind()
       }
-      if (target === host) target = undefined
     })
   })
 
@@ -465,11 +448,7 @@ export function createFileFind(opts: CreateFileFindOptions) {
     next,
     refresh: (args?: { reset?: boolean; scroll?: boolean }) => apply(args),
     onPointerDown: () => {
-      target = host
       opts.wrapper()?.focus({ preventScroll: true })
-    },
-    onFocus: () => {
-      target = host
     },
     onInputKeyDown: (event: KeyboardEvent) => {
       if (event.key === "Escape") {

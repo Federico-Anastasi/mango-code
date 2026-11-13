@@ -50,10 +50,13 @@ export function isProjectFileCard(name: string) {
   return CARD_KINDS.has(projectFileKind(name))
 }
 
-/** What the preview shows of a file: a PDF, or a picture (an SVG too, drawn as a picture and never run as a page). */
-export function previewKind(name: string): "pdf" | "image" | undefined {
+/**
+ * What the preview shows of a file: a PDF, a picture (an SVG too, drawn as a picture and never run as a page) or a web
+ * page (it runs, like the pages the agent opens).
+ */
+export function previewKind(name: string): "pdf" | "image" | "web" | undefined {
   const kind = projectFileKind(name)
-  return kind === "pdf" || kind === "image" ? kind : undefined
+  return kind === "pdf" || kind === "image" || kind === "web" ? kind : undefined
 }
 
 /** The most the preview opens (desktop panel and phone), in bytes: a bigger file says so and is opened from the folder. */

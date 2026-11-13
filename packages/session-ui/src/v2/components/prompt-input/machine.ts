@@ -193,16 +193,14 @@ function keyDown(
   state: PromptInputV2InteractionState,
   event: Extract<PromptInputV2InteractionEvent, { type: "key.down" }>,
 ): PromptInputV2Transition {
-  if (event.ctrl && event.key.toLowerCase() === "g") {
-    if (state.popover.type === "closed") return unchanged(state)
-    return changed({ ...state, popover: { type: "closed" }, focus: "editor" }, [{ type: "focus.editor" }], true)
-  }
   if (state.popover.type === "closed") {
     if (state.mode === "shell" && (event.key === "Escape" || (event.key === "Backspace" && event.empty))) {
       return changed({ ...state, mode: "normal" }, [], true)
     }
     return unchanged(state)
   }
+  // A key held with Ctrl is not a move in the list: the list answers to arrows, Enter, Tab and Esc only.
+  if (event.ctrl) return unchanged(state)
   if (event.key === "Escape") {
     return changed({ ...state, popover: { type: "closed" }, focus: "editor" }, [{ type: "focus.editor" }], true)
   }
@@ -210,12 +208,7 @@ function keyDown(
     if (!state.popover.activeID) return unchanged(state, true)
     return unchanged(state, true, [{ type: "suggestion.select", id: state.popover.activeID }])
   }
-  const direction =
-    event.key === "ArrowDown" || (event.ctrl && event.key === "n")
-      ? 1
-      : event.key === "ArrowUp" || (event.ctrl && event.key === "p")
-        ? -1
-        : 0
+  const direction = event.key === "ArrowDown" ? 1 : event.key === "ArrowUp" ? -1 : 0
   if (!direction || event.ids.length === 0) return unchanged(state)
   const current = state.popover.activeID ? event.ids.indexOf(state.popover.activeID) : -1
   const index =

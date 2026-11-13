@@ -2,14 +2,15 @@
 //! plus the user's models (`mango_common::catalog`). How they run on specific hardware is told by the profiles
 //! (`profiles.rs`); failing that, the general plan (`general.rs`).
 
+use crate::choices::{self, Choices, WhereChoice};
 use crate::general::Placement;
 use crate::gguf::cache_type;
 use crate::hardware::{choose_build, Hardware};
-use crate::profiles::{profile_for, Profile};
+use crate::profiles::{self, Profile};
 use crate::split::{Layer, LayerKind, ModelShape};
 use crate::user;
 use anyhow::{bail, Result};
-use mango_common::catalog::{file_for_engine, USER_FILE};
+use mango_common::catalog::{file_for_engine, About, Sampling, USER_FILE};
 use mango_common::download::installed_engine;
 use mango_common::{tr, Build, Paths};
 use serde::Deserialize;
@@ -98,6 +99,9 @@ pub(crate) const GENERAL_ENGINE: &str = "llamacpp";
 pub(crate) struct ModelFile {
     pub path: String,
     pub size: u64,
+    /// Missing for a file of the user's, which Mango Code never downloads (`mango_common::download::users_file`).
+    #[serde(default)]
+    pub sha256: String,
     /// The only engine that reads the file (`mango_common::catalog::file_for_engine`).
     pub engine: Option<String>,
 }
@@ -124,6 +128,9 @@ pub(crate) struct ModelMemory {
     pub kv_kib_token: u64,
     /// Fixed state of the recurrent layers.
     pub state_mib: u64,
+    /// Only in a user's model whose header the count doesn't know all of: the numbers are an estimate, and this says
+    /// what the header lacked (technical, for whoever reads the file).
+    pub estimated: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -152,6 +159,13 @@ pub(crate) struct ModelCfg {
     /// as the fastest (TOQ, until it is reliable as an agent).
     #[serde(default)]
     pub on_request: bool,
+    /// The line shown under the model's name.
+    pub about: Option<About>,
+    /// The values recommended by whoever made the model.
+    pub sampling: Option<Sampling>,
+    /// The model can think before it answers, and its chat template turns that on and off.
+    #[serde(default)]
+    pub reasoning: bool,
 }
 
 /// The image encoder's compute on a GPU, beyond its weights: an estimate, which with Qwen3.8's F16 weights (885 MiB)
@@ -180,6 +194,16 @@ impl ModelCfg {
             .find(|f| f.engine.as_deref() == Some(engine) && self.mmproj.as_deref() != Some(f.path.as_str()))
             .map(|f| f.path.as_str())
             .or(self.gguf.as_deref())
+    }
+
+    /// The weights `engine` opens and the image encoder are in the models' folder.
+    pub fn weights_on_disk(&self, paths: &Paths, engine: &str) -> bool {
+        [self.gguf_for(engine), self.mmproj.as_deref()].into_iter().flatten().all(|rel| paths.models.join(rel).is_file())
+    }
+
+    /// The memory it asks is an estimate (`ModelMemory::estimated`).
+    pub fn memory_estimated(&self) -> bool {
+        self.memory.as_ref().is_some_and(|m| m.estimated.is_some())
     }
 
     /// The image encoder's memory on a GPU: its weights (from the catalog) and the compute. 0 without images.
@@ -287,10 +311,16 @@ impl Setup {
 }
 
 /// A model that requires an engine of its own doesn't run with the general one: without a profile for this hardware
-/// (of its GPUs or of its build), error.
-pub(crate) fn setup_for(paths: &Paths, key: &str, cfg: &ModelCfg, hw: &Hardware) -> Result<Setup> {
-    if let Some(p) = profile_for(paths, key, hw)? {
-        return Ok(Setup::Profile(Box::new(p)));
+/// (of its GPUs or of its build), error. The profile counts only if the model's choice is «auto»: any other choice
+/// runs the general plan, which the engine of a model that requires its own cannot do.
+pub(crate) fn setup_for(paths: &Paths, key: &str, cfg: &ModelCfg, hw: &Hardware, choices: &Choices) -> Result<Setup> {
+    if cfg.requires_engine.is_some() && choices.place != WhereChoice::Auto {
+        bail!("{}", choices::only_automatic(&cfg.label));
+    }
+    if choices.place == WhereChoice::Auto {
+        if let Some(p) = profiles::lookup(paths, key, hw)? {
+            return Ok(Setup::Profile(Box::new(p)));
+        }
     }
     match &cfg.requires_engine {
         Some(m) => Err(user(
@@ -324,8 +354,8 @@ pub struct ModelEntry {
     pub bytes: u64,
     /// How fast it writes, if it runs on the processor.
     pub speed: Option<crate::Speed>,
-    /// Only on request (see `Recommendation::on_request`): the catalog says it is not reliable as an agent.
-    pub on_request: bool,
+    /// Its memory is estimated (a model of the user's that the count doesn't know): the verdict may be wrong.
+    pub estimated: bool,
 }
 
 /// The local models (cloud ones stay out) in catalog order, the recommended ones first and then the user's, and the
@@ -336,38 +366,102 @@ pub fn catalog(paths: &Paths) -> Result<(Vec<ModelEntry>, String)> {
 
 pub fn catalog_for(paths: &Paths, hw: &Hardware) -> Result<(Vec<ModelEntry>, String)> {
     let file = load_models(paths)?;
+    let choices = choices::read(paths)?;
     let mut entries = Vec::new();
     for key in file.local() {
         let cfg = model_cfg(&file, key)?;
-        let setup = setup_for(paths, key, &cfg, hw);
+        let assessed = crate::view::assess(paths, &file, key, &cfg, hw, &choices, &[]);
+        let engine = cfg.engine_with(&assessed.setup);
         let mut missing = None;
-        for rel in [cfg.gguf_for(cfg.engine_with(&setup)), cfg.mmproj.as_deref()].into_iter().flatten() {
+        for rel in [cfg.gguf_for(engine), cfg.mmproj.as_deref()].into_iter().flatten() {
             if !paths.models.join(rel).is_file() {
                 missing.get_or_insert(tr!("manca {}", "missing {}", paths.models.join(rel).display()));
             }
         }
         let weights = missing.is_none();
-        let (bytes, read_per_token) = (cfg.weights_bytes(cfg.engine_with(&setup)), cfg.read_per_token(cfg.engine_with(&setup)));
+        let (bytes, read_per_token) = (cfg.weights_bytes(engine), cfg.read_per_token(engine));
         let target = cfg.ctx.unwrap_or(file.ctx).min(file.ctx);
-        let (ctx, placement) = match setup {
-            Ok(a) => {
-                if installed_engine(paths, a.engine(), a.build()).is_none() {
-                    missing.get_or_insert(tr!("manca il motore {} ({})", "the engine {} ({}) is missing", a.engine(), a.build().as_str()));
-                }
-                match a {
-                    Setup::Profile(p) => crate::profile_context(&cfg, &p, hw).map_or((p.ctx, None), |ctx| (ctx, Some(p.placement()))),
-                    Setup::General { build } => crate::general::context_for(&file, &cfg, hw, build).map_or((target, None), |c| (c.ctx, Some(c.placement))),
-                }
+        // Without a fit the context is the nominal one: the profile's or the model's target.
+        let nominal = match &assessed.setup {
+            Ok(Setup::Profile(p)) => p.ctx,
+            _ => target,
+        };
+        match &assessed.setup {
+            Ok(a) if installed_engine(paths, a.engine(), a.build()).is_none() => {
+                missing.get_or_insert(tr!("manca il motore {} ({})", "the engine {} ({}) is missing", a.engine(), a.build().as_str()));
             }
             Err(e) => {
                 missing.get_or_insert(format!("{e:#}"));
-                (target, None)
             }
+            Ok(_) => {}
+        }
+        let (ctx, placement) = match &assessed.located.fit {
+            Some(f) => (f.ctx, Some(f.placement)),
+            None => (nominal, None),
         };
         let speed = (placement == Some(Placement::Cpu)).then(|| crate::cpu_speed(read_per_token));
-        entries.push(ModelEntry { key: key.to_string(), label: cfg.label, origin: file.origin(key), ctx, placement, images: cfg.mmproj.is_some(), missing, weights, bytes, speed, on_request: cfg.on_request });
+        let estimated = cfg.memory_estimated();
+        entries.push(ModelEntry { key: key.to_string(), label: cfg.label, origin: file.origin(key), ctx, placement, images: cfg.mmproj.is_some(), missing, weights, bytes, speed, estimated });
     }
     Ok((entries, file.default))
+}
+
+/// What downloading a local model of the catalog means on a computer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DownloadPlan {
+    pub label: String,
+    /// The engine and the build it would run with here, given the user's choices for it.
+    pub engine: String,
+    pub build: Build,
+    /// The bytes of its files for that engine.
+    pub bytes: u64,
+    /// Its weights and image encoder are already on disk.
+    pub weights: bool,
+    /// Why it does not fit this computer, if it doesn't.
+    pub fits: std::result::Result<(), String>,
+}
+
+/// What downloading `key` means on `hw`. An error for a model that is not a local model of the catalog, or that has no
+/// engine for this computer.
+pub fn download_of(paths: &Paths, key: &str, hw: &Hardware) -> Result<DownloadPlan> {
+    let file = load_models(paths)?;
+    let cfg = model_cfg(&file, key)?;
+    if cfg.cloud.is_some() {
+        bail!("{}", tr!("«{}» è un modello online, non si scarica.", "«{}» is an online model, it is not downloaded.", cfg.label));
+    }
+    let assessed = crate::view::assess(paths, &file, key, &cfg, hw, &choices::read(paths)?, &[]);
+    let setup = assessed.setup?;
+    let weights = cfg.weights_on_disk(paths, setup.engine());
+    Ok(DownloadPlan {
+        engine: setup.engine().to_string(),
+        build: setup.build(),
+        bytes: cfg.files_for(setup.engine()).map(|f| f.size).sum(),
+        weights,
+        fits: assessed.located.fit.map(|_| ()).ok_or(assessed.located.reason),
+        label: cfg.label,
+    })
+}
+
+/// The model the app loads when it opens: the one the user made the default (`choices.json`) if it is on disk with its
+/// engine, also when it no longer fits (its start then says why). Otherwise, of `entries`, which come in the catalog's
+/// order, the first on disk that fits this computer; if none fits, the first on disk. `None`: there is nothing to load yet.
+pub fn startup_model(paths: &Paths, entries: &[ModelEntry]) -> Result<Option<String>> {
+    let on_disk = || entries.iter().filter(|e| e.missing.is_none());
+    let default = choices::read(paths)?.default;
+    let chosen = on_disk().find(|e| Some(&e.key) == default.as_ref()).or_else(|| on_disk().find(|e| e.placement.is_some())).or_else(|| on_disk().next());
+    Ok(chosen.map(|e| e.key.clone()))
+}
+
+/// The model to save as the default while the user has none (the model a computer starts with does not change
+/// by itself): `remembered`, the last model of 0.1.2 (`model.txt`), if it is on the disk and fits, otherwise the model
+/// the app loads, if it fits. Only a model with a place to run: one that does not fit, kept forever, would not give way
+/// to one that arrives later and fits. `None` with a default saved already, or with nothing on the disk that fits.
+pub fn default_to_save(paths: &Paths, entries: &[ModelEntry], remembered: Option<&str>) -> Result<Option<String>> {
+    if choices::read(paths)?.default.is_some() {
+        return Ok(None);
+    }
+    let fits = |key: &str| entries.iter().any(|e| e.key == key && e.missing.is_none() && e.placement.is_some());
+    Ok(remembered.filter(|k| fits(k)).map(str::to_string).or(startup_model(paths, entries)?.filter(|k| fits(k))))
 }
 
 /// The needed file must be there: otherwise a readable error with what to do.

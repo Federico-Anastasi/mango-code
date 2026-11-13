@@ -100,7 +100,6 @@ export type PromptInputV2Suggestion = {
   trigger?: string
   description?: string
   path?: string
-  keybind?: string[]
   recent?: boolean
   mention?: PromptInputV2FilePart | PromptInputV2AgentPart
 }

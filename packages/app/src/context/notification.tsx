@@ -17,6 +17,7 @@ import { ServerConnection, useServer } from "./server"
 import { type DraftTab, useTabs } from "./tabs"
 import { requireServerKey } from "@/utils/session-route"
 import type { ServerScope } from "@/utils/server-scope"
+import { sessionTitle } from "@/utils/session-title"
 
 type NotificationBase = {
   directory?: string
@@ -356,8 +357,10 @@ function createServerNotificationState(input: {
 
       const href = `/${base64Encode(directory)}/session/${sessionID}`
       if (settings.notifications.agent()) {
-        void platform.notify(language.t("notification.session.responseReady.title"), session.title ?? sessionID, () =>
-          input.navigate(href),
+        void platform.notify(
+          language.t("notification.session.responseReady.title"),
+          sessionTitle(session.title, language.t("session.untitled")) ?? sessionID,
+          () => input.navigate(href),
         )
       }
     })
@@ -387,7 +390,7 @@ function createServerNotificationState(input: {
         error,
       })
       const description =
-        session?.title ??
+        sessionTitle(session?.title, language.t("session.untitled")) ??
         (typeof error === "string" ? error : language.t("notification.session.error.fallbackDescription"))
       const href = sessionID ? `/${base64Encode(directory)}/session/${sessionID}` : `/${base64Encode(directory)}`
       if (settings.notifications.errors()) {

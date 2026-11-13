@@ -7,9 +7,8 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { MangoCode, find } from "../client/mango-code";
-import { APP_EXE, REPO, start, type Environment } from "./environment";
+import { APP_EXE, LAUNCH_EXE, start, type Environment } from "./environment";
 
-const LAUNCH_EXE = path.join(REPO, "app", "target", "debug", "mango-launch.exe");
 if (!fs.existsSync(LAUNCH_EXE)) throw new Error(`${LAUNCH_EXE} is missing: cargo build -p engine (in app/)`);
 if (!fs.existsSync(APP_EXE)) throw new Error(`${APP_EXE} is missing: cargo build -p mango-code (in app/)`);
 

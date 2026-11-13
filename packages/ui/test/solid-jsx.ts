@@ -16,5 +16,8 @@ plugin({
       contents: transpiler.transformSync(await Bun.file(args.path).text()),
       loader: "js",
     }))
+    // Vite's worker URLs (`./x.worker.ts?worker&url`): tests start no worker, the module only has to load.
+    build.onResolve({ filter: /\?worker&url$/ }, (args) => ({ path: args.path, namespace: "worker-url" }))
+    build.onLoad({ filter: /.*/, namespace: "worker-url" }, () => ({ contents: 'export default ""', loader: "js" }))
   },
 })

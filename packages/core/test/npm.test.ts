@@ -151,4 +151,12 @@ describe("Npm.install", () => {
     await expect(fs.stat(path.join(tmp.path, "node_modules", "prod-pkg"))).resolves.toBeDefined()
     await expect(fs.stat(path.join(tmp.path, "node_modules", "dev-pkg"))).rejects.toThrow()
   })
+
+  test("leaves a folder that declares no dependencies as it is", async () => {
+    await using tmp = await tmpdir()
+
+    await Npm.install(tmp.path)
+
+    expect(await fs.readdir(tmp.path)).toEqual([])
+  })
 })

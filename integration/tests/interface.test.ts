@@ -84,3 +84,59 @@ test("the questions are answered from the dialog and the conversation continues"
   expect(question.state.output).toContain("Circle");
   expect(await p.evaluate("document.body.innerText")).toContain("Thanks, I have your answers.");
 }, 120_000);
+
+test("the search in the conversation: the lens and Ctrl+F open the bar, it counts and moves between the results, and Esc closes it", async () => {
+  // the conversation of the test before: the user's message and the model's answer
+  const bar = '[data-component="conversation-find"]';
+  const input = `${bar} [data-slot="conversation-find-input"]`;
+  const count = () => p.evaluate(`document.querySelector('${bar} [data-slot="conversation-find-count"]')?.innerText.trim() ?? ""`) as Promise<string>;
+  const current = () => p.evaluate(`[...(CSS.highlights.get("conversation-find-current") ?? [])].map((r) => r.toString())`) as Promise<string[]>;
+  const until = async (what: string, condition: () => Promise<boolean>) => {
+    for (let i = 0; i < 60 && !(await condition().catch(() => false)); i++) await Bun.sleep(150);
+    expect(await condition(), what).toBe(true);
+  };
+  const mouse = async (selector: string) => {
+    const at = await p.evaluate(`(() => { const q = document.querySelector(${JSON.stringify(selector)})?.getBoundingClientRect(); return q && { x: q.x + q.width / 2, y: q.y + q.height / 2 }; })()`);
+    expect(at, selector).toBeTruthy();
+    for (const type of ["mouseMoved", "mousePressed", "mouseReleased"]) await p.send("Input.dispatchMouseEvent", { type, x: at.x, y: at.y, button: "left", clickCount: 1 });
+  };
+  const typeIn = async (value: string) => {
+    await p.evaluate(`(() => { const el = document.querySelector('${input}'); el.focus(); el.select(); })()`);
+    await p.send("Input.insertText", { text: value });
+  };
+  expect(await p.evaluate(`!!document.querySelector('${bar}')`)).toBe(false);
+
+  await mouse('[data-action="conversation-find"]');
+  await until("the bar", async () => (await p.evaluate(`!!document.querySelector('${input}')`)) as boolean);
+  await until("the box focused", async () => (await p.evaluate(`document.activeElement === document.querySelector('${input}')`)) as boolean);
+
+  // one result: the word is in the model's answer only, and it is the one marked
+  await typeIn("answers");
+  await until("one result", async () => (await count()) === "1 di 1");
+  await until("the result marked", async () => (await current()).join() === "answers");
+
+  // many results: the next and the previous move through them
+  await typeIn("s");
+  await until("several results", async () => /^1 di (\d+)$/.test(await count()) && Number(/di (\d+)$/.exec(await count())![1]) > 2);
+  const total = Number(/di (\d+)$/.exec(await count())![1]);
+  await mouse('[data-component="conversation-find"] button[aria-label="Risultato successivo"]');
+  await until("the second result", async () => (await count()) === `2 di ${total}`);
+  await mouse('[data-component="conversation-find"] button[aria-label="Risultato precedente"]');
+  await until("the first result again", async () => (await count()) === `1 di ${total}`);
+  await mouse('[data-component="conversation-find"] button[aria-label="Risultato precedente"]');
+  await until("the last result, after the first", async () => (await count()) === `${total} di ${total}`);
+
+  // nothing found says so
+  await typeIn("zzzzqq");
+  await until("no result", async () => (await count()) === "Nessun risultato");
+  expect(await current()).toEqual([]);
+
+  // Esc closes it and the marks go; Ctrl+F opens it again
+  await p.send("Input.dispatchKeyEvent", { type: "keyDown", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 });
+  await p.send("Input.dispatchKeyEvent", { type: "keyUp", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 });
+  await until("the bar closed", async () => !(await p.evaluate(`!!document.querySelector('${bar}')`)));
+  expect(await p.evaluate(`CSS.highlights.has("conversation-find")`)).toBe(false);
+  await p.send("Input.dispatchKeyEvent", { type: "keyDown", key: "f", code: "KeyF", windowsVirtualKeyCode: 70, modifiers: 2 });
+  await p.send("Input.dispatchKeyEvent", { type: "keyUp", key: "f", code: "KeyF", windowsVirtualKeyCode: 70, modifiers: 2 });
+  await until("the bar opened by Ctrl+F", async () => (await p.evaluate(`!!document.querySelector('${input}')`)) as boolean);
+}, 90_000);

@@ -1,4 +1,4 @@
-// The web page fills the window: measured on the real window (Windows) at the first-run page, the Home and a conversation,
+// The web page fills the window: measured on the real window (Windows) at the app's own page, the Home and a conversation,
 // then after the app's zoom (Ctrl +) and after maximizing. The window's client area, the widest webview child window and the
 // page's viewport (innerWidth x devicePixelRatio) must be the same width, in physical pixels: a strip that the page does not
 // reach would show the window's own background. (The photos that set the viewport width through remote debugging, without
@@ -8,14 +8,21 @@
 import { afterAll, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import net from "node:net";
 import path from "node:path";
 import { start, type Environment } from "./environment";
 import { page, type Page } from "./cdp";
 
 const [AGENT, ENGINE, DEBUG] = [47690, 47691, 47692];
-const GIB = 1024 ** 3;
-const MIB = 1024 ** 2;
 const envs: Environment[] = [];
+
+async function waitFor(condition: () => Promise<boolean> | boolean, what: string, ms = 90_000) {
+  const t0 = Date.now();
+  while (!(await Promise.resolve(condition()).catch(() => false))) {
+    if (Date.now() - t0 > ms) throw new Error(`waited too long for: ${what}`);
+    await Bun.sleep(300);
+  }
+}
 afterAll(() => {
   for (const e of envs) e.close();
   Bun.sleepSync(1500);
@@ -75,25 +82,23 @@ async function measure(env: Environment, p: Page, label: string, action = "") {
 
 const key = (name: string) => `$s = New-Object -ComObject WScript.Shell; [N]::SetForegroundWindow($h) | Out-Null; ${name}`;
 
-test("the first-run page, the Home and a conversation fill the window, also after zoom and maximizing", async () => {
-  // first run: the page of the app itself (not the agent's)
+test("the app's own page, the Home and a conversation fill the window, also after zoom and maximizing", async () => {
+  // The page of the app itself (not the agent's): it stays in the window when the start fails, here on a port of the agent
+  // that another program holds.
+  const busy = net.createServer();
+  await new Promise<void>((ok) => busy.listen(0, "127.0.0.1", ok));
   const first = await start([{ text: "ok" }], {
     window: true,
-    env: { MANGO_AGENT_PORT: String(AGENT), MANGO_ENGINE_PORT: String(ENGINE), WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${DEBUG}` },
-    firstRun: () => ({
-      computer: { gpus: [{ name: "NVIDIA GeForce GTX 1060", memory_mib: 6144 }], cpu: "Intel Core i5", cores: 6, ram_mib: 16384 },
-      general: "llamacpp",
-      engines: [{ name: "llamacpp", build: "cuda-12", bytes: MIB, file: path.join("llamacpp", "x", "llama-server.exe"), url: "http://127.0.0.1:1/engine" }],
-      models: [{ key: "fake", label: "Fake model", images: false, file: "fake.gguf", url: "http://127.0.0.1:1/fake.gguf", engine: "llamacpp", profile: null }],
-      recommendations: [{ model: "fake", placement: "gpu", context: 16384, reason: "ok", bytes: MIB }],
-    }),
+    noModels: true,
+    env: { MANGO_AGENT_PORT: String((busy.address() as net.AddressInfo).port), MANGO_ENGINE_PORT: String(ENGINE), WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${DEBUG}` },
   });
   envs.push(first);
-  let p = await page(DEBUG, () => true, 90_000);
-  await Bun.sleep(4000);
-  await measure(first, p, "first run");
-  await measure(first, p, "first run, maximized", key("[N]::ShowWindow($h, 3) | Out-Null"));
+  let p = await page(DEBUG, (t) => t.url.includes("tauri.localhost"), 90_000);
+  await waitFor(() => p.evaluate(`!document.getElementById('error').hidden`), "the error of the start");
+  await measure(first, p, "the app's page");
+  await measure(first, p, "the app's page, maximized", key("[N]::ShowWindow($h, 3) | Out-Null"));
   p.close();
+  busy.close();
   first.close();
   envs.pop();
   await Bun.sleep(3000);

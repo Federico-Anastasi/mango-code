@@ -16,17 +16,17 @@ import { useLocation, useNavigate, useParams } from "@solidjs/router"
 import { IconButton } from "@opencode-ai/ui/icon-button"
 import { Icon } from "@opencode-ai/ui/icon"
 import { Button } from "@opencode-ai/ui/button"
-import { Tooltip, TooltipKeybind } from "@opencode-ai/ui/tooltip"
+import { Tooltip } from "@opencode-ai/ui/tooltip"
 import { ButtonV2 } from "@opencode-ai/ui/v2/button-v2"
 import { IconButtonV2 } from "@opencode-ai/ui/v2/icon-button-v2"
 import { Icon as IconV2 } from "@opencode-ai/ui/v2/icon"
-import { KeybindV2 } from "@opencode-ai/ui/v2/keybind-v2"
 import { TooltipV2 } from "@opencode-ai/ui/v2/tooltip-v2"
 
 import { LayoutRoute, useLayout } from "@/context/layout"
 import { usePlatform } from "@/context/platform"
 import { useCommand } from "@/context/command"
 import { useLanguage } from "@/context/language"
+import { MangoModelBar } from "@/components/mango-model-bar"
 import { useSettings } from "@/context/settings"
 import { WindowsAppMenu } from "./windows-app-menu"
 import { applyPath, backPath, forwardPath } from "./titlebar-history"
@@ -41,7 +41,6 @@ import { tabKey, useTabs } from "@/context/tabs"
 import { useDefaultProject } from "@/hooks/use-default-project"
 import type { PromptSession } from "@/context/prompt"
 import "./titlebar.css"
-import { newTabTooltipKeybind } from "./command-tooltip-keybind"
 import { normalizeSessionInfo } from "@/utils/session"
 import { sessionTitle } from "@/utils/session-title"
 import { useServerSync } from "@/context/server-sync"
@@ -170,15 +169,11 @@ export function Titlebar(props: {
     {
       id: "common.goBack",
       title: language.t("common.goBack"),
-      category: language.t("command.category.view"),
-      keybind: "mod+[",
       onSelect: back,
     },
     {
       id: "common.goForward",
       title: language.t("common.goForward"),
-      category: language.t("command.category.view"),
-      keybind: "mod+]",
       onSelect: forward,
     },
   ])
@@ -231,6 +226,7 @@ export function Titlebar(props: {
 
             const matchRoute = (route: LayoutRoute) => {
               if (route.type === "home") return
+              if (route.type === "settings") return tabsStore.find((item) => item.type === "settings")
               if (route.type === "draft") {
                 return tabsStore.find((item) => item.type === "draft" && item.draftID === route.draftID)
               }
@@ -335,48 +331,13 @@ export function Titlebar(props: {
             }
             const toggleHome = () => tabs.toggleHome({ home: layout.route().type === "home", current: currentTab() })
 
-            command.register("titlebar-home", () => [
+            command.register("tabs", () => [
               {
-                id: "home.toggle",
-                title: language.t("home.title"),
-                category: language.t("command.category.view"),
-                keybind: "mod+b",
-                hidden: true,
-                onSelect: toggleHome,
+                id: "tab.new",
+                title: language.t("command.session.new"),
+                onSelect: openNewTab,
               },
             ])
-
-            command.register("tabs", () => {
-              const current = currentTab()
-
-              return [
-                {
-                  id: "tab.new",
-                  category: "tab",
-                  title: language.t("command.session.new"),
-                  keybind: "mod+t,mod+n",
-                  hidden: true,
-                  onSelect: openNewTab,
-                },
-                current && {
-                  id: "tab.close",
-                  category: "tab",
-                  title: language.t("command.tab.close"),
-                  keybind: "mod+w",
-                  hidden: true,
-                  onSelect: () => {
-                    tabsStoreActions.closeTab(tabsStore.findIndex((tab) => current === tab))
-                  },
-                },
-                {
-                  id: "tab.reopenClosed",
-                  category: language.t("command.category.file"),
-                  title: language.t("command.tab.reopenClosed"),
-                  keybind: "mod+shift+t",
-                  onSelect: () => tabsStoreActions.reopenClosedTab(),
-                },
-              ].filter((v) => v !== undefined)
-            })
 
             // On a phone the bar is one row. In the Home: the mark and the settings. In a conversation: the arrow that goes one level up
             // (from the changes to the conversation, from the conversation to the Home), the title, a new conversation, the changes and
@@ -387,6 +348,7 @@ export function Titlebar(props: {
             const barTitle = () => {
               const route = layout.route()
               if (route.type === "session" && phoneChanges.opened()) return language.t("session.review.change.other")
+              if (route.type === "settings") return language.t("sidebar.settings")
               if (route.type !== "session") return language.t("session.untitled")
               // the title the conversation has now (it is born untitled and gets its name after the first answer)
               return sessionTitle(
@@ -519,16 +481,7 @@ export function Titlebar(props: {
                   <Show when={windows() || linux()}>
                     <WindowsAppMenu command={command} platform={platform} variant="v2" />
                   </Show>
-                  <TooltipV2
-                    placement="bottom"
-                    value={
-                      <>
-                        {language.t("titlebar.history.tooltip")}
-                        <KeybindV2 keys={command.keybindParts("home.toggle")} variant="neutral" />
-                      </>
-                    }
-                    class="shrink-0"
-                  >
+                  <TooltipV2 placement="bottom" value={language.t("titlebar.history.tooltip")} class="shrink-0">
                     <ButtonV2
                       type="button"
                       variant={layout.route().type === "home" ? "neutral" : "ghost-muted"}
@@ -555,15 +508,7 @@ export function Titlebar(props: {
                     }}
                     onReorder={(keys) => tabsStoreActions.reorder(keys)}
                   />
-                  <TooltipV2
-                    placement="bottom"
-                    value={
-                      <>
-                        {language.t("command.session.new")}
-                        <KeybindV2 keys={newTabTooltipKeybind(command)} variant="neutral" />
-                      </>
-                    }
-                  >
+                  <TooltipV2 placement="bottom" value={language.t("command.session.new")}>
                     <IconButtonV2
                       type="button"
                       variant="ghost-muted"
@@ -575,6 +520,7 @@ export function Titlebar(props: {
                     />
                   </TooltipV2>
                   <div class="flex-1" />
+                  <MangoModelBar />
                   <Show when={props.preview}>
                     <PreviewToggle opened={props.preview!.opened} toggle={props.preview!.toggle} />
                   </Show>
@@ -635,11 +581,10 @@ export function Titlebar(props: {
                 </div>
               </Show>
               <div class="flex items-center gap-1 shrink-0">
-                <TooltipKeybind
+                <Tooltip
                   class={web() ? "hidden xl:flex shrink-0 ml-14" : "hidden xl:flex shrink-0 ml-2"}
                   placement="bottom"
-                  title={language.t("command.sidebar.toggle")}
-                  keybind={command.keybind("sidebar.toggle")}
+                  value={language.t("command.sidebar.toggle")}
                 >
                   <Button
                     variant="ghost"
@@ -650,7 +595,7 @@ export function Titlebar(props: {
                   >
                     <Icon size="small" name={layout.sidebar.opened() ? "sidebar-active" : "sidebar"} />
                   </Button>
-                </TooltipKeybind>
+                </Tooltip>
                 <div class="hidden xl:flex items-center shrink-0">
                   <Show when={params.dir}>
                     <div
@@ -664,12 +609,7 @@ export function Titlebar(props: {
                           "opacity-0 duration-120 ease-in delay-0 pointer-events-none": layout.sidebar.opened(),
                         }}
                       >
-                        <TooltipKeybind
-                          placement="bottom"
-                          title={language.t("command.session.new")}
-                          keybind={command.keybind("session.new")}
-                          openDelay={800}
-                        >
+                        <Tooltip placement="bottom" value={language.t("command.session.new")} openDelay={800}>
                           <Button
                             variant="ghost"
                             class="titlebar-icon w-8 h-6 p-0 box-border"
@@ -684,7 +624,7 @@ export function Titlebar(props: {
                           >
                             <IconV2 name="edit" size="small" />
                           </Button>
-                        </TooltipKeybind>
+                        </Tooltip>
                       </div>
                     </div>
                   </Show>

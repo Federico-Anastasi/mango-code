@@ -5,10 +5,12 @@
 //! among its own (`profiles/general/`: a model official llama.cpp doesn't read, on every PC its engine supports).
 //! Otherwise the general plan applies.
 
+use crate::choices::WhereChoice;
 use crate::general::Placement;
 use crate::hardware::{choose_build, Hardware};
 use crate::user;
 use anyhow::Result;
+use mango_common::download::has_build;
 use mango_common::{tr, Build, Paths};
 use serde::Deserialize;
 use std::collections::BTreeMap;
@@ -80,17 +82,33 @@ pub struct Measurements {
     pub note: String,
 }
 
+/// The profile of `model` that applies to `hw` and to the user's choice for the model, if any: only with «auto» does a
+/// profile count, any other choice runs the general plan (`choices.rs`). Use `lookup` to know whether one exists.
+pub fn profile_for(paths: &Paths, model: &str, hw: &Hardware) -> Result<Option<Profile>> {
+    if crate::choices::read(paths)?.models.get(model).is_some_and(|c| c.place != WhereChoice::Auto) {
+        return Ok(None);
+    }
+    lookup(paths, model, hw)
+}
+
 /// The profile of `model` that applies to `hw`, if any: first the one for the PC's GPUs, then the one for its build.
 /// An unreadable profile is an error (the distribution is damaged), not a reason to silently fall back on the general
-/// one.
-pub fn profile_for(paths: &Paths, model: &str, hw: &Hardware) -> Result<Option<Profile>> {
+/// one. A CUDA 12 profile runs on its engine's build for the GTX 16 family where the PC's cards ask for it
+/// (`Hardware::turing_without_tensor_cores`) and the engine has one.
+pub(crate) fn lookup(paths: &Paths, model: &str, hw: &Hardware) -> Result<Option<Profile>> {
     let profiles = for_model(paths, model)?;
     let build = choose_build(hw);
     Ok(profiles
         .iter()
         .find(|p| p.hardware.gpus.as_ref().is_some_and(|s| same_gpus(s, hw)))
         .or_else(|| profiles.iter().find(|p| p.hardware.build.as_ref().is_some_and(|b| b.contains(&build))))
-        .cloned())
+        .cloned()
+        .map(|mut p| {
+            if p.build == Build::Cuda12 && hw.turing_without_tensor_cores() && has_build(paths, &p.engine, Build::Cuda12Gtx16) {
+                p.build = Build::Cuda12Gtx16;
+            }
+            p
+        }))
 }
 
 /// The profiles of `model`, in the order they count.
@@ -281,6 +299,40 @@ mod tests {
         assert!(p.tailored() && p.id == "test/toq", "{}", p.id);
         let other_pc = pc(vec![nvidia(0, "NVIDIA GeForce RTX 4090", 24_564, (8, 9), (12, 6))], 65_536);
         assert_eq!(profile_for(&paths, "toq", &other_pc).unwrap().unwrap().id, "general/toq");
+    }
+
+    /// The engines of the catalog, each with these builds.
+    fn engines(paths: &Paths, engines: &[(&str, &[&str])]) {
+        let cat: serde_json::Map<String, serde_json::Value> = engines
+            .iter()
+            .map(|(engine, builds)| {
+                let builds: serde_json::Map<String, serde_json::Value> = builds.iter().map(|b| (b.to_string(), serde_json::json!({ "url": "", "size": 0, "sha256": "" }))).collect();
+                (engine.to_string(), serde_json::json!({ "version": "v1", "build": builds }))
+            })
+            .collect();
+        std::fs::write(paths.dist.join("mango-engines.json"), serde_json::Value::Object(cat).to_string()).unwrap();
+    }
+
+    /// A CUDA 12 profile runs on its engine's build for the GTX 16 family where the PC's Turing cards are all of that
+    /// family and the engine has that build; with an RTX 20 beside them, without a Turing card, or with an engine that
+    /// has only the plain build, it runs on the one it names.
+    #[test]
+    fn a_cuda_12_profile_takes_the_engines_build_for_the_gtx_16_family() {
+        let gtx1650 = || pc(vec![nvidia(0, "NVIDIA GeForce GTX 1650", 4096, (7, 5), (12, 6))], 16_384);
+        let rtx3060 = || pc(vec![nvidia(0, "NVIDIA GeForce RTX 3060", 12_288, (8, 6), (12, 6))], 32_768);
+        let mixed = || pc(vec![nvidia(0, "NVIDIA GeForce RTX 2060", 6144, (7, 5), (12, 6)), nvidia(1, "NVIDIA GeForce GTX 1660", 6144, (7, 5), (12, 6))], 32_768);
+        let (_d, paths) = dist_with(&[("general/3.6.json", profile_for_build("3.6", &["cuda-12"])), ("general/toq.json", profile_for_build("toq", &["cuda-12"]).replace("\"prism\"", "\"toq\""))]);
+        let build = |model: &str, hw: Hardware| profile_for(&paths, model, &hw).unwrap().unwrap().build;
+
+        engines(&paths, &[("prism", &["cuda-12", "cuda-12-gtx16"]), ("toq", &["cuda-12"])]);
+        assert_eq!(build("3.6", three_gpus()), Build::Cuda12Gtx16);
+        assert_eq!(build("3.6", gtx1650()), Build::Cuda12Gtx16);
+        assert_eq!(build("3.6", mixed()), Build::Cuda12, "the RTX 20 would lose its tensor cores");
+        assert_eq!(build("3.6", rtx3060()), Build::Cuda12);
+        assert_eq!(build("toq", three_gpus()), Build::Cuda12, "the engine has no build for them");
+
+        engines(&paths, &[("prism", &["cuda-12"])]);
+        assert_eq!(build("3.6", three_gpus()), Build::Cuda12);
     }
 
     /// A profile says the GPUs or the builds, not both nor neither.

@@ -8,7 +8,7 @@
 //! - the recurrent layers (DeltaNet) go to the **secondary card** as long as they fit; the main one keeps only
 //!   what is left over. Every free MiB on the main card is extra context;
 //! - **at most two cards**: the weights outside the main card (4.4 GB on the 27B) sit in pinned memory for
-//!   reading, and with three cards WDDM's pinned memory ceiling runs out (the engine's README, «Open» point 1: with
+//!   reading, and with three cards WDDM's pinned memory ceiling runs out (measured on the engine: with
 //!   36 layers streaming it works, with 48 it doesn't). The rule is on the number of cards, not on names: when
 //!   streaming moves to a small ring, the limit is raised here;
 //! - the context is the requested one if it fits; otherwise it goes down in steps of 4096 to `MIN_CTX`. At equal
@@ -24,7 +24,7 @@ use mango_common::tr;
 pub const MIB: u64 = 1 << 20;
 /// Memory that Windows (screen, DWM) and the CUDA context take from each card. Measured on 30/10 from the engine
 /// log: 3060 Ti 8191 - 7128 free = 1063 MiB, 1660 S 6143 - 5134 = 1009 MiB.
-const SYSTEM_RESERVE_MIB: u64 = 1100;
+pub(crate) const SYSTEM_RESERVE_MIB: u64 = 1100;
 /// Margin above the measurement: the user's desktop may take more than ours.
 const SAFETY_MARGIN_MIB: u64 = 256;
 /// Compute buffer of the main card at `-ub 512 -wgt 1` (engine log: 242 MiB).
@@ -95,6 +95,11 @@ enum Mtp {
 
 fn capacity(g: &Gpu) -> u64 {
     g.memory_mib.saturating_sub(SYSTEM_RESERVE_MIB + SAFETY_MARGIN_MIB) * MIB
+}
+
+/// Sort key that puts the strongest card first: compute capability, at equal capability more VRAM, then PCI order.
+pub(crate) fn by_power(g: &Gpu) -> (std::cmp::Reverse<Option<(u32, u32)>>, std::cmp::Reverse<u64>, u32) {
+    (std::cmp::Reverse(g.cc), std::cmp::Reverse(g.memory_mib), g.index)
 }
 
 fn layer_bytes(l: &Layer) -> u64 {
@@ -193,6 +198,11 @@ fn gib(bytes: u64) -> f64 {
     bytes as f64 / (MIB * 1024) as f64
 }
 
+/// A context as the settings write it: «128k».
+pub(crate) fn context_label(tokens: u32) -> String {
+    format!("{}k", (tokens + 512) / 1024)
+}
+
 fn list(gpus: &[Gpu]) -> String {
     gpus.iter()
         .map(|g| format!("{} ({:.0} GB)", g.name, g.memory_mib as f64 / 1024.0))
@@ -211,7 +221,7 @@ fn free_gpu(gpus: &[Gpu], ranked: &[usize], model: &[usize], encoder: u64) -> Op
 pub fn partition(gpus: &[Gpu], shape: &ModelShape, want_ctx: u32, with_mtp: bool, encoder: u64) -> Result<Placement> {
     // The usable cards, best first: compute capability, VRAM, then PCI order.
     let mut ranked: Vec<usize> = (0..gpus.len()).filter(|&i| gpus[i].cc.is_some_and(|cc| cc >= MIN_CC)).collect();
-    ranked.sort_by_key(|&i| (std::cmp::Reverse(gpus[i].cc), std::cmp::Reverse(gpus[i].memory_mib), gpus[i].index));
+    ranked.sort_by_key(|&i| by_power(&gpus[i]));
     if ranked.is_empty() {
         bail!(
             "{}",
@@ -270,7 +280,7 @@ pub fn partition(gpus: &[Gpu], shape: &ModelShape, want_ctx: u32, with_mtp: bool
             gib(main_fixed(shape, MIN_CTX, false) + rec + encoder + reserve).ceil(),
             gib(main_fixed(shape, MIN_CTX, true) + encoder + reserve).ceil(),
             gib(rec + COMPUTE_OTHER_MIB * MIB + reserve).ceil(),
-            MIN_CTX
+            context_label(MIN_CTX)
         )
     )
 }
@@ -372,6 +382,7 @@ mod tests {
         let g = [gpu(0, "RTX 3060 Ti", 8192, (8, 6))];
         let e = partition(&g, &qwen38_27b(), 122_880, false, 0).unwrap_err().to_string();
         assert!(e.contains(&tr!("non basta", "is not enough")) && e.contains("RTX 3060 Ti"), "{e}");
+        assert!(e.contains(&tr!("contesto minimo di 32k token", "minimum context of 32k tokens")), "{e}");
     }
 
     #[test]

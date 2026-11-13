@@ -32,6 +32,8 @@ export const use = serviceUse(Service)
 
 interface Entry {
   readonly deferred: Deferred.Deferred<InstanceContext>
+  /** Set while the instance is being disposed: a load meanwhile waits for it and then makes a new one. */
+  closing?: Deferred.Deferred<void>
 }
 
 const layer: Layer.Layer<Service, never, Project.Service | InstanceBootstrap.Service> = Layer.effect(
@@ -99,10 +101,15 @@ const layer: Layer.Layer<Service, never, Project.Service | InstanceBootstrap.Ser
 
     const disposeEntry = Effect.fnUntraced(function* (directory: string, entry: Entry, ctx: InstanceContext) {
       if (cache.get(directory) !== entry) return false
-      yield* disposeContext(ctx)
-      if (cache.get(directory) !== entry) return false
-      cache.delete(directory)
-      return true
+      const closing = Deferred.makeUnsafe<void>()
+      entry.closing = closing
+      // The entry leaves the cache before the waiting loads wake up, so they make the new instance.
+      const removed = yield* disposeContext(ctx).pipe(
+        Effect.ensuring(Effect.sync(() => cache.get(directory) === entry && cache.delete(directory))),
+        Effect.ensuring(Deferred.succeed(closing, undefined)),
+        Effect.as(true),
+      )
+      return removed
     })
 
     const load = (input: LoadInput): Effect.Effect<InstanceContext> => {
@@ -110,6 +117,8 @@ const layer: Layer.Layer<Service, never, Project.Service | InstanceBootstrap.Ser
       return Effect.uninterruptibleMask((restore) =>
         Effect.gen(function* () {
           const existing = cache.get(directory)
+          // An instance being disposed is not handed out: a prompt would start on it and be cut.
+          if (existing?.closing) return yield* restore(Deferred.await(existing.closing).pipe(Effect.andThen(load(input))))
           if (existing) return yield* restore(Deferred.await(existing.deferred))
 
           const entry: Entry = { deferred: Deferred.makeUnsafe<InstanceContext>() }

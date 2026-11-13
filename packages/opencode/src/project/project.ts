@@ -215,7 +215,9 @@ const layer = Layer.effect(
     // mango-code: every folder Mango Code works in is a git repository with at least one commit (the agent's snapshots,
     // diffs and the files the app opens all go through the project, whose identity is the first commit). A folder
     // without git gets `git init`; a repository without commits gets an empty first commit, made from the empty tree so
-    // nothing the user staged ends up in it. The author is fixed: git on a new PC may have none configured. Only with
+    // nothing the user staged ends up in it. The author is fixed: git on a new PC may have none configured. The message
+    // carries a random id: without it two folders started in the same second would have the very same first commit,
+    // and so be one project. Only with
     // MANGO_PROJECTS_GIT (set by the app), and never in a folder too broad to be a project (see broad-folder.ts) or a folder that holds
     // repositories (a repository around them would swallow them).
     const ensureGit = Effect.fnUntraced(function* (directory: string, initialized: boolean) {
@@ -235,7 +237,18 @@ const layer = Layer.effect(
       }
       const tree = yield* git(["hash-object", "-t", "tree", "--stdin"], { cwd: resolved })
       const commit = yield* git(
-        ["-c", "user.name=Mango Code", "-c", "user.email=mango-code@localhost", "commit-tree", tree.text.trim(), "-m", "Mango Code: start"],
+        [
+          "-c",
+          "user.name=Mango Code",
+          "-c",
+          "user.email=mango-code@localhost",
+          "commit-tree",
+          tree.text.trim(),
+          "-m",
+          "Mango Code: start",
+          "-m",
+          `Project ${crypto.randomUUID()}`,
+        ],
         { cwd: resolved },
       )
       const ref = commit.code === 0 ? yield* git(["update-ref", "HEAD", commit.text.trim()], { cwd: resolved }) : commit

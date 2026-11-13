@@ -136,7 +136,11 @@ test("opens and searches project files inline", async ({ page }) => {
   await panel.locator("#session-side-panel-review-tab").click()
   await expect(sidebarToggle).toBeEnabled()
   await panel.getByRole("tab", { name: "Open file" }).click()
-  await page.keyboard.press("Control+w")
+  await panel
+    .locator('[data-slot="tabs-trigger-wrapper"]')
+    .filter({ has: page.getByRole("tab", { name: "Open file" }) })
+    .getByRole("button", { name: "Close tab" })
+    .click()
   await expect(panel.getByRole("tab", { name: "Open file" })).toHaveCount(0)
   await expect(panel.getByRole("tab", { name: "nested.ts" })).toHaveAttribute("data-selected", "")
 })

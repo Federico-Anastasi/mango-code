@@ -190,19 +190,21 @@ pub fn install(app: &AppHandle) -> anyhow::Result<()> {
                 }
                 return false;
             }
-            let (open, navigation) = {
+            let (open, navigation, waits) = {
                 let p = for_nav.state::<Panel>();
                 let mut s = p.state.lock().unwrap();
                 s.url = url.as_str().to_string();
                 s.navigation += 1;
                 // Going blank is how a page that does not arrive is given up: nothing is loading, and the reason stays.
-                s.loading = !is_blank(url.as_str());
-                if s.loading {
+                // A data: address carries its page: there is nothing to wait for. WebView2 never reports its end (no `Finished`)
+                // and its address for the page is not one `Webview::url` can read, so `give_up_later` would always give it up.
+                s.loading = !is_blank(url.as_str()) && url.scheme() != "data";
+                if !is_blank(url.as_str()) {
                     s.failed = None;
                 }
-                (!s.visible && !is_blank(url.as_str()), s.navigation)
+                (!s.visible && !is_blank(url.as_str()), s.navigation, s.loading)
             };
-            if !is_blank(url.as_str()) {
+            if waits {
                 give_up_later(&for_nav, navigation, url.as_str().to_string());
             }
             // A navigation with the panel closed is made by the agent: the web UI opens it.
@@ -335,7 +337,7 @@ pub fn preview_place(
     wv.show().map_err(io)
 }
 
-/// Hides the panel. The window's page is changing (the model choice, a reload): the web UI that placed the panel is going away
+/// Hides the panel. The window's page is changing (the app's own page during a restart, a reload): the web UI that placed the panel is going away
 /// and cannot hide it, and a native panel left on its own is a blank rectangle over the next page.
 pub(crate) fn hide(app: &AppHandle) {
     if let Some(p) = app.try_state::<Panel>() {
@@ -416,8 +418,8 @@ pub fn preview_external(app: AppHandle) -> Result<(), BridgeError> {
     crate::supervisor::open_outside_job(url.as_str()).map_err(io)
 }
 
-/// What the panel is asked to show of a project file besides web pages: a PDF or a picture.
-const FILE_TYPES: &[&str] = &["pdf", "png", "jpg", "jpeg", "gif", "webp", "bmp", "ico", "svg"];
+/// What the panel is asked to show of a project file: a PDF, a picture or a web page.
+const FILE_TYPES: &[&str] = &["pdf", "png", "jpg", "jpeg", "gif", "webp", "bmp", "ico", "svg", "html", "htm"];
 
 /// The biggest file shown: above it the web UI says so, instead of a window that loads hundreds of MB of picture.
 const MAX_FILE: u64 = 50 * 1024 * 1024;
@@ -433,7 +435,7 @@ fn svg_page_html(src: &str, name: &str) -> String {
     )
 }
 
-/// The address the panel opens for `real` (a real file, without the `\?\` prefix), or why it is refused: not a PDF or a picture,
+/// The address the panel opens for `real` (a real file, without the `\?\` prefix), or why it is refused: not a PDF, a picture or a web page,
 /// over `MAX_FILE`, or not readable.
 fn file_address(real: &Path) -> Result<Url, BridgeError> {
     let ext = real.extension().and_then(|e| e.to_str()).unwrap_or_default().to_ascii_lowercase();
@@ -458,7 +460,7 @@ fn file_address(real: &Path) -> Result<Url, BridgeError> {
     to_url(&page)
 }
 
-/// Opens a PDF or a picture of a project (or of `Documents\Mango Code`) in the panel: the card of the file in the chat.
+/// Opens a PDF, a picture or a web page of a project (or of `Documents\Mango Code`) in the panel: the card of the file in the chat.
 #[tauri::command]
 pub async fn preview_file(app: AppHandle, path: String) -> Result<(), BridgeError> {
     let real = crate::bridge::allowed_path(&app, path).await?;
@@ -515,7 +517,7 @@ mod tests {
     }
 
     #[test]
-    fn only_a_pdf_or_a_picture_within_the_limit_is_opened() {
+    fn only_a_pdf_a_picture_or_a_web_page_within_the_limit_is_opened() {
         let dir = std::env::temp_dir().join(format!("mc-preview-file-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let make = |name: &str, bytes: &[u8]| {
@@ -526,8 +528,11 @@ mod tests {
         let code = |p: &Path| file_address(p).unwrap_err().code;
         assert!(file_address(&make("a b.pdf", b"%PDF")).unwrap().as_str().ends_with("/a%20b.pdf"));
         assert!(file_address(&make("Photo.JPG", b"x")).unwrap().as_str().starts_with("file:///"));
-        // the other documents, pages and programs are not shown here; neither is a folder named like a picture
-        for name in ["a.docx", "a.html", "a.exe", "a.txt", "noext"] {
+        // a web page is opened as it is, by its own address: it runs, like the pages the agent opens
+        assert!(file_address(&make("my site#1.html", b"<p>")).unwrap().as_str().ends_with("/my%20site%231.html"));
+        assert!(file_address(&make("Old.HTM", b"<p>")).unwrap().as_str().ends_with("/Old.HTM"));
+        // the other documents and programs are not shown here; neither is a folder named like a picture
+        for name in ["a.docx", "a.js", "a.exe", "a.txt", "noext"] {
             assert_eq!(code(&make(name, b"x")), "blocked_type", "{name}");
         }
         std::fs::create_dir_all(dir.join("folder.png")).unwrap();

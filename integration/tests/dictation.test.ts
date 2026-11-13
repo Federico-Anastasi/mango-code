@@ -82,3 +82,29 @@ test("who updates from a version that already had the models finds it on, withou
   }
   expect(state).toMatchObject({ enabled: true, status: "ready" });
 }, 120_000);
+
+test("the row of Settings › General is the switch of the same thing: it tells the progress and when the microphone is ready", async () => {
+  // after the restart above the dictation is on and ready
+  await p.send("Page.navigate", { url: `${env.agent}/settings?section=general` });
+  const row = `document.querySelector('[data-action="settings-dictation"] input')`;
+  const said = () => p.evaluate(`document.querySelector('[data-slot="settings-dictation-state"]')?.innerText ?? ""`) as Promise<string>;
+  const waitFor = async (what: string, condition: () => Promise<boolean>) => {
+    for (let i = 0; i < 150 && !(await condition().catch(() => false)); i++) await Bun.sleep(200);
+    expect(await condition(), what).toBe(true);
+  };
+  await waitFor("the row on and ready", async () => (await p.evaluate(`${row}?.checked`)) === true && (await said()).includes("Pronta"));
+
+  // off: the space comes back and the row says nothing more
+  await p.evaluate(`${row}.click()`);
+  await waitFor("the row off", async () => (await p.evaluate(`${row}.checked`)) === false);
+  await until("off");
+  expect(await said()).toBe("");
+  expect(fs.existsSync(models())).toBe(false);
+
+  // on: it tells how far the download is, then that the microphone is in the chat
+  await p.evaluate(`${row}.click()`);
+  await waitFor("the progress", async () => /^Scarico la dettatura: \d+ di 465 MB$/.test(await said()));
+  await waitFor("ready", async () => (await said()).startsWith("Pronta"));
+  await until("ready");
+  expect(await p.evaluate(`${row}.checked`)).toBe(true);
+}, 90_000);

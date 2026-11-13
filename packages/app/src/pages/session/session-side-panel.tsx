@@ -17,11 +17,10 @@ import {
 import { Tabs } from "@opencode-ai/ui/tabs"
 import { IconButton } from "@opencode-ai/ui/icon-button"
 import { Icon } from "@opencode-ai/ui/icon"
-import { TooltipKeybind } from "@opencode-ai/ui/tooltip"
+import { Tooltip } from "@opencode-ai/ui/tooltip"
 import { ResizeHandle } from "@opencode-ai/ui/resize-handle"
 import { Mark } from "@opencode-ai/ui/logo"
 import { IconButtonV2 } from "@opencode-ai/ui/v2/icon-button-v2"
-import { KeybindV2 } from "@opencode-ai/ui/v2/keybind-v2"
 import { TooltipV2 } from "@opencode-ai/ui/v2/tooltip-v2"
 import type { SnapshotFileDiff, VcsFileDiff } from "@opencode-ai/sdk/v2"
 import type { FileDiffInfo } from "@opencode-ai/client/promise"
@@ -37,7 +36,6 @@ const reviewTabPanelID = "session-side-panel-review-tabpanel"
 const fileBrowserTabPanelID = "session-side-panel-file-browser-tabpanel"
 import { SessionContextTab, SortableTab, SortableTabV2, FileVisual } from "@/components/session"
 import { OpenInAppV2 } from "@/components/session/open-in-app-v2"
-import { useCommand } from "@/context/command"
 import { useFile, type SelectedLineRange } from "@/context/file"
 import { useLanguage } from "@/context/language"
 import { useLayout } from "@/context/layout"
@@ -55,6 +53,7 @@ import {
 } from "@/pages/session/helpers"
 import { setSessionHandoff } from "@/pages/session/handoff"
 import { useSessionLayout } from "@/pages/session/session-layout"
+import { RunningPrograms } from "@/pages/session/running-programs"
 import { SessionFileBrowserTab, type SessionFileBrowserState } from "@/pages/session/v2/session-file-browser-tab"
 
 type ReviewDiff = FileDiffInfo | SnapshotFileDiff | VcsFileDiff
@@ -80,13 +79,11 @@ export function SessionSidePanel(props: {
   focusReviewDiff: (path: string) => void
   reviewSnap: boolean
   size: Sizing
-  stacked?: boolean
 }) {
   const layout = useLayout()
   const settings = useSettings()
   const file = useFile()
   const language = useLanguage()
-  const command = useCommand()
   const dialog = useDialog()
   const sdk = useSDK()
   const { sessionKey, tabs, view, params } = useSessionLayout()
@@ -240,8 +237,6 @@ export function SessionSidePanel(props: {
     const active = activeTab()
     return active !== "review" && active !== "context" && active !== "empty"
   })
-  const openFileKeybind = createMemo(() => command.keybindParts("file.open"))
-  const closeTabKeybind = createMemo(() => command.keybindParts("tab.close"))
   const [store, setStore] = createStore({
     activeDraggable: undefined as string | undefined,
   })
@@ -294,12 +289,10 @@ export function SessionSidePanel(props: {
         aria-label={language.t("session.panel.reviewAndFiles")}
         aria-hidden={!open()}
         inert={!open()}
-        class="relative min-w-0 flex overflow-hidden"
+        class="relative min-w-0 h-full shrink-0 flex overflow-hidden"
         classList={{
           "bg-v2-background-bg-base": settings.general.newLayoutDesigns(),
           "bg-background-base": !settings.general.newLayoutDesigns(),
-          "h-full shrink-0": !props.stacked,
-          "h-full min-h-0": props.stacked,
           "pointer-events-none": !open(),
           "transition-[width] duration-[240ms] ease-[cubic-bezier(0.22,1,0.36,1)] will-change-[width] motion-reduce:transition-none":
             !props.size.active() && !props.reviewSnap,
@@ -324,12 +317,15 @@ export function SessionSidePanel(props: {
                 }}
               >
                 <div
-                  class="size-full min-w-0 h-full"
+                  class="size-full min-w-0 h-full flex flex-col [&>[data-component=tabs]]:min-h-0 [&>[data-component=tabs]]:flex-1"
                   classList={{
                     "bg-v2-background-bg-base": settings.general.newLayoutDesigns(),
                     "bg-background-base": !settings.general.newLayoutDesigns(),
                   }}
                 >
+                  <Show when={params.id} keyed>
+                    {(id) => <RunningPrograms sessionID={id} />}
+                  </Show>
                   <Show
                     when={props.fileBrowserState}
                     fallback={
@@ -367,12 +363,7 @@ export function SessionSidePanel(props: {
                                 <Tabs.Trigger
                                   value="context"
                                   closeButton={
-                                    <TooltipKeybind
-                                      title={language.t("common.closeTab")}
-                                      keybind={command.keybind("tab.close")}
-                                      placement="bottom"
-                                      gutter={10}
-                                    >
+                                    <Tooltip value={language.t("common.closeTab")} placement="bottom" gutter={10}>
                                       <IconButton
                                         icon="close-small"
                                         variant="ghost"
@@ -380,7 +371,7 @@ export function SessionSidePanel(props: {
                                         onClick={() => tabs().close("context")}
                                         aria-label={language.t("common.closeTab")}
                                       />
-                                    </TooltipKeybind>
+                                    </Tooltip>
                                   }
                                   hideCloseButton
                                   onMiddleClick={() => tabs().close("context")}
@@ -408,12 +399,7 @@ export function SessionSidePanel(props: {
                                       <Tabs.Trigger
                                         value={SESSION_OPEN_FILE_TAB}
                                         closeButton={
-                                          <TooltipKeybind
-                                            title={language.t("common.closeTab")}
-                                            keybind={command.keybind("tab.close")}
-                                            placement="bottom"
-                                            gutter={10}
-                                          >
+                                          <Tooltip value={language.t("common.closeTab")} placement="bottom" gutter={10}>
                                             <IconButton
                                               icon="close-small"
                                               variant="ghost"
@@ -421,7 +407,7 @@ export function SessionSidePanel(props: {
                                               onClick={() => tabs().close(SESSION_OPEN_FILE_TAB)}
                                               aria-label={language.t("common.closeTab")}
                                             />
-                                          </TooltipKeybind>
+                                          </Tooltip>
                                         }
                                         hideCloseButton
                                         onMiddleClick={() => tabs().close(SESSION_OPEN_FILE_TAB)}
@@ -442,11 +428,7 @@ export function SessionSidePanel(props: {
                                   "bg-background-stronger": !settings.general.newLayoutDesigns(),
                                 }}
                               >
-                                <TooltipKeybind
-                                  title={language.t("command.file.open")}
-                                  keybind={command.keybind("file.open")}
-                                  class="flex items-center"
-                                >
+                                <Tooltip value={language.t("command.file.open")} class="flex items-center">
                                   <IconButton
                                     icon="plus-small"
                                     variant="ghost"
@@ -454,12 +436,12 @@ export function SessionSidePanel(props: {
                                     class="!rounded-md"
                                     onClick={() => {
                                       void import("@/components/dialog-select-file").then((x) => {
-                                        dialog.show(() => <x.DialogSelectFile mode="files" onOpenFile={showAllFiles} />)
+                                        dialog.show(() => <x.DialogSelectFile onOpenFile={showAllFiles} />)
                                       })
                                     }}
                                     aria-label={language.t("command.file.open")}
                                   />
-                                </TooltipKeybind>
+                                </Tooltip>
                               </div>
                             </Tabs.List>
                           </div>
@@ -575,18 +557,7 @@ export function SessionSidePanel(props: {
                               <Tabs.Trigger
                                 value="context"
                                 closeButton={
-                                  <TooltipV2
-                                    value={
-                                      <>
-                                        {language.t("common.closeTab")}
-                                        <Show when={closeTabKeybind().length > 0}>
-                                          <KeybindV2 keys={closeTabKeybind()} variant="neutral" />
-                                        </Show>
-                                      </>
-                                    }
-                                    placement="bottom"
-                                    gutter={10}
-                                  >
+                                  <TooltipV2 value={language.t("common.closeTab")} placement="bottom" gutter={10}>
                                     <IconButton
                                       icon="close-small"
                                       variant="ghost"
@@ -622,18 +593,7 @@ export function SessionSidePanel(props: {
                                   <Tabs.Trigger
                                     value={SESSION_OPEN_FILE_TAB}
                                     closeButton={
-                                      <TooltipV2
-                                        value={
-                                          <>
-                                            {language.t("common.closeTab")}
-                                            <Show when={closeTabKeybind().length > 0}>
-                                              <KeybindV2 keys={closeTabKeybind()} variant="neutral" />
-                                            </Show>
-                                          </>
-                                        }
-                                        placement="bottom"
-                                        gutter={10}
-                                      >
+                                      <TooltipV2 value={language.t("common.closeTab")} placement="bottom" gutter={10}>
                                         <IconButton
                                           icon="close-small"
                                           variant="ghost"
@@ -662,14 +622,7 @@ export function SessionSidePanel(props: {
                               }}
                             >
                               <TooltipV2
-                                value={
-                                  <>
-                                    {language.t("command.file.open")}
-                                    <Show when={openFileKeybind().length > 0}>
-                                      <KeybindV2 keys={openFileKeybind()} variant="neutral" />
-                                    </Show>
-                                  </>
-                                }
+                                value={language.t("command.file.open")}
                                 placement="bottom"
                                 class="flex items-center"
                               >

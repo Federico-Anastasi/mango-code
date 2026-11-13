@@ -34,10 +34,11 @@ describe("projectFileKind", () => {
 })
 
 describe("previewKind", () => {
-  test("a PDF and the pictures can be shown in the panel, an SVG as a picture; the other documents cannot", () => {
+  test("a PDF, the pictures (an SVG as a picture) and the web pages can be shown in the panel; the other documents cannot", () => {
     expect(previewKind("a/b/c.PDF")).toBe("pdf")
     for (const name of ["a.png", "a.JPG", "a.jpeg", "a.gif", "a.webp", "a.bmp", "a.ico", "logo.svg"]) expect(previewKind(name)).toBe("image")
-    for (const name of ["a.docx", "a.xlsx", "a.pptx", "index.html", "a.txt", "a.zip", "Makefile"]) expect(previewKind(name)).toBeUndefined()
+    for (const name of ["index.html", "site/Home.HTM"]) expect(previewKind(name)).toBe("web")
+    for (const name of ["a.docx", "a.xlsx", "a.pptx", "a.txt", "a.js", "a.zip", "Makefile"]) expect(previewKind(name)).toBeUndefined()
   })
 })
 

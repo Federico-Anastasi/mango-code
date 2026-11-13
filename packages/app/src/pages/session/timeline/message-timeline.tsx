@@ -8,6 +8,7 @@ import {
   onCleanup,
   onMount,
   Show,
+  untrack,
   type Accessor,
   type JSX,
 } from "solid-js"
@@ -63,12 +64,14 @@ import { isProjectFileCard, previewKind } from "@opencode-ai/session-ui/project-
 import { lastWrittenPage, summaryFiles } from "./produced-files"
 import { phonePreview } from "@/utils/phone-preview"
 import { createElapsed } from "@opencode-ai/session-ui/live-now"
+import { MangoPendingBubbles } from "@/components/mango-pending-bubbles"
 import { formatDuration } from "@opencode-ai/session-ui/step-time"
 import { useFileComponent } from "@opencode-ai/ui/context/file"
 import { shouldMarkBoundaryGesture, normalizeWheelDelta } from "@/pages/session/message-gesture"
 import { SessionContextUsage } from "@/components/session-context-usage"
 import { createEngineLive, createEngineTurn, SessionWorkTime, TurnStats, waitLabel } from "@/components/engine-speed"
-import { formatTokens, ownsEngineNumbers, type EngineSession } from "@/utils/engine-speed"
+import { ownsEngineNumbers, type EngineSession } from "@/utils/engine-speed"
+import { readingText } from "@/components/mango-text"
 import { useDialog } from "@opencode-ai/ui/context/dialog"
 import { useLanguage } from "@/context/language"
 import { useSessionKey } from "@/pages/session/session-layout"
@@ -88,6 +91,8 @@ import { observeElementOffsetReconnectAware } from "./observe-element-offset"
 import { createTimelineProjection } from "./projection"
 import { MessageComment, SummaryDiff, TimelineRow, TimelineRowMap } from "./rows"
 import { filterVirtualIndexes } from "./virtual-items"
+import { createConversationFind, drawnResults, rowText } from "./conversation-find"
+import { ConversationFindBar } from "./conversation-find-bar"
 
 const emptyMessages: MessageType[] = []
 const emptyParts: PartType[] = []
@@ -162,13 +167,9 @@ function TimelineThinkingRow(props: { since: number; afterParts: boolean }) {
     // The engine waits for the gpus or loads the model: it says so instead of "Reading the request".
     const wait = ownsEngineNumbers(turn()) ? engine().wait : undefined
     if (wait) return withTime(waitLabel(wait, language.t, language.intl()))
-    const text = reading
-      ? language.t("engine.reading", {
-          done: formatTokens(Math.min(reading.doneTokens, reading.totalTokens), language.intl()),
-          total: formatTokens(reading.totalTokens, language.intl()),
-        })
-      : language.t(props.afterParts ? "ui.wait.working" : "ui.wait.request")
-    return withTime(text)
+    // the seconds of the reading itself, as the status line says them
+    if (reading && reading.totalTokens > 0) return readingText(reading, language)
+    return withTime(language.t(props.afterParts ? "ui.wait.working" : "ui.wait.request"))
   }
 
   // Queued behind another conversation: it says which one, and its name leads there.
@@ -270,7 +271,7 @@ function TimelineDiffSummaryRow(props: { diffs: SummaryDiff[]; produced: string[
                 return (
                   <div
                     data-slot="session-turn-file-card"
-                    // A PDF or a picture is shown in the panel by a click anywhere on its card: the same as "Open".
+                    // A PDF, a picture or a web page is shown in the panel by a click anywhere on its card: the same as "Open".
                     data-preview={!deleted && data.files && previewKind(item.file) ? "" : undefined}
                     onClick={(event) => {
                       const card = event.currentTarget
@@ -350,6 +351,11 @@ function TimelineDiffView(props: { diff: SummaryDiff }) {
 
 export function MessageTimeline(props: {
   actions?: UserActions
+  /**
+   * Sends again the message of a turn the model answered without writing anything, or in the middle of which the model
+   * closed.
+   */
+  onRetry?: (userMessageID: string) => void
   scroll: { overflow: boolean; bottom: boolean; jump: boolean }
   onResumeScroll: () => void
   setScrollRef: (el: HTMLDivElement | undefined) => void
@@ -357,7 +363,6 @@ export function MessageTimeline(props: {
   onAutoScrollHandleScroll: () => void
   onMarkScrollGesture: (target?: EventTarget | null) => void
   hasScrollGesture: () => boolean
-  onUserScroll: () => void
   onHistoryScroll: () => void
   onAutoScrollInteraction: (event: MouseEvent) => void
   shouldAnchorBottom: () => boolean
@@ -368,6 +373,14 @@ export function MessageTimeline(props: {
   setRevealMessage?: (fn: (id: string) => void) => void
   setScrollToEnd?: (fn: () => void) => void
   setHistoryAnchor?: (handlers: { capture: () => void; restore: (done: boolean) => void }) => void
+  /** Hands out the opening of the search in the conversation, for Ctrl+F. */
+  setOpenFind?: (fn: (() => void) | undefined) => void
+  /** A result of the search is about to be shown: the chat stops following the bottom. */
+  onFindScroll?: () => void
+  /** The search was closed: the focus goes back to the message box. */
+  onFindClose?: () => void
+  /** Older messages are still to be loaded: the search says it looked only in the loaded part. */
+  historyMore?: () => boolean
 }) {
   let touchGesture: number | undefined
 
@@ -411,7 +424,7 @@ export function MessageTimeline(props: {
     return sync().session.get(id)
   })
   const titleValue = createMemo(() => info()?.title)
-  const titleLabel = createMemo(() => sessionTitle(titleValue()))
+  const titleLabel = createMemo(() => sessionTitle(titleValue(), language.t("session.untitled")))
   const shareUrl = createMemo(() => info()?.share?.url)
   // Session sharing was discontinued; keep the share menu and popover hidden.
   const shareEnabled = () => false
@@ -426,7 +439,9 @@ export function MessageTimeline(props: {
     if (!id) return emptyMessages
     return sync().data.message[id] ?? emptyMessages
   })
-  const parentTitle = createMemo(() => sessionTitle(parent()?.title) ?? language.t("command.session.new"))
+  const parentTitle = createMemo(
+    () => sessionTitle(parent()?.title, language.t("session.untitled")) ?? language.t("session.untitled"),
+  )
   const getMsgParts = (msgId: string) => sync().data.part[msgId] ?? emptyParts
   // The globe of the phone opens the last page this conversation wrote when the computer's panel has none.
   createEffect(() => {
@@ -639,6 +654,107 @@ export function MessageTimeline(props: {
     })
     props.setScrollToEnd?.(() => virtualizer.scrollToEnd())
     props.setHistoryAnchor?.({ capture: capturePrependAnchor, restore: restorePrependAnchor })
+    props.setOpenFind?.(openFind)
+  })
+
+  const find = createConversationFind({
+    rows: timelineRows,
+    text: (row) => rowText(row, getMsgParts),
+    onClose: () => props.onFindClose?.(),
+  })
+  let findInput: HTMLInputElement | undefined
+  let findFrame: number | undefined
+  let scrollPaint: number | undefined
+  const openFind = () => {
+    find.open()
+    requestAnimationFrame(() => {
+      findInput?.focus()
+      findInput?.select()
+    })
+  }
+  const highlights = () => (globalThis as unknown as { CSS?: { highlights?: Map<string, unknown> } }).CSS?.highlights
+  const clearFind = () => {
+    highlights()?.delete("conversation-find")
+    highlights()?.delete("conversation-find-current")
+  }
+  /**
+   * Marks the results in the drawn rows and tells the search how many each row really shows; says whether the
+   * current result is drawn.
+   */
+  const paintFind = (center: boolean) => {
+    clearFind()
+    const root = listRoot()
+    const query = find.query().trim()
+    const match = untrack(find.current)
+    if (!root || !match || !query) return false
+    const drawn = drawnResults(root, query)
+    drawn.forEach((row) => find.counted(row.key, row.ranges.length))
+    const current = drawn.find((row) => row.key === match.key)?.ranges[match.nth]
+    const registry = highlights()
+    const Highlight = (globalThis as unknown as { Highlight?: new (...ranges: Range[]) => unknown }).Highlight
+    if (registry && Highlight) {
+      const rest = drawn.flatMap((row) => row.ranges).filter((range) => range !== current)
+      if (rest.length) registry.set("conversation-find", new Highlight(...rest))
+      if (current) registry.set("conversation-find-current", new Highlight(current))
+    }
+    if (!current) return false
+    if (!center) return true
+    const rect = current.getBoundingClientRect()
+    const view = root.getBoundingClientRect()
+    root.scrollTop += rect.top - view.top - view.height / 2
+    return true
+  }
+  // The row of the result is asked for at each frame until it stays in view, one second at most: the rows around it
+  // are measured as they are drawn and the list keeps its distance from the bottom, so a single jump can fall short.
+  // Then its exact place is marked and centered. If the row shows fewer results than counted, the count is corrected
+  // and the search moves on to the next result by itself.
+  const revealFind = (key: string, frames: number, seen = false) => {
+    findFrame = requestAnimationFrame(() => {
+      findFrame = undefined
+      const root = listRoot()
+      const row = root?.querySelector(`[data-timeline-key="${CSS.escape(key)}"]`)
+      const view = root?.getBoundingClientRect()
+      const rect = row?.getBoundingClientRect()
+      const visible = !!view && !!rect && rect.bottom > view.top && rect.top < view.bottom
+      if (visible && seen) {
+        paintFind(true)
+        return
+      }
+      const index = untrack(timelineRows).findIndex((item) => TimelineRow.key(item) === key)
+      if (index < 0 || frames === 0) return
+      if (!visible) virtualizer.scrollToIndex(index, { align: "center" })
+      revealFind(key, frames - 1, visible)
+    })
+  }
+  // Only a change of the result moves the chat, not a new message that leaves it where it is.
+  const findTarget = createMemo(() => {
+    const match = find.current()
+    return find.opened() && match ? [match.key, match.nth, find.query().trim()].join("\0") : ""
+  })
+  createEffect(
+    on(findTarget, (target) => {
+      if (findFrame !== undefined) cancelAnimationFrame(findFrame)
+      findFrame = undefined
+      clearFind()
+      const match = untrack(find.current)
+      if (!target || !match) return
+      props.onFindScroll?.()
+      revealFind(match.key, 60)
+    }),
+  )
+  // Rows that come into view get their results marked too, once a frame at most.
+  const paintOnScroll = () => {
+    if (!find.opened() || findFrame !== undefined || scrollPaint !== undefined) return
+    scrollPaint = requestAnimationFrame(() => {
+      scrollPaint = undefined
+      paintFind(false)
+    })
+  }
+  onCleanup(() => {
+    if (findFrame !== undefined) cancelAnimationFrame(findFrame)
+    if (scrollPaint !== undefined) cancelAnimationFrame(scrollPaint)
+    clearFind()
+    props.setOpenFind?.(undefined)
   })
 
   let overscanFrame: number | undefined
@@ -758,10 +874,10 @@ export function MessageTimeline(props: {
 
   const handleListScroll = (event: Event & { currentTarget: HTMLDivElement }) => {
     if (prependLoading) updatePrependAnchor()
+    paintOnScroll()
     props.onScheduleScrollState(event.currentTarget)
     props.onHistoryScroll()
     if (!props.hasScrollGesture()) return
-    props.onUserScroll()
     props.onAutoScrollHandleScroll()
     props.onMarkScrollGesture(event.currentTarget)
   }
@@ -1015,7 +1131,9 @@ export function MessageTimeline(props: {
 
   function DialogDeleteSession(props: { sessionID: string }) {
     const name = createMemo(
-      () => sessionTitle(sync().session.get(props.sessionID)?.title) ?? language.t("command.session.new"),
+      () =>
+        sessionTitle(sync().session.get(props.sessionID)?.title, language.t("session.untitled")) ??
+        language.t("session.untitled"),
     )
     const handleDelete = async () => {
       await deleteSession(props.sessionID)
@@ -1201,6 +1319,19 @@ export function MessageTimeline(props: {
     )
   }
 
+  // «Riprova» under a turn: only the last one, with the conversation still (sending again an older message would land at
+  // the bottom), and only a message with words or pictures (one of only comments has nothing to send again).
+  const retryOf = (userMessageID: string) => {
+    const resendable = getMsgParts(userMessageID).some(
+      (part) =>
+        (part.type === "text" && !part.synthetic && !!part.text.trim()) ||
+        (part.type === "file" && part.url.startsWith("data:")),
+    )
+    return props.onRetry && activeMessageID() === userMessageID && sessionStatus().type === "idle" && resendable
+      ? props.onRetry
+      : undefined
+  }
+
   const renderTimelineRow = (row: Accessor<TimelineRow.TimelineRow>, onSizeChange?: () => void) => {
     switch (row()._tag) {
       case "TurnGap":
@@ -1315,7 +1446,9 @@ export function MessageTimeline(props: {
         return (
           <TimelineRowFrame row={thinkingRow}>
             <div data-slot="session-turn-message-container" class="w-full px-4 md:px-5">
-              <TimelineThinkingRow since={thinkingRow().since} afterParts={thinkingRow().afterParts} />
+              <Show when={thinkingRow().since} fallback={<div data-slot="session-turn-thinking" aria-hidden="true" />}>
+                {(since) => <TimelineThinkingRow since={since()} afterParts={thinkingRow().afterParts} />}
+              </Show>
             </div>
           </TimelineRowFrame>
         )
@@ -1343,6 +1476,26 @@ export function MessageTimeline(props: {
           </TimelineRowFrame>
         )
       }
+      case "EmptyAnswer": {
+        const emptyRow = row as Accessor<TimelineRowByTag<"EmptyAnswer">>
+        const retry = () => retryOf(emptyRow().userMessageID)
+        return (
+          <TimelineRowFrame row={emptyRow}>
+            <div data-slot="session-turn-message-container" class="w-full px-4 md:px-5">
+              <div data-slot="session-turn-empty-answer" class="flex flex-wrap items-center gap-x-3 gap-y-2">
+                <span class="text-14-regular text-text-weak">{language.t("session.emptyAnswer.text")}</span>
+                <Show when={retry()}>
+                  {(onRetry) => (
+                    <ButtonV2 variant="outline" size="small" onClick={() => onRetry()(emptyRow().userMessageID)}>
+                      {language.t("session.emptyAnswer.retry")}
+                    </ButtonV2>
+                  )}
+                </Show>
+              </div>
+            </div>
+          </TimelineRowFrame>
+        )
+      }
       case "DiffSummary": {
         const diffSummaryRow = row as Accessor<TimelineRowByTag<"DiffSummary">>
         return (
@@ -1355,12 +1508,27 @@ export function MessageTimeline(props: {
       }
       case "Error": {
         const errorRow = row as Accessor<TimelineRowByTag<"Error">>
+        const retry = () => (errorRow().retry ? retryOf(errorRow().userMessageID) : undefined)
         return (
           <TimelineRowFrame row={errorRow}>
-            <div data-slot="session-turn-message-container" class="w-full px-4 md:px-5">
+            <div data-slot="session-turn-message-container" class="flex w-full flex-col gap-2 px-4 md:px-5">
               <Card variant="error" class="error-card">
                 {errorRow().overflow ? language.t("ui.error.contextOverflow") : errorRow().text}
               </Card>
+              <Show when={retry()}>
+                {(onRetry) => (
+                  <div>
+                    <ButtonV2
+                      variant="outline"
+                      size="small"
+                      data-action="session-turn-retry"
+                      onClick={() => onRetry()(errorRow().userMessageID)}
+                    >
+                      {language.t("session.emptyAnswer.retry")}
+                    </ButtonV2>
+                  </div>
+                )}
+              </Show>
             </div>
           </TimelineRowFrame>
         )
@@ -1454,6 +1622,28 @@ export function MessageTimeline(props: {
             <SessionContextUsage
               placement="bottom"
               buttonAppearance={settings.general.newLayoutDesigns() ? "v2" : "default"}
+            />
+          </Show>
+          <Show
+            when={settings.general.newLayoutDesigns()}
+            fallback={
+              <IconButton
+                icon="magnifying-glass"
+                variant="ghost"
+                class="size-6 rounded-md"
+                onClick={openFind}
+                aria-label={language.t("session.find.open")}
+              />
+            }
+          >
+            <IconButtonV2
+              type="button"
+              variant="ghost-muted"
+              size="large"
+              data-action="conversation-find"
+              onClick={openFind}
+              aria-label={language.t("session.find.open")}
+              icon={<IconV2 name="magnifying-glass" />}
             />
           </Show>
           <Show when={!parentID()}>
@@ -1796,6 +1986,24 @@ export function MessageTimeline(props: {
 
   return (
     <div class="relative w-full h-full min-w-0">
+      <Show when={find.opened()}>
+        <div
+          class="pointer-events-none absolute inset-x-2 z-[70] flex justify-end"
+          classList={{ "top-14": showHeader(), "top-2": !showHeader() }}
+        >
+          <ConversationFindBar
+            query={find.query()}
+            index={find.index()}
+            count={find.count()}
+            partial={props.historyMore?.() ?? false}
+            setInput={(el) => (findInput = el)}
+            onInput={find.setQuery}
+            onKeyDown={find.onKeyDown}
+            onMove={find.move}
+            onClose={find.close}
+          />
+        </div>
+      </Show>
       <div
         class="absolute left-1/2 -translate-x-1/2 z-[60] pointer-events-none transition-all duration-200 ease-out"
         classList={{
@@ -1989,6 +2197,7 @@ export function MessageTimeline(props: {
             />
           </Show>
         </div>
+        <MangoPendingBubbles sessionID={sessionID()} centered={props.centered} onChange={maybeAnchorBottom} />
       </ScrollView>
       <Show when={phone() ? phoneBarActions.element() : undefined} keyed>
         {(mount) => <Portal mount={mount}>{titleActions()}</Portal>}

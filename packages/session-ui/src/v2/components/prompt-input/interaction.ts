@@ -23,7 +23,6 @@ export type PromptInputV2SelectControl = {
   options: Accessor<PromptInputV2Option[]>
   current: Accessor<string>
   onSelect: (id: string) => void
-  keybind?: Accessor<string[]>
 }
 
 export type PromptInputV2ViewConfig = {
@@ -39,6 +38,8 @@ export type PromptInputV2ViewConfig = {
   submit: {
     stopping: Accessor<boolean>
     working?: Accessor<boolean>
+    /** Nothing can be sent now, whatever is written: the send button is off and Enter keeps the text in the box. */
+    blocked?: Accessor<boolean>
     onSubmit: () => void
     onStop: () => void
   }
@@ -188,17 +189,6 @@ export function createPromptInputV2Controller(input: {
   }
 
   const onKeyDown = (event: KeyboardEvent) => {
-    if (
-      state.mode === "normal" &&
-      (event.metaKey || event.ctrlKey) &&
-      !event.altKey &&
-      !event.shiftKey &&
-      event.key.toLowerCase() === "u"
-    ) {
-      event.preventDefault()
-      attach()
-      return true
-    }
     const handled = dispatch({
       type: "key.down",
       key: event.key,
@@ -215,11 +205,7 @@ export function createPromptInputV2Controller(input: {
       )
     }
     if (handled) return true
-    const stop =
-      input.view.submit.working?.() &&
-      ((event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey && event.key.toLowerCase() === "g") ||
-        event.key === "Escape")
-    if (stop) {
+    if (input.view.submit.working?.() && event.key === "Escape") {
       event.preventDefault()
       input.view.submit.onStop()
       return true
@@ -330,6 +316,7 @@ export function createPromptInputV2Controller(input: {
       draft.removeAttachment(id)
     },
     canSubmit() {
+      if (input.view.submit.blocked?.()) return false
       const persisted = draft.state
       if (persisted.prompt.some((part) => part.type === "image")) return true
       if (persisted.context.items.some((item) => !!item.comment?.trim())) return true
@@ -360,6 +347,7 @@ export function createPromptInputV2Controller(input: {
       dispatch({ type: "mode.normal" })
     },
     submit() {
+      if (input.view.submit.blocked?.()) return
       input.view.submit.onSubmit()
       dispatch({ type: "popover.close" })
     },

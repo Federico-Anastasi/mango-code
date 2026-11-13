@@ -11,8 +11,7 @@ describe("sessionTitle", () => {
     expect(sessionTitle("Child session - 2026-10-30T13:48:29.935Z", "New conversation")).toBe("New conversation")
   })
 
-  test("without a label the old behaviour stays", () => {
-    expect(sessionTitle("New session - 2026-10-30T13:48:29.935Z")).toBe("New session")
-    expect(sessionTitle(undefined)).toBeUndefined()
+  test("no title is left to the caller", () => {
+    expect(sessionTitle(undefined, "Nuova conversazione")).toBeUndefined()
   })
 })

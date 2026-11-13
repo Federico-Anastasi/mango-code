@@ -5,12 +5,13 @@
 //! They load no model: `--version` loads no backend; installing a CUDA build also asks the engine for its GPUs
 //! (`--list-devices`).
 
-use mango_common::download::{install_model, install_engine, installed_engine, download, sha256_file, RemoteFile};
+use mango_common::download::{install_model, install_engine, installed_engine, download_stoppable, sha256_file, RemoteFile};
 use mango_common::{Build, Paths};
 use serde_json::Value;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::AtomicBool;
 
 fn launcher() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../launcher").canonicalize().unwrap()
@@ -45,7 +46,7 @@ fn the_cpu_and_vulkan_builds_install_and_start() {
     for build in [Build::Cpu, Build::Vulkan] {
         assert_eq!(installed_engine(&p, "llamacpp", build), None);
         let mut last = (0, 0);
-        let dir = install_engine(&p, "llamacpp", build, &mut |a, t| last = (a, t)).unwrap();
+        let dir = install_engine(&p, "llamacpp", build, &AtomicBool::new(false), &mut |a, t| last = (a, t)).unwrap();
         assert_eq!(dir, p.engines.join("llamacpp").join(format!("{version}-{build}")));
         assert_eq!(last.0, last.1);
         assert!(last.1 > 20_000_000, "{last:?}");
@@ -57,7 +58,7 @@ fn the_cpu_and_vulkan_builds_install_and_start() {
         println!("{build}: {}", text.lines().next().unwrap_or_default());
     }
     // the second time it doesn't download again
-    assert!(install_engine(&p, "llamacpp", Build::Cpu, &mut |_, _| panic!("downloaded again")).is_ok());
+    assert!(install_engine(&p, "llamacpp", Build::Cpu, &AtomicBool::new(false), &mut |_, _| panic!("downloaded again")).is_ok());
     let _ = fs::remove_dir_all(&base);
 }
 
@@ -71,7 +72,7 @@ fn the_cuda_12_and_13_files_have_the_catalog_size_and_hash() {
         for (name, v) in [("build", b), ("runtime", &b["runtime"])] {
             let f = catalog_file(v);
             let dest = base.join(format!("{build}-{name}.zip"));
-            download(&f, &dest, &mut |_, _| {}).unwrap();
+            download_stoppable(&f, &dest, &AtomicBool::new(false), &mut |_, _| {}).unwrap();
             assert_eq!(fs::metadata(&dest).unwrap().len(), f.size, "{build} {name}");
             assert_eq!(sha256_file(&dest).unwrap(), f.sha256, "{build} {name}");
             fs::remove_file(&dest).unwrap();
@@ -88,9 +89,9 @@ fn the_cuda_12_and_13_files_have_the_catalog_size_and_hash() {
 fn the_forked_engines_install_and_start() {
     let base = folder("forks");
     let p = paths(&launcher(), &base);
-    for engine in ["prism", "toq"] {
-        for build in [Build::Cpu, Build::Vulkan, Build::Cuda12] {
-            let dir = install_engine(&p, engine, build, &mut |_, _| {}).unwrap_or_else(|e| panic!("{engine} {build}: {e:#}"));
+    for (engine, builds) in [("prism", &[Build::Cpu, Build::Vulkan, Build::Cuda12, Build::Cuda12Gtx16][..]), ("toq", &[Build::Cpu, Build::Vulkan, Build::Cuda12])] {
+        for &build in builds {
+            let dir = install_engine(&p, engine, build, &AtomicBool::new(false), &mut |_, _| {}).unwrap_or_else(|e| panic!("{engine} {build}: {e:#}"));
             let out = Command::new(dir.join("llama-server.exe")).arg("--version").current_dir(&dir).output().unwrap();
             let text = String::from_utf8_lossy(&out.stdout).into_owned() + &String::from_utf8_lossy(&out.stderr);
             assert!(out.status.success(), "{engine} {build}: {text}");
@@ -108,7 +109,7 @@ fn cuda_13_with_an_old_driver_does_not_install_and_the_error_says_so() {
     let base = folder("cuda13");
     let p = paths(&launcher(), &base);
 
-    let err = format!("{:#}", install_engine(&p, "llamacpp", Build::Cuda13, &mut |_, _| {}).unwrap_err());
+    let err = format!("{:#}", install_engine(&p, "llamacpp", Build::Cuda13, &AtomicBool::new(false), &mut |_, _| {}).unwrap_err());
 
     println!("{err}");
     assert!(err.contains(&mango_common::tr!("non vede nessuna scheda", "sees no GPU")) && err.contains("cuda-13"), "{err}");
@@ -132,10 +133,10 @@ fn a_model_downloads_from_hugging_face_and_then_does_not_download_again() {
     .unwrap();
     let p = paths(&dist, &base);
 
-    install_model(&p, "vad", "llamacpp", &mut |_, _| {}).unwrap();
+    install_model(&p, "vad", "llamacpp", &AtomicBool::new(false), &mut |_, _| {}).unwrap();
 
     let f = p.models.join("vad").join("ggml-silero-v5.1.2.bin");
     assert_eq!(sha256_file(&f).unwrap(), "29940d98d42b91fbd05ce489f3ecf7c72f0a42f027e4875919a28fb4c04ea2cf");
-    install_model(&p, "vad", "llamacpp", &mut |_, _| panic!("downloaded again")).unwrap();
+    install_model(&p, "vad", "llamacpp", &AtomicBool::new(false), &mut |_, _| panic!("downloaded again")).unwrap();
     let _ = fs::remove_dir_all(&base);
 }

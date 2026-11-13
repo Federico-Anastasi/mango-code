@@ -15,7 +15,7 @@ test("session settings use the remote server context", async ({ page }) => {
 
   await page.goto(`/server/${base64Encode(serverB)}/session/${sessionB.id}`)
   await expect(page.getByText(sessionB.title).first()).toBeVisible()
-  await page.keyboard.press("Control+,")
+  await page.locator('[data-action="titlebar-settings"]').click()
 
   const dialog = page.locator(".settings-v2-dialog")
   await dialog.getByRole("tab", { name: "Models" }).click()
@@ -78,7 +78,7 @@ async function mockServers(page: Page) {
     if (/^\/session\/[^/]+$/.test(url.pathname)) return json(route, { name: "NotFoundError" }, 404)
     if (/^\/session\/[^/]+\/message$/.test(url.pathname)) return json(route, [])
     if (/^\/session\/[^/]+\/(children|todo|diff)$/.test(url.pathname)) return json(route, [])
-    if (["/skill", "/command", "/lsp", "/formatter", "/question", "/vcs/diff", "/pty/shells"].includes(url.pathname))
+    if (["/skill", "/command", "/lsp", "/formatter", "/question", "/vcs/diff"].includes(url.pathname))
       return json(route, [])
     if (["/global/config", "/config", "/provider/auth", "/mcp"].includes(url.pathname)) return json(route, {})
     if (url.pathname === "/provider") return json(route, provider(remote ? "server-b" : "server-a"))
@@ -106,7 +106,6 @@ async function mockServers(page: Page) {
     if (url.pathname === "/vcs") return json(route, { branch: "main", default_branch: "main" })
     if (url.pathname === "/api/vcs")
       return json(route, { location: { directory }, data: { branch: "main", defaultBranch: "main" } })
-    if (url.pathname === "/api/pty/shells") return json(route, { location: { directory }, data: [] })
     return json(route, {})
   })
 }

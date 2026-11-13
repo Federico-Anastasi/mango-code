@@ -449,48 +449,6 @@ function createV1Api(input: CompatibleInput): CompatibleApi {
         },
       },
     },
-    pty: {
-      ...input.current.pty,
-      // async shells(value?: Parameters<ServerApi["pty"]["shells"]>[0]) {
-      //   return located((await legacy(value?.location).pty.shells()).data ?? [], value?.location)
-      // },
-      async list(value?: Parameters<ServerApi["pty"]["list"]>[0]) {
-        return located((await legacy(value?.location).pty.list()).data ?? [], value?.location)
-      },
-      async create(value?: Parameters<ServerApi["pty"]["create"]>[0]) {
-        const result = await legacy(value?.location).pty.create({
-          command: value?.command,
-          args: value?.args ? [...value.args] : undefined,
-          cwd: value?.cwd,
-          title: value?.title,
-          env: value?.env,
-        })
-        if (!result.data) throw new Error("Failed to create terminal")
-        return located(result.data, value?.location)
-      },
-      async get(value: Parameters<ServerApi["pty"]["get"]>[0]) {
-        const result = await legacy(value.location).pty.get({ ptyID: value.ptyID })
-        if (!result.data) throw new Error(`Terminal not found: ${value.ptyID}`)
-        return located(result.data, value.location)
-      },
-      async update(value: Parameters<ServerApi["pty"]["update"]>[0]) {
-        const result = await legacy(value.location).pty.update({
-          ptyID: value.ptyID,
-          title: value.title,
-          size: value.size,
-        })
-        if (!result.data) throw new Error(`Terminal not found: ${value.ptyID}`)
-        return located(result.data, value.location)
-      },
-      async remove(value: Parameters<ServerApi["pty"]["remove"]>[0]) {
-        await legacy(value.location).pty.remove({ ptyID: value.ptyID })
-      },
-      // async connectToken(value: Parameters<ServerApi["pty"]["connectToken"]>[0]) {
-      //   const result = await legacy(value.location).pty.connectToken({ ptyID: value.ptyID })
-      //   if (!result.data) throw new Error(`Failed to connect terminal: ${value.ptyID}`)
-      //   return located(result.data, value.location)
-      // },
-    },
     permission: {
       ...input.current.permission,
       async reply(value: Parameters<ServerApi["permission"]["reply"]>[0] & { location?: { directory?: string } }) {

@@ -26,7 +26,8 @@ profile; with neither, the general plan applies (official llama.cpp).
 
 - `model`: the key in `mango-models.json`, or in the user's catalog (below).
 - `engine`, `build`: the engine folder (`llamacpp`, `prism`, `toq`) and the hardware it is built for (`cpu`, `vulkan`,
-  `cuda-12`, `cuda-13`).
+  `cuda-12`, `cuda-13`). On a PC whose Turing cards are all of the GTX 16 family a `cuda-12` profile runs by itself on
+  the engine's `cuda-12-gtx16` build, if the engine has one (`prism`).
 - `args`: the `llama-server` arguments beyond those common to all models; the model sits entirely on the GPUs
   (`-ngl 999`) or, with the `cpu` build, entirely on the CPU: never split (no `--fit`, `-ot`, `-ncmoe`, `-cmoe`);
   `ctx`, `ub` (`-ub`) and `ts` (`-ts`) have their own field. `env`: the engine's environment variables.
@@ -40,10 +41,10 @@ profile; with neither, the general plan applies (official llama.cpp).
 
 `<data>\user-models.json` adds models to Mango Code's catalog, without replacing it: `{ "models": { "<key>":
 { ... } } }`, each entry in the same format as `models` in `mango-models.json`. A key already in the catalog is an
-error. User models appear after the recommended ones and before the cloud ones, by key, in the selector, in the first
-run; they are never the recommended one.
+error. User models appear after the recommended ones and before the cloud ones, by key, wherever the models are
+listed; they are never the recommended one.
 
-The app writes this file from the "Other models" section of the model choice (`app/README.md`). A Hugging Face entry
+The app writes this file from "Another model" in the settings, Models (`app/README.md`). A Hugging Face entry
 has `repo`, `revision` and `files` (`path` on disk, `size`, `sha256`, and `name` if the file sits in a folder of the
 repo); one for a file on the computer has the absolute path in `gguf` and only `path` and `size` in `files`. In all of
 them, `memory` (`kv_kib_token`, `state_mib`) comes from the GGUF header.

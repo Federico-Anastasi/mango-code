@@ -24,12 +24,12 @@ Class **G**: holds for whoever has that kind of hardware or engine. The numbers 
 
 - **G10. The VRAM CUDA declares free is not what can be allocated.** Measured: declared 7128/7187/5134 MiB, allocatable
   7488/7520/5440 (360, 333 and 306 MiB more per GPU, ~1 GB over the three). On top of that Windows (WDDM) keeps a reserve of ~1 GB per GPU
-  (`RIP`: 1063 and 1009 MiB between total and declared free). llama.cpp splits the layers on the declared figure: with `-ts` by hand you reason on the real memory,
+  (1063 and 1009 MiB between total and declared free). llama.cpp splits the layers on the declared figure: with `-ts` by hand you reason on the real memory,
   and you measure how much is allocated (32 MiB blocks until the first refusal).
 - **G11. On Windows going over the VRAM gives no error: everything runs much slower.** A 27B on the 3060 Ti (weights 6326 + buffer 1204 MiB on 7128 free):
   prefill 10.7 tok/s instead of 320, visible only from the second pass. 4 slots × 4096 tokens fit (8013 MiB, full speed); 4 × 6144 went over
-  (10 times slower). The NVIDIA setting "CUDA - Sysmem Fallback Policy = Prefer No Sysmem Fallback" would turn it into an error: it is written in three
-  documents, **never tried on the RTX 3060 Ti + GTX 1080 + GTX 1660 SUPER**. Cure tried: a guard that compares used and free memory before every measurement.
+  (10 times slower). The NVIDIA setting "CUDA - Sysmem Fallback Policy = Prefer No Sysmem Fallback" would turn it into an error: it is documented,
+  **never tried on the RTX 3060 Ti + GTX 1080 + GTX 1660 SUPER**. Cure tried: a guard that compares used and free memory before every measurement.
 - **G12. The KV cost is computed.** `attention_layers × 2 × KV_heads × head_size × bytes`: Qwen3.8/Bonsai (16 layers, 4 heads, 256) are
   34 KiB/token in q8_0 (4.25 GiB at 128k) and 64 KiB in f16; LFM2.5 20 KiB/token in f16 (2.5 GiB at 128k). Hybrid models (Gated DeltaNet) have few
   attention layers but a recurrent state for every slot (~150 MB per slot).
@@ -134,5 +134,5 @@ All lossless (the model verifies every token). The yield depends on how predicta
 - **G100. VRAM decides the context, not preference:** target 128k; lower it only if measured that it does not fit: Qwen3.6 128k with q8 KV (f16 only 120k), Qwen3.8 80k (beyond that, the engine moves layers to the CPU or crashes with a CUDA error during prefill), Bonsai 2 256k (1 slot), LFM 128k f16, TOQ 120k on two GPUs, ~14k on a 3060 Ti. 256k on 3.6 does not fit.
 - **G101. The prompt prefix must stay stable between one step and the next,** otherwise every step rereads everything: reminders at the tail and never in the system prompt; changing the preserved reasoning mid-session makes the whole context be reread (reinjecting the system prompt alone cost ~40 s of GPU). A model's Jinja template can silently discard or reject non-initial `system` messages (Qwen3.6 discards ~1600 tokens, Qwen3.8 raises a 400): check the real prompt that reaches the engine.
 - **G102. The conversation's on-disk memory (`--cache-disk`) avoids rereading the prompt:** 42.6k tokens → a 1.82 GiB file saved in 1.7 s; after the restart 22 tokens are reread instead of 42,649 (1.2 s against ~1 minute). An agent's system prompt (~18.6k tokens at ~790 tok/s) costs 20-35 s on the first message without it. It is a feature of our patches, but the cost to avoid is everyone's.
-- **G103. The host's RAM can be cut:** `--no-mmproj-offload` keeps the image encoder in RAM; with `llama-bench` `-lm none` avoids a mapped GGUF staying entirely in RAM even if it lives on the GPUs (17.9 GB for a 16.5 GB file). On 20 Sep `llama-server` had ~25 GB private out of 32 with `--cache-ram` at 8 GB (ENG), which were cut; another episode (KI) cites ~14.7 GB.
+- **G103. The host's RAM can be cut:** `--no-mmproj-offload` keeps the image encoder in RAM; with `llama-bench` `-lm none` avoids a mapped GGUF staying entirely in RAM even if it lives on the GPUs (17.9 GB for a 16.5 GB file). On 20 Sep `llama-server` had ~25 GB private out of 32 with `--cache-ram` at 8 GB, which were cut; another episode cites ~14.7 GB.
 - **G104. A long process on Windows is detached** (`Start-Process`, saving at every step): background commands die at ~30 minutes or when RAM runs short; exhausted virtual memory (disk C: full) gives "access violation" without the RAM being used up.

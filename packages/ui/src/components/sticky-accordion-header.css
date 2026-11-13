@@ -4,3 +4,8 @@
   z-index: 10;
   background-color: var(--background-stronger);
 }
+
+/* In the new layout the rows sit on the page color with rounded corners: a header of another color shows behind them as a dark square. */
+body[data-new-layout] [data-component="sticky-accordion-header"] {
+  background-color: var(--v2-background-bg-base);
+}

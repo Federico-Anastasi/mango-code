@@ -12,9 +12,8 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { MangoCode, find } from "../client/mango-code";
-import { writeLanguage } from "./environment";
+import { APP_EXE, writeLanguage } from "./environment";
 
-const APP_EXE = path.resolve(import.meta.dir, "..", "..", "app", "target", "debug", "mango-code.exe");
 const model = process.argv[2] ?? "3.5-2b";
 const port = () =>
   new Promise<number>((ok) => {

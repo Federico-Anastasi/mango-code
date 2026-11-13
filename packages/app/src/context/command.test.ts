@@ -1,25 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import {
-  activeCommandRegistrations,
-  addCommandRegistration,
-  commandPaletteOptions,
-  resolveKeybindOption,
-  type CommandOption,
-} from "./command"
-
-const paletteOptions: CommandOption[] = [
-  { id: "settings.open", title: "Open settings" },
-  { id: "session.undo", title: "Undo" },
-  { id: "file.open", title: "Open file" },
-  { id: "hidden", title: "Hidden", hidden: true },
-  { id: "disabled", title: "Disabled", disabled: true },
-]
-
-describe("commandPaletteOptions", () => {
-  test("keeps visible enabled commands", () => {
-    expect(commandPaletteOptions(paletteOptions).map((option) => option.id)).toEqual(["settings.open", "session.undo"])
-  })
-})
+import { activeCommandRegistrations, addCommandRegistration } from "./command"
 
 describe("command registrations", () => {
   test("shadows keyed registrations while retaining the previous owner", () => {
@@ -50,21 +30,5 @@ describe("command registrations", () => {
     expect(next).toHaveLength(2)
     expect(next[0]?.options).toBe(two)
     expect(next[1]?.options).toBe(one)
-  })
-})
-
-describe("resolveKeybindOption", () => {
-  test("prefers a matching contextual command over the global fallback", () => {
-    const fallback = { id: "tab.close", title: "Close tab" }
-    const contextual = { id: "terminal.close", title: "Close terminal", when: () => true }
-
-    expect(resolveKeybindOption([fallback, contextual], new KeyboardEvent("keydown"))).toBe(contextual)
-  })
-
-  test("uses the global fallback outside the command context", () => {
-    const fallback = { id: "tab.close", title: "Close tab" }
-    const contextual = { id: "terminal.close", title: "Close terminal", when: () => false }
-
-    expect(resolveKeybindOption([fallback, contextual], new KeyboardEvent("keydown"))).toBe(fallback)
   })
 })

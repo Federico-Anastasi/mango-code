@@ -18,7 +18,7 @@ isolation, run it in a virtual machine.
   (your home network and Tailscale, never all the networks), a random key, a session cookie and numeric addresses only. If
   Windows calls the home network public (a café's), the settings say so. A session there controls an agent with a shell, so it
   is worth as much as the computer: share the link only with yourself.
-- Sharing the engine with your other PCs is off by default ("Share the engine with my PCs", on the "Models and engine" page). When you
+- Sharing the engine with your other PCs is off by default ("Lend the engine to my PCs", in the settings under Connections). When you
   turn it on, the app opens a separate port on the addresses the settings show (your home network and Tailscale, never all
   the networks) and a PC that pastes the code (address and random key) can use your models: it cannot see your files,
   run commands, drive the agent or take the graphics cards, and only the routes of the model are open. Turning it off
@@ -38,8 +38,10 @@ isolation, run it in a virtual machine.
 - The app stores your OpenRouter and Hugging Face keys in the Windows Credential Manager. It hands the OpenRouter key to
   the agent in an environment variable, only when the Team is in use; it is never written in a config file. The agent's
   commands can read it, as they can read anything else your user can.
-- The preview panel also shows a PDF or a picture of a project when you click its card: only a file inside a project (or
+- The preview panel also shows a PDF, a picture or a web page of a project when you click its card: only a file inside a project (or
   in `Documents\Mango Code`), at most 50 MB. An SVG is drawn as a picture by a page that allows no script, never opened as a
-  page; the files the server hands out stay inert downloads. From the phone the same files are shown from memory by the web UI.
+  page; a web page runs in the panel like the ones the agent opens; the files the server hands out stay inert downloads. From the phone the same files are shown from memory by the web UI.
 - The agent's browser: it is the preview panel, with a profile of its own and none of your logins. "Use my Chrome" lets
-  the agent work in your own Chrome tabs, logged in wherever you are. Nothing copies the cookies of your Chrome.
+  the agent open a page in a new tab of your own Chrome, logged in wherever you are, when it asks for it for a page that
+  needs your sign-ins, and it does not take a tab of yours to another address with `navigate_page`. While it is
+  connected it can still list and read your other tabs, as with any use of your Chrome. Nothing copies the cookies of your Chrome.

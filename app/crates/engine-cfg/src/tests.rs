@@ -2,6 +2,7 @@ use super::*;
 use crate::hardware::fixture::*;
 use crate::fixtures::Fake;
 use crate::split::fixture::*;
+use crate::choices::{Choices, Scope};
 use std::collections::BTreeMap;
 
 /// The real command line captured from the PowerShell launcher on 30/10, with neutral paths (`C:\Test\...`): in the
@@ -235,7 +236,103 @@ fn catalog_of_local_models() {
     assert_eq!(entries[0].ctx, 81_920, "without a profile, the general plan: the model's target if it fits");
 }
 
-const LOCAL_ORDER: [&str; 7] = ["3.6", "3.8", "bonsai2", "toq", "lfm", "3.5-4b", "3.5-2b"];
+/// When the app opens it loads the user's default if it is on disk, otherwise the first model on disk in the catalog's
+/// order; with no model on disk there is nothing to load.
+#[test]
+fn the_model_loaded_at_startup_is_the_users_default_or_the_first_on_disk() {
+    let t = with_user_models(serde_json::json!({}));
+    t.save();
+    let startup = || catalog::startup_model(&t.paths, &catalog_on_three_gpus(&t).0).unwrap();
+    assert_eq!(startup(), None, "no weights on disk");
+    std::fs::write(t.paths.models.join("a.gguf"), b"").unwrap();
+    assert_eq!(startup().as_deref(), Some("a"), "the only one on disk, though second in the order");
+    std::fs::write(t.paths.models.join("b.gguf"), b"").unwrap();
+    assert_eq!(startup().as_deref(), Some("b"), "the first in the catalog's order");
+    choices::set_default(&t.paths, Some("a")).unwrap();
+    assert_eq!(startup().as_deref(), Some("a"), "the user's default");
+    std::fs::remove_file(t.paths.models.join("a.gguf")).unwrap();
+    assert_eq!(startup().as_deref(), Some("b"), "a default that is no longer on disk gives way to the first that is");
+}
+
+/// What a download needs to know about a model: its engine here, its files for that engine, whether they are on disk
+/// and whether it fits.
+#[test]
+fn what_downloading_a_model_means_on_this_computer() {
+    let t = with_user_models(serde_json::json!({}));
+    t.save();
+    let d = catalog::download_of(&t.paths, "a", &three_gpus()).unwrap();
+    assert_eq!((d.label.as_str(), d.engine.as_str(), d.bytes, d.weights), ("A", "llamacpp", 2_000_000_000, false));
+    assert_eq!(d.fits, Ok(()));
+    std::fs::write(t.paths.models.join("a.gguf"), b"").unwrap();
+    assert!(catalog::download_of(&t.paths, "a", &three_gpus()).unwrap().weights);
+    // a cloud model and one that is not in the catalog are not downloaded
+    let e = catalog::download_of(&t.paths, "c", &three_gpus()).unwrap_err().to_string();
+    assert!(e.contains(&tr!("non si scarica", "is not downloaded")), "{e}");
+    assert!(catalog::download_of(&t.paths, "ghost", &three_gpus()).is_err());
+    // on a computer with too little memory the reason is told, and the engine is still named
+    let small = catalog::download_of(&t.paths, "a", &pc(vec![], 1024)).unwrap();
+    assert!(small.fits.is_err(), "{small:?}");
+}
+
+/// A model on disk that does not fit this computer is not the one to load when another on disk does; the user's own
+/// default is, and its start says why it does not fit.
+#[test]
+fn the_model_loaded_at_startup_fits_unless_it_is_the_users_default() {
+    let entry = |key: &str, placement| ModelEntry {
+        key: key.into(),
+        label: key.into(),
+        origin: Origin::Recommended,
+        ctx: 4096,
+        placement,
+        images: false,
+        missing: None,
+        weights: true,
+        bytes: 1,
+        speed: None,
+        estimated: false,
+    };
+    let t = with_user_models(serde_json::json!({}));
+    t.save();
+    let entries = [entry("huge", None), entry("small", Some(Placement::Gpu))];
+    assert_eq!(catalog::startup_model(&t.paths, &entries).unwrap().as_deref(), Some("small"));
+    assert_eq!(catalog::startup_model(&t.paths, &entries[..1]).unwrap().as_deref(), Some("huge"), "nothing else on disk: its start says why");
+    choices::set_default(&t.paths, Some("huge")).unwrap();
+    assert_eq!(catalog::startup_model(&t.paths, &entries).unwrap().as_deref(), Some("huge"));
+}
+
+/// The default saved while the user has none: only a model on the disk with a place to run; the last model of 0.1.2
+/// first, if it is there and fits; nothing once a default is saved.
+#[test]
+fn the_default_to_save_is_a_model_that_fits() {
+    let entry = |key: &str, placement, missing: Option<&str>| ModelEntry {
+        key: key.into(),
+        label: key.into(),
+        origin: Origin::Recommended,
+        ctx: 4096,
+        placement,
+        images: false,
+        missing: missing.map(str::to_string),
+        weights: true,
+        bytes: 1,
+        speed: None,
+        estimated: false,
+    };
+    let t = with_user_models(serde_json::json!({}));
+    t.save();
+    let save = |entries: &[ModelEntry], remembered| catalog::default_to_save(&t.paths, entries, remembered).unwrap();
+    let huge = entry("huge", None, None);
+    assert_eq!(save(&[huge.clone()], None), None, "the only one on the disk does not fit: it is not kept");
+    let entries = [huge.clone(), entry("small", Some(Placement::Gpu), None), entry("tiny", Some(Placement::Gpu), None)];
+    assert_eq!(save(&entries, None).as_deref(), Some("small"));
+    assert_eq!(save(&entries, Some("tiny")).as_deref(), Some("tiny"), "the model 0.1.2 started with");
+    assert_eq!(save(&entries, Some("huge")).as_deref(), Some("small"), "a remembered model that does not fit is not kept");
+    let gone = [entry("small", Some(Placement::Gpu), None), entry("tiny", Some(Placement::Gpu), Some("missing"))];
+    assert_eq!(save(&gone, Some("tiny")).as_deref(), Some("small"), "nor one no longer on the disk");
+    choices::set_default(&t.paths, Some("tiny")).unwrap();
+    assert_eq!(save(&entries, None), None, "the user has one");
+}
+
+const LOCAL_ORDER: [&str; 8] = ["3.6", "3.8", "bonsai2", "toq", "lfm", "ling", "3.5-4b", "3.5-2b"];
 
 fn real_paths() -> Paths {
     Paths {
@@ -448,19 +545,165 @@ fn with_little_memory_the_cache_goes_down_to_q8() {
     assert_eq!(p.ctx, 131_072);
 }
 
+/// A model with the 4B's size whose cache per token is `kv_kib_token` KiB (f16): small values make it fit one card.
+fn general_plan_with_cache(hw: &Hardware, excluded: &[u32], kv_kib_token: u64, weights_bytes: u64) -> Result<EnginePlan> {
+    let mut t = Fake::small();
+    t.catalog["models"]["4b"]["memory"]["kv_kib_token"] = kv_kib_token.into();
+    t.catalog["models"]["4b"]["files"][0]["size"] = weights_bytes.into();
+    let f = t.save();
+    build_plan(&t.paths, &f, None, 8080, hw, excluded, |_, _, _| panic!("GGUF read"))
+}
+
+fn visible(p: &EnginePlan) -> &str {
+    env_of(p)["CUDA_VISIBLE_DEVICES"]
+}
+
+/// A card is added only to reach 64,000 tokens of context: the f16 cache (128k tokens) doesn't fit one 8 GB card next
+/// to the weights, but the q8_0 one does, and that is enough: the second card is not taken for the f16 cache.
 #[test]
-fn with_several_nvidia_cards_all_are_used() {
+fn a_card_is_added_only_if_the_context_needs_it() {
     let hw = pc(
         vec![nvidia(0, "NVIDIA GeForce RTX 3060", 8192, (8, 6), (12, 6)), nvidia(1, "NVIDIA GeForce RTX 3060", 8192, (8, 6), (12, 6))],
         32_768,
     );
     let p = general_plan(&hw, &[]).unwrap();
-    assert_eq!(env_of(&p)["CUDA_VISIBLE_DEVICES"], "0,1");
+    assert_eq!(visible(&p), "0");
+    assert!(has(&p.spec.args, ["-ctk", "q8_0"]) && p.ctx == 131_072, "one card with the q8_0 cache gives the whole target: {:?}", p.spec.args);
     let p = general_plan(&hw, &[0]).unwrap();
-    assert_eq!(env_of(&p)["CUDA_VISIBLE_DEVICES"], "1");
+    assert_eq!(visible(&p), "1");
     assert_eq!(p.gpus_used.iter().map(|g| g.index).collect::<Vec<_>>(), [1]);
     let e = general_plan(&hw, &[0, 1]).unwrap_err().to_string();
     assert!(e.contains(&tr!("liberate", "released")), "{e}");
+}
+
+/// The cache of the test model (`kv_kib_token` 32) at q8_0 weighs 17 KiB a token. The weights that leave `free_mib` of
+/// an 8 GB card for the cache, once the reserve and the model's state (53 MiB) are taken out.
+fn weights_leaving(free_mib: u64) -> u64 {
+    (8192 - crate::hardware::GPU_RESERVE_MIB - 53 - free_mib) << 20
+}
+
+/// The context the test model gets on the 3060 Ti alone with those weights.
+fn context_on_one_card(weights_bytes: u64) -> u32 {
+    general_plan_with_cache(&pc(vec![three_gpus().gpus[0].clone()], 65_536), &[], 32, weights_bytes).unwrap().ctx
+}
+
+/// `auto` reaches for 64,000 tokens, which with the context in steps of 4096 means 65,536 (61,440 is under it): a card
+/// that leaves 41,000 to 49,000 tokens of cache is not enough, and a second one is taken, the GTX 1080.
+#[test]
+fn a_card_that_leaves_between_40000_and_60000_tokens_takes_a_second_one() {
+    for free_mib in [700, 830] {
+        let weights = weights_leaving(free_mib);
+        assert!((40_000..60_000).contains(&context_on_one_card(weights)), "{free_mib} MiB");
+        let p = general_plan_with_cache(&three_gpus(), &[], 32, weights).unwrap();
+        assert_eq!(visible(&p), "0,1", "{free_mib} MiB");
+        assert!(p.ctx >= 65_536, "{}", p.ctx);
+    }
+}
+
+/// A card that gives 65,536 tokens or more is enough alone.
+#[test]
+fn a_card_that_gives_65536_tokens_or_more_stays_alone() {
+    for free_mib in [1088, 1500, 3000] {
+        let weights = weights_leaving(free_mib);
+        assert!(context_on_one_card(weights) >= 65_536, "{free_mib} MiB");
+        assert_eq!(visible(&general_plan_with_cache(&three_gpus(), &[], 32, weights).unwrap()), "0", "{free_mib} MiB");
+    }
+}
+
+/// The edge: 61,440 tokens on one card take two cards, 65,536 take one.
+#[test]
+fn at_the_edge_61440_tokens_take_two_cards_and_65536_take_one() {
+    let (below, at) = (weights_leaving(1087), weights_leaving(1088));
+    assert_eq!((context_on_one_card(below), context_on_one_card(at)), (61_440, 65_536));
+    assert_eq!(visible(&general_plan_with_cache(&three_gpus(), &[], 32, below).unwrap()), "0,1");
+    assert_eq!(visible(&general_plan_with_cache(&three_gpus(), &[], 32, at).unwrap()), "0");
+}
+
+/// On the RTX 3060 Ti + GTX 1080 + GTX 1660 SUPER a model that fits one card, with the context and the cache the three
+/// would give, runs on the card with the highest compute capability alone.
+#[test]
+fn a_model_that_fits_one_card_runs_on_the_strongest() {
+    let p = general_plan_with_cache(&three_gpus(), &[], 8, 2_740_937_888).unwrap();
+    all_on_gpus(&p.spec.args);
+    assert_eq!(visible(&p), "0");
+    assert_eq!(p.gpus_used.iter().map(|g| g.name.as_str()).collect::<Vec<_>>(), ["NVIDIA GeForce RTX 3060 Ti"]);
+    assert_eq!(p.ctx, 131_072);
+    assert!(!p.spec.args.iter().any(|x| x == "-ctk"), "same cache type as on three cards: f16");
+}
+
+/// A model that doesn't fit one card takes the fewest cards (the count comes first), the fastest ones: the second is the
+/// GTX 1080, not the GTX 1660 SUPER, which declares compute capability 7.5 but has no tensor cores and reads the prompt
+/// five times slower. A third card joins only if two don't reach 64,000 tokens, and then they give the largest context.
+#[test]
+fn a_model_that_does_not_fit_one_card_takes_the_fewest() {
+    let p = general_plan_with_cache(&three_gpus(), &[], 8, 8 << 30).unwrap();
+    all_on_gpus(&p.spec.args);
+    assert_eq!(visible(&p), "0,1");
+    assert_eq!(p.gpus_used.len(), 2);
+    assert_eq!(p.ctx, 131_072);
+    // A cache that doesn't hold 128k tokens in the two cards but holds 64,000 or more: the two are enough, with the
+    // context they give.
+    let p = general_plan_with_cache(&three_gpus(), &[], 32, 10 << 30).unwrap();
+    assert_eq!(visible(&p), "0,1");
+    assert!((65_536..131_072).contains(&p.ctx), "{}", p.ctx);
+    // Weights that leave the two cards room for less than 64,000 tokens: the third joins in.
+    let p = general_plan_with_cache(&three_gpus(), &[], 32, 11 << 30).unwrap();
+    assert_eq!(visible(&p), "0,1,2");
+    assert_eq!(p.ctx, 131_072);
+    // Not even the three reach 64,000: all of them, with the largest context there is.
+    let p = general_plan_with_cache(&three_gpus(), &[], 32, 15 << 30).unwrap();
+    assert_eq!(visible(&p), "0,1,2");
+    assert!((32_768..65_536).contains(&p.ctx), "{}", p.ctx);
+}
+
+/// The catalog's models without a profile on the three cards: the 2B and the 4B on the 3060 Ti alone (the 4B with the
+/// q8_0 cache and the context the image encoder leaves it).
+#[test]
+fn the_small_catalog_models_on_the_three_cards() {
+    let paths = Paths { dist: real_paths().dist, engines: "x".into(), models: "x".into(), opencode: "x".into(), data: "x".into() };
+    let file = load_models(&paths).unwrap();
+    let on = |key: &str| {
+        let p = general::plan(&file, &model_cfg(&file, key).unwrap(), &three_gpus(), &[], &Scope::default()).unwrap();
+        (p.ctx, p.gpus.iter().map(|g| g.index).collect::<Vec<_>>())
+    };
+    assert_eq!(on("3.5-2b"), (131_072, vec![0]));
+    assert_eq!(on("3.5-4b"), (126_976, vec![0]));
+}
+
+/// The card lent to another job stays out; the model goes to the fastest of the others (the 1080, not the 1660 SUPER),
+/// and the context is computed on those.
+#[test]
+fn with_the_main_card_lent_the_next_one_is_used() {
+    let p = general_plan_with_cache(&three_gpus(), &[0], 8, 2_740_937_888).unwrap();
+    assert_eq!(visible(&p), "1");
+    assert_eq!(p.ctx, 131_072);
+    let p = general_plan_with_cache(&three_gpus(), &[0, 1], 8, 2_740_937_888).unwrap();
+    assert_eq!(visible(&p), "2");
+}
+
+/// On Vulkan the engine's device numbers are not the PCI order of `Gpu::index` (the integrated card sits among them),
+/// so the cards are not chosen: all of them stay visible.
+#[test]
+fn on_vulkan_all_the_cards_stay_visible() {
+    let hw = pc(vec![other(0, "AMD Radeon RX 7800 XT", Vendor::Amd, 16_368), other(1, "AMD Radeon RX 6800", Vendor::Amd, 16_368)], 32_768);
+    let p = general_plan_with_cache(&hw, &[], 8, 2_740_937_888).unwrap();
+    all_on_gpus(&p.spec.args);
+    assert_eq!(p.gpus_used.len(), 2);
+}
+
+/// What the user is told about where the model runs is the plan's: the memory counted is that of the cards chosen.
+#[test]
+fn the_reason_counts_the_memory_of_the_cards_the_plan_uses() {
+    let mut t = Fake::small();
+    t.catalog["models"]["4b"]["memory"]["kv_kib_token"] = 8.into();
+    let f = t.save();
+    let cfg = model_cfg(&f, "4b").unwrap();
+    let located = general::evaluate(&f, &cfg, &three_gpus(), mango_common::Build::Cuda12, &Scope::default(), &[]);
+    let reason = located.reason;
+    assert_eq!(located.fit.map(|f| f.ctx), Some(131_072));
+    assert!(reason.contains(&tr!("su 5,9 GB disponibili", "out of 5.9 GB available")), "{reason}");
+    // the context is written as the settings write it, not as a raw number
+    assert!(reason.contains(&tr!("per 128k token", "for 128k tokens")) && !reason.contains("131072"), "{reason}");
 }
 
 /// A target context below the agent's minimum (the integration tests use 16384) stays as it is.
@@ -481,7 +724,7 @@ fn on_vulkan_a_single_card_is_not_released() {
     assert!(p.spec.env.is_empty());
     assert_eq!(p.gpus_used.len(), 1);
     let e = general_plan(&hw, &[0]).unwrap_err().to_string();
-    assert!(e.contains("Vulkan"), "{e}");
+    assert!(e.contains(&tr!("non si può liberare una scheda singola", "a single card can't be released")) && !e.contains("Vulkan"), "{e}");
 }
 
 #[test]
@@ -490,12 +733,13 @@ fn if_it_does_not_fit_the_error_says_how_much_is_missing_and_what_to_do() {
     assert_eq!(
         e,
         tr!(
-            "Il modello «Qwen3.5-4B» non ci sta in questo computer: servono almeno 3,1 GB (pesi e cache per 32768 token) e la RAM ne ha 2,0. Scegli un modello più piccolo.",
-            "The model «Qwen3.5-4B» doesn't fit on this computer: at least 3.1 GB are needed (weights and cache for 32768 tokens) and the RAM has 2.0. Choose a smaller model."
+            "Il modello «Qwen3.5-4B» non ci sta in questo computer: servono almeno 3,1 GB (pesi e cache per 32k token) e la RAM ne ha 2,0. Scegli un modello più piccolo.",
+            "The model «Qwen3.5-4B» doesn't fit on this computer: at least 3.1 GB are needed (weights and cache for 32k tokens) and the RAM has 2.0. Choose a smaller model."
         )
     );
-    let e = general_plan(&pc(vec![nvidia(0, "NVIDIA GeForce GT 1030", 2048, (6, 1), (12, 6))], 6144), &[]).unwrap_err().to_string();
-    assert!(e.contains(&tr!("le schede video ne hanno 0,0 e la RAM 2,0", "the graphics cards have 0.0 and the RAM 2.0")), "{e}");
+    // a 2 GiB card doesn't count (nothing is left on it after the reserve); a 3 GiB one does, with what is left
+    let e = general_plan(&pc(vec![nvidia(0, "NVIDIA GeForce GTX 1050", 3072, (6, 1), (12, 6))], 6144), &[]).unwrap_err().to_string();
+    assert!(e.contains(&tr!("le schede video ne hanno 0,9 e la RAM 2,0", "the graphics cards have 0.9 and the RAM 2.0")), "{e}");
 }
 
 /// A 4 GB card (GTX 1650): the 2B, without the image encoder, is the one that fits on it, with a large context; the 4B
@@ -615,13 +859,17 @@ fn with_a_24gb_card_all_the_models_fit() {
     for k in LOCAL_ORDER {
         assert!(c[k].placement == Some(Placement::Gpu) && c[k].context == 131_072 && !c[k].profile, "{k}: {:?}", c[k]);
     }
-    assert!(c["toq"].reason.contains(&tr!("motore «toq»", "engine «toq»")), "{}", c["toq"].reason);
+    assert!(c["toq"].reason.contains(&tr!("col suo motore", "its own engine")) && !c["toq"].reason.contains("toq"), "{}", c["toq"].reason);
+    // the context as the interface writes it, never in tokens
+    let k = format!("{}k", (c["toq"].context + 512) / 1024);
+    assert!(c["toq"].reason.contains(&k) && !c["toq"].reason.contains("token"), "{}", c["toq"].reason);
     assert_eq!(c["bonsai2"].bytes, BONSAI_Q2_0);
 }
 
 /// An 8 GB card and 32 GB of RAM: Bonsai 2 (7.6 GB) and Qwen3.6 (17 GB) don't fit on the card and run on the
-/// processor; the 4B fits on the card with the image encoder, which takes some context from it, and is the fastest (the
-/// 2B fits too, but it is for smaller cards); TOQ, which only has the cards' engine, doesn't fit.
+/// processor; the 4B fits on the card with the image encoder, which takes some context from it; Ling fits too and is
+/// the fastest (a MoE that reads fewer weights per token than the 4B; the 2B is for smaller cards); TOQ, which only has
+/// the cards' engine, doesn't fit.
 #[test]
 fn an_8gb_card_and_32gb_of_ram() {
     let c = recommendations(&pc(vec![nvidia(0, "NVIDIA GeForce RTX 3060 Ti", 8192, (8, 6), (12, 6))], 32_768));
@@ -630,7 +878,8 @@ fn an_8gb_card_and_32gb_of_ram() {
     }
     assert_eq!((c["3.5-4b"].placement, c["3.5-4b"].context), (Some(Placement::Gpu), 126_976), "{:?}", c["3.5-4b"]);
     assert!(c["toq"].placement.is_none(), "{:?}", c["toq"]);
-    assert_eq!(c.values().filter(|c| c.fastest).map(|c| c.model.as_str()).collect::<Vec<_>>(), ["3.5-4b"]);
+    assert_eq!((c["ling"].placement, c["ling"].context), (Some(Placement::Gpu), 131_072), "{:?}", c["ling"]);
+    assert_eq!(c.values().filter(|c| c.fastest).map(|c| c.model.as_str()).collect::<Vec<_>>(), ["ling"]);
 
     let hw = pc(vec![nvidia(0, "NVIDIA GeForce RTX 3060 Ti", 8192, (8, 6), (12, 6))], 32_768);
     for k in ["bonsai2", "3.6"] {
@@ -640,8 +889,8 @@ fn an_8gb_card_and_32gb_of_ram() {
 }
 
 /// Three cards (22 GB in all) without a profile: those that fit go on the cards, Qwen3.6 and Qwen3.8 on
-/// the processor. The fastest is LFM, on the cards and with fewer weights read per token (a MoE with 2 billion
-/// active parameters); the 2B, which reads fewer, is for smaller cards.
+/// the processor. The fastest is Ling, on the cards and with the fewest weights read per token (a MoE with 1.3 billion
+/// active parameters); the 2B is for smaller cards.
 #[test]
 fn three_cards_without_a_profile() {
     let hw = pc(vec![nvidia(0, "A", 8192, (8, 6), (12, 6)), nvidia(1, "B", 8192, (6, 1), (12, 6)), nvidia(2, "C", 6144, (7, 5), (12, 6))], 65_536);
@@ -649,13 +898,14 @@ fn three_cards_without_a_profile() {
     for k in ["3.6", "3.8"] {
         assert_eq!(c[k].placement, Some(Placement::Cpu), "{k}: {:?}", c[k]);
     }
-    for k in ["bonsai2", "toq", "lfm", "3.5-4b", "3.5-2b"] {
+    for k in ["bonsai2", "toq", "lfm", "ling", "3.5-4b", "3.5-2b"] {
         assert_eq!(c[k].placement, Some(Placement::Gpu), "{k}: {:?}", c[k]);
     }
-    assert_eq!(c.values().filter(|c| c.fastest).map(|c| c.model.as_str()).collect::<Vec<_>>(), ["lfm"]);
+    assert_eq!(c.values().filter(|c| c.fastest).map(|c| c.model.as_str()).collect::<Vec<_>>(), ["ling"]);
     let (p, _, _d) = real_plan("bonsai2", &hw);
     all_on_gpus(&p.spec.args);
-    assert_eq!(env_of(&p)["CUDA_VISIBLE_DEVICES"], "0,1,2");
+    // Bonsai 2 (8.9 GB with the encoder) needs two of the three cards for 64,000 tokens: the fastest two.
+    assert_eq!(env_of(&p)["CUDA_VISIBLE_DEVICES"], "0,1");
 }
 
 /// Without cards and without enough RAM there is no fastest to propose.
@@ -723,7 +973,7 @@ fn a_profile_not_yet_measured_says_so() {
     t.profile["measurements"] = serde_json::json!({ "note": "to be measured" });
     t.save();
     let c = recommended(&t.paths, &three_gpus()).unwrap();
-    assert!(c[0].placement.is_some() && c[0].reason.contains("test/toq") && c[0].reason.contains(&tr!("non ancora misurato", "not measured yet")), "{}", c[0].reason);
+    assert!(c[0].placement.is_some() && c[0].profile && c[0].reason.contains(&tr!("non ancora misurato", "not measured yet")), "{}", c[0].reason);
     assert!(!c[0].reason.contains(&tr!("misurato il", "measured on")), "{}", c[0].reason);
 }
 
@@ -733,7 +983,7 @@ fn on_three_gpus_every_local_model_has_its_profile() {
     assert_eq!(c["toq"].context, 122_880);
     assert_eq!(c["3.8"].context, 92_160);
     for k in ["toq", "3.6", "3.8", "lfm", "bonsai2"] {
-        assert!(c[k].placement == Some(Placement::Gpu) && c[k].reason.contains(&format!("3060ti-1080-1660s/{k}")), "{k}: {:?}", c[k]);
+        assert!(c[k].placement == Some(Placement::Gpu) && c[k].profile && !c[k].reason.contains("3060ti-1080-1660s"), "{k}: {:?}", c[k]);
     }
     // The small model has no profile: on the three GPUs the general plan applies.
     assert!(c["3.5-4b"].placement == Some(Placement::Gpu) && c["3.5-4b"].reason.starts_with(&tr!("Ci sta", "It fits")), "{:?}", c["3.5-4b"]);
@@ -758,7 +1008,7 @@ fn three_gpus_have_the_same_plan_as_before() {
             continue;
         }
         // Only the models that have a three-GPU profile: the others have the general plan, tested separately.
-        let Setup::Profile(a) = setup_for(&paths, key, &cfg, &hw).unwrap() else { continue };
+        let Setup::Profile(a) = setup_for(&paths, key, &cfg, &hw, &Choices::default()).unwrap() else { continue };
         for f in [cfg.gguf.as_deref(), cfg.mmproj.as_deref()].into_iter().flatten() {
             let p = paths.models.join(f);
             std::fs::create_dir_all(p.parent().unwrap()).unwrap();
@@ -804,7 +1054,7 @@ fn real_plan(key: &str, hw: &Hardware) -> (EnginePlan, Paths, tempfile::TempDir)
     let paths = Paths { dist: real_paths().dist, engines: r.join("engines"), models: r.join("models"), opencode: r.join("o"), data: r.join("data") };
     let file = load_models(&paths).unwrap();
     let cfg = model_cfg(&file, key).unwrap();
-    let a = setup_for(&paths, key, &cfg, hw).unwrap();
+    let a = setup_for(&paths, key, &cfg, hw, &Choices::default()).unwrap();
     for f in [cfg.gguf_for(a.engine()), cfg.mmproj.as_deref()].into_iter().flatten() {
         let p = paths.models.join(f);
         std::fs::create_dir_all(p.parent().unwrap()).unwrap();
@@ -1083,5 +1333,20 @@ mod real {
         // The shape read from the real file matches the one used in the tests.
         let shape = gguf::read_shape(&p.gguf, "q8_0", "q8_0").unwrap();
         assert!(shape == qwen38_27b(), "the shape read from the GGUF doesn't match the fixture");
+    }
+}
+
+/// Issue 2's PC: Core Ultra 5 245K, 16 GB, a GT 710 read from DXGI (1 or 2 GiB). The card hosts nothing, the engine
+/// is the processor's, and the real catalog still has a model that writes faster than one reads: Ling.
+#[test]
+fn a_pc_with_only_an_old_small_card_gets_a_quick_model_on_the_processor() {
+    for memory_mib in [1024, 2048] {
+        let mut hw = pc(vec![other(0, "NVIDIA GeForce GT 710", Vendor::Nvidia, memory_mib)], 16_384);
+        hw.cpu = Cpu { name: "Intel(R) Core(TM) Ultra 5 245K".into(), cores: 14, avx2: true, avx512: false };
+        assert_eq!(choose_build(&hw), mango_common::Build::Cpu, "{memory_mib} MiB");
+        let all = recommended(&real_paths(), &hw).unwrap();
+        assert!(all.iter().all(|r| r.placement != Some(Placement::Gpu)), "{memory_mib} MiB: nothing fits on the card");
+        let ling = all.iter().find(|r| r.model == "ling").unwrap();
+        assert_eq!((ling.placement, ling.speed, ling.fastest), (Some(Placement::Cpu), Some(Speed::Quick), true), "{memory_mib} MiB");
     }
 }

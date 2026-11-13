@@ -98,12 +98,13 @@ const configLayer = (
     auth?: Layer.Layer<Auth.Service>
     account?: Layer.Layer<Account.Service>
     client?: HttpClient.HttpClient
+    npm?: Layer.Layer<Npm.Service>
   } = {},
 ) =>
   LayerNode.compile(LayerNode.group([Config.node, FSUtil.node, Env.node, CrossSpawnSpawner.node]), [
     [Auth.node, options.auth ?? AuthTest.empty],
     [Account.node, options.account ?? AccountTest.empty],
-    [Npm.node, NpmTest.noop],
+    [Npm.node, options.npm ?? NpmTest.noop],
     [httpClient, Layer.succeed(HttpClient.HttpClient, options.client ?? unexpectedHttp)],
   ])
 
@@ -1156,6 +1157,27 @@ it.effect("installs dependencies in writable OPENCODE_CONFIG_DIR", () =>
 // Note: deduplication and serialization of npm installs is now handled by the
 // core Npm.Service (via EffectFlock). Those behaviors are tested in the core
 // package's npm tests, not here.
+
+// The product's own plugin package is not on npm under the version of this build: asking for it at every start is a
+// request that cannot succeed and that carries the user's npm credentials.
+const installs: Array<{ dir: string; add: number }> = []
+const recordingNpm = configIt({
+  npm: Layer.mock(Npm.Service)({
+    install: (dir, input) =>
+      Effect.sync(() => {
+        installs.push({ dir, add: input?.add.length ?? 0 })
+      }),
+  }),
+})
+
+recordingNpm.instance("does not ask npm for the plugin package when the config loads", () =>
+  Effect.gen(function* () {
+    yield* Config.use.get()
+    yield* Config.use.waitForDependencies()
+    expect(installs.length).toBeGreaterThan(0)
+    expect(installs.filter((item) => item.add > 0)).toEqual([])
+  }),
+)
 
 it.instance("resolves scoped npm plugins in config", () =>
   Effect.gen(function* () {

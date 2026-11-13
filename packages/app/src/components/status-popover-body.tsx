@@ -17,6 +17,7 @@ import { useGlobal } from "@/context/global"
 import { useSettings } from "@/context/settings"
 import { useMcpToggle } from "@/context/mcp"
 import { useServerProtocol } from "@/context/server-sdk"
+import { mcpLabel } from "@/utils/mango-prompt"
 
 const pluginEmptyMessage = (value: string, file: string): JSXElement => {
   const parts = value.split(file)
@@ -432,7 +433,9 @@ export function StatusPopoverBody(props: { shown: Accessor<boolean> }) {
                         />
                         <span class="flex flex-col min-w-0 flex-1">
                           <span class="flex items-center gap-2 min-w-0">
-                            <span class="text-14-regular text-text-base truncate">{name}</span>
+                            <span class="text-14-regular text-text-base truncate">
+                              {mcpLabel(name, mcpNames(), (own) => language.t(`mango.mcp.${own}`))}
+                            </span>
                           </span>
                           <Show when={status() === "needs_auth"}>
                             <span class="text-11-regular text-text-weaker truncate">

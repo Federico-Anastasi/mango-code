@@ -360,7 +360,7 @@ const layer: Layer.Layer<Service, never, Git.Service | EventV2Bridge.Service> = 
             Effect.gen(function* () {
               const stat =
                 map.get(item.file) ??
-                (item.status === "added" ? yield* git.statUntracked(ctx.worktree, item.file) : undefined)
+                (item.status === "added" ? yield* git.statUntracked(ctx.directory, item.file) : undefined)
               return {
                 file: item.file,
                 additions: stat?.additions ?? 0,
@@ -387,13 +387,18 @@ const layer: Layer.Layer<Service, never, Git.Service | EventV2Bridge.Service> = 
       diffRaw: Effect.fn("Vcs.diffRaw")(function* () {
         const ctx = yield* InstanceState.context
         if (ctx.project.vcs !== "git") return ""
-        const [hasHead, status] = yield* Effect.all([git.hasHead(ctx.directory), git.status(ctx.directory)], {
-          concurrency: 2,
-        })
-        const tracked = hasHead ? (yield* git.patchAll(ctx.directory, "HEAD")).text : ""
+        const [hasHead, status, base] = yield* Effect.all(
+          [git.hasHead(ctx.directory), git.status(ctx.directory), git.prefix(ctx.directory)],
+          { concurrency: 3 },
+        )
+        // `git apply` reads the names of a git patch from the repository root, for new files too. A new file's patch
+        // (`--no-index`, which takes no pathspec magic) names it as written, so it is asked from the root: `ctx.worktree`
+        // is the top folder of the checkout (Project.fromDirectory's sandbox: `git rev-parse --show-toplevel` in
+        // ProjectV2.resolve), the same root the snapshots use as their work tree.
+        const tracked = hasHead ? (yield* git.patchAll(ctx.directory, "HEAD", { fromRoot: true })).text : ""
         const untracked = yield* Effect.forEach(
           status.filter((item) => item.code === "??"),
-          (item) => git.patchUntracked(ctx.directory, item.file).pipe(Effect.map((patch) => patch.text)),
+          (item) => git.patchUntracked(ctx.worktree, base + item.file).pipe(Effect.map((patch) => patch.text)),
         )
         return [tracked, ...untracked].filter(Boolean).join("\n")
       }),

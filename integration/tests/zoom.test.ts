@@ -23,10 +23,23 @@ const scale = (p: Page) => p.evaluate("devicePixelRatio") as Promise<number>;
 
 /**
  * Ctrl + `notches` of the wheel (up zooms in) with the pointer at `at` (a point of the chat's page, in its CSS pixels), then the
- * scale of `p` once it has changed. It is Windows' own wheel on the real window: WebView2 does not zoom for a wheel that comes
- * from the remote debugging.
+ * scale of `p`. It is Windows' own wheel on the real window: WebView2 does not zoom for a wheel that comes from the remote
+ * debugging. Two causes made it fail now and then: Windows refuses the foreground to a process that did not send the last
+ * input (then Ctrl goes to another window and the wheel scrolls), and a notch that arrives while WebView2 is still applying
+ * the one before can be lost. So the window is brought to the foreground until it is, and each notch waits for the zoom of
+ * the one before, and is sent again once if WebView2 did not take it.
  */
 async function wheel(chat: Page, at: number[], p: Page, notches: number) {
+  for (let n = 0; n < Math.abs(notches); n++) {
+    const before = await scale(p);
+    // a notch WebView2 did not take (rarely, on the panel) is sent again once: the zoom is WebView2's, not the app's
+    if (!(await notch(chat, at, p, Math.sign(notches)))) await notch(chat, at, p, Math.sign(notches));
+    if ((await scale(p)) === before) break;
+  }
+  return scale(p);
+}
+
+async function notch(chat: Page, at: number[], p: Page, direction: number) {
   const before = await scale(p);
   const ratio = await scale(chat);
   const script = `
@@ -36,6 +49,7 @@ public struct PT { public int X, Y; }
 public class W {
   [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
   [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
+  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
   [DllImport("user32.dll")] public static extern bool ClientToScreen(IntPtr h, ref PT p);
   [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
   [DllImport("user32.dll")] public static extern void mouse_event(uint f, uint x, uint y, int d, UIntPtr e);
@@ -44,17 +58,28 @@ public class W {
 '@
 [W]::SetProcessDPIAware() | Out-Null
 $h = (Get-Process -Id ${env!.app.pid}).MainWindowHandle
-[W]::SetForegroundWindow($h) | Out-Null
+# a Shift pressed and released makes this process the one of the last input, which Windows lets take the foreground
+for ($i = 0; $i -lt 20 -and [W]::GetForegroundWindow() -ne $h; $i++) {
+  [W]::keybd_event(0x10, 0, 0, [UIntPtr]::Zero); [W]::keybd_event(0x10, 0, 2, [UIntPtr]::Zero)
+  [W]::SetForegroundWindow($h) | Out-Null
+  Start-Sleep -Milliseconds 100
+}
+if ([W]::GetForegroundWindow() -ne $h) { Write-Output "the window could not be brought to the foreground" }
 $p = New-Object PT; $p.X = ${Math.round(at[0]! * ratio)}; $p.Y = ${Math.round(at[1]! * ratio)}
 [W]::ClientToScreen($h, [ref]$p) | Out-Null
 [W]::SetCursorPos($p.X, $p.Y) | Out-Null
 Start-Sleep -Milliseconds 300
 [W]::keybd_event(0x11, 0, 0, [UIntPtr]::Zero)
-foreach ($n in 1..${Math.abs(notches)}) { [W]::mouse_event(0x0800, 0, 0, ${notches > 0 ? 120 : -120}, [UIntPtr]::Zero); Start-Sleep -Milliseconds 300 }
+[W]::mouse_event(0x0800, 0, 0, ${direction * 120}, [UIntPtr]::Zero)
+Start-Sleep -Milliseconds 100
 [W]::keybd_event(0x11, 0, 2, [UIntPtr]::Zero)`;
-  spawnSync("powershell", ["-NoProfile", "-Command", script]);
-  for (let t = 0; t < 50 && (await scale(p)) === before; t++) await Bun.sleep(100);
-  return scale(p);
+  const said = spawnSync("powershell", ["-NoProfile", "-Command", script]).stdout.toString().trim();
+  if (said) throw new Error(said);
+  for (let t = 0; t < 30; t++) {
+    if ((await scale(p)) !== before) return true;
+    await Bun.sleep(100);
+  }
+  return false;
 }
 
 /** The remote debugging port of the Preview panel: the one of the WebView2 that keeps its data in `<data>\preview`. */

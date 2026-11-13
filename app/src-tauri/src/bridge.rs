@@ -48,7 +48,7 @@ pub const INIT_SCRIPT: &str = r#"
     log("console", args.map(describe).join(" "));
   };
   // These wait for the user (a dialog) or do slow work on purpose: their time says nothing.
-  const waits = new Set(["pick_folders", "report_problem", "update_check", "engine_remote_connect"]);
+  const waits = new Set(["pick_folders", "report_problem", "update_check", "engine_remote_connect", "other_models_pick_file", "other_models_search", "other_models_analyze", "token_save"]);
   const call = (cmd, args) => {
     if (waits.has(cmd)) return invoke(cmd, args);
     const t0 = performance.now();
@@ -83,11 +83,18 @@ pub const INIT_SCRIPT: &str = r#"
     reportInfo: () => call("report_info"),
     // the app's logs folder in File Explorer
     openLogs: () => call("open_logs_folder"),
-    // Automatic updates: state() and check() give { status, version?, percent?, message? } (the web UI's UpdaterState);
+    // The first X that hides the window: the app sends "mango-close-notice" on window and waits a second for
+    // closeNoticeAnswer(shown): true when the page shows why the app stays, false to let the window go now.
+    // closeNoticeSeen() is "OK": it remembers the notice was read and hides the window (close_notice.rs).
+    closeNoticeAnswer: (shown) => call("close_notice_answer", { shown }),
+    closeNoticeSeen: () => call("close_notice_seen"),
+    // Automatic updates: state() and check() give { status, version?, percent?, message?, automatic } (the web UI's
+    // UpdaterState, and whether the check of each start is on); setAutomatic(bool) saves that choice and gives the same;
     // install() stops agent and engine, runs the installer and closes the app. Changes arrive as "mango-update" on window.
     updates: Object.freeze({
       state: () => call("update_state"),
       check: () => call("update_check"),
+      setAutomatic: (automatic) => call("update_set_automatic", { automatic }),
       install: () => call("update_install"),
     }),
     // folders chosen in the Windows picker (array), or null if the user cancels
@@ -102,8 +109,15 @@ pub const INIT_SCRIPT: &str = r#"
       return png && png.byteLength ? png : null;
     },
     openExternal: (url) => call("open_external", { url }),
-    // the choice of models to download ("Models and engine"): the window moves to the app page
-    openModels: () => call("open_models"),
+    // the last section of the settings the tray asked and not read yet, { section } or null: the interface reads it when
+    // it starts, as the event "mango-settings" may have come before it listened; reading it empties it
+    pendingSettings: () => call("settings_pending"),
+    // the size of the window's page (the browser's zoom, 1 = 100%), as Ctrl+ and Ctrl-: set(zoom) gives the one set,
+    // within 25% and 500%; every change, from here or from the keys, arrives as "mango-zoom" on window with the zoom
+    zoom: Object.freeze({
+      get: () => call("zoom_get"),
+      set: (zoom) => call("zoom_set", { zoom }),
+    }),
     // project files (absolute path): { size, isDir }, opening with the default program, selecting in File Explorer;
     // they reject with { code, message } (not_found, forbidden, blocked_type, ...)
     fileInfo: (path) => call("file_info", { path }),
@@ -117,7 +131,7 @@ pub const INIT_SCRIPT: &str = r#"
       nav: (action) => call("preview_nav", { action }),
       state: () => call("preview_state"),
       openExternal: () => call("preview_external"),
-      // a PDF or a picture of a project (absolute path); rejects with { code, message } (not_found, forbidden, blocked_type, too_large, ...)
+      // a PDF, a picture or a web page of a project (absolute path); rejects with { code, message } (not_found, forbidden, blocked_type, too_large, ...)
       openFile: (path) => call("preview_file", { path }),
     }),
     // "Use my Chrome": { installed, debugging, enabled }; setEnabled rejects with chrome_missing / chrome_debug_off
@@ -145,13 +159,59 @@ pub const INIT_SCRIPT: &str = r#"
       state: () => call("dictation_state"),
       setEnabled: (enabled) => call("dictation_set_enabled", { enabled }),
     }),
+    // The models to download (the state of the downloads is the control server's): download(keys) queues them, one runs
+    // at a time; pause(key) keeps what has arrived, resume(key) goes on from there, cancel(key) deletes it. They reject
+    // with { code: "refused", message } where message is the sentence for the user.
+    // setDefault(key | null): the model loaded when the app opens. setChoices(key, { where, gpus, context, style,
+    // reasoning }): where the model runs and how. remove(key): takes it off the computer, its download included; it answers
+    // null, or the sentence to show when some files stay (those of a model the user added). openFolder(): the models' folder.
+    models: Object.freeze({
+      download: (keys) => call("models_download", { keys }),
+      pause: (key) => call("models_pause", { key }),
+      resume: (key) => call("models_resume", { key }),
+      cancel: (key) => call("models_cancel", { key }),
+      setDefault: (key) => call("models_set_default", { key: key ?? null }),
+      setChoices: (key, choices) => call("models_set_choices", { key, choices }),
+      remove: (key) => call("models_remove", { key }),
+      openFolder: () => call("models_open_folder"),
+    }),
+    // "Another model": search(text) = { type: "results", results: [{ id, downloads, likes, gated }] } for a name,
+    // { type: "analysis", repo, analysis } for a link (or a result's id), { type: "tested", key, label } for the repo of
+    // a model of the catalog; analyze({ file }) = the analysis of a GGUF of the computer, with whether it fits;
+    // pickFile() = the path of a GGUF or null; add({ key, entry }) puts a quantization in the user's list, remove(key)
+    // takes it out. They reject like `models`.
+    otherModels: Object.freeze({
+      search: (text) => call("other_models_search", { text }),
+      analyze: (what) => call("other_models_analyze", { file: what.file }),
+      pickFile: () => call("other_models_pick_file"),
+      add: (candidate) => call("user_models_add", { key: candidate.key, entry: candidate.entry }),
+      remove: (key) => call("user_models_remove", { key }),
+    }),
+    // The Hugging Face token (in the Windows Credential Manager, never in the page): status() = whether it is saved;
+    // save(token) checks it with Hugging Face first. They reject like `models`.
+    token: Object.freeze({
+      status: () => call("token_status"),
+      save: (token) => call("token_save", { token }),
+      remove: () => call("token_remove"),
+    }),
+    // The computer's choices: setGpuUsed(name, used) leaves a card out of the models or gives it back; setSmallModels("one"
+    // | "all") says where a model that fits one card runs. They reject like `models`.
+    computer: Object.freeze({
+      setGpuUsed: (name, used) => call("computer_set_gpu_used", { name, used }),
+      setSmallModels: (smallModels) => call("computer_set_small_models", { smallModels }),
+      // «Come si ottimizza»: the folder of the skill that tunes Mango Code on this PC, in File Explorer
+      openOptimize: () => call("computer_open_optimize"),
+      // «Aggiorna il motore»: the models on the disk that wait for the engine the app came with download it; it answers
+      // the sentence to show
+      updateEngine: () => call("computer_update_engine"),
+    }),
     // "Share the engine with my PCs": { enabled, listening, port, error, home, away } (home and away: { address, code } or null)
     engineShare: Object.freeze({
       state: () => call("engine_share_state"),
       setEnabled: (enabled) => call("engine_share_set_enabled", { enabled }),
       newKey: () => call("engine_share_new_key"),
     }),
-    // "Use the engine of another PC" (the page of Models and engine): connect(code) checks the pasted code with that PC and, if it is
+    // "Use the engine of another PC": connect(code) checks the pasted code with that PC and, if it is
     // right, the app starts again on its engine; it rejects with { code, message } (bad_code, rejected, unreachable, no_models, not_mango).
     // disconnect() goes back to the engine of this PC.
     engineRemote: Object.freeze({
@@ -182,14 +242,6 @@ pub const INIT_SCRIPT: &str = r#"
   addEventListener("load", sync);
   matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => setTimeout(sync, 50));
   setInterval(sync, 1000);
-
-  // Last page of the web UI (project or conversation): the app reopens it at the next start.
-  let page = "";
-  setInterval(() => {
-    if (location.protocol !== "http:" || location.href === page) return;
-    page = location.href;
-    call("remember_page", { url: page }).catch(() => {});
-  }, 1000);
 })();
 "#;
 
@@ -211,6 +263,15 @@ pub struct BridgeError {
 
 pub(crate) fn err(code: &'static str, message: impl Into<String>) -> BridgeError {
     BridgeError { code, message: message.into() }
+}
+
+/// A refusal shown to the user: the sentence alone (`mango_common::user_phrase`), and the whole error, with `what` it is
+/// about, in `startup.log`.
+pub(crate) fn shown(app: &AppHandle, code: &'static str, what: &str, e: anyhow::Error) -> BridgeError {
+    if let Some(paths) = app.state::<crate::AppState>().paths.get() {
+        crate::startup_log(paths, &format!("{what}: {e:#}"));
+    }
+    err(code, mango_common::user_phrase(&e))
 }
 
 // ---------------------------------------------------------------- folders
@@ -543,31 +604,6 @@ async fn reveal_path(app: AppHandle, path: String) -> Result<(), BridgeError> {
         .map_err(|e| err("io", format!("{}: {e}", real.display())))
 }
 
-// ---------------------------------------------------------------- last page
-
-/// Saves the last page of the web UI; `lib.rs` reopens it at startup.
-#[tauri::command]
-fn remember_page(url: String) -> Result<(), BridgeError> {
-    let parsed = Url::parse(&url).map_err(|e| err("invalid", format!("{url}: {e}")))?;
-    // Only web UI pages (agent server): the loading page is also http
-    // (http://tauri.localhost) and, saved at startup, it erased the conversation to reopen.
-    if parsed.scheme() != "http" || !matches!(parsed.host_str(), Some("127.0.0.1" | "localhost")) {
-        return Err(err("invalid", tr!("pagina non della web UI: {url}", "not a web UI page: {url}")));
-    }
-    let f = mango_common::last_page_file().map_err(|e| err("io", e.to_string()))?;
-    mango_common::write_atomic(&f, parsed.as_str()).map_err(|e| err("io", format!("{}: {e}", f.display())))
-}
-
-// ---------------------------------------------------------------- models
-
-/// "Models and engine": the window moves to the choice of models to download, like the tray item.
-/// Async, so it runs off the window's thread: a synchronous command runs on it, and showing the window from there
-/// waits for that same thread (the app froze).
-#[tauri::command]
-async fn open_models(app: AppHandle) {
-    crate::choice::change(&app);
-}
-
 // ---------------------------------------------------------------- title bar
 
 /// Colors the Windows title bar (Windows 11; on Windows 10 it stays the system one).
@@ -620,8 +656,29 @@ pub fn install(app: &App) -> tauri::Result<()> {
                 open_path,
                 reveal_path,
                 set_titlebar_color,
-                remember_page,
-                open_models,
+                crate::downloads::models_download,
+                crate::downloads::models_pause,
+                crate::downloads::models_resume,
+                crate::downloads::models_cancel,
+                crate::model_choices::models_set_default,
+                crate::model_choices::models_set_choices,
+                crate::model_choices::models_remove,
+                crate::model_choices::models_open_folder,
+                crate::model_choices::computer_set_gpu_used,
+                crate::model_choices::computer_set_small_models,
+                crate::model_choices::computer_open_optimize,
+                crate::model_choices::computer_update_engine,
+                crate::other_models::bridge::other_models_search,
+                crate::other_models::bridge::other_models_analyze,
+                crate::other_models::bridge::other_models_pick_file,
+                crate::other_models::bridge::user_models_add,
+                crate::other_models::bridge::user_models_remove,
+                crate::other_models::bridge::token_status,
+                crate::other_models::bridge::token_save,
+                crate::other_models::bridge::token_remove,
+                crate::tray::settings_pending,
+                crate::zoom::zoom_get,
+                crate::zoom::zoom_set,
                 crate::preview::preview_place,
                 crate::preview::preview_go,
                 crate::preview::preview_nav,
@@ -650,7 +707,10 @@ pub fn install(app: &App) -> tauri::Result<()> {
                 crate::report::open_logs_folder,
                 crate::updater::update_state,
                 crate::updater::update_check,
-                crate::updater::update_install
+                crate::updater::update_set_automatic,
+                crate::updater::update_install,
+                crate::close_notice::close_notice_answer,
+                crate::close_notice::close_notice_seen
             ])
             .build(),
     )
@@ -675,7 +735,7 @@ pub fn window<'a>(
         })
         // a link without a target that would take the window out of the app goes to the browser
         .on_navigation(move |url| {
-            // The app's first page is the loading one: we come back to it for the model choice.
+            // The app's first page is its own (the logo): a restart of the agent comes back to it.
             if url.host_str() == Some("tauri.localhost") {
                 let _ = for_nav.state::<crate::AppState>().app_page.set(url.clone());
             }
@@ -694,6 +754,25 @@ pub fn window<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every command the page calls through the bridge has its permission (`build.rs`) and its handler in the plugin:
+    /// without either, the call is refused only when the user presses the button.
+    #[test]
+    fn every_command_of_the_script_is_allowed_and_registered() {
+        let build = include_str!("../build.rs");
+        let source = include_str!("bridge.rs");
+        let start = source.find(".invoke_handler(tauri::generate_handler![").unwrap();
+        // the names in the plugin's list, whole: `token_save` is not found inside `crate::x::other_token_save`
+        let registered: Vec<&str> = source[start..start + source[start..].find(']').unwrap()]
+            .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+            .collect();
+        let called: Vec<&str> = INIT_SCRIPT.split("call(\"").skip(1).filter_map(|rest| rest.split('"').next()).collect();
+        assert!(called.contains(&"other_models_search") && called.contains(&"token_save"), "{called:?}");
+        for command in called {
+            assert!(build.contains(&format!("\"{command}\"")), "{command} has no permission in build.rs");
+            assert!(registered.contains(&command), "{command} is not registered in the plugin");
+        }
+    }
 
     #[test]
     fn valid_and_invalid_names() {

@@ -377,6 +377,161 @@ describe("cross-spawn spawner", () => {
   })
 
   describe("Windows-specific", () => {
+    // `start /b` in cmd (as `server &` in Git Bash): the program inherits cmd's output, and cmd exits at once. The
+    // program waits, then writes and writes `done` only if its output still works: a server left running by a
+    // command logs every request there. The commands are marked as the shell tool marks its own.
+    const leaving = Effect.fnUntraced(function* () {
+      const tmp = yield* Effect.acquireRelease(
+        Effect.promise(() => tmpdir()),
+        (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+      )
+      const done = path.join(tmp.path, "done")
+      const script = path.join(tmp.path, "left.js")
+      yield* Effect.promise(() =>
+        fs.writeFile(
+          script,
+          [
+            `process.stdout.on("error", () => {})`,
+            `setTimeout(() => process.stdout.write("x".repeat(1 << 20), (error) => error || require("fs").writeFileSync(${JSON.stringify(done)}, "ok")), 8000)`,
+          ].join(";"),
+        ),
+      )
+      const marked = (command: ChildProcess.StandardCommand) => ({
+        command,
+        held: CrossSpawnSpawner.leavesRunning(command),
+      })
+      return {
+        process: marked(ChildProcess.make("cmd.exe", ["/d", "/c", "start", "/b", "node", script])),
+        // through a shell, as the shell tool runs a command, ending with 1 as a shell stopped by taskkill does
+        failing: marked(ChildProcess.make(`start /b node "${script}" & exit /b 1`, [], { shell: true })),
+        // the program's output has not come yet: what holds the command's output is still running
+        early: Effect.promise(async () => !(await Bun.file(done).exists())),
+        reached: Effect.promise(async () => {
+          const end = Date.now() + 20_000
+          while (Date.now() < end && !(await Bun.file(done).exists())) await Bun.sleep(100)
+          return Bun.file(done).exists()
+        }),
+      }
+    })
+
+    fx.effect(
+      "ends when the process exits though a program it left running holds its output, and leaves that output working",
+      Effect.gen(function* () {
+        if (process.platform !== "win32") return
+
+        const left = yield* leaving()
+        // Read as the shell tool reads a command: its output, until the process ends.
+        const code = yield* Effect.scoped(
+          Effect.gen(function* () {
+            const handle = yield* left.process.command
+            yield* Effect.forkScoped(Stream.runDrain(handle.all))
+            return yield* handle.exitCode
+          }),
+        )
+        expect(code).toBe(ChildProcessSpawner.ExitCode(0))
+        expect(yield* left.early).toBe(true)
+        expect(left.process.held.held).toBe(true)
+        expect(left.process.held.exited).toBeNumber()
+        expect(yield* left.reached).toBe(true)
+      }),
+      40_000,
+    )
+
+    fx.effect(
+      "a command run by a shell that ends with 1 ends though a program it left running holds its output",
+      Effect.gen(function* () {
+        if (process.platform !== "win32") return
+
+        const left = yield* leaving()
+        const code = yield* Effect.scoped(Effect.flatMap(left.failing.command, (handle) => handle.exitCode))
+        expect(code).toBe(ChildProcessSpawner.ExitCode(1))
+        expect(yield* left.early).toBe(true)
+        expect(yield* left.reached).toBe(true)
+      }),
+      40_000,
+    )
+
+    fx.effect(
+      "stopping a process that has already exited stops nothing by its old number",
+      Effect.gen(function* () {
+        if (process.platform !== "win32") return
+
+        const left = yield* leaving()
+        const stopped = yield* Effect.scoped(
+          Effect.gen(function* () {
+            const handle = yield* left.process.command
+            yield* Effect.promise(async () => {
+              while (left.process.held.exited === undefined) await Bun.sleep(20)
+            })
+            return yield* Effect.exit(handle.kill())
+          }),
+        )
+        expect(Exit.isSuccess(stopped)).toBe(true)
+        expect(yield* left.reached).toBe(true)
+      }),
+      40_000,
+    )
+
+    // Under load the output of a command may still be on its way, or waiting to be read, a second after it exits.
+    fx.effect(
+      "a command that leaves a program running ends only once its own output has been read",
+      Effect.gen(function* () {
+        if (process.platform !== "win32") return
+
+        const tmp = yield* Effect.acquireRelease(
+          Effect.promise(() => tmpdir()),
+          (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+        )
+        const holder = path.join(tmp.path, "holder.js")
+        const writer = path.join(tmp.path, "writer.js")
+        yield* Effect.promise(() =>
+          Promise.all([
+            fs.writeFile(holder, "setTimeout(() => {}, 8000)"),
+            fs.writeFile(
+              writer,
+              `process.stdout.write("first\\n"); setTimeout(() => process.stdout.write("second\\n"), 300)`,
+            ),
+          ]),
+        )
+        const command = ChildProcess.make(`start /b node "${holder}" & node "${writer}"`, [], { shell: true })
+        const held = CrossSpawnSpawner.leavesRunning(command)
+        const seen: string[] = []
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const handle = yield* command
+            // A reader slower than the output: each piece takes it longer than the wait after the exit.
+            yield* Effect.forkScoped(
+              Stream.runForEach(Stream.decodeText(handle.all), (text) =>
+                Effect.sync(() => seen.push(text)).pipe(Effect.andThen(Effect.promise(() => Bun.sleep(1500)))),
+              ),
+            )
+            return yield* handle.exitCode
+          }),
+        )
+        expect(seen.join("")).toContain("second")
+        expect(held.held).toBe(true)
+      }),
+      40_000,
+    )
+
+    // Git, ripgrep, an MCP server: a caller that stops reading early closes the pipe, and the program does not block.
+    fx.effect(
+      "a command not marked as the shell tool's closes its output when its reader stops",
+      Effect.gen(function* () {
+        if (process.platform !== "win32") return
+
+        const exit = yield* Effect.scoped(
+          Effect.gen(function* () {
+            const handle = yield* js(`process.stdout.write("x".repeat(1 << 24))`)
+            yield* Stream.runDrain(Stream.take(handle.stdout, 1))
+            return yield* Effect.exit(handle.exitCode.pipe(Effect.timeout("15 seconds")))
+          }),
+        )
+        expect(Exit.isSuccess(exit)).toBe(true)
+      }),
+      40_000,
+    )
+
     fx.effect(
       "uses shell routing on Windows",
       Effect.gen(function* () {

@@ -3,7 +3,7 @@ export * as Shell from "./shell"
 import path from "path"
 import { spawn, type ChildProcess } from "child_process"
 import { readFile } from "fs/promises"
-import { statSync } from "fs"
+import { existsSync, statSync } from "fs"
 import { setTimeout as sleep } from "node:timers/promises"
 import { Flag } from "./flag/flag"
 import { FSUtil } from "./fs-util"
@@ -63,6 +63,19 @@ function stat(file: string) {
   return statSync(file, { throwIfNoEntry: false }) ?? undefined
 }
 
+// A program installed from the Microsoft Store (PowerShell 7 is one) is an app execution alias in WindowsApps. It runs
+// like any executable, but `stat` on it fails with EACCES: `which` does not find it and `statSync` throws.
+function storeAlias(file: string) {
+  if (process.platform !== "win32" || !process.env.LOCALAPPDATA) return
+  const alias = path.win32.join(process.env.LOCALAPPDATA, "Microsoft", "WindowsApps", name(file) + ".exe")
+  if (path.win32.dirname(file) !== "." && path.win32.normalize(file).toLowerCase() !== alias.toLowerCase()) return
+  if (existsSync(alias)) return alias
+}
+
+function find(shell: string) {
+  return which(shell) || storeAlias(shell)
+}
+
 function full(file: string) {
   if (process.platform !== "win32") return file
   const shell = FSUtil.windowsPath(file)
@@ -71,7 +84,7 @@ function full(file: string) {
     return shell
   }
   if (name(shell) === "bash") return gitbash() || which(shell) || shell
-  return which(shell) || shell
+  return find(shell) || shell
 }
 
 function meta(file: string) {
@@ -89,16 +102,16 @@ function rooted(file: string) {
 function resolve(file: string) {
   const shell = full(file)
   if (rooted(shell)) {
-    if (stat(shell)?.isFile()) return shell
+    if (storeAlias(shell) || stat(shell)?.isFile()) return shell
     return
   }
-  return which(shell) ?? undefined
+  return find(shell)
 }
 
 function win() {
   return Array.from(
     new Set(
-      [which("pwsh"), which("powershell"), gitbash(), process.env.COMSPEC || "cmd.exe"]
+      [find("pwsh"), which("powershell"), gitbash(), process.env.COMSPEC || "cmd.exe"]
         .filter((item): item is string => Boolean(item))
         .map(full),
     ),

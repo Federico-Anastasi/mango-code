@@ -1,18 +1,23 @@
 # The Mango Code desktop app
 
-Rust/Tauri 2. Double click → loading page → engine and agent server hidden, in a
-Job Object (they die with the app) → window with the agent's web UI (opencode, in `packages/` at the repo root).
+Rust/Tauri 2. Double click → the logo → the control server (the engine manager on its port, with no model yet) and the
+agent server hidden, in a Job Object (they die with the app) → window on the home of the agent's web UI (opencode, in
+`packages/` at the repo root), never on the last conversation → the default model loads in the background, and the engine
+manager tells how it goes (`GET /engine`). Nothing at startup concerns the last conversation; `logs\startup.log` has one
+line per phase with the time since the start.
+What PowerShell 7 from the Microsoft Store starts (a web server left in the background) is created outside every job: the agent gets
+`MANGO_APP_RUN`, a value of this run, every process it starts inherits it, and at Quit `stragglers.rs` stops the ones that carry it.
 What the app opens for the user (files with "Open", links in the browser, the logs folder) starts outside that job
 (`supervisor::open_outside_job`): a browser opened by the app stays open when the app quits. "Open" opens only documents,
 text, images, sound and video (`OPENABLE` in `bridge.rs`: the agent writes these files, and other types may run code); any other
 type is shown in File Explorer.
 On close the engine saves its memory and stops. Once the agent runs, the X hides the window in the tray (a click on the
-icon brings it back) and the icon's "Quit" closes; before that (model choice, download, startup error) the X quits.
-The window shows only the app's own pages: the loading page and the agent's web UI on its port. Nothing else, a local
+icon brings it back) and the icon's "Quit" closes; before that (startup, a startup error) the X quits.
+The window shows only the app's own page (the logo while it starts, the error that stops a start) and the agent's web UI on its port. Nothing else, a local
 file or another local port (a project's development server) included, can take its place, and only those two get the
 bridge (`capabilities/default.json` for the loading page, a capability added in `bridge::install` for the agent's port).
-Dictation (the microphone in the chat) is the user's choice and does not hold the start: it is off until it is turned on,
-on the first start page ("Models and engine" too) or in the settings, under "Dictation (microphone in the chat)". On, once the app is
+Dictation (the microphone in the chat) is the user's choice and does not hold the start: it is off until it is turned on
+in the settings, under "Dictation". On, once the app is
 ready, its models (whisper `small` and the Silero VAD, 465 MB) download in the background with the progress shown where it was
 turned on, then the service starts; the chat's microphone works when it is ready, and before that it leads to the setting. Off
 (even halfway through the download) the service stops and `models\whisper` is deleted. The choice is `<data>\dictation.json`
@@ -23,14 +28,14 @@ the download and the service with a pretence of the same duration (tests and pic
 
 | where | what |
 |---|---|
-| `src-tauri/` | window, startup (`lib.rs`), process supervisor, native bridge for the web UI (`bridge.rs`), Preview panel (`preview.rs`), "Use my Chrome" (`chrome.rs`), dictation (`dictation.rs`), model preparation (`preparation.rs`), first run and model changes (`first_run.rs`, `choice.rs`, `system.rs`), the engine of another PC (`engine_remote.rs`), "Other models" (`other_models.rs`), the Team (`team.rs`), zoom of the window (`zoom.rs`), problem reports (`report.rs`), tray |
-| `crates/engine` | the engine manager on 8080: starts the model the request asks for, saves the conversation before stopping, releases and resumes the GPUs (`/engine/*`), rejects web pages; `share.rs` shares it with the user's other PCs (below, "The engine for your other PCs") and `remote.rs` is the other side, the code of another PC checked and kept ("Using the engine of another PC"). Also `fake-engine` (the tests), `mango-bench` (the speeds of the catalog models), `mango-tune` (tuning: measures a tune, keeps the log, writes the profile; the `optimize/` skill uses it) and `mango-launch` (`-p "request"`: one request from a script to the running app, `docs/INTEGRATION.md`) |
-| `crates/mango-common` | paths (`Paths::discover`), data folder, service file, `Build` (the build of an engine: `cpu`, `vulkan`, `cuda-12`, `cuda-13`), the app's language (`i18n`); `network` (the addresses of the home network and of Tailscale, for the phone and for the shared engine) and the key helpers (`random_hex`, `equal_ct`); `download`: download of engines (`mango-engines.json`) and models (`mango-models.json`) with resume and sha256, plus Hugging Face (`download/hugging_face.rs`: search, links, GGUF files with hash); `credentials`: the keys in the Windows Credential Manager |
+| `src-tauri/` | window, startup (`lib.rs`), process supervisor, native bridge for the web UI (`bridge.rs`), Preview panel (`preview.rs`), "Use my Chrome" (`chrome.rs`), dictation (`dictation.rs`), the control server's routes (`control.rs`), the downloads in the background (`downloads.rs`), the user's choices about the models and the computer and taking a model off it (`model_choices.rs`), the models the agent knows, told again when they change (`agent_models.rs`), the engine of another PC (`engine_remote.rs`), "Other models" (`other_models.rs`), the Team (`team.rs`), automatic updates (`updater.rs`), zoom of the window (`zoom.rs`), problem reports (`report.rs`), tray (`tray.rs`: "Open", "Settings…", "Quit") |
+| `crates/engine` | the engine manager on 8080: starts the model the request asks for, adds to the chat requests that do not say them the style and the reasoning the user chose, loads the running model again when the user's choices change its plan, saves the conversation before stopping, releases and resumes the GPUs (`/engine/*`), rejects web pages; `share.rs` shares it with the user's other PCs (below, "The engine for your other PCs") and `remote.rs` is the other side, the code of another PC checked and kept ("Using the engine of another PC"). Also `fake-engine` (the tests), `mango-bench` (the speeds of the catalog models), `mango-tune` (tuning: measures a tune, keeps the log, writes the profile; the `optimize/` skill uses it) and `mango-launch` (`-p "request"`: one request from a script to the running app, `docs/INTEGRATION.md`) |
+| `crates/mango-common` | paths (`Paths::discover`), data folder, service file, `Build` (the build of an engine: `cpu`, `vulkan`, `cuda-12`, `cuda-13`, and `cuda-12-gtx16` of our forks for the GTX 16 family), the app's language (`i18n`); `network` (the addresses of the home network and of Tailscale, for the phone and for the shared engine) and the key helpers (`random_hex`, `equal_ct`); `download`: download of engines (`mango-engines.json`) and models (`mango-models.json`) with resume and sha256, plus Hugging Face (`download/hugging_face.rs`: search, links, GGUF files with hash); `credentials`: the keys in the Windows Credential Manager |
 | `crates/engine-cfg` | the PC's hardware (`hardware.rs`: GPUs of any vendor, CPU, RAM, build to use), the optimized profile if it applies (`profiles.rs`, `launcher/profiles/`) or the general plan with the official llama.cpp (`general.rs`), the recommended models (`recommended`), the split of layers across GPUs (`split.rs`) |
 | `crates/agent-cfg` | the agent's config, generated from `launcher/opencode-home/opencode.template.json` (the test checks the generated config against a fixed file); `team.rs`: the Team |
 | `crates/voice` | dictation: whisper in Rust, on the CPU |
 | `crates/phone` | the web UI on the phone: the network port, the key, the sessions, the forwarding to the agent, the links with the QR (below, "From your phone") |
-| `ui/` | the loading page, the model choice and the download; its texts are in `first-run.js` (Italian and English) |
+| `ui/` | the app's own page: the logo while the app starts, and the error that stops a start, with Retry, Report a problem, Open the logs and, when the engine in use is another PC's, the way back to this one; its texts are in `startup.js` (Italian and English) |
 | `scripts/` | staging and installer; `test/` to drive the app from scripts |
 
 ## Where it takes the files from
@@ -43,13 +48,11 @@ paths of the installed app apply: `%LOCALAPPDATA%\MangoCode\engine` and `\models
 `<dist>/opencode`, that is `resources/opencode` when installed and `launcher/opencode` in the repo, where `scripts\build-agent.ps1`
 builds the agent.
 
-At startup it starts the last model used (`<data>\model.txt`), otherwise the catalog default.
-
 ## Language
 
 The app speaks Italian or English. The choice is `"language"` in `<data>\settings.json`; without it, the Windows display
 language. Rust texts use `mango_common::tr!("testo italiano", "English text")`, which reads the language at every call.
-The first-run page asks for it with the `language` command and picks its texts from the table in `ui/first-run.js`. The
+The app's own page asks for it with the `language` command and picks its texts from the table in `ui/startup.js`. The
 tray menu follows a change when the pointer reaches the icon; the installer's labels follow the language of the
 installer (`bundle.windows.nsis.languages` in `tauri.conf.json`, `windows/hooks.nsh`).
 
@@ -70,14 +73,15 @@ installer (`bundle.windows.nsis.languages` in `tauri.conf.json`, `windows/hooks.
   visible with CUDA) if weights, image encoder and cache for at least 32k tokens fit; otherwise on the CPU
   (`-dev none -t <cores>`, with the same build: nothing to download) if they fit in RAM; otherwise it does not fit, and
   the error says how much is needed and what to do. The context is the maximum that fits, in steps of 4096, up to the
-  catalog target; the cache drops to q8_0 if f16 is not enough. `-fit` must be off because llama.cpp turns it on by itself and would move
+  catalog target; the cache drops to q8_0 if f16 is not enough. The context is computed on all the NVIDIA cards that are not
+  loaned; the model then takes the fewest of them (among as many, the strongest: `split::by_power`) that give the same context with the
+  same cache type (with Vulkan, all of them). `-fit` must be off because llama.cpp turns it on by itself and would move
   layers to RAM. A loaned GPU (`/engine/release`) does not send a GPU model to the CPU. **How fast a model on the CPU
   writes** (`speed.rs`) is told in a band, not in a number: tokens per second ≈ bandwidth ÷ bytes read for each token
   (`ModelCfg::read_per_token`), with one bandwidth (17 GiB/s) because the app does not know the PC's memory; the two PCs
   measured in `optimize/knowledge/general.md` (G90-G92) sit at 13.5 and about 24 GiB/s, so a figure would be wrong by more
-  than half for many PCs. The choice page says "molto lento / lento / discreto / svelto" with words per second (from
-  `Recommendation.speed` and, for the models found online, `Proposal.speed`, which takes them as dense); the versions of a repository are told "piccolo / medio / grande" by weight, their names in a "Dettagli
-  tecnici" fold. Builds:
+  than half for many PCs. The interface says the band (`ModelView.verdict.speed` and, for the models found online,
+  `Proposal.speed`, which takes them as dense). Builds:
   NVIDIA with CUDA 13.4 driver and Turing or later GPUs `cuda-13`; CUDA 12.4 driver `cuda-12`; AMD, Intel or NVIDIA
   with an older driver `vulkan`; no GPU with 2 GiB `cpu`. Models with `requires_engine` do not run without a
   profile of their own (for the GPUs or the build).
@@ -85,41 +89,68 @@ installer (`bundle.windows.nsis.languages` in `tauri.conf.json`, `windows/hooks.
   which of the recommended ones is probably the fastest: on the GPUs it beats the CPU, at equal placement the one that
   reads fewer weights per token wins (`active_permille` of the MoEs in the catalog).
 
-## First run and changing models
+## The models on the computer
 
-The installer brings no engines or weights. If at startup there is no model that can be started (weights and engine for the hardware
-on disk), instead of failing the window shows the choice: the computer (GPUs, memory, processor), the engine that
-will be needed, the recommended models with where they run ("On the graphics card · 128k context", "On the processor · slower"),
-the probably fastest one and, for those that do not fit, why (they cannot be chosen). Below the list it points to the
-`optimize/` skill (in the installed app in `resources\optimize`) to give to a frontier AI. In the web UI a model
+The installer brings no engines or weights. With no model on disk the app opens on the home all the same, and the agent
+knows every model of the catalog from the start (a model downloaded later needs no new agent). The models are chosen and
+downloaded in the settings of the web UI, section Models (`GET /control/models`, the bridge's `models.*`): the tray's
+"Settings…" opens it with the event `mango-settings` on the
+window (`{ section: "models" }`, `tray::open_settings`). In the web UI a model
 that runs on the CPU or does not fit says so in its name; choosing one that does not fit shows the sentence of the plan (the
-manager answers 422, which the agent does not retry). Then it downloads engine and models
-with progress and the app starts as usual. What is being downloaded is in `<data>\first-run.json`: if the app is closed halfway,
-the next start resumes by itself. "Models and engine" reopens the choice when the app is in use: from the tray icon
-or from "Download more models…" at the bottom of the model menu under the chat (Cancel goes
-back to where it was; if something is downloaded the agent restarts to know the new models). The model menu under
-the chat lists the models on this PC: the engine loads the chosen one with the next message, and the chosen one is
-the default at the next start. Under each name the menu has a line (weight, "sulla scheda video" / "sul processore · lento",
-"legge le immagini"; a model of another PC has its PC in its name) and, for a model marked `on_request`, the catalog's own warning that it is not reliable as an agent: the app gives
-the facts to the agent in `MANGO_MODELS_INFO` (`agent-cfg`, `ModelInfo`) and the web UI reads them from `GET /mango/models/info`.
+manager answers 422, which the agent does not retry). The agent knows every model of the catalog, also the ones not
+downloaded yet; the model menu under the chat lists those on the disk (`present`), and the engine loads the model chosen
+there with the next message. When the app opens it loads the default model (`default` in
+`<data>\choices.json`) or, without one, the first model on disk in the catalog's order. Under each name the menu has a line (weight, «sulla scheda video» / «sul processore · lento»,
+«legge le immagini» in Italian; a model of another PC has its PC in its name) and, for a model marked `on_request`, the catalog's own warning that it is not reliable as an agent: the app gives
+the facts from its control server (`/control/models`, `/control/state`), which the web UI reads through the agent's
+`GET /mango/models` and `GET /mango/state` (the agent forwards them to `MANGO_CONTROL_URL`).
 Models without a catalog verdict about their quality (the `fallback` 2B among them) have no warning. A model marked `fallback` in the catalog (Qwen3.5-2B, for 4 GB cards) is proposed,
 and called the fastest, only when no other model fits on the graphics cards.
 
-With `--service` nobody is there to choose: the app writes the reason in `service.json` (`reason`) and in `startup.log`, and
-waits for the window to be opened from the icon and "Retry" to be pressed.
+**Downloads in the background** (`src-tauri/src/downloads.rs`, the bridge's `models.download/pause/resume/cancel`): the
+models asked from the app's window download one at a time while the app is in use, the engine of a model included if
+it is missing. The queue is in `<data>\downloads.json`: closing the app leaves the partial file and the next start goes
+on from there, a paused download stays paused, a cancelled one deletes what had arrived. A saved download that cannot
+go on at the next start stays, failed, with the reason; one whose model is already on the computer or left the catalog
+goes. A failed download says so in a sentence with the model's name; the addresses and the details go to
+`<data>\logs\startup.log`. Taking a model off the computer (`models.remove`, `model_choices.rs`) stops its download first
+and waits for it to leave its files; a model the user added also leaves `user-models.json`, and the files the user chose
+stay where they are. The control server's state (`GET /control/state`, `downloads`) says how each one
+goes; when a model arrives and no model is running, it is loaded.
+Development builds download from `MANGO_HF_URL` instead of Hugging Face, if set (`integration/tests/downloads.test.ts`
+serves the files itself).
 
-The code: the logic in `src-tauri/src/first_run.rs` (what is missing, the plan, the execution, the remembered choice), the
-page and the commands in `choice.rs` + `ui/`, everything that touches the computer and the network behind the `System` trait
-(`system.rs`: real hardware and downloads; `fake.rs`: in development builds, `MANGO_FAKE_SYSTEM=<file>` describes a fake
-computer with downloads from a local server; it is what `integration/tests/first-run.test.ts` uses).
+With `--service` and no model the app is in use all the same: whoever asks the engine for a model that is not on disk gets
+the sentence that says so.
+
+**A start that fails** (the model does not load) is `failed` in the control server's state, with the sentence and, when there is
+one, a model on the disk that fits now (`proposal`, `engine_cfg::after_failure`, read once for each failure in `control.rs`): the
+default if it fits, otherwise the first in the catalog. If the model fits this computer but another program holds the memory of its
+card (read with NVML while no model of Mango Code is on the cards), a sentence of its own (`taken`) names the card and how much it
+holds.
 
 ## Other models
 
-Below the recommended ones, the choice page has "Other models": you search on Hugging Face (public API), paste a
-link (`huggingface.co/o/n`, `.../blob/main/f.gguf`, `hf.co/o/n:Q4_K_M` or `o/n`) or choose a GGUF already on the computer.
+"Another model" (the settings, section Models): you search on Hugging Face (public API), paste a
+link (the model's page, a file's page or its download link, `hf.co/o/n:Q4_K_M` or `o/n`, also amid other words;
+`?download=true`, a line break after a `/` and revisions like `refs/pr/1` are read) or choose a GGUF already on the
+computer, wherever it is (any piece of a split model brings all its pieces, which must be next to it; a `*mmproj*.gguf`
+next to it is offered as the version with images only if it is shown to be the model's: its `clip.vision.projection_dim`
+equals the model's `embedding_length`, and the same `general.basename` or `general.name`, or a file named after the
+model's; another one is left out and `startup.log` says why).
 For a repo the app lists the quantizations (the pieces of a split model joined, the image encoder as an
-option) and for each says **before** whether it fits in the PC's memory and with what context: the same estimate as the recommended ones
-(`general.rs`), with `memory` computed from the GGUF header (for a remote file the first MBs are enough, with `Range`).
+option) and proposes, on the cards, the largest that keeps the context of «Automatico» (`AUTO_CTX`, or the model's own
+if smaller), otherwise the largest that fits, never F16, BF16 or F32; on the processor, where speed counts more, Q4_K_M
+or the nearest below it that fits. For each it
+says **before** whether it fits in the PC's memory and with what context: the same estimate as the recommended ones
+(`general.rs`), with `memory` computed from the GGUF header (for a remote file the first MBs are enough, with `Range`;
+the later pieces of a split model from 256 KiB; all the headers of a link within two minutes). The header reader
+believes no length beyond the file and no product that overflows: an absurd header is an invalid file.
+A header the count doesn't know all of (a new architecture, a missing field, a `block_count` beyond the layers the
+tensors name) isn't refused: what is missing takes the most a layer can ask (K and V as wide as the tensors' shapes
+say, or twice the model's width), the context is the smallest the agent works with (`split::MIN_CTX`),
+`memory.estimated` keeps what was missing (and `startup.log` says it when the model is added), and the analysis and
+the verdict say `estimated`.
 The warnings come from the conversation format inside the GGUF (`tokenizer.chat_template`), tried with a
 conversation that has the tool list, a call with its result and a system message in the middle: if the
 template rejects it (`raise_exception`), ignores the tools or drops that message, the warning says so and the button
@@ -158,9 +189,8 @@ keeps a drive root (`C:\`) from escaping the quote. Test: `integration/tests/ope
 ## The engine for your other PCs
 
 A PC with graphics cards can lend its models to the user's other PCs, at home or with Tailscale. **Off by default**; it is turned on
-from the "Models and engine" page of the app (tray icon, or "Manage" in the model menu under the chat; `ui/first-run.js`, section
-"Share the engine with my PCs"; `engine_share_*` bridge commands in `src-tauri/src/engine_share.rs`). The page is where the other
-half lives too, "Use the engine of another PC of mine" (below). The service is `engine::share` (`crates/engine/src/share.rs`)
+from the settings of the web UI, section Connections (`engine_share_*` bridge commands in `src-tauri/src/engine_share.rs`). The
+other half lives there too, "Use the engine of another PC" (below). The service is `engine::share` (`crates/engine/src/share.rs`)
 and the requests are served by the engine manager itself (`engine/src/http.rs`, `handle_network`): the manager stays on
 `127.0.0.1:8080` as before, without a key, for the apps of this PC. The contract for a client is in `docs/INTEGRATION.md`
 ("The engine of another PC").
@@ -188,35 +218,36 @@ and the requests are served by the engine manager itself (`engine/src/http.rs`, 
 ## Using the engine of another PC
 
 The other half: a PC that uses the engine another one shares, even a laptop without a graphics card and with little disk. The code
-(`mango://<ip>:<port>/<key>`) is pasted on the **"Models and engine" page** (`ui/first-run.js`, card "Use the engine of another PC of
-mine"): at the first start it is the first thing the page offers, before the models; in use it is the tray icon's "Models and engine…"
-or "Manage" in the model menu.
+(`mango://<ip>:<port>/<key>`) is pasted in the settings of the web UI, section Connections (bridge `engineRemote.connect`).
 
 - **Checking** (`engine::remote`, `crates/engine/src/remote.rs`): the code is read by the same rule that writes it (`Code::parse`), then
   `GET /mango/models` with the key, 5 s. `200` with models: it is saved. `401`: "the code is not valid, or sharing is off on that PC".
   Refused or no answer: "the PC with the engine does not answer: is it on? Is Mango Code open there, with sharing on?". No models:
-  "that PC has no model ready". Something else answering: it says it is not Mango Code. The sentence is shown under the field
-  (`engine_remote_connect` in `src-tauri/src/engine_remote.rs`, bridge `engineRemote.connect`); the pasted text is never repeated.
-- **Kept**: `<data>emote-engine.json` (`address`, `key`, in the clear like `phone.json`; see `SECURITY.md`). Its presence is the
+  "that PC has no model ready". Something else answering: it says it is not Mango Code. The command rejects with the code of the
+  failure and the sentence (`engine_remote_connect` in `src-tauri/src/engine_remote.rs`); the pasted text is never repeated.
+- **Kept**: `<data>\remote-engine.json` (`address`, `key`, in the clear like `phone.json`; see `SECURITY.md`). Its presence is the
   whole state: the app uses that PC's engine until "Back to the engine of this PC" (`engineRemote.disconnect`) deletes it.
 - **At startup** (`lib.rs::startup`, `engine_remote::start`) with the file there: the PC's hardware is not read, no engine or model is
-  downloaded, no `EngineManager` is made, port 8080 stays free and the model preparation is skipped. The other PC is checked again
-  (the page "Connecting to the engine of the PC …"); the models offered to the agent are that PC's, named "… · on PC <ip>", and the
-  default is the one running there. `service.json` has `"engine": null`. A PC that does not answer is the startup error page,
-  with "Retry" and "Back to the engine of this PC" (`ErrorInfo.remote`). Dictation and the rest start as always.
+  downloaded, and the engine manager is there with no model to load (its port must be free in this case too). The other PC is checked again
+  (the app's page shows the logo meanwhile); the models offered to the agent are that PC's, named "… · on PC <ip>", and the
+  default is the one running there. `service.json` has `"engine": null` (and `control`, as always). A PC that does not answer is the startup error page,
+  with "Retry" and "Back to the engine of this PC" (`ErrorInfo.remote`): until the web UI has its own screen for it, it is the
+  only way out at that point. Dictation and the rest start as always.
 - **The agent** (`agent-cfg`): `AgentInputs.engine_key` puts the key in the environment variable `MANGO_ENGINE_KEY` and the provider's
   `apiKey` becomes `{env:MANGO_ENGINE_KEY}`: the key is never in `opencode.json`. The agent sends it on `/v1` and on its two reads of
   the manager (`/engine`, `/slots`: "loading the model", the reading bar). `POST /tokenize` is not offered by the other PC's network
   door, so the weights in "What the model reads" stay "not measured". A connection that drops is worded "the PC with the engine
   does not answer…" and tried again with growing waits (about a minute); then the next message tries again.
-- **The page when it is in use** (`choice.rs::show_remote`): no hardware, no downloads, no sharing; that PC and its models and the
-  way back. Moving to a PC's engine while the app is in use stops this PC's model (it restarts on a request if sharing is on) and
-  restarts the agent; at the first start it goes on from the page.
+- **While it is in use** the control server's state is `remote`, with that PC's address and models, and `reachable`: whether that
+  PC answered the last time the app asked, every 5 s (`remote::watch`; a refused key counts as an answer, and is asked again
+  every 60 s, so that PC's log does not get a refusal every few seconds). Moving to a PC's engine while
+  the app is in use stops this PC's model (it restarts on a request if sharing is on) and restarts the agent. A model of this PC
+  that was still loading stops loading.
 
 ## From your phone
 
 The web UI on the phone, from the same Wi-Fi or from outside the house with Tailscale. **Off by default**; it is turned on from the
-web UI settings in the app ("From your phone", `settings-v2/phone.tsx`, `phone_*` bridge commands in
+web UI settings in the app (Connections, "Phone", `settings-v2/phone.tsx`, `phone_*` bridge commands in
 `src-tauri/src/phone.rs`), which shows the link with the key and its QR for the home network and for Tailscale (an
 address in `100.64.0.0/10`). The phone does not see the bridge: no phone settings from the phone.
 
@@ -234,7 +265,7 @@ address in `100.64.0.0/10`). The phone does not see the bridge: no phone setting
   `/phone`; `Origin` different from `http://<requested address>` `403`; without a valid session `401` (a sentence for the
   browser, JSON for the rest), except the manifest and the icons of the app (`PUBLIC_FILES`), which the system reads without the cookie;
   methods other than `GET`, `HEAD`, `POST`, `PUT`, `PATCH`, `DELETE` `405`; the routes only the
-  app on the PC uses (`/mango/warmup`, `/mango/extra-folders`) `403`; chunked body `400`; a line break or NUL outside `\r\n`
+  app on the PC uses (`/mango/reload`, `/mango/extra-folders`) `403`; chunked body `400`; a line break or NUL outside `\r\n`
   in the head `400`; agent off `502`. The head must arrive within 10 s and at most 64 connections are open at once (more are
   closed unanswered).
 - **Problem reports** (`/phone/report`): the one route the port answers itself. `GET` says what a report may carry,
@@ -279,8 +310,8 @@ address in `100.64.0.0/10`). The phone does not see the bridge: no phone setting
 - **Pages are never kept**: the HTML of the web UI goes out with `Cache-Control: no-cache` (the files with a hash in their name keep
   their own rule), so after an update the phone asks again.
 - **Forwarding**: to the agent with its own `Host` and `Origin` (for the agent it is its web UI), without `Cookie`, `Referer`,
-  `Authorization` or proxy headers; one request per connection, the response streamed (events included), the
-  web UI terminal (WebSocket) both ways.
+  `Authorization` or proxy headers; one request per connection, the response streamed (events included),
+  WebSockets (`Upgrade`) both ways.
 - **Turning off** closes the port, drops the sessions, closes the open connections and removes the key: a link seen
   before is not valid when it is turned on again. **New key** does the same without closing the port.
 - State in `<data>\phone.json` (`enabled`, the key, of the sessions only the SHA-256 hash and the expiry, at most
@@ -317,11 +348,12 @@ window to that shape, again at every change of size (the two bottom corners in t
 the card's; all four on a device). The phone and the tablet formats draw a device, a recent iPhone (393 × 852) and an
 11-inch iPad (834 × 1194), with the page on its screen at its real size and the whole device scaled to fit the panel.
 
-**PDF and pictures in the panel.** The card of a PDF or a picture (png, jpg, gif, webp, bmp, ico, svg) opens it in the panel with a
-click (`preview_file` in `preview.rs`, the bridge's `preview.openFile`): the same checks as `open_path` (only a file inside a
-project or in `Documents\Mango Code`), at most 50 MB, readable. A PDF or a raster picture is opened by its own `file://`
-address; an SVG goes through `<data>\preview-view\image.html`, a page with no script that draws it in an `<img>`, because as
-a page of its own an SVG runs its scripts. The refusals carry a code the card turns into a sentence: `too_large`,
+**PDF, pictures and web pages in the panel.** The card of a PDF, a picture (png, jpg, gif, webp, bmp, ico, svg) or a web page (html,
+htm) opens it in the panel with a click (`preview_file` in `preview.rs`, the bridge's `preview.openFile`): the same checks as
+`open_path` (only a file inside a project or in `Documents\Mango Code`), at most 50 MB, readable. A PDF, a raster picture or a
+web page is opened by its own `file://` address (the page runs, like the ones the agent opens); an SVG goes through
+`<data>\preview-view\image.html`, a page with no script that draws it in an `<img>`, because as a page of its own an SVG
+runs its scripts. The refusals carry a code the card turns into a sentence: `too_large`,
 `unreadable`, `blocked_type`, `not_found`, `forbidden`. Word, Excel and PowerPoint keep opening in their Windows program.
 
 **While a page loads.** The native panel stays hidden until the page it navigates to is the one it shows; the web UI puts its own message
@@ -329,13 +361,14 @@ a page of its own an SVG runs its scripts. The refusals carry a code the card tu
 `Finished` at the end) arrive for pages, pictures, PDFs, SVG pages and refused addresses; the start of the content (`Started`) only when the
 server answers. An address whose page has not arrived after 30 s (`load_limit`, `MANGO_PREVIEW_LIMIT_MS` in debug builds) is given up:
 the panel goes to `about:blank`, `preview.state()` carries `failed` with the address and the web UI shows the sentence and "Try again".
-A page that arrived and is still loading is left alone.
+A page that arrived and is still loading is left alone. A `data:` address carries its page: it counts as arrived at once, because WebView2
+reports no end of loading for it and `Webview::url` cannot read its address.
 
 ## What goes in the prompt
 
 Every item of the fixed prompt (base tool, MCP server, skill, instructions file, plugin) is on or off. The agent
 rereads at every request `<data>\settings.json` (`agent-cfg` sets `MANGO_SETTINGS`, so it follows `MANGO_DATA`) and
-`.mango/settings.json` of the working folder; the settings "Prompt" tab writes them. The weight in tokens of
+`.mango/settings.json` of the working folder; the settings' Agent section ("What the model reads") writes them. The weight in tokens of
 each item is counted by the engine (`POST /tokenize`, which goes through the manager; the fake engine counts one word per token) with the
 first request of a conversation and writes it in `opencode.log`. The format and the routes: `docs/INTEGRATION.md`.
 
@@ -351,7 +384,7 @@ the distribution. One Team at a time: the ports are fixed (dev 4090, agents 4092
 - **In the chat**: the "Team" switch next to the model (`packages/app/src/components/team-switch.tsx`) passes the
   conversation to the manager (agent `team`, with its model) and back to the local model. It is there only once the
   key is saved (`utils/team-switch.ts`); before that the Team is set up from the settings.
-- **Settings, "Team"** (`settings-v2/team.tsx`): the OpenRouter key, how many agents (0-4), the models of manager and
+- **Settings, Connections, "Cloud, paid"** (`settings-v2/team.tsx`): the OpenRouter key, how many agents (0-4), the models of manager and
   agents (the cloud entries of `mango-models.json`). Saving restarts the agent. The choices are in `<data>\team.json`.
 - **The key** lives only in the Windows Credential Manager (service `MangoCode`, credential `OPENROUTER_API_KEY`, that is
   target `OPENROUTER_API_KEY.MangoCode`, `mango-common::credentials`). At startup the app reads it and puts it in the environment
@@ -400,18 +433,25 @@ What it brings compared to opencode:
   request has no answer yet, and the page writes it in the conversation.
 - **The same wrong call repeated is not executed** (`session/repeat-guard.ts`), for every tool.
 - **What goes in the prompt** (`session/settings.ts`, `session/prompt-measurement.ts`, `shared/mango-settings.ts`):
-  `GET`/`PUT /mango/settings` and the "Prompt" tab (`settings-v2/prompt.tsx`); the `PUT` passes only from the page.
+  `GET`/`PUT /mango/settings` and the settings' Agent section (`settings-page/agent.tsx`); the `PUT` passes only from the page.
 - **Rules per path**: the `tool.execute.after` hook also receives `messageID` and the turn's history; the plugin
   `mango-project` brings in one with `paths:` once per conversation.
-- **Shorter descriptions of the base tools** (13,696 → 7,096 characters), **the brand** (`logo.tsx`, favicon),
-  **engine preparation** (`POST /mango/warmup`).
+- **Shorter descriptions of the base tools** (13,696 → 7,096 characters), **the brand** (`logo.tsx`, favicon).
+- **The model, the models and the computer** (`shared/mango-control.ts`): `GET /mango/state`, `/mango/models`,
+  `/mango/computer`, `POST /mango/model/use`, `/mango/model/retry` go to the app's control server (`MANGO_CONTROL_URL`,
+  always on this PC) and return its status and body; `503` if it does not answer within 10 s.
+- **The configuration read again** (`shared/mango-reload.ts`): after `agent_cfg::set_models` rewrote `opencode.json`,
+  `POST /mango/reload` makes the agent read it again as soon as no conversation is answering (`200` done now, `202` it
+  waits); until then the configuration before holds. The app does both (`src-tauri/src/agent_models.rs`) when what the agent
+  knows of this PC's models changes: a context or the cards chosen, a model of the user added or removed, a model that
+  arrives or goes, the default; never with another PC's engine.
 
 ## Building and testing
 
 ```powershell
 app\scripts\build-agent.ps1          # the agent (above)
 cd launcher;                npm ci
-cd opencode-home;           npm install   # reads package.json (see below)
+cd opencode-home;           npm ci
 cd ..\..\app
 node scripts\prepare-installer.mjs   # staging: also needed by cargo test (tauri-build wants the folder)
 cargo test --workspace
@@ -493,7 +533,9 @@ a pre-release), downloads the newer installer in the background and checks its s
 Help, which also has "Check for updates". The click stops agent and engine as "Quit" does, starts the installer in
 passive mode (`/P /UPDATE /R`: only its progress bar, then it reopens the app) and closes the app. The installer is
 started by the app with `CREATE_BREAKAWAY_FROM_JOB`: inside the app's job Windows would kill it together with the app.
-No automatic checks in the service, in test instances (`MANGO_DATA`) and in debug builds.
+No automatic checks in the service, in test instances (`MANGO_DATA`) and in debug builds. The user can turn the check of each start
+off (bridge `updates.setAutomatic(false)`, saved as `update.automatic` in `<data>\choices.json`; read when the check is due, so a
+choice made in the first minute counts); "Check for updates" works all the same. The state the web UI reads carries `automatic`.
 
 Publishing a release (`.github/workflows/release.yml`; official installers are built only there, never on a PC: a
 local build carries the PC's paths inside its binaries):

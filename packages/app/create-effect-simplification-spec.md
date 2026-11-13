@@ -50,7 +50,6 @@ Apply this to:
 
 - `packages/app/src/pages/session.tsx:141`
 - `packages/app/src/pages/layout.tsx:557`
-- `packages/app/src/components/terminal.tsx:261`
 - `packages/app/src/components/session/session-header.tsx:309`
 
 Rules:
@@ -94,7 +93,6 @@ Apply this to:
 - `packages/app/src/pages/layout.tsx:1489`
 - `packages/app/src/pages/layout.tsx:1519`
 - `packages/app/src/components/file-tree.tsx:328`
-- `packages/app/src/pages/session/terminal-panel.tsx:55`
 - `packages/app/src/context/global-sync.tsx:148`
 - Duplicated trigger sets in:
   - `packages/app/src/pages/session/review-tab.tsx:122`
@@ -167,11 +165,11 @@ Priority items:
 - Normalize tabs at write boundaries and remove `packages/app/src/pages/session.tsx:141`
 - Stop syncing `workspaceOrder` in `packages/app/src/pages/layout.tsx:557`
 - Make prompt slash filtering reactive so `packages/app/src/components/prompt-input.tsx:652` can be removed
-- Replace other obvious derived-state effects in terminal and session header
+- Replace other obvious derived-state effects in the session header
 
 Acceptance criteria:
 
-- No behavior change in tab ordering, prompt filtering, terminal display, or header state
+- No behavior change in tab ordering, prompt filtering, or header state
 - Targeted derived-state effects are deleted, not just moved
 
 ### Phase 2: Keyed Reset Cleanup
@@ -199,7 +197,7 @@ Priority items:
 - Replace `globalStore.reload` effect dispatching with direct calls
 - Split mixed-responsibility effect in `packages/app/src/pages/layout.tsx:1489`
 - Collapse duplicated imperative trigger triplets into single functions
-- Move file-tree and terminal-panel imperative work to explicit handlers
+- Move file-tree imperative work to explicit handlers
 
 Acceptance criteria:
 
@@ -440,7 +438,6 @@ Acceptance criteria:
 
 Files:
 
-- `packages/app/src/components/terminal.tsx:261`
 - `packages/app/src/components/session/session-header.tsx:309`
 
 Work:

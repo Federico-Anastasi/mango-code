@@ -184,10 +184,6 @@ export function List<T>(props: ListProps<T> & { ref?: (ref: ListRef) => void }) 
       e.preventDefault()
       if (selected) handleSelect(selected, index)
     } else if (props.search) {
-      if (e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey && (e.key === "n" || e.key === "p")) {
-        onKeyDown(e)
-        return
-      }
       if (e.key === "ArrowDown" || e.key === "ArrowUp") {
         onKeyDown(e)
       }

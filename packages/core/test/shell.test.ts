@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import path from "path"
+import { existsSync } from "fs"
 import { Shell } from "@opencode-ai/core/shell"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import { which } from "@opencode-ai/core/util/which"
@@ -94,6 +95,18 @@ describe("shell", () => {
       await withShell("bash", async () => {
         expect(Shell.acceptable()).toBe(bash)
         expect(Shell.preferred()).toBe(bash)
+      })
+    })
+
+    test("finds a PowerShell 7 installed from the Microsoft Store", async () => {
+      // An app execution alias: `stat` fails on it, so `which` does not see it.
+      const alias = path.win32.join(process.env.LOCALAPPDATA ?? "", "Microsoft", "WindowsApps", "pwsh.exe")
+      if (which("pwsh") || !existsSync(alias)) return
+      await withShell(undefined, async () => {
+        expect(Shell.acceptable()).toBe(alias)
+        expect(Shell.acceptable("pwsh")).toBe(alias)
+        expect(Shell.acceptable(alias)).toBe(alias)
+        expect((await Shell.list()).map((item) => item.path)).toContain(alias)
       })
     })
 

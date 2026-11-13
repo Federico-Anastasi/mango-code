@@ -59,11 +59,9 @@ import { eq } from "drizzle-orm"
 import { SessionTable } from "@opencode-ai/core/session/sql"
 import { SessionReminders } from "./reminders"
 import { SessionTools } from "./tools"
-import { savedTimings } from "@/provider/engine-timings"
 import { Skill } from "@/skill"
 import { PromptSettings } from "./settings"
 import { PromptMeasurement } from "./prompt-measurement"
-import { tr } from "@/util/mango-language"
 
 // @ts-ignore
 globalThis.AI_SDK_LOG_WARNINGS = false
@@ -114,32 +112,17 @@ export interface Interface {
   readonly shell: (input: ShellInput) => Effect.Effect<SessionV1.WithParts, Session.BusyError>
   readonly command: (input: CommandInput) => Effect.Effect<SessionV1.WithParts, Image.Error>
   readonly resolvePromptParts: (template: string) => Effect.Effect<PromptInput["parts"]>
-  readonly warmup: () => Effect.Effect<WarmupResult>
-  readonly items: () => Effect.Effect<PromptItems>
+  readonly items: (modelID?: string) => Effect.Effect<PromptItems>
 }
 
 /**
  * mango-code: the items that a request of a new conversation in the instance folder can bring into the prompt,
  * with the text of each one: also the ones the settings leave off (the page shows their weight).
- * `model` is the model key of a new conversation.
+ * `model` is the model key of a new conversation: the local model `modelID` when it is given and known (the one whose
+ * weights the page shows: the request names it), else the default; `null` while the agent has no model at all, and
+ * then there is no request to list.
  */
-export type PromptItems = { readonly model: string; readonly items: ReadonlyArray<PromptMeasurement.Item> }
-
-/**
- * mango-code: outcome of the engine warmup for the instance folder. `promptTokens` is how much
- * the engine had to read: 0 = the base of this prompt was already on its disk.
- */
-export type WarmupResult = {
-  readonly directory: string
-  readonly ready: boolean
-  readonly skipped?: string
-  readonly error?: string
-  readonly model?: string
-  readonly tools?: number
-  readonly systemChars?: number
-  readonly promptTokens?: number
-  readonly promptMs?: number
-}
+export type PromptItems = { readonly model: string | null; readonly items: ReadonlyArray<PromptMeasurement.Item> }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/SessionPrompt") {}
 
@@ -1162,8 +1145,8 @@ const layer = Layer.effect(
       throw new Error("Impossible")
     })
 
-    // The tools and the system prompt of a request to the model: the conversation loop and the
-    // engine warmup (`warmup`) both use them, so they are always the same.
+    // The tools of a request to the model: the conversation loop and the list of the prompt items both use them, so
+    // they are always the same.
     const resolveToolsAll = (input: Parameters<typeof SessionTools.resolve>[0]) =>
       SessionTools.resolve(input).pipe(
         Effect.provideService(Plugin.Service, plugin),
@@ -1204,14 +1187,14 @@ const layer = Layer.effect(
 
     const systemPrompt = Effect.fn("SessionPrompt.systemPrompt")(function* (
       agent: Agent.Info,
-      session: Pick<Session.Info, "permission">,
+      session: Pick<Session.Info, "id" | "permission">,
       model: Provider.Model,
     ) {
       const directory = yield* InstanceState.directory
       const valid = PromptSettings.load(directory)
       const enabled = (kind: PromptSettings.Kind) => (name: string) => PromptSettings.enabled(valid, kind, name)
       const [skills, env, instructions, mcpInstructions] = yield* Effect.all([
-        sys.skills(agent, enabled("skills")),
+        sys.skills(agent, session.id, enabled("skills")),
         sys.environment(model),
         instruction.system().pipe(Effect.orDie),
         sys.mcp(agent, session.permission, enabled("mcp")),
@@ -1418,9 +1401,16 @@ const layer = Layer.effect(
               toolChoice: format.type === "json_schema" ? "required" : undefined,
             })
 
-            // mango-code: the first request of the conversation measures the token weight of every prompt item.
-            if (step === 1 && model.providerID === "mango" && msgs.filter((m) => m.info.role === "user").length === 1)
-              yield* measurePrompt(agent, session, model).pipe(Effect.forkIn(scope))
+            // mango-code: the first request of a conversation measures the token weight of every prompt item, and so
+            // does the first request of one taken up again when this folder has no weights for this model. Not in a
+            // sub-agent's conversation: its base prompt and tools are its own, not the ones the settings page shows.
+            if (step === 1 && model.providerID === "mango" && !session.parentID) {
+              const first = msgs.filter((m) => m.info.role === "user").length === 1
+              if (first || PromptMeasurement.measuredModel(yield* InstanceState.directory) !== model.id)
+                yield* measurePrompt(agent, session, model).pipe(Effect.forkIn(scope))
+              // nothing to measure: what the plugins added to this conversation's messages is not kept
+              else PromptMeasurement.takePlugins(session.id)
+            }
 
             if (structured !== undefined) {
               handle.message.structured = structured
@@ -1617,10 +1607,10 @@ const layer = Layer.effect(
       return result
     })
 
-    // mango-code: a fake conversation to build a request without writing anything (engine warmup,
-    // list of the prompt items): a user message and an assistant that no tool answers.
+    // mango-code: a fake conversation to build a request without writing anything (the list of the prompt items): a
+    // user message and an assistant that no tool answers.
     const probeContext = (agent: Agent.Info, model: Provider.Model, ctx: { directory: string; worktree: string }) => {
-      const sessionID = SessionID.make("ses_mangowarmup")
+      const sessionID = SessionID.make("ses_mangoprobe")
       const created = Date.now()
       const user: SessionV1.User = {
         id: MessageID.ascending(),
@@ -1651,8 +1641,8 @@ const layer = Layer.effect(
           time: { created },
           sessionID,
         } satisfies SessionV1.Assistant,
-        updateToolCall: () => Effect.die("engine warmup: no tool runs"),
-        completeToolCall: () => Effect.die("engine warmup: no tool runs"),
+        updateToolCall: () => Effect.die("prompt probe: no tool runs"),
+        completeToolCall: () => Effect.die("prompt probe: no tool runs"),
       }
       return { sessionID, session: { id: sessionID, permission: undefined }, user, msgs, processor }
     }
@@ -1767,10 +1757,10 @@ const layer = Layer.effect(
       Effect.gen(function* () {
         const directory = yield* InstanceState.directory
         const items = yield* itemsOf(agent, session, model, PromptMeasurement.takePlugins(session.id))
-        const { errors } = yield* Effect.promise(() => PromptMeasurement.measure(directory, model.id, items))
+        const { errors, unsaved } = yield* Effect.promise(() => PromptMeasurement.measure(directory, model.id, items))
         const valid = PromptSettings.load(directory)
         const rows = items.map((item) => {
-          const n = PromptMeasurement.tokens(directory, model.id, item.kind, item.name)
+          const n = PromptMeasurement.tokens(directory, model.id, item)
           const on = item.kind === "base" || PromptSettings.enabled(valid, item.kind as PromptSettings.Kind, item.name)
           return { item: `${item.kind}:${item.name}`, n, on }
         })
@@ -1783,91 +1773,36 @@ const layer = Layer.effect(
         })
         if (errors.length > 0)
           yield* Effect.logWarning("prompt: unmeasured items", { directory, errors: errors.join("; ") })
+        if (unsaved) yield* Effect.logWarning("prompt: weights not saved", { directory, reason: unsaved })
+        const problem = PromptMeasurement.takeProblem()
+        if (problem) yield* Effect.logWarning("prompt: weights not read", { reason: problem })
       }).pipe(
         Effect.catchCause((cause) => Effect.logWarning("prompt: measurement failed", { cause: Cause.pretty(cause) })),
       )
 
     // mango-code: the prompt items for the settings page (see shared/mango-settings.ts).
-    const pageItems = Effect.fn("SessionPrompt.items")(function* () {
+    const pageItems = Effect.fn("SessionPrompt.items")(function* (modelID?: string) {
       const ctx = yield* InstanceState.context
       const agent = yield* agents.defaultInfo()
-      const ref = yield* provider.defaultModel().pipe(Effect.orDie)
-      const model = yield* provider.getModel(ref.providerID, ref.modelID).pipe(Effect.orDie)
+      const measured = modelID
+        ? yield* provider.getModel(ProviderV2.ID.make("mango"), ModelV2.ID.make(modelID)).pipe(Effect.option)
+        : Option.none()
+      if (Option.isSome(measured)) {
+        const { session } = probeContext(agent, measured.value, ctx)
+        return { model: measured.value.id, items: yield* itemsOf(agent, session, measured.value) }
+      }
+      const ref = yield* provider.defaultModel().pipe(
+        Effect.map(Option.some),
+        Effect.catchTags({
+          ProviderNoProvidersError: () => Effect.succeedNone,
+          ProviderNoModelsError: () => Effect.succeedNone,
+        }),
+        Effect.orDie,
+      )
+      if (Option.isNone(ref)) return { model: null, items: [] }
+      const model = yield* provider.getModel(ref.value.providerID, ref.value.modelID).pipe(Effect.orDie)
       const { session } = probeContext(agent, model, ctx)
       return { model: model.id, items: yield* itemsOf(agent, session, model) }
-    })
-
-    // mango-code: makes the engine read the system prompt and the tools of a new conversation in this folder, so
-    // that its disk memory saves their base before the user writes (engine --cache-disk, server-slot-file). The request is the
-    // one of a real conversation (same agent, same model, same tools, same system prompt: `resolveTools` and
-    // `systemPrompt` are the ones of the loop) with a single user message, which comes after the common prefix, and a
-    // single token of answer. Nothing is written in the database and no tool can start.
-    const warmup = Effect.fn("SessionPrompt.warmup")(function* () {
-      const ctx = yield* InstanceState.context
-      const directory = ctx.directory
-      const agent = yield* agents.defaultInfo()
-      const ref = yield* provider.defaultModel().pipe(Effect.orDie)
-      if (ref.providerID !== "mango") {
-        return {
-          directory,
-          ready: false,
-          skipped: tr(
-            `il modello ${ref.providerID}/${ref.modelID} non e' sul motore locale`,
-            `the model ${ref.providerID}/${ref.modelID} is not on the local engine`,
-          ),
-        }
-      }
-      const model = yield* provider.getModel(ref.providerID, ref.modelID).pipe(Effect.orDie)
-
-      const { sessionID, session, user, msgs, processor } = probeContext(agent, model, ctx)
-
-      const tools = yield* resolveTools({
-        agent,
-        session,
-        model,
-        processor,
-        bypassAgentCheck: false,
-        messages: msgs,
-        promptOps: yield* ops(),
-      })
-      yield* plugin.trigger("experimental.chat.messages.transform", {}, { messages: msgs })
-      const [system, modelMsgs] = yield* Effect.all([
-        systemPrompt(agent, session, model),
-        MessageV2.toModelMessagesEffect(msgs, model),
-      ])
-
-      let timings: ReturnType<typeof savedTimings>
-      const exit = yield* llm
-        .stream({ user, sessionID, system, messages: modelMsgs, tools, model, agent, warmup: true })
-        .pipe(
-          Stream.tap((event) =>
-            Effect.sync(() => {
-              if (event.type === "step-finish")
-                timings = savedTimings(event.providerMetadata?.[model.providerID]?.timings) ?? timings
-            }),
-          ),
-          Stream.runDrain,
-          Effect.exit,
-        )
-      if (Exit.isFailure(exit)) {
-        const error = Cause.squash(exit.cause)
-        return { directory, ready: false, error: error instanceof Error ? error.message : String(error) }
-      }
-      yield* measurePrompt(agent, session, model).pipe(Effect.forkIn(scope))
-      return {
-        directory,
-        ready: true,
-        model: `${model.providerID}/${model.id}`,
-        // How many tools REALLY reach the engine: the same ones the conversation loop sends, after the
-        // agent and permissions filter. "invalid" is the placeholder the engine never receives
-        // (see llm.ts, activeTools).
-        tools: Object.keys(toolsForRequest({ tools, agent, permission: session.permission, user })).filter(
-          (name) => name !== "invalid",
-        ).length,
-        systemChars: system.reduce((n, part) => n + part.length, 0),
-        promptTokens: timings?.promptTokens,
-        promptMs: timings?.promptMs,
-      }
     })
 
     return Service.of({
@@ -1877,7 +1812,6 @@ const layer = Layer.effect(
       shell,
       command,
       resolvePromptParts,
-      warmup,
       items: pageItems,
     })
   }),

@@ -25,8 +25,6 @@ The app is currently hybrid. In this document, V1 refers to the legacy unprefixe
 - [x] Consume current VCS events.
   - `src/context/global-sync/event-reducer.ts`
   - `src/pages/session.tsx`
-- [x] Consume current `pty.exited` events.
-  - `src/context/terminal.tsx`
 - [ ] Migrate LSP and reference events.
   - `src/context/global-sync/event-reducer.ts`
 
@@ -179,21 +177,6 @@ These calls are retained as fallback adapters. The current production path suppl
 ## Search
 
 - [x] Migrate global session search from `GET /experimental/session` to `GET /api/session`.
-  - `src/components/command-palette.ts`
-  - `src/components/dialog-command-palette-v2.tsx`
-
-## PTY And Terminal
-
-- [x] Migrate PTY creation, reads, updates, and deletion from `/pty` to `/api/pty`.
-  - `src/context/terminal.tsx`
-  - `src/components/terminal.tsx`
-- [x] Migrate shell listing from `GET /pty/shells` to `GET /api/pty/shells`.
-  - `src/components/settings-general.tsx`
-  - `src/components/settings-v2/general.tsx`
-- [x] Migrate connection tokens from `POST /pty/:ptyID/connect-token` to `POST /api/pty/:ptyID/connect-token`.
-  - `src/components/terminal.tsx`
-- [x] Migrate the direct WebSocket connection from `/pty/:ptyID/connect` to `/api/pty/:ptyID/connect`.
-  - `src/components/terminal.tsx`
 
 ## Legacy Types And Adapters
 

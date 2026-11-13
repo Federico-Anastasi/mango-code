@@ -11,6 +11,7 @@ import { createHomeSessionSearchController } from "./home/home-session-search-co
 import { createHomeSessionsController } from "./home/home-sessions-controller"
 import { HomeSessions } from "./home/home-sessions"
 import { HomeMobile } from "./home/home-mobile"
+import { MangoHomePanel } from "@/components/mango-home"
 
 export function NewHome() {
   const home = createHomeController()
@@ -64,6 +65,17 @@ export function NewHome() {
       })
     }
   })
+  // mango-code: the first project from the Home's model panel, on the server in view (see components/mango-home.tsx).
+  const newProject =
+    projects.project.create &&
+    (() => {
+      const conn = home.server.focused()
+      if (conn) projects.project.create?.(conn)
+    })
+  const openFolder = () => {
+    const conn = home.server.focused()
+    if (conn) projects.project.choose(conn)
+  }
   return (
     <div
       class={`
@@ -71,7 +83,14 @@ export function NewHome() {
         bg-v2-background-bg-base shadow-[var(--v2-elevation-raised)] max-md:shadow-none
       `}
     >
-      <Show when={!phone()} fallback={<HomeMobile projects={projects} sessions={sessions} />}>
+      <Show
+        when={!phone()}
+        fallback={
+          <MangoHomePanel onNewProject={newProject} onOpenFolder={openFolder}>
+            <HomeMobile projects={projects} sessions={sessions} />
+          </MangoHomePanel>
+        }
+      >
         <ScrollView
           class="absolute inset-0 [container-type:size]"
           thumbContainer={scroll.viewport.thumbTrack}
@@ -87,7 +106,9 @@ export function NewHome() {
           `}
           >
             <HomeProjects projects={projects} scroll={scroll} />
-            <HomeSessions sessions={sessions} search={search} scroll={scroll} />
+            <MangoHomePanel onNewProject={newProject} onOpenFolder={openFolder}>
+              <HomeSessions sessions={sessions} search={search} scroll={scroll} />
+            </MangoHomePanel>
             <HomeUtilityNav
               class="flex lg:hidden"
               onOpenSettings={projects.utility.settings}

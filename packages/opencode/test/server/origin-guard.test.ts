@@ -4,6 +4,7 @@ import { HttpRouter, HttpServerResponse } from "effect/unstable/http"
 import {
   isForeignApiNavigation,
   isLocalHost,
+  isSimpleAgentPost,
   isTrustedOrigin,
   originGuard,
 } from "../../src/server/routes/instance/httpapi/middleware/origin-guard"
@@ -48,13 +49,34 @@ test("only a navigation to an API address started by another site is refused", (
   expect(isForeignApiNavigation({}, "/api/fs/read/a.html")).toBe(false)
 })
 
+test("a POST to the agent's own routes must carry JSON (or the dictation's audio), which forces the preflight", () => {
+  expect(isSimpleAgentPost("POST", "/mango/processes/stop", "application/json")).toBe(false)
+  expect(isSimpleAgentPost("POST", "/mango/model/use", "application/json; charset=utf-8")).toBe(false)
+  expect(isSimpleAgentPost("POST", "/mango/voice/live/pcm", "application/octet-stream")).toBe(false)
+  for (const type of [
+    undefined,
+    "text/plain",
+    "text/plain;charset=UTF-8",
+    "application/x-www-form-urlencoded",
+    "multipart/form-data; boundary=x",
+  ])
+    expect(isSimpleAgentPost("POST", "/mango/processes/stop", type)).toBe(true)
+  // reads, and the routes of opencode, are not touched
+  expect(isSimpleAgentPost("GET", "/mango/processes?sessionID=x", undefined)).toBe(false)
+  expect(isSimpleAgentPost("POST", "/session", "text/plain")).toBe(false)
+})
+
 // The guard through the router, as the server runs it: a tiny route behind the real middleware.
 describe("originGuard in the router", () => {
-  const status = (request: { host?: string; origin?: string }, config: Record<string, string> = {}) => {
+  const status = (
+    request: { host?: string; origin?: string; path?: string; type?: string },
+    config: Record<string, string> = {},
+  ) => {
     const route = Layer.effectDiscard(
       Effect.gen(function* () {
         const router = yield* HttpRouter.HttpRouter
         yield* router.add("*", "/probe", Effect.succeed(HttpServerResponse.text("ok")))
+        yield* router.add("*", "/mango/probe", Effect.succeed(HttpServerResponse.text("ok")))
       }),
     ).pipe(
       Layer.provide(originGuard.pipe(Layer.provide(ServerAuth.Config.layer))),
@@ -64,7 +86,9 @@ describe("originGuard in the router", () => {
     const headers = new Headers()
     if (request.host) headers.set("host", request.host)
     if (request.origin) headers.set("origin", request.origin)
-    return web.handler(new Request("http://127.0.0.1:4096/probe", { method: "POST", headers })).then((response) => {
+    if (request.type) headers.set("content-type", request.type)
+    const url = `http://127.0.0.1:4096${request.path ?? "/probe"}`
+    return web.handler(new Request(url, { method: "POST", headers, body: "{}" })).then((response) => {
       void web.dispose()
       return response.status
     })
@@ -87,6 +111,13 @@ describe("originGuard in the router", () => {
 
   test("a page of another origin does not pass even on a local Host", async () => {
     expect(await status({ host: "127.0.0.1:4096", origin: "https://foreign-site.example" })).toBe(403)
+  })
+
+  test("a POST to the agent's own routes without JSON is refused, also from the web UI", async () => {
+    const local = { host: "127.0.0.1:4096", origin: "http://127.0.0.1:4096", path: "/mango/probe" }
+    expect(await status({ ...local, type: "text/plain" })).toBe(415)
+    expect(await status(local)).toBe(415)
+    expect(await status({ ...local, type: "application/json" })).toBe(200)
   })
 
   test("with a password the server keeps the comparison between Host and Origin", async () => {

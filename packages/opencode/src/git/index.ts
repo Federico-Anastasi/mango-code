@@ -57,6 +57,11 @@ export interface PatchOptions {
   readonly maxOutputBytes?: number
 }
 
+export interface PatchAllOptions extends PatchOptions {
+  /** Name files from the repository root, as `git apply` expects, instead of from `cwd`. */
+  readonly fromRoot?: boolean
+}
+
 export interface Result {
   readonly exitCode: number
   readonly text: () => string
@@ -84,7 +89,7 @@ export interface Interface {
   readonly diff: (cwd: string, ref: string) => Effect.Effect<Item[]>
   readonly stats: (cwd: string, ref: string) => Effect.Effect<Stat[]>
   readonly patch: (cwd: string, ref: string, file: string, options?: PatchOptions) => Effect.Effect<Patch>
-  readonly patchAll: (cwd: string, ref: string, options?: PatchOptions) => Effect.Effect<Patch>
+  readonly patchAll: (cwd: string, ref: string, options?: PatchAllOptions) => Effect.Effect<Patch>
   readonly patchUntracked: (cwd: string, file: string, options?: PatchOptions) => Effect.Effect<Patch>
   readonly statUntracked: (cwd: string, file: string) => Effect.Effect<Stat | undefined>
   readonly applyPatch: (cwd: string, patch: string) => Effect.Effect<Result>
@@ -170,8 +175,12 @@ const layer = Layer.effect(
 
     const prefix = Effect.fn("Git.prefix")(function* (cwd: string) {
       const result = yield* run(["rev-parse", "--show-prefix"], { cwd })
-      if (result.exitCode !== 0) return ""
-      return out(result)
+      if (result.exitCode === 0) return result.text().replace(/\r?\n$/, "")
+      yield* Effect.logWarning("failed to read the folder's path inside the repository", {
+        exitCode: result.exitCode,
+        stderr: result.stderr.toString("utf8"),
+      })
+      return ""
     })
 
     const defaultBranch = Effect.fn("Git.defaultBranch")(function* (cwd: string) {
@@ -212,13 +221,20 @@ const layer = Layer.effect(
       return result.text()
     })
 
+    // Files are named from `cwd`, like the other listings here (`--relative`). The porcelain format always names them
+    // from the repository root and has no option to do otherwise: the "." pathspec keeps every one of them under
+    // `cwd`, so the root-to-cwd prefix is cut.
     const status = Effect.fn("Git.status")(function* (cwd: string) {
-      return nuls(
-        yield* text(["status", "--porcelain=v1", "--untracked-files=all", "--no-renames", "-z", "--", "."], {
-          cwd,
-        }),
-      ).flatMap((item) => {
-        const file = item.slice(3)
+      const [list, base] = yield* Effect.all(
+        [
+          text(["status", "--porcelain=v1", "--untracked-files=all", "--no-renames", "-z", "--", "."], { cwd }),
+          prefix(cwd),
+        ],
+        { concurrency: 2 },
+      )
+      return nuls(list).flatMap((item) => {
+        const named = item.slice(3)
+        const file = named.startsWith(base) ? named.slice(base.length) : named
         if (!file) return []
         const code = item.slice(0, 2)
         return [{ file, code, status: kind(code) } satisfies Item]
@@ -227,7 +243,9 @@ const layer = Layer.effect(
 
     const diff = Effect.fn("Git.diff")(function* (cwd: string, ref: string) {
       const list = nuls(
-        yield* text(["diff", "--no-ext-diff", "--no-renames", "--name-status", "-z", ref, "--", "."], { cwd }),
+        yield* text(["diff", "--no-ext-diff", "--no-renames", "--relative", "--name-status", "-z", ref, "--", "."], {
+          cwd,
+        }),
       )
       return list.flatMap((code, idx) => {
         if (idx % 2 !== 0) return []
@@ -239,7 +257,7 @@ const layer = Layer.effect(
 
     const stats = Effect.fn("Git.stats")(function* (cwd: string, ref: string) {
       return nuls(
-        yield* text(["diff", "--no-ext-diff", "--no-renames", "--numstat", "-z", ref, "--", "."], { cwd }),
+        yield* text(["diff", "--no-ext-diff", "--no-renames", "--relative", "--numstat", "-z", ref, "--", "."], { cwd }),
       ).flatMap((item) => {
         const a = item.indexOf("\t")
         const b = item.indexOf("\t", a + 1)
@@ -262,15 +280,35 @@ const layer = Layer.effect(
 
     const patch = Effect.fn("Git.patch")(function* (cwd: string, ref: string, file: string, options?: PatchOptions) {
       const result = yield* run(
-        ["diff", "--patch", "--no-ext-diff", "--no-renames", `--unified=${options?.context ?? 3}`, ref, "--", file],
+        [
+          "diff",
+          "--patch",
+          "--no-ext-diff",
+          "--no-renames",
+          "--relative",
+          `--unified=${options?.context ?? 3}`,
+          ref,
+          "--",
+          file,
+        ],
         { cwd, maxOutputBytes: options?.maxOutputBytes },
       )
       return { text: result.truncated ? "" : result.text(), truncated: result.truncated } satisfies Patch
     })
 
-    const patchAll = Effect.fn("Git.patchAll")(function* (cwd: string, ref: string, options?: PatchOptions) {
+    const patchAll = Effect.fn("Git.patchAll")(function* (cwd: string, ref: string, options?: PatchAllOptions) {
       const result = yield* run(
-        ["diff", "--patch", "--no-ext-diff", "--no-renames", `--unified=${options?.context ?? 3}`, ref, "--", "."],
+        [
+          "diff",
+          "--patch",
+          "--no-ext-diff",
+          "--no-renames",
+          ...(options?.fromRoot ? [] : ["--relative"]),
+          `--unified=${options?.context ?? 3}`,
+          ref,
+          "--",
+          ".",
+        ],
         { cwd, maxOutputBytes: options?.maxOutputBytes },
       )
       return { text: result.text(), truncated: result.truncated } satisfies Patch

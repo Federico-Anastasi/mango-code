@@ -1,24 +1,25 @@
 //! Mango Code, desktop app: one window.
 //!
-//! At startup the window shows the loading page (`ui/`); meanwhile a thread starts the engine and the agent server,
-//! then moves the window to the web UI the server serves. Dictation, if the user wants it, comes after (`dictation.rs`).
-//! The startup state is read with the `startup_status` command and arrives as the
-//! `mango://status` event.
+//! At startup the window shows the app's own page (`ui/`), the logo, and nothing else unless the startup fails; meanwhile a thread opens the control server (the engine manager on
+//! its port, with no model yet) and starts the agent server, then moves the window to the home of the web UI the agent
+//! serves. The default model loads after that, in the background: the manager tells how it goes. Nothing at startup concerns
+//! the last conversation, and nothing is read for a conversation before the user writes in it. Dictation, if the user wants
+//! it, comes after (`dictation.rs`).
+//! The startup state is read with the `startup_status` command and arrives as the `mango://status` event.
 
+mod agent_models;
 mod other_models;
 mod bridge;
+mod close_notice;
 mod folder;
 mod chrome;
+mod control;
+mod downloads;
 mod dictation;
-#[cfg(debug_assertions)]
-mod fake;
-mod mcp;
+mod model_choices;
 mod preview;
-mod preparation;
-mod first_run;
-mod choice;
-mod system;
 mod supervisor;
+mod stragglers;
 mod team;
 mod phone;
 mod engine_share;
@@ -31,9 +32,7 @@ mod zoom;
 use anyhow::{Context, Result};
 use mango_common::{port_busy, free_port, tr, Paths};
 use engine::EngineManager;
-use choice::Mode;
 use serde::Serialize;
-use std::sync::atomic::AtomicBool;
 use std::sync::{Mutex, OnceLock};
 use supervisor::Supervisor;
 use tauri::{AppHandle, Emitter, Manager, RunEvent, WebviewUrl, WebviewWindowBuilder};
@@ -69,20 +68,13 @@ pub(crate) fn phone_preview_port() -> u16 {
 pub(crate) fn service_mode() -> bool {
     std::env::args().any(|a| a == "--service")
 }
-/// How long to wait for the agent's browser, web search and documents to connect (and reconnect).
-const MCP_WAIT_MAX: std::time::Duration = std::time::Duration::from_secs(90);
-
 #[derive(Clone, Serialize, Default)]
 pub struct Status {
-    /// "startup" | "choice" | "download" | "engine" | "agent" | "preparing" | "ready" | "error"
+    /// "startup" | "engine" | "agent" | "ready" | "error"
     pub stage: String,
     /// Text for the user, one line.
     pub detail: String,
     pub error: Option<ErrorInfo>,
-    /// With "choice": what the model choice page shows.
-    pub choice: Option<choice::Choice>,
-    /// With "download": the progress of the steps.
-    pub download: Option<first_run::Progress>,
 }
 
 #[derive(Clone, Serialize)]
@@ -101,14 +93,15 @@ pub(crate) struct EngineUse {
     /// The key of another PC's engine; none for this PC's.
     pub key: Option<String>,
     pub models: Vec<agent_cfg::AgentModel>,
-    pub default_model: String,
+    /// The model of new conversations; none while no model is on this computer.
+    pub default_model: Option<String>,
 }
 
 #[derive(Default)]
 struct AppState {
     status: Mutex<Status>,
     sup: OnceLock<Supervisor>,
-    /// The engine manager: lives as long as the app, across "Retry" attempts.
+    /// The control server: the engine manager, born before any model. It lives as long as the app, across "Retry" attempts.
     engine: OnceLock<EngineManager>,
     paths: OnceLock<Paths>,
     /// The microphone in the chat, off until the user turns it on.
@@ -122,16 +115,20 @@ struct AppState {
     share: OnceLock<engine::share::Share>,
     /// The PC whose engine is in use, when it is another PC's (`engine_remote.rs`).
     remote: Mutex<Option<engine_remote::Info>>,
-    /// The address of the app's own page (loading, model choice), to come back to it from the web UI.
+    /// The address of the app's own page (the logo, the fatal error), to come back to it from the web UI.
     app_page: OnceLock<tauri::Url>,
-    /// Who waits for the answer to the choice page.
-    choice: choice::Pending,
-    /// The model choice opened from the tray is in progress.
-    changing: AtomicBool,
     /// The agent server, when the app is ready.
     agent: Mutex<Option<String>>,
     /// A folder to open as a project that arrived before the agent was ready (`folder.rs`).
     folder: Mutex<Option<std::path::PathBuf>>,
+    /// What the control server's routes remember (`control.rs`).
+    control: control::Shared,
+    /// The models being downloaded (`downloads.rs`), born at the first startup.
+    downloads: OnceLock<downloads::Downloads>,
+    /// The models and the default the agent knows, to tell it when they change (`agent_models.rs`).
+    declared: agent_models::Declared,
+    /// The section of the settings asked from the tray or the model menu, until the interface reads it (`tray.rs`).
+    settings: Mutex<Option<String>>,
 }
 
 /// The main window, through the reference kept at startup: looked up by label it is not found once the Preview
@@ -149,21 +146,15 @@ pub(crate) fn set_status(app: &AppHandle, stage: &str, detail: impl Into<String>
     publish(app, Status { stage: stage.into(), detail: detail.into(), ..Default::default() });
 }
 
+pub(crate) use mango_common::startup_log;
+
 pub(crate) fn set_error(app: &AppHandle, title: &str, err: &anyhow::Error) {
     let st = app.state::<AppState>();
     let logs = st.paths.get().map(|p| p.logs().display().to_string());
     // The error also goes to the log file: the screen shows it, but on narrow windows the box is
     // cut off and without the file nothing is left to read.
     if let Some(paths) = st.paths.get() {
-        use std::io::Write;
-        let _ = std::fs::create_dir_all(paths.logs());
-        if let Ok(mut file) = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(paths.logs().join("startup.log"))
-        {
-            let _ = writeln!(file, "{title}: {err:#}");
-        }
+        startup_log(paths, &format!("{title}: {err:#}"));
     }
     // after the log: whoever sees the reason (other apps, the tests) finds the log already written
     write_reason(&format!("{title}: {err:#}"));
@@ -197,7 +188,7 @@ fn language() -> &'static str {
 /// "Retry" of the error screen: stops what had started and starts again.
 #[tauri::command]
 fn retry_startup(app: AppHandle) {
-    restart(&app, Mode::Startup { interactive: true });
+    restart(&app);
 }
 
 /// The agent first (its running request drops and releases the engine), then the engine, which saves the open
@@ -206,6 +197,7 @@ pub(crate) fn stop_children(app: &AppHandle) {
     let st = app.state::<AppState>();
     if let Some(s) = st.sup.get() {
         s.shutdown();
+        s.stop_stragglers();
     }
     if let Some(m) = st.engine.get() {
         m.stop();
@@ -215,8 +207,9 @@ pub(crate) fn stop_children(app: &AppHandle) {
     }
 }
 
-/// Stops the agent, removes the service file (the app is no longer ready) and starts again.
-pub(crate) fn restart(app: &AppHandle, mode: Mode) {
+/// Stops the agent, removes the service file (the app is no longer ready) and starts again. The engine manager and its
+/// model stay as they are.
+pub(crate) fn restart(app: &AppHandle) {
     let st = app.state::<AppState>();
     // From the web UI of the agent about to stop, back to the loading page: it says what is happening.
     if st.status.lock().unwrap().stage == "ready" {
@@ -232,7 +225,7 @@ pub(crate) fn restart(app: &AppHandle, mode: Mode) {
     if let Ok(f) = mango_common::service_file() {
         let _ = std::fs::remove_file(f);
     }
-    spawn_startup(app.clone(), mode);
+    spawn_startup(app.clone());
 }
 
 #[tauri::command]
@@ -242,13 +235,17 @@ fn open_logs(app: AppHandle, state: tauri::State<'_, AppState>) -> Result<(), St
     app.opener().open_path(p.display().to_string(), None::<&str>).map_err(|e| e.to_string())
 }
 
-fn startup(app: &AppHandle, mode: Mode) -> Result<()> {
+fn startup(app: &AppHandle) -> Result<()> {
     let st = app.state::<AppState>();
+    let t0 = std::time::Instant::now();
     set_status(app, "startup", tr!("Preparazione", "Preparing"));
     let paths = Paths::discover().with_context(|| tr!("Impossibile trovare i file di Mango Code", "Cannot find the Mango Code files"))?;
     let paths = st.paths.get_or_init(|| paths).clone();
-    // Dictation, the microphone in the chat: off until the user turns it on (the first start page asks), then it downloads
-    // and starts by itself once the app is ready (`dictation.rs`). The agent only needs to know where the service will be.
+    // One line per phase, with the time since the start: where a slow startup spends its time.
+    let phase = |name: &str| startup_log(&paths, &format!("startup: {name} (+{} ms)", t0.elapsed().as_millis()));
+    phase("begins");
+    // Dictation, the microphone in the chat: off until the user turns it on, then it downloads and starts by itself once the
+    // app is ready (`dictation.rs`). The agent only needs to know where the service will be.
     if st.dictation.get().is_none() {
         dictation::install(app, &paths, free_port(VOICE_PORT).unwrap_or(VOICE_PORT));
     }
@@ -261,23 +258,37 @@ fn startup(app: &AppHandle, mode: Mode) -> Result<()> {
         }
     };
 
-    // The PC's development tools are detected while the engine loads the model (tens of
-    // seconds), so they cost nothing at startup. They are awaited right before the agent config.
+    // The PC's development tools are detected meanwhile; they are awaited right before the agent config.
     let tools = {
         let data = paths.data.clone();
         std::thread::spawn(move || agent_cfg::tools::update(&data))
     };
 
-    // --- engine: the one of another PC if the user chose it, otherwise this computer's (choice and download first)
+    let engine = control_server(app, &paths)?;
+    phase("control server");
+    // The downloads of the last time go on once the window is in use (`restore`, at the end).
+    let downloads = st.downloads.get_or_init(|| {
+        let (arrived, changed, logs) = (app.clone(), app.clone(), paths.clone());
+        downloads::Downloads::new(
+            Box::new(downloads::Real { paths: paths.clone(), hardware: engine_cfg::detect }),
+            paths.data.join("downloads.json"),
+            downloads::Tell {
+                arrived: Box::new(move |model| models_arrived(&arrived, model)),
+                changed: Box::new(move |_| {
+                    catalog_read_again(&changed);
+                }),
+                log: Box::new(move |line| startup_log(&logs, &format!("downloads: {line}"))),
+            },
+        )
+    });
+
+    // --- the models the agent knows: those of another PC if the user chose its engine, otherwise this computer's catalog
     let used = match engine_remote::start(app, &paths)? {
         Some(used) => used,
-        None => match local_engine(app, &paths, mode)? {
-            Some(used) => used,
-            // The choice page was answered with the engine of another PC.
-            None => engine_remote::start(app, &paths)?.with_context(|| tr!("Il codice dell'altro PC non c'è più", "The code of the other PC is gone"))?,
-        },
+        None => local_models(app, &paths)?,
     };
     let remote = used.key.is_some();
+    phase("models");
 
     // --- agent server
     set_status(app, "agent", tr!("Avvio dell'agente", "Starting the agent"));
@@ -304,9 +315,10 @@ fn startup(app: &AppHandle, mode: Mode) -> Result<()> {
         &paths,
         &agent_cfg::AgentInputs {
             engine_url: used.url.clone(),
+            control_url: format!("http://127.0.0.1:{}", engine_port()),
             engine_key: used.key.clone(),
-            models: used.models,
-            default_model: used.default_model,
+            models: used.models.clone(),
+            default_model: used.default_model.clone(),
             port,
             voice_url: st.dictation.get().map(|d| d.url.clone()),
             tools: tools.join().unwrap_or_else(|_| {
@@ -325,13 +337,23 @@ fn startup(app: &AppHandle, mode: Mode) -> Result<()> {
     agent_plan.spec.env.extend(mango_common::internet::child_proxy_env(&used.url));
     sup.spawn(&agent_plan.spec)?;
     sup.wait_ready(&agent_plan.spec, |_| {}).with_context(|| tr!("L'agente non è partito", "The agent did not start"))?;
-    connect_tools(app, &agent_plan.url);
-    // The engine of another PC reads the base of the prompt where it is: there is nothing to prepare on this PC.
-    if !remote {
-        prepare_model(app, &agent_plan.url);
+    phase("agent");
+    // From now on a change of this computer's models is told to the agent; another PC's are read at the start.
+    match remote {
+        true => st.declared.forget(),
+        false => st.declared.launched(&used.models, used.default_model.as_deref()),
     }
 
-    // --- the window moves to the web UI, and the other apps can find it
+    // The model loads in the background, and the manager tells how it goes: the default one, or the one that was in use before
+    // the engine was stopped (the engine of another PC, then back to this one). A model that is running or loading is left
+    // alone: only the agent started again.
+    if !remote && engine.phase() == engine::Phase::Stopped {
+        if let Some(key) = engine.state().model.or(used.default_model) {
+            engine.choose(&key);
+        }
+    }
+
+    // --- the window moves to the home of the web UI, and the other apps can find the service
     set_status(app, "ready", tr!("Pronto", "Ready"));
     if let Some(d) = st.dictation.get() {
         d.arm();
@@ -342,7 +364,7 @@ fn startup(app: &AppHandle, mode: Mode) -> Result<()> {
         *st.agent.lock().unwrap() = Some(agent_plan.url.clone());
         waiting.take()
     };
-    write_service_file(&agent_plan.url, (!remote).then_some(used.url.as_str()))?;
+    write_service_file(&agent_plan.url, &format!("http://127.0.0.1:{}", engine_port()), !remote)?;
     let win = app
         .state::<AppState>()
         .main
@@ -351,135 +373,222 @@ fn startup(app: &AppHandle, mode: Mode) -> Result<()> {
         .with_context(|| tr!("finestra principale sparita", "main window gone"))?;
     let page = match requested {
         Some(folder) => folder::page(&agent_plan.url, &folder)?,
-        None => start_page(&agent_plan.url).parse().with_context(|| tr!("URL dell'agente", "Agent URL"))?,
+        None => agent_plan.url.parse().with_context(|| tr!("URL dell'agente", "Agent URL"))?,
     };
+    // At every attempt: a "Retry" after a startup that stopped before here takes them up, and they are taken up once.
+    // What cannot be resumed or queued is not worth stopping an app that is already in use: it goes to the log.
+    if let Err(e) = downloads.restore() {
+        startup_log(&paths, &format!("downloads not resumed: {e:#}"));
+    }
     win.navigate(page)?;
+    phase("window on the home");
+    // Then the engine the app came with, if models on the disk wait for it: it reads the hardware and the models (about
+    // 150 ms measured, too long to keep the window waiting), while the interface loads; its first read of the state
+    // comes later, and finds the engine coming.
+    if let Err(e) = engine_cfg::detect().and_then(|hw| model_choices::engine_update(&paths, &hw, &downloads)) {
+        startup_log(&paths, &format!("the new engine not queued: {e:#}"));
+    }
+    phase("engine update");
     Ok(())
 }
 
-/// This computer's engine: the choice and download of what is missing, the manager on its port, and the model the last time (or the
-/// default). `None` if the choice page was answered with the engine of another PC.
-fn local_engine(app: &AppHandle, paths: &Paths, mode: Mode) -> Result<Option<EngineUse>> {
+/// The control server: the engine manager on its fixed port, which starts the model the user picks and the one the
+/// conversations ask for. It is born once, before any model is on the computer and also when the engine in use is another
+/// PC's, and with it the sharing of the engine.
+fn control_server(app: &AppHandle, paths: &Paths) -> Result<EngineManager> {
     let st = app.state::<AppState>();
-    {
-        let system = system::choose(paths)?;
-        if let choice::Outcome::Switched = choice::ensure(app, paths, &*system, mode)? {
-            return Ok(None);
-        }
-        set_status(app, "startup", tr!("Preparazione", "Preparing"));
+    if let Some(m) = st.engine.get() {
+        return Ok(m.clone());
     }
-    *st.remote.lock().unwrap() = None;
-
-    // --- engine: the manager on the fixed port, which starts the model the conversations ask for
-    set_status(app, "engine", tr!("Avvio del motore", "Starting the engine"));
-    let (catalog, default_model) = engine_cfg::catalog(paths).with_context(|| tr!("Elenco dei modelli", "Model list"))?;
-    let available: Vec<&engine_cfg::ModelEntry> = catalog.iter().filter(|v| v.missing.is_none()).collect();
-    for v in catalog.iter().filter(|v| v.missing.is_some()) {
-        eprintln!("model {} not available: {}", v.key, v.missing.as_deref().unwrap_or(""));
-    }
-    if available.is_empty() {
+    let manager_port = engine_port();
+    if port_busy(manager_port) {
         anyhow::bail!(
             "{}",
             tr!(
-                "Nessun modello è sul disco: i file vanno nella cartella {}. (dettaglio tecnico: {})",
-                "No model is on disk: the files go in the {} folder. (technical detail: {})",
-                paths.models.display(),
-                catalog.iter().filter_map(|v| v.missing.clone()).collect::<Vec<_>>().join("; ")
+                "La porta {manager_port} del motore è occupata: probabilmente la sta usando un altro programma, per esempio un motore già \
+                 acceso. Spegnilo e riapri l'app.",
+                "Engine port {manager_port} is busy: another program is probably using it, for example an engine \
+                 that is already running. Stop it and reopen the app."
             )
         );
     }
-    let engine = match st.engine.get() {
-        Some(m) => m.clone(),
-        None => {
-            let manager_port = engine_port();
-            if port_busy(manager_port) {
-                anyhow::bail!(
-                    "{}",
-                    tr!(
-                        "La porta {manager_port} del motore è occupata: probabilmente la sta usando un altro programma, per esempio un motore già \
-                         acceso. Spegnilo e riapri l'app.",
-                        "Engine port {manager_port} is busy: another program is probably using it, for example an engine \
-                         that is already running. Stop it and reopen the app."
-                    )
-                );
-            }
-            let p = paths.clone();
-            let m = EngineManager::new(
-                Box::new(move |k, port, excluded| engine_cfg::plan_excluding(&p, Some(k), port, excluded)),
-                Box::new(engine_cfg::gpu_memory),
-                &paths.logs(),
-                Some(paths.data.join("model.txt")),
-            );
-            engine::http::serve(m.clone(), manager_port).with_context(|| tr!("Porta del motore", "Engine port"))?;
-            let _ = st.engine.set(m.clone());
-            engine_share::install(app, &paths.data, m.clone()).with_context(|| tr!("Condivisione del motore", "Engine sharing"))?;
-            m
-        }
-    };
+    let p = paths.clone();
+    let m = EngineManager::new(
+        Box::new(move |k, port, excluded| engine_cfg::plan_excluding(&p, Some(k), port, excluded)),
+        Box::new(engine_cfg::gpu_memory),
+        &paths.logs(),
+    );
+    // The style of the answers and the reasoning the user chose for each model: read at every request, so a change
+    // applies from the next answer without loading the model again.
+    let p = paths.clone();
+    m.set_request_defaults(Box::new(move |key| engine_cfg::choices::request_defaults(&p, key)));
+    // A model that goes on the cards does not start where other programs hold the memory it counts on: «Riprova» starts it
+    // anyway. In development builds `MANGO_ROOM_CHECK_OFF` leaves the check out: the fake models of the integration tests
+    // have a plan on this PC's real cards, which another program may be using.
+    if !(cfg!(debug_assertions) && std::env::var_os("MANGO_ROOM_CHECK_OFF").is_some()) {
+        let p = paths.clone();
+        m.set_room_check(Box::new(move |key, lent, used| engine_cfg::taken_before_start(&p, &engine_cfg::detect()?, used, key, lent)));
+    }
+    engine::http::serve(m.clone(), manager_port, Some(std::sync::Arc::new(control::Routes(app.clone())))).with_context(|| tr!("Porta del motore", "Engine port"))?;
+    let _ = st.engine.set(m.clone());
+    engine_share::install(app, &paths.data, m.clone()).with_context(|| tr!("Condivisione del motore", "Engine sharing"))?;
+    Ok(m)
+}
+
+/// The catalog as it is on this computer now, and the model to load when the app opens, if any is on disk. Whoever needs
+/// the names of the models and the default (the control server, the sharing of the engine) is told.
+fn read_catalog(app: &AppHandle, paths: &Paths) -> Result<(Vec<engine_cfg::ModelEntry>, Option<String>)> {
+    let hw = engine_cfg::detect().with_context(|| tr!("Non riesco a guardare l'hardware di questo computer", "Cannot look at the hardware of this computer"))?;
+    if let Some(e) = &hw.nvml_error {
+        // The app starts anyway: the line says why an NVIDIA card runs without CUDA, or isn't used at all.
+        startup_log(paths, &format!("NVML does not answer, the NVIDIA cards are read from DXGI without CUDA: {e}"));
+    }
+    let (catalog, _) = engine_cfg::catalog_for(paths, &hw).with_context(|| tr!("Elenco dei modelli", "Model list"))?;
+    for v in catalog.iter().filter(|v| v.missing.is_some()) {
+        eprintln!("model {} not available: {}", v.key, v.missing.as_deref().unwrap_or(""));
+    }
     engine_share::offer(
         app,
-        available
+        catalog
             .iter()
-            .filter(|v| v.placement.is_some())
+            .filter(|v| v.missing.is_none() && v.placement.is_some())
             .map(|v| engine::share::SharedModel { key: v.key.clone(), label: v.label.clone(), context: v.ctx, images: v.images })
             .collect(),
     );
-    // The model of the last time, if it is still there and fits; otherwise the default, otherwise the first that fits.
-    let ready = |k: &str| available.iter().any(|v| v.key == k && v.placement.is_some());
-    let initial = engine
-        .remembered()
-        .filter(|k| ready(k))
-        .or_else(|| ready(&default_model).then(|| default_model.clone()))
-        .or_else(|| available.iter().find(|v| v.placement.is_some()).map(|v| v.key.clone()))
-        .with_context(|| {
-            tr!(
-                "Nessuno dei modelli sul computer ci sta nella sua memoria. Scegline uno più piccolo da «Modelli e motore», nel menu \
-                 dell'icona di Mango Code.",
-                "None of the models on this computer fits in its memory. Pick a smaller one from \"Models and engine\" in the menu \
-                 of the Mango Code icon."
-            )
-        })?;
-    let entry = available.iter().find(|v| v.key == initial).expect("chosen among the available");
-    let placement = if entry.placement == Some(engine_cfg::Placement::Cpu) {
-        tr!(" sul processore, più lento", " on the processor, slower")
-    } else {
-        String::new()
+    let default_model = engine_cfg::startup_model(paths, &catalog)?;
+    app.state::<AppState>().control.set_known(control::Known {
+        labels: catalog.iter().map(|v| (v.key.clone(), v.label.clone())).collect(),
+        default_model: default_model.clone(),
+    });
+    Ok((catalog, default_model))
+}
+
+/// `model` has just arrived on this computer: the catalog is read again, the interface is told (`catalog_revision`),
+/// without a default saved it becomes it if it is the one to keep (`keep_default`: the first model downloaded that
+/// fits), and, if no model is running, loading or failed, the one to load is loaded: the first model downloaded starts
+/// by itself.
+fn models_arrived(app: &AppHandle, model: &str) {
+    let st = app.state::<AppState>();
+    let (Some(paths), Some(engine), Some((catalog, Some(key)))) = (st.paths.get(), st.engine.get(), catalog_read_again(app)) else { return };
+    keep_default(app, paths, &catalog, Keep::Arrived(model));
+    let state = engine.state();
+    let idle = state.phase == engine::Phase::Stopped && state.model.is_none() && state.failed.is_none() && state.chosen.is_none();
+    let remote = st.remote.lock().unwrap().is_some();
+    // A model being taken off the computer is not loaded, also if it is the one the catalog read before its files went.
+    let removing = st.downloads.get().is_some_and(|d| d.removing(&key));
+    if idle && !remote && !removing {
+        engine.choose(&key);
+    }
+}
+
+/// The files of the models changed on the disk: the catalog is read again and the interface is told, also when the
+/// catalog cannot be read (what it shows is no longer sure). The answer is the catalog and the model to load when the
+/// app opens.
+fn catalog_read_again(app: &AppHandle) -> Option<(Vec<engine_cfg::ModelEntry>, Option<String>)> {
+    let st = app.state::<AppState>();
+    let paths = st.paths.get()?;
+    let read = read_catalog(app, paths);
+    st.control.catalog_changed();
+    match read {
+        Ok((catalog, default_model)) => {
+            agent_models::tell(app, paths, &catalog, default_model.as_deref());
+            Some((catalog, default_model))
+        }
+        Err(e) => {
+            startup_log(paths, &format!("the catalog was not read again after a download: {e:#}"));
+            None
+        }
+    }
+}
+
+/// The user changed a choice about the models or the computer, or took a model off it: the catalog is read again, the
+/// interface is told, and a running model whose plan is no longer the same is loaded again when it has no answer in
+/// progress. The answer is the catalog, if it was read.
+pub(crate) fn choices_changed(app: &AppHandle) -> Option<Vec<engine_cfg::ModelEntry>> {
+    let st = app.state::<AppState>();
+    let (Some(paths), Some(engine)) = (st.paths.get(), st.engine.get()) else { return None };
+    let catalog = match read_catalog(app, paths) {
+        Ok((catalog, default_model)) => {
+            agent_models::tell(app, paths, &catalog, default_model.as_deref());
+            Some(catalog)
+        }
+        Err(e) => {
+            startup_log(paths, &format!("the catalog was not read again after a choice: {e:#}"));
+            None
+        }
     };
-    engine
-        .start(&initial, &mut |s| {
-            set_status(app, "engine", tr!("Caricamento del modello {}{placement} ({s} s)", "Loading the model {}{placement} ({s} s)", entry.label))
-        })
-        .with_context(|| tr!("Il motore non è partito", "The engine did not start"))?;
-    let engine_plan = engine
-        .running_plan()
-        .with_context(|| tr!("il motore si è spento subito dopo l'avvio", "the engine stopped right after starting"))?;
-    Ok(Some(EngineUse {
+    st.control.catalog_changed();
+    engine.reload_if_changed();
+    catalog
+}
+
+/// When `keep_default` is asked: at the start, with the model 0.1.2 used last (`model.txt`), if any; or when a model
+/// arrived on the computer (downloaded, or a file of the user's added).
+pub(crate) enum Keep<'a> {
+    Start(Option<&'a str>),
+    Arrived(&'a str),
+}
+
+/// The model a computer starts with does not change by itself: without a default saved, the model to keep
+/// (`engine_cfg::default_to_save`: one on the disk that fits, the one of 0.1.2 first) is saved as the default, so that a
+/// model arriving later does not take its place. A model that arrived is saved only if it is that one. Not with another
+/// PC's engine in use, nor for a model being taken off the computer; it is not asked when the default is taken off:
+/// then there is none until the next start or the next model that arrives. The answer is the model saved; one that
+/// cannot be saved leaves the rule of the catalog's order, and the log says why.
+pub(crate) fn keep_default(app: &AppHandle, paths: &Paths, catalog: &[engine_cfg::ModelEntry], when: Keep) -> Option<String> {
+    let st = app.state::<AppState>();
+    if st.remote.lock().unwrap().is_some() {
+        return None;
+    }
+    let remembered = match when {
+        Keep::Start(remembered) => remembered,
+        Keep::Arrived(_) => None,
+    };
+    let key = match engine_cfg::default_to_save(paths, catalog, remembered) {
+        Ok(key) => key?,
+        Err(e) => {
+            startup_log(paths, &format!("the default model to keep was not read: {e:#}"));
+            return None;
+        }
+    };
+    let removing = st.downloads.get().is_some_and(|d| d.removing(&key));
+    if removing || matches!(when, Keep::Arrived(model) if model != key) {
+        return None;
+    }
+    match engine_cfg::choices::set_default_if_none(paths, &key) {
+        Ok(()) => Some(key),
+        Err(e) => {
+            startup_log(paths, &format!("the default model was not saved: {e:#}"));
+            None
+        }
+    }
+}
+
+/// This computer's models for the agent: every local model of the catalog, on disk or not (a model downloaded later needs
+/// no new agent), and the one to load when the app opens, if any is on disk.
+fn local_models(app: &AppHandle, paths: &Paths) -> Result<EngineUse> {
+    *app.state::<AppState>().remote.lock().unwrap() = None;
+    let (mut catalog, mut default_model) = read_catalog(app, paths)?;
+    // 0.1.2 started with the model used last, written in `model.txt`: the first start without a default saved keeps it.
+    // Once a default is saved the file has done its work and goes.
+    let remembered_file = paths.data.join("model.txt");
+    let remembered = std::fs::read_to_string(&remembered_file).ok().map(|t| t.trim().to_string()).filter(|t| !t.is_empty());
+    if let Some(kept) = keep_default(app, paths, &catalog, Keep::Start(remembered.as_deref())) {
+        match std::fs::remove_file(&remembered_file) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => startup_log(paths, &format!("{} was not removed: {e}", remembered_file.display())),
+            _ => {}
+        }
+        // the model of 0.1.2 is not the one the catalog's order gave: the model to load is read again with it
+        if default_model.as_deref() != Some(kept.as_str()) {
+            (catalog, default_model) = read_catalog(app, paths)?;
+        }
+    }
+    Ok(EngineUse {
         url: format!("http://127.0.0.1:{}", engine_port()),
         key: None,
-        // The context of the running model is the one of its plan (the split can reduce it); for the others the declared one
-        // applies. In the web UI selector the name says where the model runs when it is not on the GPUs: whoever picks it
-        // reads that before waiting.
-        models: available
-            .iter()
-            .map(|v| agent_cfg::AgentModel {
-                key: v.key.clone(),
-                label: v.label.clone(),
-                ctx: if v.key == engine_plan.key { engine_plan.ctx } else { v.ctx },
-                images: v.images,
-                info: agent_cfg::ModelInfo {
-                    bytes: Some(v.bytes),
-                    place: match v.placement {
-                        Some(engine_cfg::Placement::Gpu) => "gpu",
-                        Some(engine_cfg::Placement::Cpu) => "cpu",
-                        None => "none",
-                    },
-                    speed: v.speed.map(|s| s.as_str().to_string()),
-                    weak: v.on_request,
-                },
-            })
-            .collect(),
-        default_model: engine_plan.key.clone(),
-    }))
+        default_model,
+        models: agent_models::of(&catalog),
+    })
 }
 
 /// The Team's key, from the Credential Manager. Without it, or if the Manager does not answer, the Team does not start
@@ -491,16 +600,18 @@ fn team_key() -> Option<String> {
     })
 }
 
-/// `service.json`: where the agent and the engine are, and the process that holds them (docs/INTEGRATION.md). It is
-/// written at "ready" and removed on exit: an app that finds it with a live process knows it can talk. Without an engine
-/// manager on this PC (the engine is another PC's) `engine` is `null`.
-fn write_service_file(agent: &str, engine: Option<&str>) -> Result<()> {
+/// `service.json`: where the agent, the engine and the control server are, and the process that holds them
+/// (docs/INTEGRATION.md). It is written as soon as the agent answers, before the model is loaded, and removed on exit: an
+/// app that finds it with a live process knows it can talk, and asks the engine for the model it wants. `local`: the engine
+/// in use is this PC's; with another PC's, `engine` is `null`.
+fn write_service_file(agent: &str, control: &str, local: bool) -> Result<()> {
     let f = mango_common::service_file()?;
     let v = serde_json::json!({
         "version": 1,
         "pid": std::process::id(),
         "agent": agent,
-        "engine": engine,
+        "engine": local.then_some(control),
+        "control": control,
         "window": !service_mode(),
     });
     mango_common::write_atomic(&f, serde_json::to_string_pretty(&v)?).with_context(|| tr!("scrittura di {}", "writing {}", f.display()))
@@ -508,7 +619,7 @@ fn write_service_file(agent: &str, engine: Option<&str>) -> Result<()> {
 
 /// While the app is not ready: why, where the other apps read it (`reason` in `service.json`, see
 /// docs/INTEGRATION.md). A service that is already ready (with the agent) is left alone: startup did not fail.
-pub(crate) fn write_reason(reason: &str) {
+fn write_reason(reason: &str) {
     let Ok(f) = mango_common::service_file() else { return };
     let ready = std::fs::read_to_string(&f)
         .ok()
@@ -523,104 +634,9 @@ pub(crate) fn write_reason(reason: &str) {
     }
 }
 
-/// Before "ready": the MCP tools of the conversation that reopens must be connected, otherwise the
-/// first request has a different system prompt from the following ones and the engine rereads
-/// everything (see `mcp.rs`). It does not block startup: if one does not connect, the app starts
-/// anyway, warns on the loading page and writes it to the log.
-fn connect_tools(app: &AppHandle, agent_url: &str) {
-    let Some(folder) = mcp::last_session_dir(agent_url) else {
-        // No conversation to reopen: the MCPs start at the first request, and the server makes it
-        // wait until they are connected.
-        return;
-    };
-    set_status(app, "agent", tr!("Collego browser, ricerca web e documenti", "Connecting the browser, web search and documents"));
-    let outcome = mcp::wait(agent_url, &folder, MCP_WAIT_MAX, &mut |phrase| set_status(app, "agent", phrase));
-    if outcome.missing.is_empty() {
-        return;
-    }
-    for (name, reason) in &outcome.missing {
-        eprintln!("MCP {name}: not connected ({reason}); the agent starts without its tools");
-    }
-    let names: Vec<String> = outcome.missing.iter().map(|(n, _)| mcp::user_name(n)).collect();
-    let names = names.join(", ");
-    set_status(app, "agent", tr!("Non sono riuscito a collegare {names}: parto senza", "Could not connect {names}: starting without"));
-    // Time to read the sentence before the window moves to the web UI.
-    std::thread::sleep(std::time::Duration::from_secs(4));
-}
-
-/// Before "ready": the engine reads the system prompt and the tools of the conversation the user
-/// will open and saves its base (see `preparation.rs`). If the base is already there it costs nothing and
-/// the page does not show it; if the read fails the app starts anyway (the first conversation
-/// will wait for the read, as before) and the reason goes to the log.
-fn prepare_model(app: &AppHandle, agent_url: &str) {
-    let Some(folder) = preparation::folder_to_prepare(mcp::last_session_dir(agent_url)) else {
-        eprintln!("model preparation: no working folder yet, nothing to prepare");
-        return;
-    };
-    let t0 = std::time::Instant::now();
-    let outcome = preparation::prepare(agent_url, &folder, &mut |s| {
-        set_status(app, "preparing", tr!("Preparo il modello ({s} s)", "Preparing the model ({s} s)"))
-    });
-    match outcome {
-        Ok(preparation::Outcome::AlreadyReady) => eprintln!("model preparation: base already ready for {folder}"),
-        Ok(preparation::Outcome::Prepared { tokens, ms }) => {
-            eprintln!("model preparation: read {tokens} tokens in {:.1} s for {folder}", ms / 1000.0)
-        }
-        Ok(preparation::Outcome::Skipped(reason)) => eprintln!("model preparation skipped: {reason}"),
-        Err(e) => eprintln!("model preparation failed after {:.1} s: {e:#}", t0.elapsed().as_secs_f32()),
-    }
-}
-
-/// The page to open: the last one seen (project or conversation) if it belongs to the current server,
-/// otherwise the web UI home.
-pub(crate) fn start_page(agent_url: &str) -> String {
-    let home = agent_url.to_string();
-    let Ok(file) = mango_common::last_page_file() else { return home };
-    let Some(url) = std::fs::read_to_string(file).ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()) else {
-        return home;
-    };
-    if !url.starts_with(&format!("{}/", agent_url.trim_end_matches('/'))) {
-        return home;
-    }
-    // A saved conversation may no longer exist (deleted, data not restored): the web UI would
-    // show "Cannot find this conversation" with no obvious way out. The server is asked before
-    // navigating there; if it does not answer or does not know it, the home is better.
-    match saved_session(&url) {
-        Some((id, query)) => {
-            if session_exists(agent_url, &id, query.as_deref()) {
-                url
-            } else {
-                eprintln!("saved conversation {id} is gone: opening the home");
-                home
-            }
-        }
-        None => url,
-    }
-}
-
-/// Id and query (`directory=…`, already encoded as the web UI sends it) of a saved page that
-/// points to a conversation: `…/session/ses_x?directory=…`.
-fn saved_session(url: &str) -> Option<(String, Option<String>)> {
-    let (path, query) = match url.split_once('?') {
-        Some((p, q)) => (p, Some(q.to_string())),
-        None => (url, None),
-    };
-    let id = path.rsplit('/').next()?.to_string();
-    if !id.starts_with("ses_") || !path.ends_with(&format!("/session/{id}")) {
-        return None;
-    }
-    Some((id, query))
-}
-
-fn session_exists(agent_url: &str, id: &str, query: Option<&str>) -> bool {
-    let q = query.map(|d| format!("?{d}")).unwrap_or_default();
-    let url = format!("{}/session/{id}{q}", agent_url.trim_end_matches('/'));
-    mango_common::internet::agent(&url, std::time::Duration::from_secs(5)).get(&url).call().is_ok()
-}
-
-fn spawn_startup(app: AppHandle, mode: Mode) {
+fn spawn_startup(app: AppHandle) {
     std::thread::spawn(move || {
-        if let Err(e) = startup(&app, mode) {
+        if let Err(e) = startup(&app) {
             set_error(&app, &tr!("Mango Code non è riuscito ad avviarsi", "Mango Code could not start"), &e);
         }
     });
@@ -637,9 +653,15 @@ pub fn run() {
     }
     // The second start brings the window of the running one to the front and, if it has a folder, opens it there.
     tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| match folder::requested_folder(&argv) {
-            Some(path) => folder::open(app, path),
-            None => tray::show(app),
+        .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+            // Development builds only: the tests cannot click the Windows icon, and ask its «Settings…» this way.
+            if cfg!(debug_assertions) && argv.iter().any(|a| a == "--test-tray-settings") {
+                return tray::open_settings(app, "models");
+            }
+            match folder::requested_folder(&argv) {
+                Some(path) => folder::open(app, path),
+                None => tray::show(app),
+            }
         }))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
@@ -648,17 +670,7 @@ pub fn run() {
             startup_status,
             language,
             retry_startup,
-            open_logs,
-            other_models::other_models_open,
-            other_models::other_models_local,
-            other_models::other_models_add,
-            other_models::other_models_remove,
-            other_models::other_models_token_status,
-            other_models::other_models_token_save,
-            other_models::other_models_token_remove,
-            choice::choice_confirm,
-            choice::choice_cancel,
-            choice::open_optimize
+            open_logs
         ))
         .setup(|app| {
             bridge::install(app)?;
@@ -707,22 +719,21 @@ pub fn run() {
                 folder::open(app.handle(), path);
             }
             phone::install(app.handle());
-            spawn_startup(app.handle().clone(), Mode::Startup { interactive: !service_mode() });
+            spawn_startup(app.handle().clone());
             Ok(())
         })
         .build(context)
         .expect("Tauri startup")
         .run(|app, ev| match ev {
             // Window close. Once the agent runs, the X only hides the window: the app stays alive (and with it the
-            // loaded model) and reopens from the tray icon, whose "Quit" stops everything. Before that (model choice,
-            // download, startup, a startup error) there is nothing to keep alive and the X quits: an interrupted
-            // download resumes at the next start.
+            // loaded model) and reopens from the tray icon, whose "Quit" stops everything. Before that (startup, a
+            // startup error) there is nothing to keep alive and the X quits.
             RunEvent::WindowEvent { label, event: tauri::WindowEvent::CloseRequested { api, .. }, .. } if label == "main" => {
                 api.prevent_close();
                 if app.state::<AppState>().agent.lock().unwrap().is_none() {
                     tray::quit(app);
                 } else if let Some(w) = main_window(app) {
-                    let _ = w.hide();
+                    close_notice::on_close(&w);
                 }
             }
             RunEvent::Exit => {
@@ -761,48 +772,5 @@ fn allow_microphone(window: &tauri::WebviewWindow) {
     });
     if let Err(e) = result {
         eprintln!("Microphone permission handler not installed: {e}");
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::io::{Read, Write};
-    use std::net::TcpListener;
-
-    #[test]
-    fn recognizes_saved_pages() {
-        let (id, q) = saved_session("http://127.0.0.1:4096/session/ses_abc?directory=C%3A%5Cp").unwrap();
-        assert_eq!(id, "ses_abc");
-        assert_eq!(q.as_deref(), Some("directory=C%3A%5Cp"));
-        let (id, q) = saved_session("http://127.0.0.1:4096/session/ses_abc").unwrap();
-        assert_eq!(id, "ses_abc");
-        assert_eq!(q, None);
-        // home and projects are not conversations: we navigate without asking the server
-        assert!(saved_session("http://127.0.0.1:4096/").is_none());
-        assert!(saved_session("http://127.0.0.1:4096/project/prj_x").is_none());
-        assert!(saved_session("http://127.0.0.1:4096/session/ses_abc/extra").is_none());
-    }
-
-    /// A conversation the server does not know (404) must not be reopened: we fall back to the home.
-    #[test]
-    fn asks_the_server_before_navigating() {
-        let l = TcpListener::bind("127.0.0.1:0").unwrap();
-        let port = l.local_addr().unwrap().port();
-        let h = std::thread::spawn(move || {
-            for expected in ["/session/ses_alive?directory=C%3A%5Cp", "/session/ses_dead?directory=C%3A%5Cp"] {
-                let (mut c, _) = l.accept().unwrap();
-                let mut buf = [0u8; 1024];
-                let n = c.read(&mut buf).unwrap();
-                let line = String::from_utf8_lossy(&buf[..n]).lines().next().unwrap_or("").to_string();
-                assert_eq!(line, format!("GET {expected} HTTP/1.1"));
-                let (code, body) = if expected.contains("alive") { ("200 OK", "{}") } else { ("404 Not Found", "{}") };
-                let _ = write!(c, "HTTP/1.1 {code}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
-            }
-        });
-        let base = format!("http://127.0.0.1:{port}");
-        assert!(session_exists(&base, "ses_alive", Some("directory=C%3A%5Cp")));
-        assert!(!session_exists(&base, "ses_dead", Some("directory=C%3A%5Cp")));
-        h.join().unwrap();
     }
 }

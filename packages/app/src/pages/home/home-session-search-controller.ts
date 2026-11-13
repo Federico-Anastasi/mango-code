@@ -1,4 +1,3 @@
-import { useCommand } from "@/context/command"
 import { useLanguage } from "@/context/language"
 import { makeEventListener } from "@solid-primitives/event-listener"
 import { createMemo, onCleanup } from "solid-js"
@@ -9,7 +8,6 @@ import { homeSessionSearchKey, type HomeSessionRecord, type HomeSessionsControll
 type HomeSessionSearchSource = Pick<HomeSessionsController, "data" | "session">
 
 export function createHomeSessionSearchController(home: HomeController, sessions: HomeSessionSearchSource) {
-  const command = useCommand()
   const language = useLanguage()
   const [state, setState] = createStore({ value: "", focused: false, highlighted: "" })
   let root: HTMLDivElement | undefined
@@ -40,16 +38,6 @@ export function createHomeSessionSearchController(home: HomeController, sessions
       close()
     }),
   )
-
-  command.register("home.search", () => [
-    {
-      id: "home.sessions.search.focus",
-      title: placeholder(),
-      keybind: "mod+f",
-      hidden: true,
-      onSelect: focus,
-    },
-  ])
 
   function focus() {
     input?.focus()

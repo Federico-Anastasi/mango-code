@@ -1,46 +1,41 @@
 import { Dialog } from "@opencode-ai/ui/dialog"
 import { FileIcon } from "@opencode-ai/ui/file-icon"
-import { Icon } from "@opencode-ai/ui/icon"
-import { Keybind } from "@opencode-ai/ui/keybind"
 import { List } from "@opencode-ai/ui/list"
 import { getDirectory, getFilename } from "@opencode-ai/core/util/path"
-import { createMemo, createSignal, lazy, Match, Show, Switch } from "solid-js"
-import { formatKeybind } from "@/context/command"
-import { useServerSDK } from "@/context/server-sdk"
+import { createMemo, createSignal, lazy } from "solid-js"
+import { useDialog } from "@opencode-ai/ui/context/dialog"
+import { useFile } from "@/context/file"
 import { useLanguage } from "@/context/language"
+import { useLayout } from "@/context/layout"
 import { usePlatform } from "@/context/platform"
+import { useServerSDK } from "@/context/server-sdk"
 import { useSettings } from "@/context/settings"
+import { createSessionTabs } from "@/pages/session/helpers"
 import { useSessionLayout } from "@/pages/session/session-layout"
 import { decode64 } from "@/utils/base64"
-import { getRelativeTime } from "@/utils/time"
-import {
-  createCommandPaletteFileEntry,
-  createCommandPaletteFileOpener,
-  createCommandPaletteModel,
-  uniqueCommandPaletteEntries,
-  type CommandPaletteEntry,
-} from "./command-palette"
-import { DialogCommandPaletteV2 } from "./dialog-command-palette-v2"
 
 const DialogSelectFileV2 = lazy(() =>
   import("./dialog-select-directory-v2").then((module) => ({ default: module.DialogSelectDirectoryV2 })),
 )
-type DialogSelectFileMode = "all" | "files"
 
-export function DialogSelectFile(props: { mode?: DialogSelectFileMode; onOpenFile?: (path: string) => void }) {
+const ENTRY_LIMIT = 5
+
+type FileEntry = {
+  id: string
+  title: string
+  category: string
+  path: string
+}
+
+export function DialogSelectFile(props: { onOpenFile?: (path: string) => void }) {
   const platform = usePlatform()
   const settings = useSettings()
-  const filesOnly = () => props.mode === "files"
 
-  if (!filesOnly() && settings.general.newLayoutDesigns()) {
-    return <DialogCommandPaletteV2 onOpenFile={props.onOpenFile} />
-  }
-
-  if (filesOnly() && platform.platform === "desktop" && settings.general.newLayoutDesigns()) {
+  if (platform.platform === "desktop" && settings.general.newLayoutDesigns()) {
     return <DialogSelectFileDesktopV2 onOpenFile={props.onOpenFile} />
   }
 
-  return <DialogSelectFileLegacy filesOnly={filesOnly} onOpenFile={props.onOpenFile} />
+  return <DialogSelectFileLegacy onOpenFile={props.onOpenFile} />
 }
 
 function DialogSelectFileDesktopV2(props: { onOpenFile?: (path: string) => void }) {
@@ -48,7 +43,7 @@ function DialogSelectFileDesktopV2(props: { onOpenFile?: (path: string) => void 
   const serverSDK = useServerSDK()
   const { params } = useSessionLayout()
   const projectDirectory = createMemo(() => decode64(params.dir) ?? "")
-  const openFile = createCommandPaletteFileOpener(props.onOpenFile)
+  const openFile = createFileOpener(props.onOpenFile)
 
   return (
     <DialogSelectFileV2
@@ -64,18 +59,66 @@ function DialogSelectFileDesktopV2(props: { onOpenFile?: (path: string) => void 
   )
 }
 
-function DialogSelectFileLegacy(props: { filesOnly: () => boolean; onOpenFile?: (path: string) => void }) {
-  const palette = createCommandPaletteModel(props)
+function DialogSelectFileLegacy(props: { onOpenFile?: (path: string) => void }) {
+  const dialog = useDialog()
+  const file = useFile()
+  const language = useLanguage()
+  const { tabs } = useSessionLayout()
+  const openFile = createFileOpener(props.onOpenFile)
   const [grouped, setGrouped] = createSignal(false)
+
+  const tabState = createSessionTabs({
+    tabs,
+    pathFromTab: file.pathFromTab,
+    normalizeTab: (tab) => (tab.startsWith("file://") ? file.tab(tab) : tab),
+  })
+  const entry = (path: string): FileEntry => ({
+    id: "file:" + path,
+    title: path,
+    category: language.t("palette.group.files"),
+    path,
+  })
+  const recentEntries = createMemo(() => {
+    const all = tabState.openedTabs()
+    const active = tabState.activeFileTab()
+    const order = active ? [active, ...all.filter((item) => item !== active)] : all
+    const seen = new Set<string>()
+    return order
+      .map((item) => file.pathFromTab(item))
+      .filter((path): path is string => {
+        if (!path || seen.has(path)) return false
+        seen.add(path)
+        return true
+      })
+      .slice(0, ENTRY_LIMIT)
+      .map(entry)
+  })
+  const rootEntries = createMemo(() =>
+    file.tree
+      .children("")
+      .filter((node) => node.type === "file")
+      .map((node) => node.path)
+      .sort((a, b) => a.localeCompare(b))
+      .slice(0, ENTRY_LIMIT)
+      .map(entry),
+  )
+  const unique = () => {
+    const seen = new Set<string>()
+    return [...recentEntries(), ...rootEntries()].filter((item) => {
+      if (seen.has(item.id)) return false
+      seen.add(item.id)
+      return true
+    })
+  }
 
   const items = async (text: string) => {
     const query = text.trim()
     setGrouped(query.length > 0)
 
-    if (!query && props.filesOnly()) {
-      const loaded = palette.file.tree.state("")?.loaded
-      const pending = loaded ? Promise.resolve() : palette.file.tree.list("")
-      const next = uniqueCommandPaletteEntries([...palette.recentFileEntries(), ...palette.rootFileEntries()])
+    if (!query) {
+      const loaded = file.tree.state("")?.loaded
+      const pending = loaded ? Promise.resolve() : file.tree.list("")
+      const next = unique()
 
       if (loaded || next.length > 0) {
         void pending
@@ -83,24 +126,10 @@ function DialogSelectFileLegacy(props: { filesOnly: () => boolean; onOpenFile?: 
       }
 
       await pending
-      return uniqueCommandPaletteEntries([...palette.recentFileEntries(), ...palette.rootFileEntries()])
+      return unique()
     }
 
-    if (!query) return [...palette.preferredCommandEntries(), ...palette.recentFileEntries()]
-
-    if (props.filesOnly()) {
-      const files = await palette.file.searchFiles(query)
-      const category = palette.language.t("palette.group.files")
-      return files.map((path) => createCommandPaletteFileEntry(path, category))
-    }
-
-    const [files, nextSessions] = await Promise.all([
-      palette.file.searchFiles(query),
-      Promise.resolve(palette.sessions(query)),
-    ])
-    const category = palette.language.t("palette.group.files")
-    const entries = files.map((path) => createCommandPaletteFileEntry(path, category))
-    return [...palette.commandEntries(), ...nextSessions, ...entries]
+    return (await file.searchFiles(query)).map(entry)
   }
 
   return (
@@ -108,82 +137,53 @@ function DialogSelectFileLegacy(props: { filesOnly: () => boolean; onOpenFile?: 
       <List
         class="px-3"
         search={{
-          placeholder: props.filesOnly()
-            ? palette.language.t("session.header.searchFiles")
-            : palette.language.t("palette.search.placeholder"),
+          placeholder: language.t("session.header.searchFiles"),
           autofocus: true,
           hideIcon: true,
         }}
-        emptyMessage={palette.language.t("palette.empty")}
-        loadingMessage={palette.language.t("common.loading")}
+        emptyMessage={language.t("palette.empty")}
+        loadingMessage={language.t("common.loading")}
         items={items}
         key={(item) => item.id}
-        filterKeys={["title", "description", "category"]}
-        skipFilter={(item) => item.type === "file"}
+        filterKeys={["title", "category"]}
+        skipFilter={() => true}
         groupBy={grouped() ? (item) => item.category : () => ""}
-        onMove={(item: CommandPaletteEntry | undefined) => palette.highlight(item)}
-        onSelect={(item: CommandPaletteEntry | undefined) => palette.select(item)}
+        onSelect={(item: FileEntry | undefined) => {
+          if (!item) return
+          dialog.close()
+          openFile(item.path)
+        }}
       >
         {(item) => (
-          <Switch
-            fallback={
-              <div class="w-full flex items-center justify-between rounded-md pl-1">
-                <div class="flex items-center gap-x-3 grow min-w-0">
-                  <FileIcon node={{ path: item.path ?? "", type: "file" }} class="shrink-0 size-4" />
-                  <div class="flex items-center text-14-regular">
-                    <span class="text-text-weak whitespace-nowrap overflow-hidden overflow-ellipsis truncate min-w-0">
-                      {getDirectory(item.path ?? "")}
-                    </span>
-                    <span class="text-text-strong whitespace-nowrap">{getFilename(item.path ?? "")}</span>
-                  </div>
-                </div>
+          <div class="w-full flex items-center justify-between rounded-md pl-1">
+            <div class="flex items-center gap-x-3 grow min-w-0">
+              <FileIcon node={{ path: item.path, type: "file" }} class="shrink-0 size-4" />
+              <div class="flex items-center text-14-regular">
+                <span class="text-text-weak whitespace-nowrap overflow-hidden overflow-ellipsis truncate min-w-0">
+                  {getDirectory(item.path)}
+                </span>
+                <span class="text-text-strong whitespace-nowrap">{getFilename(item.path)}</span>
               </div>
-            }
-          >
-            <Match when={item.type === "command"}>
-              <div class="w-full flex items-center justify-between gap-4">
-                <div class="flex items-center gap-2 min-w-0">
-                  <span class="text-14-regular text-text-strong whitespace-nowrap">{item.title}</span>
-                  <Show when={item.description}>
-                    <span class="text-14-regular text-text-weak truncate">{item.description}</span>
-                  </Show>
-                </div>
-                <Show when={item.keybind}>
-                  <Keybind class="rounded-[4px]">{formatKeybind(item.keybind ?? "", palette.language.t)}</Keybind>
-                </Show>
-              </div>
-            </Match>
-            <Match when={item.type === "session"}>
-              <div class="w-full flex items-center justify-between rounded-md pl-1">
-                <div class="flex items-center gap-x-3 grow min-w-0">
-                  <Icon name="bubble-5" size="small" class="shrink-0 text-icon-weak" />
-                  <div class="flex items-center gap-2 min-w-0">
-                    <span
-                      class="text-14-regular text-text-strong truncate"
-                      classList={{ "opacity-70": !!item.archived }}
-                    >
-                      {item.title}
-                    </span>
-                    <Show when={item.description}>
-                      <span
-                        class="text-14-regular text-text-weak truncate"
-                        classList={{ "opacity-70": !!item.archived }}
-                      >
-                        {item.description}
-                      </span>
-                    </Show>
-                  </div>
-                </div>
-                <Show when={item.updated}>
-                  <span class="text-12-regular text-text-weak whitespace-nowrap ml-2">
-                    {getRelativeTime(new Date(item.updated!).toISOString(), palette.language.t)}
-                  </span>
-                </Show>
-              </div>
-            </Match>
-          </Switch>
+            </div>
+          </div>
         )}
       </List>
     </Dialog>
   )
+}
+
+function createFileOpener(onOpenFile?: (path: string) => void) {
+  const file = useFile()
+  const layout = useLayout()
+  const { tabs, view } = useSessionLayout()
+
+  return (path: string) => {
+    const value = file.tab(path)
+    void tabs().open(value)
+    void file.load(path)
+    if (!view().reviewPanel.opened()) view().reviewPanel.open()
+    layout.fileTree.setTab("all")
+    onOpenFile?.(path)
+    tabs().setActive(value)
+  }
 }

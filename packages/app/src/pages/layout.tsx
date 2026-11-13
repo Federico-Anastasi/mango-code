@@ -36,7 +36,6 @@ import { useProviders } from "@/hooks/use-providers"
 import { dismissToast, setV2Toast, showToast, ToastRegion } from "@/utils/toast"
 import { useServerSDK } from "@/context/server-sdk"
 import { normalizeProjectInfo } from "@/context/global-sync/utils"
-import { clearWorkspaceTerminals } from "@/context/terminal"
 import { pickSessionCacheEvictions } from "@/context/global-sync/session-cache"
 import { useNotification } from "@/context/notification"
 import { usePreview } from "@/context/preview"
@@ -50,8 +49,8 @@ import { SessionRouteKey, SessionStateKey } from "@/utils/server-scope"
 import { listAllSessions } from "@/utils/session"
 
 import { useDialog } from "@opencode-ai/ui/context/dialog"
-import { useTheme, type ColorScheme } from "@opencode-ai/ui/theme/context"
-import { useCommand, type CommandOption } from "@/context/command"
+import { useTabs } from "@/context/tabs"
+import { useCommand } from "@/context/command"
 import { ConstrainDragXAxis, getDraggableId } from "@/utils/solid-dnd"
 import { DebugBar } from "@/components/debug-bar"
 import { PreviewPanel } from "@/components/preview-panel"
@@ -59,7 +58,8 @@ import { TabsInfoPopup } from "@/components/help-button"
 import { Titlebar, type TitlebarUpdate } from "@/components/titlebar"
 import { useDirectoryPicker } from "@/components/directory-picker"
 import { ServerConnection, useServer } from "@/context/server"
-import { useLanguage, type Locale } from "@/context/language"
+import { useLanguage } from "@/context/language"
+import { sessionTitle } from "@/utils/session-title"
 import { pathKey } from "@/utils/path-key"
 import {
   displayName,
@@ -118,8 +118,8 @@ export default function LegacyLayout(props: ParentProps) {
   const navigate = useNavigate()
   const providers = useProviders(() => undefined)
   const dialog = useDialog()
+  const tabs = useTabs()
   const command = useCommand()
-  const theme = useTheme()
   const language = useLanguage()
   const preview = usePreview()
   preview.follow(layout.route)
@@ -137,14 +137,6 @@ export default function LegacyLayout(props: ParentProps) {
       dir: store[0].path.directory || dir,
     }
   })
-  const availableThemeEntries = createMemo(() => theme.ids().map((id) => [id, theme.themes()[id]] as const))
-  const colorSchemeOrder: ColorScheme[] = ["system", "light", "dark"]
-  const colorSchemeKey: Record<ColorScheme, "theme.scheme.system" | "theme.scheme.light" | "theme.scheme.dark"> = {
-    system: "theme.scheme.system",
-    light: "theme.scheme.light",
-    dark: "theme.scheme.dark",
-  }
-  const colorSchemeLabel = (scheme: ColorScheme) => language.t(colorSchemeKey[scheme])
   const currentDir = createMemo(() => route().dir)
 
   const [state, setState] = createStore({
@@ -330,50 +322,6 @@ export default function LegacyLayout(props: ParentProps) {
     layout.mobileSidebar.hide()
   }
 
-  function cycleTheme(direction = 1) {
-    const ids = availableThemeEntries().map(([id]) => id)
-    if (ids.length === 0) return
-    const currentIndex = ids.indexOf(theme.themeId())
-    const nextIndex = currentIndex === -1 ? 0 : (currentIndex + direction + ids.length) % ids.length
-    const nextThemeId = ids[nextIndex]
-    theme.setTheme(nextThemeId)
-    showToast({
-      title: language.t("toast.theme.title"),
-      description: theme.name(nextThemeId),
-    })
-  }
-
-  function cycleColorScheme(direction = 1) {
-    const current = theme.colorScheme()
-    const currentIndex = colorSchemeOrder.indexOf(current)
-    const nextIndex =
-      currentIndex === -1 ? 0 : (currentIndex + direction + colorSchemeOrder.length) % colorSchemeOrder.length
-    const next = colorSchemeOrder[nextIndex]
-    theme.setColorScheme(next)
-    showToast({
-      title: language.t("toast.scheme.title"),
-      description: colorSchemeLabel(next),
-    })
-  }
-
-  function setLocale(next: Locale) {
-    if (next === language.locale()) return
-    language.setChoice(next)
-    showToast({
-      title: language.t("toast.language.title"),
-      description: language.t("toast.language.description", { language: language.label(next) }),
-    })
-  }
-
-  function cycleLanguage(direction = 1) {
-    const locales = language.locales
-    const currentIndex = locales.indexOf(language.locale())
-    const nextIndex = currentIndex === -1 ? 0 : (currentIndex + direction + locales.length) % locales.length
-    const next = locales[nextIndex]
-    if (!next) return
-    setLocale(next)
-  }
-
   const useSDKNotificationToasts = () =>
     onMount(() => {
       const toastBySession = new Map<string, number>()
@@ -429,12 +377,13 @@ export default function LegacyLayout(props: ParentProps) {
         const session = store.session.find((s) => s.id === props.sessionID)
         const sessionKey = `${directory}:${props.sessionID}`
 
-        const sessionTitle = session?.title ?? language.t("command.session.new")
+        const untitled = language.t("session.untitled")
+        const named = sessionTitle(session?.title, untitled) ?? untitled
         const projectName = getFilename(directory)
         const description =
           e.details.type === "permission.asked"
-            ? language.t("notification.permission.description", { sessionTitle, projectName })
-            : language.t("notification.question.description", { sessionTitle, projectName })
+            ? language.t("notification.permission.description", { sessionTitle: named, projectName })
+            : language.t("notification.question.description", { sessionTitle: named, projectName })
         const href = `/${base64Encode(directory)}/session/${props.sessionID}`
 
         const now = Date.now()
@@ -836,39 +785,6 @@ export default function LegacyLayout(props: ParentProps) {
     void openProject(target.worktree)
   }
 
-  function navigateToProjectIndex(index: number) {
-    const projects = layout.projects.list()
-    const target = projects[index]
-    if (!target) return
-
-    serverSync().child(target.worktree)
-    void openProject(target.worktree)
-  }
-
-  function navigateSessionByUnseen(offset: number) {
-    const sessions = currentSessions()
-    if (sessions.length === 0) return
-
-    const hasUnseen = sessions.some((session) => notification.session.unseenCount(session.id) > 0)
-    if (!hasUnseen) return
-
-    const activeIndex = params.id ? sessions.findIndex((s) => s.id === params.id) : -1
-    const start = activeIndex === -1 ? (offset > 0 ? -1 : 0) : activeIndex
-
-    for (let i = 1; i <= sessions.length; i++) {
-      const index = offset > 0 ? (start + i) % sessions.length : (start - i + sessions.length) % sessions.length
-      const session = sessions[index]
-      if (!session) continue
-      if (notification.session.unseenCount(session.id) === 0) continue
-
-      prefetchSession(session, "high")
-      warm(sessions, index)
-
-      navigateToSession(session)
-      return
-    }
-  }
-
   async function archiveSession(session: Session) {
     if ((await serverSDK().protocol) !== "v1") return
     const [store, setStore] = serverSync().child(session.directory)
@@ -896,193 +812,65 @@ export default function LegacyLayout(props: ParentProps) {
     }
   }
 
-  command.register("layout", () => {
-    const commands: CommandOption[] = [
-      {
-        id: "sidebar.toggle",
-        title: language.t("command.sidebar.toggle"),
-        category: language.t("command.category.view"),
-        keybind: "mod+b",
-        onSelect: () => layout.sidebar.toggle(),
+  command.register("layout", () => [
+    {
+      id: "sidebar.toggle",
+      title: language.t("command.sidebar.toggle"),
+      onSelect: () => layout.sidebar.toggle(),
+    },
+    {
+      id: "project.open",
+      title: language.t("command.project.open"),
+      onSelect: () => chooseProject(),
+    },
+    {
+      id: "project.previous",
+      title: language.t("command.project.previous"),
+      onSelect: () => navigateProjectByOffset(-1),
+    },
+    {
+      id: "project.next",
+      title: language.t("command.project.next"),
+      onSelect: () => navigateProjectByOffset(1),
+    },
+    {
+      id: "settings.open",
+      title: language.t("command.settings.open"),
+      onSelect: () => openSettings(),
+    },
+    {
+      id: "session.previous",
+      title: language.t("command.session.previous"),
+      onSelect: () => navigateSessionByOffset(-1),
+    },
+    {
+      id: "session.next",
+      title: language.t("command.session.next"),
+      onSelect: () => navigateSessionByOffset(1),
+    },
+    {
+      id: "workspace.toggle",
+      title: language.t("command.workspace.toggle"),
+      description: language.t("command.workspace.toggle.description"),
+      slash: "workspace",
+      disabled: !currentProject() || currentProject()?.vcs !== "git",
+      onSelect: () => {
+        const project = currentProject()
+        if (!project) return
+        if (project.vcs !== "git") return
+        const wasEnabled = layout.sidebar.workspaces(project.worktree)()
+        layout.sidebar.toggleWorkspaces(project.worktree)
+        showToast({
+          title: wasEnabled
+            ? language.t("toast.workspace.disabled.title")
+            : language.t("toast.workspace.enabled.title"),
+          description: wasEnabled
+            ? language.t("toast.workspace.disabled.description")
+            : language.t("toast.workspace.enabled.description"),
+        })
       },
-      {
-        id: "project.open",
-        title: language.t("command.project.open"),
-        category: language.t("command.category.project"),
-        keybind: "mod+o",
-        onSelect: () => chooseProject(),
-      },
-      {
-        id: "project.previous",
-        title: language.t("command.project.previous"),
-        category: language.t("command.category.project"),
-        keybind: "mod+alt+arrowup",
-        onSelect: () => navigateProjectByOffset(-1),
-      },
-      {
-        id: "project.next",
-        title: language.t("command.project.next"),
-        category: language.t("command.category.project"),
-        keybind: "mod+alt+arrowdown",
-        onSelect: () => navigateProjectByOffset(1),
-      },
-      {
-        id: "provider.connect",
-        title: language.t("command.provider.connect"),
-        category: language.t("command.category.provider"),
-        onSelect: () => connectProvider(),
-      },
-      {
-        id: "server.switch",
-        title: language.t("command.server.switch"),
-        category: language.t("command.category.server"),
-        onSelect: () => openServer(),
-      },
-      {
-        id: "settings.open",
-        title: language.t("command.settings.open"),
-        category: language.t("command.category.settings"),
-        keybind: "mod+comma",
-        onSelect: () => openSettings(),
-      },
-      {
-        id: "session.previous",
-        title: language.t("command.session.previous"),
-        category: language.t("command.category.session"),
-        keybind: "alt+arrowup",
-        onSelect: () => navigateSessionByOffset(-1),
-      },
-      {
-        id: "session.next",
-        title: language.t("command.session.next"),
-        category: language.t("command.category.session"),
-        keybind: "alt+arrowdown",
-        onSelect: () => navigateSessionByOffset(1),
-      },
-      {
-        id: "session.previous.unseen",
-        title: language.t("command.session.previous.unseen"),
-        category: language.t("command.category.session"),
-        keybind: "shift+alt+arrowup",
-        onSelect: () => navigateSessionByUnseen(-1),
-      },
-      {
-        id: "session.next.unseen",
-        title: language.t("command.session.next.unseen"),
-        category: language.t("command.category.session"),
-        keybind: "shift+alt+arrowdown",
-        onSelect: () => navigateSessionByUnseen(1),
-      },
-      {
-        id: "workspace.new",
-        title: language.t("workspace.new"),
-        category: language.t("command.category.workspace"),
-        keybind: "mod+shift+w",
-        disabled: !workspaceSetting(),
-        onSelect: () => {
-          const project = currentProject()
-          if (!project) return
-          return createWorkspace(project)
-        },
-      },
-      {
-        id: "workspace.toggle",
-        title: language.t("command.workspace.toggle"),
-        description: language.t("command.workspace.toggle.description"),
-        category: language.t("command.category.workspace"),
-        slash: "workspace",
-        disabled: !currentProject() || currentProject()?.vcs !== "git",
-        onSelect: () => {
-          const project = currentProject()
-          if (!project) return
-          if (project.vcs !== "git") return
-          const wasEnabled = layout.sidebar.workspaces(project.worktree)()
-          layout.sidebar.toggleWorkspaces(project.worktree)
-          showToast({
-            title: wasEnabled
-              ? language.t("toast.workspace.disabled.title")
-              : language.t("toast.workspace.enabled.title"),
-            description: wasEnabled
-              ? language.t("toast.workspace.disabled.description")
-              : language.t("toast.workspace.enabled.description"),
-          })
-        },
-      },
-      {
-        id: "theme.cycle",
-        title: language.t("command.theme.cycle"),
-        category: language.t("command.category.theme"),
-        keybind: "mod+shift+t",
-        onSelect: () => cycleTheme(1),
-      },
-    ]
-
-    Array.from({ length: 9 }, (_, i) => {
-      const index = i
-      const number = index + 1
-      commands.push({
-        id: `project.${number}`,
-        category: language.t("command.category.project"),
-        title: `Open Project {number}`,
-        keybind: `mod+${number}`,
-        disabled: layout.projects.list().length <= index,
-        hidden: true,
-        onSelect: () => navigateToProjectIndex(index),
-      })
-    })
-
-    for (const [id] of availableThemeEntries()) {
-      commands.push({
-        id: `theme.set.${id}`,
-        title: language.t("command.theme.set", { theme: theme.name(id) }),
-        category: language.t("command.category.theme"),
-        onSelect: () => theme.commitPreview(),
-        onHighlight: () => {
-          theme.previewTheme(id)
-          return () => theme.cancelPreview()
-        },
-      })
-    }
-
-    commands.push({
-      id: "theme.scheme.cycle",
-      title: language.t("command.theme.scheme.cycle"),
-      category: language.t("command.category.theme"),
-      keybind: "mod+shift+s",
-      onSelect: () => cycleColorScheme(1),
-    })
-
-    for (const scheme of colorSchemeOrder) {
-      commands.push({
-        id: `theme.scheme.${scheme}`,
-        title: language.t("command.theme.scheme.set", { scheme: colorSchemeLabel(scheme) }),
-        category: language.t("command.category.theme"),
-        onSelect: () => theme.commitPreview(),
-        onHighlight: () => {
-          theme.previewColorScheme(scheme)
-          return () => theme.cancelPreview()
-        },
-      })
-    }
-
-    commands.push({
-      id: "language.cycle",
-      title: language.t("command.language.cycle"),
-      category: language.t("command.category.language"),
-      onSelect: () => cycleLanguage(1),
-    })
-
-    for (const locale of language.locales) {
-      commands.push({
-        id: `language.set.${locale}`,
-        title: language.t("command.language.set", { language: language.label(locale) }),
-        category: language.t("command.category.language"),
-        onSelect: () => setLocale(locale),
-      })
-    }
-
-    return commands
-  })
+    },
+  ])
 
   function connectProvider() {
     const run = ++dialogRun
@@ -1092,20 +880,8 @@ export default function LegacyLayout(props: ParentProps) {
     })
   }
 
-  function openServer() {
-    const run = ++dialogRun
-    void import("@/components/dialog-select-server").then((x) => {
-      if (dialogDead || dialogRun !== run) return
-      dialog.show(() => <x.DialogSelectServer />)
-    })
-  }
-
   function openSettings() {
-    const run = ++dialogRun
-    void import("@/components/settings-v2").then((x) => {
-      if (dialogDead || dialogRun !== run) return
-      dialog.show(() => <x.DialogSettings />)
-    })
+    tabs.openSettings()
   }
 
   function projectRoot(directory: string) {
@@ -1447,12 +1223,6 @@ export default function LegacyLayout(props: ParentProps) {
 
     const sessions = await listAllSessions(serverSDK().api.session, { directory, order: "desc" }).catch(() => [])
 
-    clearWorkspaceTerminals(
-      directory,
-      sessions.map((s) => s.id),
-      platform,
-      serverSDK().scope,
-    )
     await serverSDK()
       .client.instance.dispose({ directory })
       .catch(() => undefined)
@@ -2229,11 +1999,9 @@ export default function LegacyLayout(props: ParentProps) {
       handleDragEnd={handleDragEnd}
       handleDragOver={handleDragOver}
       openProjectLabel={language.t("command.project.open")}
-      openProjectKeybind={() => command.keybind("project.open")}
       onOpenProject={chooseProject}
       renderProjectOverlay={projectOverlay}
       settingsLabel={() => language.t("sidebar.settings")}
-      settingsKeybind={() => command.keybind("settings.open")}
       onOpenSettings={openSettings}
       helpLabel={() => language.t("sidebar.help")}
       onOpenHelp={() => platform.openExternal("https://github.com/Federico-Anastasi/mango-code/issues")}

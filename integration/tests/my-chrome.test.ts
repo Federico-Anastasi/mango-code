@@ -1,7 +1,10 @@
-// "Use my Chrome": with the choice on and Chrome's remote debugging active, the agent's browser is that Chrome and
-// not the panel. In place of the user's Chrome, a windowless Chrome with a temporary profile and its
-// `DevToolsActivePort` in a fake LOCALAPPDATA. What remains to be seen on screen (the debugging turned on from
-// chrome://inspect, Chrome's notice at every connection) is checked by hand.
+// "Use my Chrome": with the choice on and Chrome's remote debugging active, a `new_page` that asks for it (`userChrome: true`)
+// opens a new tab in that Chrome and not in the panel, through the whole chain: app, agent, tool definition, browser server.
+// In place of the user's Chrome, a windowless Chrome with a temporary profile and its `DevToolsActivePort` in a fake
+// LOCALAPPDATA. Without the request every page goes to the panel, and the tabs the user has are never taken over:
+// `browser-mcp.test.ts` checks that.
+// What remains to be seen on screen (the debugging turned on from chrome://inspect, Chrome's notice at every connection)
+// is checked by hand.
 
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { spawn, type ChildProcess } from "node:child_process";
@@ -18,13 +21,16 @@ let mc: MangoCode;
 let chrome: ChildProcess;
 let port: number;
 let fakeRoot: string;
-const TEST_URL = "data:text/html,<title>my-chrome</title>MY CHROME";
+const SITE = 48243;
+const TEST_URL = `http://myapp.test:${SITE}/`;
+let site: ReturnType<typeof Bun.serve>;
 
 beforeAll(async () => {
   if (!fs.existsSync(CHROME)) throw new Error(`${CHROME} is missing`);
   fakeRoot = fs.mkdtempSync(path.join(os.tmpdir(), "mango-my-chrome-"));
   const profile = path.join(fakeRoot, "profile");
-  chrome = spawn(CHROME, ["--headless=new", "--remote-debugging-port=0", `--user-data-dir=${profile}`, "--no-first-run", "about:blank"], { stdio: "ignore" });
+  site = Bun.serve({ port: SITE, hostname: "127.0.0.1", fetch: () => new Response("<!doctype html><title>my-chrome</title>MY CHROME", { headers: { "content-type": "text/html" } }) });
+  chrome = spawn(CHROME, ["--headless=new", "--remote-debugging-port=0", `--user-data-dir=${profile}`, "--no-first-run", "--host-resolver-rules=MAP myapp.test 127.0.0.1", "about:blank"], { stdio: "ignore" });
   // With port 0 Chrome picks one and writes it in the profile's DevToolsActivePort: the same file Chrome
   // writes in the default profile when debugging is turned on from chrome://inspect.
   const active = path.join(profile, "DevToolsActivePort");
@@ -35,7 +41,7 @@ beforeAll(async () => {
   fs.mkdirSync(userData, { recursive: true });
   fs.writeFileSync(path.join(userData, "DevToolsActivePort"), lines);
 
-  env = await start([{ tool: "chrome-devtools_new_page", arguments: { url: TEST_URL } }, { text: "Opened." }], {
+  env = await start([{ tool: "chrome-devtools_new_page", arguments: { url: TEST_URL, userChrome: true } }, { text: "Opened." }], {
     env: { LOCALAPPDATA: path.join(fakeRoot, "local") },
   });
   fs.writeFileSync(path.join(env.data, "browser.json"), JSON.stringify({ myChrome: true }));
@@ -44,6 +50,7 @@ beforeAll(async () => {
 
 afterAll(() => {
   env?.close();
+  site?.stop(true);
   try {
     chrome?.kill();
   } catch {}
@@ -55,7 +62,7 @@ afterAll(() => {
   }
 });
 
-test("with \"Use my Chrome\" the agent opens pages in the user's Chrome", async () => {
+test("with \"Use my Chrome\" the agent opens a page in the user's Chrome when it asks for it", async () => {
   const id = await mc.createSession(env.project);
   const steps = [];
   for await (const p of mc.turn(id, env.project, "Open the page", { model: "fake" })) steps.push(p);

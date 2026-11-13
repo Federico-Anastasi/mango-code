@@ -76,12 +76,13 @@ import {
 } from "@/server/shared/voice"
 import { ENGINE_SPEED_PATH, engineSpeedEffect } from "@/server/shared/engine-speed"
 import { SESSION_WORK_PATH, sessionWorkEffect } from "@/server/shared/session-work"
-import { ENGINE_WARMUP_PATH, engineWarmupEffect } from "@/server/shared/engine-warmup"
 import { FOLDERS_PATH, foldersEffect } from "@/server/shared/mango-folders"
 import { SETTINGS_PATH, settingsEffect } from "@/server/shared/mango-settings"
 import { LANGUAGE_PATH, languageEffect } from "@/server/shared/mango-language"
 import { FOLDER_PATH, projectFolderEffect } from "@/server/shared/mango-project-folder"
-import { MODELS_PATH, modelsEffect } from "@/server/shared/mango-models"
+import { CONTROL_ROUTES, controlEffect } from "@/server/shared/mango-control"
+import { RELOAD_PATH, makeReload } from "@/server/shared/mango-reload"
+import { PROCESSES_PATH, PROCESSES_STOP_PATH, processesEffect, processesStopEffect } from "@/server/shared/mango-processes"
 import { ServerAuth } from "@/server/auth"
 import { InstanceHttpApi, RootHttpApi } from "./api"
 import { Api } from "@opencode-ai/server/api"
@@ -232,15 +233,6 @@ const sessionWorkRoute = HttpRouter.use((router) =>
   }),
 ).pipe(Layer.provide(authOnlyRouterLayer))
 
-// mango-code: engine preparation for a folder (see shared/engine-warmup.ts).
-const engineWarmupRoute = HttpRouter.use((router) =>
-  Effect.gen(function* () {
-    const store = yield* InstanceStore.Service
-    const prompt = yield* SessionPrompt.Service
-    yield* router.add("POST", ENGINE_WARMUP_PATH, (request) => engineWarmupEffect(request, store, prompt))
-  }),
-).pipe(Layer.provide(authOnlyRouterLayer))
-
 // mango-code: extra folders for the context of a working folder (see shared/mango-folders.ts).
 const foldersRoute = HttpRouter.use((router) =>
   Effect.gen(function* () {
@@ -275,10 +267,26 @@ const projectFolderRoute = HttpRouter.use((router) =>
   }),
 ).pipe(Layer.provide(authOnlyRouterLayer))
 
-// mango-code: what the model menu says about each model (see shared/mango-models.ts).
-const modelsRoute = HttpRouter.use((router) =>
+// mango-code: the model, the models and the computer, from the app's control server (see shared/mango-control.ts).
+const controlRoute = HttpRouter.use((router) =>
+  Effect.forEach(CONTROL_ROUTES, (route) =>
+    router.add(route.method, route.path, (request) => controlEffect(request, route.target)),
+  ),
+).pipe(Layer.provide(authOnlyRouterLayer))
+
+// mango-code: the configuration read again when the app rewrote it (see shared/mango-reload.ts).
+const reloadRoute = HttpRouter.use((router) =>
   Effect.gen(function* () {
-    yield* router.add("GET", MODELS_PATH, () => modelsEffect)
+    const reload = yield* makeReload
+    yield* router.add("POST", RELOAD_PATH, () => reload)
+  }),
+).pipe(Layer.provide(authOnlyRouterLayer))
+
+// mango-code: the programs the shell left running in a conversation (see shared/mango-processes.ts).
+const processesRoute = HttpRouter.use((router) =>
+  Effect.gen(function* () {
+    yield* router.add("GET", PROCESSES_PATH, (request) => processesEffect(request))
+    yield* router.add("POST", PROCESSES_STOP_PATH, (request) => processesStopEffect(request))
   }),
 ).pipe(Layer.provide(authOnlyRouterLayer))
 
@@ -372,12 +380,13 @@ export function createRoutes(
     voiceRoute,
     engineSpeedRoute,
     sessionWorkRoute,
-    engineWarmupRoute,
     foldersRoute,
     settingsRoute,
     languageRoute,
     projectFolderRoute,
-    modelsRoute,
+    controlRoute,
+    reloadRoute,
+    processesRoute,
     uiRoute,
   ).pipe(
     Layer.provide([

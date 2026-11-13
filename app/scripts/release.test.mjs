@@ -40,15 +40,17 @@ test("the notes of the release in the repo give the text the manifest carries", 
 })
 
 test("the version is the same everywhere, the tag is v + version, the notes exist", () => {
-  const same = { tauri: "0.1.2", cargo: "0.1.2", tag: "v0.1.2" }
+  const same = { tauri: "0.1.2", cargo: "0.1.2", lock: "0.1.2", tag: "v0.1.2" }
   assert.deepEqual(versionErrors(same), [])
   assert.deepEqual(versionErrors({ ...same, tag: undefined }), [])
-  assert.deepEqual(versionErrors({ tauri: "0.1.2-rc.1", cargo: "0.1.2-rc.1", tag: "v0.1.2-rc.1" }), [])
-  assert.match(versionErrors({ ...same, cargo: "0.1.1" })[0], /tauri\.conf\.json says 0\.1\.2, Cargo\.toml 0\.1\.1/)
+  assert.deepEqual(versionErrors({ tauri: "0.1.2-rc.1", cargo: "0.1.2-rc.1", lock: "0.1.2-rc.1", tag: "v0.1.2-rc.1" }), [])
+  assert.match(versionErrors({ ...same, cargo: "0.1.1", lock: "0.1.1" })[0], /tauri\.conf\.json says 0\.1\.2, Cargo\.toml 0\.1\.1/)
+  assert.match(versionErrors({ ...same, lock: "0.1.1" })[0], /Cargo\.toml says 0\.1\.2, Cargo\.lock 0\.1\.1/)
+  assert.match(versionErrors({ ...same, lock: undefined })[0], /Cargo\.lock undefined/)
   assert.match(versionErrors({ ...same, tag: "v0.1.3" })[0], /the tag is v0\.1\.3, the version v0\.1\.2/)
   assert.match(versionErrors({ ...same, tag: "0.1.2" })[0], /the tag is 0\.1\.2/)
   assert.match(versionErrors({ ...same, notes: "app/release-notes/v0.1.2.md is missing" })[0], /missing/)
-  assert.match(versionErrors({ tauri: "0.1", cargo: "0.1" })[0], /X\.Y\.Z/)
+  assert.match(versionErrors({ tauri: "0.1", cargo: "0.1", lock: "0.1" })[0], /X\.Y\.Z/)
 })
 
 test("the repo as it is passes the check, and a tag that is not its version does not", () => {

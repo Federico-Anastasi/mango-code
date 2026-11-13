@@ -1,16 +1,3 @@
-const keybinds: Record<string, string> = {
-  "file.attach": "mod+u",
-  "prompt.mode.shell": "mod+shift+x",
-  "prompt.mode.normal": "mod+shift+e",
-  "agent.cycle": "mod+.",
-  "model.choose": "mod+m",
-  "model.variant.cycle": "mod+shift+m",
-}
-
-export function formatKeybind(config: string) {
-  return config === "none" ? "" : config
-}
-
 export function useCommand() {
   return {
     options: [],
@@ -18,11 +5,5 @@ export function useCommand() {
       return () => undefined
     },
     trigger() {},
-    keybind(id: string) {
-      return keybinds[id]
-    },
-    keybindParts(id: string) {
-      return keybinds[id]?.split("+") ?? []
-    },
   }
 }

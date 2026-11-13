@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test"
 import { createRoot, getOwner, onCleanup } from "solid-js"
 import { createTabMemory } from "./tab-memory"
-import { leftEmptyDraft, nextTabAfterClose, pushClosedTab, removeClosedTabs, takeClosedTab, type ClosedTab } from "./closed-tabs"
-import { tabKey, type DraftTab, type SessionTab, type Tab } from "./tabs"
+import { leftEmptyDraft, nextTabAfterClose } from "./closed-tabs"
+import { settingsHref, tabHref, tabKey, type DraftTab, type SessionTab, type Tab } from "./tabs"
 import { migrateTabs } from "./tab-migration"
 import type { ServerConnection } from "./server"
 
@@ -26,6 +26,23 @@ describe("tab migration", () => {
   test("replaces invalid top-level persisted data", () => {
     expect(migrateTabs(null, server)).toEqual([])
     expect(migrateTabs({}, server)).toEqual([])
+  })
+})
+
+describe("the settings tab", () => {
+  test("is kept across a restart, with its server, and is one: one key, the page's address", () => {
+    const settings = { type: "settings" as const, server }
+    expect(migrateTabs([settings, { type: "settings" }], server)).toEqual([settings, settings])
+    expect(tabKey(settings)).toBe("settings")
+    expect(tabHref(settings)).toBe("/settings")
+  })
+
+  test("opens on a section and on a row of it", () => {
+    expect(settingsHref()).toBe("/settings")
+    expect(settingsHref({ section: "models" })).toBe("/settings?section=models")
+    expect(settingsHref({ section: "general", focus: "Dettatura (microfono)" })).toBe(
+      "/settings?section=general&focus=Dettatura+%28microfono%29",
+    )
   })
 })
 
@@ -73,69 +90,7 @@ describe("a new conversation left empty", () => {
   })
 })
 
-describe("closed tab stack", () => {
-  test("records session tabs with their index", () => {
-    const stack = pushClosedTab([], sessionTab("a"), 2)
-
-    expect(stack).toEqual([{ tab: sessionTab("a"), index: 2 }])
-  })
-
-  test("ignores draft tabs", () => {
-    const draft: Tab = { type: "draft", draftID: "d1", server, directory: "/tmp" }
-
-    expect(pushClosedTab([], draft, 0)).toEqual([])
-  })
-
-  test("caps the stack size", () => {
-    const stack = Array.from({ length: 30 }, (_, i) => i).reduce<ClosedTab[]>(
-      (acc, i) => pushClosedTab(acc, sessionTab(`s${i}`), i),
-      [],
-    )
-
-    expect(stack).toHaveLength(25)
-    expect(stack[0]?.tab.sessionId).toBe("s5")
-    expect(stack.at(-1)?.tab.sessionId).toBe("s29")
-  })
-
-  test("pops the most recently closed tab", () => {
-    const stack = [
-      { tab: sessionTab("a"), index: 0 },
-      { tab: sessionTab("b"), index: 1 },
-    ]
-    const result = takeClosedTab(stack, [])
-
-    expect(result.entry?.tab.sessionId).toBe("b")
-    expect(result.stack).toEqual([{ tab: sessionTab("a"), index: 0 }])
-  })
-
-  test("skips entries whose tab is already open", () => {
-    const stack = [
-      { tab: sessionTab("a"), index: 0 },
-      { tab: sessionTab("b"), index: 1 },
-    ]
-    const result = takeClosedTab(stack, [sessionTab("b")])
-
-    expect(result.entry?.tab.sessionId).toBe("a")
-    expect(result.stack).toEqual([])
-  })
-
-  test("returns no entry when everything is open or empty", () => {
-    expect(takeClosedTab([], []).entry).toBeUndefined()
-
-    const result = takeClosedTab([{ tab: sessionTab("a"), index: 0 }], [sessionTab("a")])
-    expect(result.entry).toBeUndefined()
-    expect(result.stack).toEqual([])
-  })
-
-  test("purges removed sessions", () => {
-    const stack = [
-      { tab: sessionTab("a"), index: 0 },
-      { tab: sessionTab("b"), index: 1 },
-    ]
-
-    expect(removeClosedTabs(stack, server, ["a"])).toEqual([{ tab: sessionTab("b"), index: 1 }])
-  })
-
+describe("closing a tab", () => {
   test("does not navigate when a background tab closes", () => {
     const tabs = [sessionTab("a"), sessionTab("b"), sessionTab("c")]
 

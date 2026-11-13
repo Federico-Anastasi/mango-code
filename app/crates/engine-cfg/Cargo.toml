@@ -14,7 +14,7 @@ nvml-wrapper = "0.13.0"
 minijinja = { version = "3", features = ["loop_controls", "preserve_order", "serde"] }
 minijinja-contrib = { version = "3", features = ["pycompat"] }
 raw-cpuid = "11"
-windows = { version = "0.58", features = ["Win32_Foundation", "Win32_Graphics_Dxgi", "Win32_System_SystemInformation"] }
+windows = { version = "0.58", features = ["Win32_Foundation", "Win32_Graphics_Dxgi", "Win32_Storage_FileSystem", "Win32_System_SystemInformation"] }
 
 [dev-dependencies]
 tempfile = "3.27.0"

@@ -11,7 +11,7 @@ import { TooltipV2 } from "@opencode-ai/ui/v2/tooltip-v2"
 import type { ServerConnection } from "@/context/server"
 import { useLanguage } from "@/context/language"
 import { useServerSDK } from "@/context/server-sdk"
-import { authTokenFromCredentials } from "@/utils/server"
+import { authHeaders } from "@/utils/server"
 import { showToast } from "@/utils/toast"
 import {
   formatVoiceDuration,
@@ -22,7 +22,7 @@ import {
 } from "./dictation"
 import { dictationState, showDictationHint } from "@/utils/dictation-state"
 import { inMangoDesktop, type MangoDictationState } from "@/utils/mango-desktop"
-import { useSettingsDialog } from "@/components/settings-dialog"
+import { useOpenSettings } from "@/components/settings-page/open"
 
 export const VOICE_LIVE_START_PATH = "/mango/voice/live/start"
 export const VOICE_LIVE_PCM_PATH = "/mango/voice/live/pcm"
@@ -250,10 +250,8 @@ async function voiceRequest(
   body: ArrayBuffer | undefined,
   unreachable: string,
 ): Promise<Record<string, unknown>> {
-  const headers: Record<string, string> = {}
-  if (body) headers["content-type"] = "application/octet-stream"
-  if (server.password)
-    headers.authorization = `Basic ${authTokenFromCredentials({ username: server.username, password: server.password })}`
+  // The agent takes a POST to its routes only with one of these types (they make a page of another site ask first).
+  const headers = { "content-type": body ? "application/octet-stream" : "application/json", ...authHeaders(server) }
   const response = await fetch(new URL(path, base), {
     method: "POST",
     headers,
@@ -326,7 +324,8 @@ export function PromptVoiceButton(props: {
     },
   }
   // In the app the dictation is the user's choice: until it is ready the button leads to where it is turned on, and says so.
-  const settings = useSettingsDialog("general")
+  const openSettings = useOpenSettings()
+  const settings = () => openSettings("general", language.t("settings.dictation.row.title"))
   const dictation = dictationState()
   const notReady = () => {
     const current = dictation()

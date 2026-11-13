@@ -2,6 +2,7 @@ import "@/index.css"
 import * as Sentry from "@sentry/solid"
 import { I18nProvider } from "@opencode-ai/ui/context"
 import { DialogProvider } from "@opencode-ai/ui/context/dialog"
+import { CloseNotice } from "@/components/close-notice"
 import { FileComponentProvider } from "@opencode-ai/ui/context/file"
 import { File } from "@opencode-ai/session-ui/file"
 import { Font } from "@opencode-ai/ui/font"
@@ -70,6 +71,9 @@ import { NewHome } from "@/pages/home"
 import { LegacyHome } from "@/pages/home/legacy-home"
 
 const NewSession = lazy(() => import("@/pages/new-session"))
+const SettingsPage = lazy(() =>
+  import("@/components/settings-page/settings-page").then((m) => ({ default: m.SettingsPage })),
+)
 
 const SessionRoute = () => {
   const settings = useSettings()
@@ -333,7 +337,6 @@ function DesktopCommands() {
       commands.push({
         id: "logs.export",
         title: language.t("command.logs.export"),
-        category: language.t("command.category.settings"),
         onSelect: () => {
           void platform.exportDebugLogs?.()
         },
@@ -378,7 +381,7 @@ function NewAppLayout(props: ParentProps<{ serverScoped?: JSX.Element }>) {
   )
 }
 
-// The draft page only renders the prompt composer, so it drops TerminalProvider.
+// The draft page only renders the prompt composer.
 // FileProvider and CommentsProvider stay because PromptInput uses file search and comment context.
 function DraftProviders(props: ParentProps) {
   return (
@@ -415,6 +418,7 @@ export function AppBaseProviders(
               <QueryProvider>
                 <WslServersProvider>
                   <DialogProvider>
+                    <CloseNotice />
                     <FileComponentProvider component={File}>{props.children}</FileComponentProvider>
                   </DialogProvider>
                 </WslServersProvider>
@@ -641,6 +645,7 @@ function Routes(props: { serverScoped?: JSX.Element }) {
         <Route path="/server/:serverKey/session/:id" component={TargetSessionRoute} />
       </Show>
       <Route path="/new-session" component={DraftRoute} />
+      <Route path="/settings" component={SettingsPage} />
     </>
   )
 }

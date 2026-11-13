@@ -344,9 +344,7 @@ export const LineCommentEditor = (props: LineCommentEditorProps) => {
               }
 
               const nav = e.key === "ArrowUp" || e.key === "ArrowDown" || e.key === "Enter"
-              const ctrlNav =
-                event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey && (e.key === "n" || e.key === "p")
-              if ((nav || ctrlNav) && mention.flat().length > 0) {
+              if (nav && mention.flat().length > 0) {
                 mention.onKeyDown(event)
                 event.preventDefault()
                 return

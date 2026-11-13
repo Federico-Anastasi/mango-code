@@ -80,17 +80,6 @@ describe("i18n parity", () => {
     }
   })
 
-  test("non-English locales translate targeted unseen session keys", async () => {
-    const source = await dictionary("./en.ts")
-    for (const locale of appLocales) {
-      const target = await dictionary(`./${locale}.ts`)
-      for (const key of ["command.session.previous.unseen", "command.session.next.unseen"]) {
-        expect(target[key]).toBeDefined()
-        expect(target[key]).not.toBe(source[key])
-      }
-    }
-  })
-
   test("changed-file summary keys preserve rendered English copy and localize complete phrases", async () => {
     const source = await dictionary("../../../ui/src/i18n/en.ts")
     expect(source["ui.sessionTurn.diffs.changed.one"].replace("{{count}}", "1")).toBe("1 Changed file")

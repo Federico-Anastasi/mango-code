@@ -306,10 +306,11 @@ impl Inner {
 
     fn write(&self, saved: &Saved) -> Result<()> {
         let text = serde_json::to_string_pretty(saved)?;
+        let unsaved = || mango_common::user_text(&tr!("Non riesco a salvare il servizio per il telefono.", "I can't save the service for the phone."), self.file.display());
         if let Some(folder) = self.file.parent() {
-            std::fs::create_dir_all(folder)?;
+            std::fs::create_dir_all(folder).with_context(unsaved)?;
         }
-        mango_common::write_atomic(&self.file, text).with_context(|| tr!("scrittura di {}", "writing {}", self.file.display()))
+        mango_common::write_atomic(&self.file, text).with_context(unsaved)
     }
 
     /// True if it's the current key. The hashes are compared, in constant time.

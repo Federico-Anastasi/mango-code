@@ -9,6 +9,7 @@
 //!   hardware.
 
 pub mod other_models;
+pub mod choices;
 mod catalog;
 mod general;
 mod gguf;
@@ -19,9 +20,11 @@ mod profiles;
 mod fixtures;
 mod speed;
 mod split;
+mod view;
 
-pub use catalog::{catalog, catalog_for, Origin, ModelEntry};
-pub use general::{recommended, Recommendation, Placement};
+pub use catalog::{catalog, catalog_for, default_to_save, download_of, startup_model, DownloadPlan, Origin, ModelEntry};
+pub use general::Placement;
+pub use view::{after_failure, taken_before_start, CardsTaken, computer_view, engine_label, engine_updates, models_view, recommended, AfterFailure, ComputerView, EngineUpdate, Limits, ModelView, Recommendation, Verdict, Where};
 pub use speed::{cpu_speed, Speed};
 pub use hardware::{gpu_memory, detect, choose_build, Cpu, Hardware, Vendor, Gpu};
 pub use profiles::{profile_for, ProfileHardware, Measurements, Profile};
@@ -129,8 +132,9 @@ fn build_plan(
     if cfg.cloud.is_some() {
         bail!("{}", tr!("Il modello «{key}» è un modello online, non si avvia in locale.", "The model «{key}» is an online model, it doesn't start locally."));
     }
+    let scope = choices::read(paths)?.scope(key);
 
-    let setup = setup_for(paths, key, &cfg, hw)?;
+    let setup = setup_for(paths, key, &cfg, hw, &scope.choices)?;
     let gguf_rel = cfg.gguf_for(setup.engine()).ok_or_else(|| {
         user(
             &tr!("La configurazione del modello è incompleta. Reinstalla l'applicazione.", "The model configuration is incomplete. Reinstall the application."),
@@ -139,8 +143,8 @@ fn build_plan(
     })?;
     let gguf = paths.models.join(gguf_rel);
     let remedy = tr!(
-        "Scaricalo da «Modelli e motore», nel menu dell'icona di Mango Code.",
-        "Download it from «Models and engine», in the Mango Code icon menu."
+        "Scaricalo da Impostazioni › Modelli.",
+        "Download it from Settings › Models."
     );
     require(&gguf, &tr!("Il modello «{}» non è sul disco.", "The model «{}» is not on disk.", cfg.label), &remedy)?;
     let mmproj = match &cfg.mmproj {
@@ -172,26 +176,20 @@ fn build_plan(
     })?;
     let exe = dir.join("llama-server.exe");
 
+    // The cards the plan leaves out: those lent to another job and those the user doesn't use.
+    let unused = general::unused_indexes(hw, &scope);
     let parts = match &setup {
-        Setup::Profile(p) => profile_parts(p, &gguf, cfg.encoder_bytes(), hw, excluded, read_shape)?,
+        Setup::Profile(p) => {
+            let left: Vec<u32> = excluded.iter().chain(&unused).copied().collect();
+            profile_parts(p, &gguf, cfg.encoder_bytes(), hw, &left, scope.choices.context, read_shape)?
+        }
         Setup::General { .. } => {
-            let g = general::plan(file, &cfg, key, hw, excluded)?;
+            let g = general::plan(file, &cfg, hw, excluded, &scope)?;
             Parts { ctx: g.ctx, gpus_used: g.gpus, env: g.env, args: g.args, args_after: vec![], disk_memory: false }
         }
     };
     let Parts { ctx, gpus_used, env, args: setup_args, args_after, disk_memory } = parts;
-    if let Some(g) = gpus_used.iter().find(|g| excluded.contains(&g.index)) {
-        bail!(
-            "{}",
-            tr!(
-                "Il modello «{}» ha bisogno della scheda {} ({}), che è stata liberata per un altro lavoro.",
-                "The model «{}» needs graphics card {} ({}), which has been released for another job.",
-                cfg.label,
-                g.index,
-                g.name
-            )
-        );
-    }
+    check_left(&cfg.label, &gpus_used, excluded, &unused)?;
     let slots = paths.data.join("slots");
     std::fs::create_dir_all(&slots).map_err(|e| {
         user(&tr!("Non riesco a preparare la cartella di lavoro di Mango Code.", "I can't prepare Mango Code's working folder."), format!("{}: {e}", slots.display()))
@@ -275,7 +273,7 @@ fn build_plan(
 /// The profile splits the layers across the GPUs by itself. If it declares the GPUs or the layer map by hand, it
 /// wins (explicit override) and the automatic plan touches neither the GPUs nor the context; a profile without
 /// `split` uses all the GPUs, with its own `-ts`.
-fn auto_split(p: &Profile) -> bool {
+pub(crate) fn auto_split(p: &Profile) -> bool {
     p.split && !p.env.contains_key("CUDA_VISIBLE_DEVICES") && !p.env.contains_key("LLAMA_LAYER_DEVICES")
 }
 
@@ -284,63 +282,103 @@ fn cache_types(p: &Profile) -> (&str, &str) {
     (arg_value(&p.args, &["-ctk", "--cache-type-k"]).unwrap_or("f16"), arg_value(&p.args, &["-ctv", "--cache-type-v"]).unwrap_or("f16"))
 }
 
-/// A profile's context on `hw` before starting, when the model may not be on disk yet: with the automatic split
-/// what the model's shape in the catalog leaves on the GPUs (error if it doesn't fit), otherwise the profile's.
-/// Without the shape in the catalog the profile's context holds: the plan confirms it, reading the GGUF.
-pub(crate) fn profile_context(cfg: &catalog::ModelCfg, p: &Profile, hw: &Hardware) -> Result<u32> {
-    if !auto_split(p) {
-        return Ok(p.ctx);
-    }
-    let (ctk, ctv) = cache_types(p);
-    let Some(shape) = cfg.shape(ctk, ctv)? else { return Ok(p.ctx) };
+/// A profile's context and cards on `hw` before starting, when the model may not be on disk yet: with the automatic
+/// split what the model's shape in the catalog leaves on the cards (error if it doesn't fit), otherwise the profile's.
+/// Without the shape in the catalog the profile's context holds, on all the cards that are left: the plan confirms
+/// it, reading the GGUF. `excluded`: the cards lent or left out; `chosen`: the context the user chose, if any.
+pub(crate) fn profile_fit(cfg: &catalog::ModelCfg, p: &Profile, hw: &Hardware, excluded: &[u32], chosen: Option<u32>) -> Result<(u32, Vec<Gpu>)> {
     let gpus: Vec<Gpu> = hw.usable().cloned().collect();
-    Ok(split::partition(&gpus, &shape, p.ctx, p.mtp.is_some(), cfg.encoder_bytes())?.ctx)
+    let want = chosen.map_or(p.ctx, |c| c.min(p.ctx));
+    if !auto_split(p) {
+        return Ok((want, manual_gpus(p, gpus)?));
+    }
+    let available: Vec<Gpu> = gpus.into_iter().filter(|g| !excluded.contains(&g.index)).collect();
+    let (ctk, ctv) = cache_types(p);
+    let Some(shape) = cfg.shape(ctk, ctv)? else { return Ok((want, available)) };
+    let placement = split::partition(&available, &shape, want, p.mtp.is_some(), cfg.encoder_bytes())?;
+    let used = placement_cards(&placement);
+    Ok((placement.ctx, used.into_iter().map(|i| available[i].clone()).collect()))
 }
 
-/// A profile's setup: its GPUs, its context, its environment and its arguments. `encoder`: bytes of the image
-/// encoder, 0 if the model doesn't read images.
+/// The cards a profile that declares them by hand uses: those of its `CUDA_VISIBLE_DEVICES`, or all.
+fn manual_gpus(p: &Profile, gpus: Vec<Gpu>) -> Result<Vec<Gpu>> {
+    let Some(list) = p.env.get("CUDA_VISIBLE_DEVICES") else { return Ok(gpus) };
+    list.split(',')
+        .map(|s| {
+            let i: u32 = s.trim().parse().map_err(|_| {
+                user(&tr!("La configurazione delle schede video è errata.", "The graphics card configuration is wrong."), format!("CUDA_VISIBLE_DEVICES={list}"))
+            })?;
+            gpus.iter().find(|g| g.index == i).cloned().ok_or_else(|| {
+                user(
+                    &tr!("La configurazione indica una scheda video che non c'è.", "The configuration names a graphics card that isn't there."),
+                    format!("CUDA_VISIBLE_DEVICES={list}, GPUs found: {}", gpus.len()),
+                )
+            })
+        })
+        .collect()
+}
+
+/// The model's cards in order (the main one is CUDA0), then the image encoder's if the model doesn't use it.
+fn placement_cards(placement: &split::Placement) -> Vec<usize> {
+    let mut used = placement.gpus.clone();
+    used.extend(placement.encoder.filter(|e| !used.contains(e)));
+    used
+}
+
+/// A plan that needs a card lent to another job or left out by the user doesn't start, and says which of the two.
+pub(crate) fn check_left(label: &str, used: &[Gpu], lent: &[u32], unused: &[u32]) -> Result<()> {
+    let Some(g) = used.iter().find(|g| lent.contains(&g.index) || unused.contains(&g.index)) else { return Ok(()) };
+    if unused.contains(&g.index) {
+        bail!(
+            "{}",
+            tr!(
+                "Il modello «{}» ha bisogno della scheda {} ({}), che hai segnato come non usata.",
+                "The model «{}» needs graphics card {} ({}), which you marked as not used.",
+                label,
+                g.index,
+                g.name
+            )
+        );
+    }
+    bail!(
+        "{}",
+        tr!(
+            "Il modello «{}» ha bisogno della scheda {} ({}), che è stata liberata per un altro lavoro.",
+            "The model «{}» needs graphics card {} ({}), which has been released for another job.",
+            label,
+            g.index,
+            g.name
+        )
+    )
+}
+
+/// A profile's setup: its GPUs, its context (the profile's, or the user's if smaller), its environment and its
+/// arguments. `encoder`: bytes of the image encoder, 0 if the model doesn't read images.
 fn profile_parts(
     p: &Profile,
     gguf: &Path,
     encoder: u64,
     hw: &Hardware,
     excluded: &[u32],
+    chosen: Option<u32>,
     read_shape: impl FnOnce(&Path, &str, &str) -> Result<split::ModelShape>,
 ) -> Result<Parts> {
     let manual = !auto_split(p);
     let gpus: Vec<Gpu> = hw.usable().cloned().collect();
     let available: Vec<Gpu> = gpus.iter().filter(|g| !excluded.contains(&g.index)).cloned().collect();
-    let mut ctx = p.ctx;
+    let mut ctx = chosen.map_or(p.ctx, |c| c.min(p.ctx));
     // The engines (patched forks) turn on CUDA graphs even on Pascal/Turing with this variable.
     let mut env: Vec<(String, String)> =
         vec![("CUDA_DEVICE_ORDER".into(), "PCI_BUS_ID".into()), ("GGML_CUDA_GRAPHS_ANY_ARCH".into(), "1".into())];
     let gpus_used = if manual {
-        match p.env.get("CUDA_VISIBLE_DEVICES") {
-            None => gpus,
-            Some(list) => list
-                .split(',')
-                .map(|s| {
-                    let i: u32 = s.trim().parse().map_err(|_| {
-                        user(&tr!("La configurazione delle schede video è errata.", "The graphics card configuration is wrong."), format!("CUDA_VISIBLE_DEVICES={list}"))
-                    })?;
-                    gpus.iter().find(|g| g.index == i).cloned().ok_or_else(|| {
-                        user(
-                            &tr!("La configurazione indica una scheda video che non c'è.", "The configuration names a graphics card that isn't there."),
-                            format!("CUDA_VISIBLE_DEVICES={list}, GPUs found: {}", gpus.len()),
-                        )
-                    })
-                })
-                .collect::<Result<_>>()?,
-        }
+        manual_gpus(p, gpus)?
     } else {
         let (ctk, ctv) = cache_types(p);
         let shape = read_shape(gguf, ctk, ctv)
             .map_err(|e| user(&tr!("Non riesco a leggere il modello.", "I can't read the model."), format!("{}: {e:#}", gguf.display())))?;
         let placement = split::partition(&available, &shape, ctx, p.mtp.is_some(), encoder)?;
         ctx = placement.ctx;
-        // The model's GPUs in order (the main one is CUDA0), then the encoder's if the model doesn't use it.
-        let mut used: Vec<usize> = placement.gpus.clone();
-        used.extend(placement.encoder.filter(|e| !used.contains(e)));
+        let used = placement_cards(&placement);
         let visible: Vec<String> = used.iter().map(|&i| available[i].index.to_string()).collect();
         env.push(("CUDA_VISIBLE_DEVICES".into(), visible.join(",")));
         // With a single GPU visible the map isn't needed: the engine puts everything on the only GPU. With the
@@ -375,3 +413,5 @@ fn profile_parts(
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod choice_tests;

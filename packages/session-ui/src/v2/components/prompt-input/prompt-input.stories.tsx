@@ -84,7 +84,6 @@ const commandSuggestions: PromptInputV2Suggestion[] = [
     trigger: "fix",
     title: "Fix",
     description: "Fix the current issue",
-    keybind: ["Enter"],
   },
   {
     id: "command-review",

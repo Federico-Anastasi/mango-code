@@ -3,14 +3,19 @@
 //! * `POST /v1/...` with the `"model"` field (key of mango-models.json): starts that model if needed (waiting for
 //!   the other one's in-flight requests), then forwards. Every other route (`/health`, `/props`, `/slots`,
 //!   `/metrics`, ...) goes to the running engine; 503 if no engine is running. A model the plan refuses (unknown,
-//!   missing files, doesn't fit) gives 422: the agent doesn't retry and shows the sentence.
+//!   missing files, doesn't fit) gives 422: the agent doesn't retry and shows the sentence. So does a model whose
+//!   load the user stopped by picking another one. A request to `/v1/chat/completions` gets the style of the answers and the reasoning the user chose for its model, where it does
+//!   not say them itself (`EngineManager::set_request_defaults`).
 //! * `GET /engine` → the state (`PublicState`).
 //! * `POST /engine/release` `{"gpus": [0, 2], "pid"?: n}` (no body = all) → releases the GPUs; the loan belongs to
 //!   the calling process (or to `pid`, `0` = to nobody) and ends when that process closes.
 //! * `POST /engine/resume` → gives the GPUs back and restarts the model; replies when it's ready.
 //! * `POST /engine/model` `{"model": "toq"}` → starts that model; replies when it's ready (422 if the plan refuses it).
+//! * `/control/...` → the app's own routes (`Control`), which the manager only carries: what the app tells and does about
+//!   the models, beyond the engine. Without an app behind (the tools, the tests) they are not there (404).
 //!
-//! Forwarding is byte for byte: the request goes to the engine with `Connection: close` and the reply returns to
+//! Forwarding is byte for byte; only a chat request that lacks the defaults of its model (above) gets those fields
+//! written in. The request goes to the engine with `Connection: close` and the reply returns to
 //! the client as it arrives (the engine's headers and chunks), piece by piece. A thread watches the client's
 //! socket: if the client closes (the «Stop» button), the connection to the engine is closed at once too, and the
 //! engine cancels the task even while it is reading the prompt, when it has nothing to write yet.
@@ -29,6 +34,7 @@ use serde_json::{json, Value};
 use std::cell::Cell;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{Ipv4Addr, Shutdown, TcpListener, TcpStream};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 /// A request body larger than this (base64 images included) is an error.
@@ -41,15 +47,21 @@ const READ_TIMEOUT: Duration = if cfg!(test) { Duration::from_secs(1) } else { D
 /// The time a PC of the network has to send the head of its request, however slowly it comes.
 const HEAD_DEADLINE: Duration = if cfg!(test) { Duration::from_secs(1) } else { Duration::from_secs(10) };
 /// Request headers that pass on to the engine.
-const FORWARDED: &[&str] = &["content-type", "accept", "authorization", "x-mango-warmup"];
+const FORWARDED: &[&str] = &["content-type", "accept", "authorization"];
+
+/// The routes under `/control/` belong to whoever starts the manager (the app): the status and the JSON to answer for a
+/// method, a path and a body. They are served on 127.0.0.1 only, never on the port shared with the other PCs.
+pub trait Control: Send + Sync {
+    fn handle(&self, method: &str, path: &str, body: &[u8]) -> (u16, Value);
+}
 
 /// Opens the port on 127.0.0.1 and serves on a thread of its own (one thread per connection).
-pub fn serve(m: EngineManager, port: u16) -> Result<()> {
+pub fn serve(m: EngineManager, port: u16, control: Option<Arc<dyn Control>>) -> Result<()> {
     let l = TcpListener::bind(("127.0.0.1", port)).with_context(|| format!("engine port {port}"))?;
     std::thread::Builder::new().name("engine-http".into()).spawn(move || {
         for c in l.incoming().flatten() {
-            let m = m.clone();
-            let _ = std::thread::Builder::new().name("engine-request".into()).spawn(move || handle(c, &m, None));
+            let (m, control) = (m.clone(), control.clone());
+            let _ = std::thread::Builder::new().name("engine-request".into()).spawn(move || handle(c, &m, None, control.as_deref()));
         }
     })?;
     Ok(())
@@ -130,7 +142,10 @@ fn admit(method: &str, url: &str, headers: &[(String, String)], share: &Share) -
         return refuse(
             403,
             "the address must be numeric",
-            tr!("l'indirizzo dev'essere numerico (http://192.168.x.y:porta o http://100.x.y.z:porta)", "the address must be numeric (http://192.168.x.y:port or http://100.x.y.z:port)"),
+            tr!(
+                "l'indirizzo del motore dev'essere fatto di numeri: copia di nuovo il codice dal PC con il motore",
+                "the engine's address must be made of numbers: copy the code again from the PC with the engine"
+            ),
         );
     }
     let key = header("Authorization").and_then(|v| v.strip_prefix("Bearer ")).unwrap_or("");
@@ -139,8 +154,8 @@ fn admit(method: &str, url: &str, headers: &[(String, String)], share: &Share) -
             401,
             "wrong or missing key",
             tr!(
-                "La chiave non è giusta, oppure la condivisione è spenta: copia di nuovo il codice dal PC con il motore e incollalo in «Modelli e motore».",
-                "The key is not right, or sharing is off: copy the code again from the PC with the engine and paste it in \"Models and engine\"."
+                "La chiave non è giusta, oppure la condivisione è spenta: copia di nuovo il codice dal PC con il motore e incollalo in Impostazioni › Collegamenti.",
+                "The key is not right, or sharing is off: copy the code again from the PC with the engine and paste it in Settings › Connections."
             ),
         );
     }
@@ -207,10 +222,10 @@ fn read_request(c: &TcpStream, gate: Option<&Share>) -> Result<Request> {
 
 /// A request from another PC (`share.rs`): the gate is in `read_request`.
 pub(crate) fn handle_network(c: TcpStream, share: &Share) {
-    handle(c, share.manager(), Some(share));
+    handle(c, share.manager(), Some(share), None);
 }
 
-fn handle(c: TcpStream, m: &EngineManager, net: Option<&Share>) {
+fn handle(c: TcpStream, m: &EngineManager, net: Option<&Share>, app: Option<&dyn Control>) {
     let mut req = match read_request(&c, net) {
         Ok(r) => r,
         Err(e) => {
@@ -247,6 +262,15 @@ fn handle(c: TcpStream, m: &EngineManager, net: Option<&Share>) {
     if let (Some(share), "/mango/models") = (net, path.as_str()) {
         return respond(&c, 200, share.offered());
     }
+    if path.starts_with("/control/") {
+        return match app {
+            Some(app) => {
+                let (status, v) = app.handle(&req.method, &path, &req.body);
+                respond(&c, status, v)
+            }
+            None => respond(&c, 404, error(&tr!("rotta sconosciuta: {path}", "unknown route: {path}"))),
+        };
+    }
     if path == "/engine" || path.starts_with("/engine/") {
         let t0 = Instant::now();
         let (status, v) = control(&req, &path, &c, m);
@@ -267,8 +291,11 @@ fn handle(c: TcpStream, m: &EngineManager, net: Option<&Share>) {
     let permit = match permit {
         Ok(u) => u,
         // A model that doesn't start as it is must not be retried, and the agent retries 5xx: 422, with the sentence that explains it.
-        Err(e) => return respond(&c, if e.is::<crate::WillNotStart>() { 422 } else { 503 }, error(&format!("{e:#}"))),
+        Err(e) => return respond(&c, if crate::not_to_retry(&e) { 422 } else { 503 }, error(&format!("{e:#}"))),
     };
+    if path == "/v1/chat/completions" && req.method == "POST" {
+        req.body = m.with_request_defaults(&permit.key, std::mem::take(&mut req.body));
+    }
     if let Err(e) = forward(&c, &permit.url, &req) {
         // Before anything has been written to the client the error can still be told; after that, the connection drops.
         respond(&c, 502, error(&tr!("il motore non risponde: {e:#}", "the engine does not answer: {e:#}")));
@@ -338,7 +365,7 @@ fn control(req: &Request, path: &str, c: &TcpStream, m: &EngineManager) -> (u16,
     match outcome {
         Ok(s) => (200, serde_json::to_value(s).unwrap_or(Value::Null)),
         // A model the plan refuses answers 422, as on `/v1/`: the sentence says why and nobody retries.
-        Err(e) => (if e.is::<crate::WillNotStart>() { 422 } else { 500 }, error(&format!("{e:#}"))),
+        Err(e) => (if crate::not_to_retry(&e) { 422 } else { 500 }, error(&format!("{e:#}"))),
     }
 }
 
@@ -451,7 +478,8 @@ fn loan_pid(v: &Value, caller: impl FnOnce() -> Option<u32>) -> Result<Option<u3
     }
 }
 
-fn error(msg: &str) -> Value {
+/// The body of an error, in the shape of OpenAI's.
+pub fn error(msg: &str) -> Value {
     json!({ "error": { "message": msg, "type": "mango_engine" } })
 }
 
@@ -517,7 +545,7 @@ mod tests {
     #[test]
     fn a_head_sent_drop_by_drop_is_cut_at_the_deadline() {
         let dir = tempfile::tempdir().unwrap();
-        let manager = EngineManager::new(Box::new(|k, _, _| bail!("no model in the tests ({k})")), Box::new(Vec::new), dir.path(), None);
+        let manager = EngineManager::new(Box::new(|k, _, _| bail!("no model in the tests ({k})")), Box::new(Vec::new), dir.path());
         let share = Share::new(dir.path(), manager, 0, true).unwrap();
         let l = TcpListener::bind("127.0.0.1:0").unwrap();
         let mut client = TcpStream::connect(l.local_addr().unwrap()).unwrap();

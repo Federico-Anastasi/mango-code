@@ -1,10 +1,10 @@
 //! A fake `llama-server`, to test the engine manager and the integration without GPUs.
 //!
-//! Arguments like the real ones (only `-m` and `--port` are used). Routes:
+//! Arguments like the real ones (only `-m` and `--port` are used; `--version` says a version and exits, as the check of
+//! a downloaded engine wants). Routes:
 //! * `GET /health` → 200 `{"status":"ok"}` (503 for `FAKE_ENGINE_START_MS` after start);
 //! * `GET /props` → `{"model_path": <-m>}`;
-//! * `POST /v1/chat/completions` → the base warm-up (`X-Mango-Warmup`) answers «Ready.»; without a script it
-//!   answers «I am the engine <name of the -m file>»;
+//! * `POST /v1/chat/completions` → without a script it answers «I am the engine <name of the -m file>»;
 //!   with `FAKE_ENGINE_SCRIPT` (JSON file: a list of steps) it answers step number N, where N is the number of tool
 //!   results already in the conversation. A step is `{"text": "..."}` (said in pieces, one word per piece) or
 //!   `{"tool": "<name>", "arguments": {...}}` (a tool call). When streaming (`"stream": true`) one piece every
@@ -45,6 +45,11 @@ use tiny_http::{Header, Method, Response, Server};
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
+    // Like the real one, for the check of a downloaded engine: it starts and says its version.
+    if args.iter().any(|a| a == "--version") {
+        println!("version: 0 (fake-engine)");
+        return;
+    }
     let value = |name: &str| args.windows(2).find(|w| w[0] == name).map(|w| w[1].clone());
     let model = value("-m").unwrap_or_default();
     let port: u16 = value("--port").and_then(|p| p.parse().ok()).expect("--port");
@@ -151,11 +156,7 @@ fn main() {
                 }
                 (Method::Post, "/v1/chat/completions") => {
                     memory.lock().unwrap().0 += 100;
-                    // The base warm-up (X-Mango-Warmup header) isn't a conversation: a short text, like the token a
-                    // real engine writes, without consuming the script.
-                    let warmup = req.headers().iter().any(|h| h.field.equiv("x-mango-warmup"));
                     let step = match &script {
-                        _ if warmup => json!({ "text": "Ready." }),
                         None => json!({ "text": format!("I am the engine {name}") }),
                         Some(c) => {
                             // Two forms of step are outside the numbering: `{"summary": "...", "token": {...}}` answers

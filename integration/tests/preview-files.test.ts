@@ -1,6 +1,7 @@
-// A PDF or a picture of the project opens in the Preview panel from its card in the chat, in the app's real window
+// A PDF, a picture or a web page of the project opens in the Preview panel from its card in the chat, in the app's real window
 // (WebView2 CDP for the web UI, the bridge's `preview.state()` for what the native panel shows):
 //  - a PDF and a picture open in the panel; an SVG goes through a page that draws it as a picture, so its script never runs;
+//  - an html page opens in the panel too, by its own address, and runs, also from "Open" next to its name in the chat;
 //  - a file that is too big, unreadable, outside the project or of another type is refused with a reason that the card shows;
 //  - the click on the card does it all, the panel opens in the conversation.
 // Fake engine, no GPU. Own ports (47690-47692). With `MC_PHOTOS=<folder>` it saves a photo of the window (860 px and
@@ -59,6 +60,8 @@ function png(width = 240, height = 150) {
   return Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk("IHDR", header), chunk("IDAT", deflateSync(rows)), chunk("IEND", Buffer.alloc(0))]);
 }
 const PNG = png();
+// A page that changes its own title: the title of the panel says the script ran.
+const PAGE = `<!doctype html><title>before</title><h1>Page in the panel</h1><script>document.title = "ran"</script>`;
 const SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80"><script>document.title = "RAN"</script><rect width="120" height="80" fill="#e8590c"/></svg>`;
 
 beforeAll(async () => {
@@ -66,6 +69,7 @@ beforeAll(async () => {
     ({ project }) => [
       { tool: "write", arguments: { filePath: path.join(project, "doc.pdf"), content: PDF } },
       { tool: "write", arguments: { filePath: path.join(project, "picture.png"), content: "x" } },
+      { tool: "write", arguments: { filePath: path.join(project, "page.html"), content: "x" } },
       { text: "Fatto." },
     ],
     { window: true, env: { MANGO_AGENT_PORT: String(AGENT), MANGO_ENGINE_PORT: String(ENGINE), WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${DEBUG}` } },
@@ -78,7 +82,9 @@ beforeAll(async () => {
   fs.writeFileSync(path.join(env.project, "picture.png"), PNG);
   fs.writeFileSync(path.join(env.project, "vector.svg"), SVG);
   fs.writeFileSync(path.join(env.project, "notes.docx"), "x");
-  fs.writeFileSync(path.join(env.project, "script.html"), "<h1>x</h1>");
+  fs.writeFileSync(path.join(env.project, "script.js"), "1");
+  fs.writeFileSync(path.join(env.project, "page.html"), PAGE);
+  fs.writeFileSync(path.join(env.project, "old page.htm"), PAGE);
   fs.writeFileSync(path.join(env.project, "big.png"), "");
   fs.truncateSync(path.join(env.project, "big.png"), 51 * 1024 * 1024);
   locked = path.join(env.project, "locked.pdf");
@@ -154,6 +160,16 @@ test("a PDF and a picture open in the panel, by their own address", async () => 
   windowPhoto("immagine-nel-pannello", ratio);
 }, 60_000);
 
+test("a web page opens in the panel, by its own address, and runs", async () => {
+  for (const file of ["page.html", "old page.htm"]) {
+    expect(await open(file)).toBe("ok");
+    const page = await shown();
+    expect(decodeURI(page.url)).toBe("file:///" + path.join(env.project, file).replace(/\\/g, "/"));
+    expect(page.title).toBe("ran");
+  }
+  windowPhoto("pagina-nel-pannello", ratio);
+}, 60_000);
+
 test("an SVG is drawn as a picture: its script never runs", async () => {
   expect(await open("vector.svg")).toBe("ok");
   const svg = await shown();
@@ -164,9 +180,9 @@ test("an SVG is drawn as a picture: its script never runs", async () => {
   expect(page).not.toContain("<script");
 }, 60_000);
 
-test("what is not a PDF or a picture, is too big, is not readable or is out of the project is refused with its reason", async () => {
+test("what is not a PDF, a picture or a web page, is too big, is not readable or is out of the project is refused with its reason", async () => {
   expect(await open("notes.docx")).toBe("blocked_type");
-  expect(await open("script.html")).toBe("blocked_type");
+  expect(await open("script.js")).toBe("blocked_type");
   expect(await open("big.png")).toBe("too_large");
   expect(await open("locked.pdf")).toBe("unreadable");
   expect(await open("gone.pdf")).toBe("not_found");
@@ -193,6 +209,16 @@ test("a click on the card of a file opens it in the panel of that conversation, 
   await waitFor(`document.body.innerText.includes("Troppo grande per l'anteprima")`);
   windowPhoto("file-troppo-grande", ratio);
   fs.writeFileSync(path.join(env.project, "picture.png"), PNG);
+}, 120_000);
+
+test("Open on an html file in the chat shows it in the panel", async () => {
+  // a page has lines to read, so it is a header with its changes and not a card; "Open" is in the header
+  await p.evaluate(`[...document.querySelectorAll('[data-slot="session-turn-diff-trigger"]')].find((h) => h.innerText.includes("page.html")).querySelector('[data-slot="project-file-action"]').click()`);
+  await waitFor(`document.querySelector('aside[aria-label="Anteprima"]') !== null`);
+  const page = await shown();
+  expect(decodeURI(page.url)).toEndWith("/page.html");
+  expect(page.title).toBe("ran");
+  windowPhoto("apri-html-nel-pannello", ratio);
 }, 120_000);
 
 test("when the window moves to another page of the app the panel does not stay over it as a blank rectangle", async () => {

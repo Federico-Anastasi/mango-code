@@ -23,7 +23,7 @@ else: it uses the models and the engine of the app, in the way `claude -p` uses 
 - Nobody is there to answer: the app's configuration asks for no permission, and one that a project's own rules ask for is
   refused. Use the HTTP session below when the program has to decide.
 - Exit code: `0` answered; `1` the agent could not answer (the reason is on stderr); `2` wrong command line; `3` Mango Code
-  cannot be used (not installed next to the program, open but waiting for a choice in its window, or it does not start),
+  cannot be used (not installed next to the program, or it does not start),
   with the sentence on stderr.
 
 The request goes through the same agent server as the HTTP interface below, so a session opened this way can also be read
@@ -36,23 +36,27 @@ contract: never match on them.
 
 ## 1. Finding or starting Mango Code
 
-When it is ready, Mango Code writes `%LOCALAPPDATA%\MangoCode\service.json`, and removes it on exit:
+As soon as its agent answers, Mango Code writes `%LOCALAPPDATA%\MangoCode\service.json`, and removes it on exit:
 
 ```json
-{ "version": 1, "pid": 12345, "agent": "http://127.0.0.1:4096", "engine": "http://127.0.0.1:8080", "window": true }
+{ "version": 1, "pid": 12345, "agent": "http://127.0.0.1:4096", "engine": "http://127.0.0.1:8080", "control": "http://127.0.0.1:8080", "window": true }
 ```
 
-`engine` is `null` when this Mango Code uses the engine of another PC (see "The engine of another PC" below): there is no engine
-manager on this PC, so there is nothing to release, resume or load; the agent works as always.
+The file does not wait for a model: the default model loads after it is written, in the background, and there may be no
+model on the computer at all. A request to the agent or to `/v1` waits for the model that is loading; `GET <engine>/engine`
+says what is loading (section 6), and `POST <engine>/engine/model` answers when the model you name is ready.
+
+`engine` is `null` when this Mango Code uses the engine of another PC (see "The engine of another PC" below): this PC's
+engine runs no model, so there is nothing to release, resume or load; the agent works as always. `control` is the app's
+own server on this PC, there in both cases.
 
 - It is running if the file exists, the `pid` process is alive and `GET <agent>/global/health` answers 200 (`find()`).
-- If the app is running but cannot be ready, the file is there all the same, with `reason` (a readable sentence) instead
-  of `agent` and `engine`: startup failed, or at first run the engine or models are missing and the choice of what to
-  download waits in the window (with `--service` there is no window: the reason says so and explains how to open it).
+- If the app is running but its startup failed, the file is there all the same, with `reason` (a readable sentence)
+  instead of `agent` and `engine`.
   `notReady()` reads it, and `launch()` stops waiting and reports it as an error instead of waiting until the time limit.
   While the `pid` process lives the file is updated: as soon as the app is ready it rewrites it in the form above.
 - If it is not running: `"%LOCALAPPDATA%\Mango Code\mango-code.exe" --service` starts it **without a window** (open one
-  from the tray icon); then wait for the file. The first start loads the model: tens of seconds (`launch()`).
+  from the tray icon); then wait for the file, a couple of seconds (`launch()`).
 - If the app is already open with its window, use that one: there is a single instance, and its `service.json` is just as
   valid.
 
@@ -72,10 +76,11 @@ Environment variables an app can set when it starts Mango Code (tests, a second 
 | `MANGO_ENGINE_PORT` | port of the engine manager (default 8080) |
 | `MANGO_PHONE_PORT` | port of the phone service (default 47096) |
 | `MANGO_SHARE_PORT` | port of the shared engine (default 47098) |
+| `MANGO_ROOM_CHECK_OFF` | development builds only: a model starts on the graphics cards without first checking that other programs leave it room there (the integration tests, whose fake models have a plan on the PC's real cards) |
 
 ### The engine of another PC
 
-A PC can share its engine with the user's other PCs ("Share the engine with my PCs"). Off by default, on a port of its own
+A PC can share its engine with the user's other PCs ("Lend the engine to my PCs", in the settings under Connections). Off by default, on a port of its own
 (47098) opened only on the home network's address and on Tailscale's, never on all the networks. The user copies a **code**,
 `mango://<ip>:<port>/<key>` (the key is 48 hex characters); the client splits it into address and key and sends the key on
 every request: `Authorization: Bearer <key>`, `Host` the numeric address, no `Origin`. To use that engine, an agent's
@@ -87,7 +92,7 @@ environment variable `MANGO_ENGINE_KEY` (the config reads it as `{env:MANGO_ENGI
 | request | answer |
 |---|---|
 | `GET /mango/models` | `200` `{"models": [{"key", "label", "context", "images"}], "running": "<key>"|null}`: the models that are on that PC and fit, and the one that is running. **This is also how the key is checked**: `200` the code is right, `401` the key is wrong (a new one was made, or it is off), `403` the address was not numeric or an `Origin` was sent; a connection that is refused or times out means the PC is off, Mango Code is not open there or sharing is off |
-| `POST /v1/chat/completions` (and the other `/v1/*`) | as on the PC's own engine: `"model"` is one of the keys above, the reply streams. A model that is not on that PC: `422` with the sentence; another app holds the cards: `503` |
+| `POST /v1/chat/completions` (and the other `/v1/*`) | as on the PC's own engine: `"model"` is one of the keys above, the reply streams. The manager adds to every chat request that does not carry them, from the apps of that PC as from other PCs, the sampling values (`temperature`, `top_p`, ...) and `chat_template_kwargs.enable_thinking` the user chose there for that model (a `null` counts as missing); a request that carries them all passes untouched. A model that is not on that PC: `422` with the sentence; another app holds the cards: `503` |
 | `GET /health`, `/props`, `/metrics`, `/slots`, `/engine` | the reads of the engine and of the manager (`/engine`: phase, loans) |
 | anything else (`/engine/release`, `/engine/resume`, `/engine/model`, `POST /slots`, `POST /props`, a path with `..` or `%`) | `403`: the cards and the engine's writes stay for the apps on that PC |
 
@@ -126,7 +131,7 @@ The message body:
   (those with weights and engine on disk) are in `GET /config/providers`, provider `mango`, with context and images
   (`models()`).
 - An image sent to a model without vision arrives as a file name, not as an image. Of the recommended models,
-  only LFM does not see images.
+  LFM2.5, Ling 3.0 Tiny and Qwen3.5-2B do not see images.
 
 ## 3. Events
 
@@ -265,7 +270,8 @@ that is off does not reach the model and weighs no tokens, from the next message
 - `GET /mango/settings?directory=<working folder>` → `{ directory, model, file: { default, folder }, items: [{ type, name,
   tokens, enabled, source }] }`. `type`: `tools`, `mcp`, `skills`, `instructions`, `plugins`, and `base` (the base prompt,
   which cannot be switched off). `source`: `default` or `folder`, from which file the value comes. `PUT` with `{ type, name,
-  enabled, scope }` (`scope`: `all` or `folder`) → the changed entry (`{ type, name, enabled, source }`).
+  enabled, scope }` (`scope`: `all` or `folder`) → the changed entry (`{ type, name, enabled, source }`). An agent without
+  any model has no request to list: `model` is `null` and `items` empty.
 - `tokens` is the weight of the entry, counted by the engine with the model's tokenizer (`POST /tokenize`, which the manager
   forwards to the running engine) with the first request of every session, and written in the agent's log (`opencode.log`,
   line "prompt measured": `total` and every entry, as `type:name=tokens`). An entry that is off also has its weight, if it
@@ -306,13 +312,13 @@ changes nothing. Existing sessions keep working.
   `{ error }` in the user's language if not, or if it exists).
 - Tests: `packages/opencode/test/project/broad-folder.test.ts`, `ensure-git.test.ts`, `test/server/mango-project-folder.test.ts`.
 
-### What the model menu says about each model
+### The model, the models and the computer
 
-- `GET /mango/models/info` (on the agent's address, not the engine's `/mango/models`) → `{ "<model key>": { "bytes", "place", "speed", "weak" } }`:
-  the weight of the model's files, where it runs (`gpu`, `cpu`, `remote` for a model of another PC, `none` if it does not fit),
-  how fast it writes on the processor (`very_slow`, `slow`, `fair`, `quick`: a band, not a number), and
-  `weak` when the catalog marks the model `on_request` (not trusted as an agent). The app starts the agent with the object in
-  `MANGO_MODELS_INFO`; an agent started by hand answers `{}`. Test: `test/server/mango-models.test.ts`.
+On the agent's address (not the engine's shared `/mango/models`): `GET /mango/state`, `GET /mango/models`,
+`GET /mango/computer`, `POST /mango/model/use` `{ "model", "once"? }`, `POST /mango/model/retry`. The agent forwards them
+to the app's control server (`MANGO_CONTROL_URL/control/*`, on this PC) and returns its status and body; the shapes are
+the types of `packages/app/src/utils/mango-state.ts`. An agent the app did not start, or a control server that does not answer within 10 s, gives
+`503`. Test: `test/server/mango-control.test.ts`.
 
 ## 6. The engine and the GPUs
 
@@ -320,7 +326,7 @@ The local model holds the GPUs. Whoever needs to do heavy work on the same GPUs 
 
 | what | call (on the `engine` address) |
 |---|---|
-| state | `GET /engine` → `{ phase, model, name, context, gpus: [{index, name, memory_used_mib, memory_total_mib}], released_gpus, all_released, loans: [{gpus, pid, who, since}], requests_in_flight, error }` |
+| state | `GET /engine` → `{ phase, model, name, context, gpus: [{index, name, memory_used_mib, memory_total_mib}], released_gpus, all_released, loans: [{gpus, pid, who, since}], requests_in_flight, error, loading, failed, chosen }` (`loading`: while `starting`, `{model, name, context, gpus: [names], seconds}`; `failed`: the last start that failed, `{model, reason, taken}`, where `taken` is the sentence that says which card another program holds when the manager did not start the model for that, otherwise null; `chosen`: the model the user picked that has not begun to load yet) |
 | release | `POST /engine/release` `{ "gpus": [0, 2], "pid"?: 1234 }` (without `gpus`: all) → the state, when the GPUs are free |
 | resume | `POST /engine/resume` → the state, when the model is ready |
 | load a model | `POST /engine/model` `{ "model": "toq" }` → the state, when it is ready; a model that does not start (unknown, missing files) leaves the previous one running, with `error` saying why |
@@ -390,7 +396,7 @@ models together: the files used longest ago go out first.
 `duration_ms`, `error` if not 200, `address` and `user_agent` of the caller): to know who released or resumed and when, a
 client sends a `User-Agent` of its own. The manager also writes the engine's events there, with `event`: `save` (before every
 stop: `model`, `token` in memory, `written`, `bytes`, `ms`, `error`), `restore` (at every start: `model`, `token` reloaded,
-`ms` of the start), `crash` (the engine closed on its own: `model`, `code`, last lines of its log; the next request restarts
+`ms` of the start, of which `load_ms` until the engine answered and `restore_ms` for the conversation), `crash` (the engine closed on its own: `model`, `code`, last lines of its log; the next request restarts
 it), `loan_ended` (the process of a loan exited: `pid`, `who`, `since`, `reason`) and `resume_after_loan` (the automatic
 restart that follows, with `error` if it failed). Next to it sit the engine's log and TOQ's.
 
@@ -398,7 +404,8 @@ restart that follows, with `error` if it failed). Next to it sit the engine's lo
 
 - **Subagents**: the `task` tool is off (a local model with one slot gains nothing by splitting itself).
 - **Effort / reasoning levels**: the model always reasons; there is no selector.
-- **The user's Chrome**: the agent's browser is the app's Preview panel; "Use my Chrome" needs a manual step: turn on
+- **The user's Chrome**: the agent's browser is the app's Preview panel, and the agent opens a page in your Chrome only
+  when it asks for it on purpose (`new_page` with `userChrome`), as a new tab. "Use my Chrome" needs a manual step: turn on
   remote debugging at `chrome://inspect/#remote-debugging`, and Chrome asks for confirmation at every connection.
 - **One session at a time on the engine**: requests of different sessions queue; two different models do not run together
   (changing model costs 20-80 s of loading).

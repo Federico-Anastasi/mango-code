@@ -19,7 +19,7 @@ export function createNewSessionDraftController(workspace: { worktree: () => str
   const [searchParams, setSearchParams] = useSearchParams<{ draftId?: string; prompt?: string }>()
   const model = createPromptModelSelection({ agent: () => local.agent.current() })
 
-  useComposerCommands({ model })
+  useComposerCommands()
 
   const controls = createPromptInputController({
     sessionKey: route.sessionKey,

@@ -1,11 +1,11 @@
 import { createPromptProjectController } from "@/components/prompt-project-selector"
 import { useTitlebarRightMount } from "@/components/titlebar"
+import { useSettingsCommand } from "@/components/settings-page/open"
 import { useSettings } from "@/context/settings"
 import { createEffect, createResource } from "solid-js"
 import { createNewSessionDraftController } from "./new-session/new-session-draft-controller"
 import { NewSessionStatus, NewSessionView } from "./new-session/new-session-view"
 import { createNewSessionWorkspaceController } from "./new-session/new-session-workspace-controller"
-import { useNewSessionCommands } from "./new-session/use-new-session-commands"
 
 /** The draft-only V2 session page. Submitting promotes the draft into a real session. */
 export default function NewSessionPage() {
@@ -20,13 +20,7 @@ export default function NewSessionPage() {
     controls: draft.project.controls,
     onDone: draft.input.restoreFocus,
   })
-  useNewSessionCommands({
-    restoreFocus: draft.input.restoreFocus,
-    project: {
-      empty: project.empty,
-      open: () => project.setOpen(true),
-    },
-  })
+  useSettingsCommand()
   createEffect(() => {
     if (!draft.prompt.ready()) return
     draft.input.restoreFocus()

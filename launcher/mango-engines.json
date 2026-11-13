@@ -36,23 +36,33 @@
     }
   },
   "prism": {
-    "_note": "Our fork mango-prism (PrismML's llama.cpp plus the mango branch), built by the fork's workflow with mango-ci/build.ps1: the release of tag 'prism-<version>' carries the zips 'prism-<version>-win-<build>.zip' (cpu, vulkan, cuda-12), with size and sha256 in its notes. The CUDA runtime is llama.cpp's. app/scripts/build-engines.ps1 prism builds the same tag from source.",
-    "version": "b10709-9a9394a",
+    "_note": "Our fork mango-prism (PrismML's llama.cpp plus the mango branch), built by the fork's workflow with mango-ci/build.ps1: the release of tag 'prism-<version>' carries the zips 'prism-<version>-win-<build>.zip' (cpu, vulkan, cuda-12, cuda-12-gtx16), with size and sha256 in its notes. 'cuda-12-gtx16' is cuda-12 built without the tensor-core kernels for compute capability 7.5: for the PCs whose Turing cards are of the GTX 16 family, which declare that capability without having them (the app picks it, engine-cfg profiles.rs). The version is the upstream build and commit the branch starts from; '-r3' is our third release from the same upstream commit. The CUDA runtime is llama.cpp's. app/scripts/build-engines.ps1 prism builds the same tag from source.",
+    "version": "b10709-9a9394a-r3",
     "build": {
       "cpu": {
-        "url": "https://github.com/Federico-Anastasi/mango-prism/releases/download/prism-b10709-9a9394a/prism-b10709-9a9394a-win-cpu.zip",
-        "size": 8613885,
-        "sha256": "f7abe6e2ae111e07b65b6be858ad86b46fd07689ab53d4b458c441a2a23ce846"
+        "url": "https://github.com/Federico-Anastasi/mango-prism/releases/download/prism-b10709-9a9394a-r3/prism-b10709-9a9394a-r3-win-cpu.zip",
+        "size": 8434455,
+        "sha256": "7fa33ac921934861a8a888d9a7100f83b84bcb957fec68a8b10c91cb7d775b19"
       },
       "vulkan": {
-        "url": "https://github.com/Federico-Anastasi/mango-prism/releases/download/prism-b10709-9a9394a/prism-b10709-9a9394a-win-vulkan.zip",
-        "size": 25849978,
-        "sha256": "3ae1016cabe0e0603967c18477ef08597b983916ab017d46469156f36d36687a"
+        "url": "https://github.com/Federico-Anastasi/mango-prism/releases/download/prism-b10709-9a9394a-r3/prism-b10709-9a9394a-r3-win-vulkan.zip",
+        "size": 25771888,
+        "sha256": "c94149c3a9686410aacf07af00ba2b8f6eefc83c970011cd438472cdd10643a6"
       },
       "cuda-12": {
-        "url": "https://github.com/Federico-Anastasi/mango-prism/releases/download/prism-b10709-9a9394a/prism-b10709-9a9394a-win-cuda-12.zip",
-        "size": 207551338,
-        "sha256": "5f5e2b76cd5f2e98249fddc47c162a27a9efcd3be560e2435e7a88fb54b3182f",
+        "url": "https://github.com/Federico-Anastasi/mango-prism/releases/download/prism-b10709-9a9394a-r3/prism-b10709-9a9394a-r3-win-cuda-12.zip",
+        "size": 204461915,
+        "sha256": "c405c29b145c2a3f338a5a95a65d7bc9582f56f19c4ee0c102cfa1f1b12484fa",
+        "runtime": {
+          "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12110/cudart-llama-bin-win-cuda-12.4-x64.zip",
+          "size": 391443627,
+          "sha256": "8c79a9b226de4b3cacfd1f83d24f962d0773be79f1e7b75c6af4ded7e32ae1d6"
+        }
+      },
+      "cuda-12-gtx16": {
+        "url": "https://github.com/Federico-Anastasi/mango-prism/releases/download/prism-b10709-9a9394a-r3/prism-b10709-9a9394a-r3-win-cuda-12-gtx16.zip",
+        "size": 195743854,
+        "sha256": "7372aa34cee9496da95687237a35ba3f342aed8d73947bc0fc162f80f5d57013",
         "runtime": {
           "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12110/cudart-llama-bin-win-cuda-12.4-x64.zip",
           "size": 391443627,

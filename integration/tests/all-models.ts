@@ -10,10 +10,8 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { MangoCode, find } from "../client/mango-code";
-import { writeLanguage } from "./environment";
+import { APP_EXE, writeLanguage } from "./environment";
 
-const REPO = path.resolve(import.meta.dir, "..", "..");
-const APP_EXE = path.join(REPO, "app", "target", "debug", "mango-code.exe");
 
 const freePort = () =>
   new Promise<number>((ok) => {

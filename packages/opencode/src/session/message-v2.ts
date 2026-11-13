@@ -732,6 +732,27 @@ export function fromError(
         ),
       },
     }
+  // mango-code: this PC's engine that closes in the middle of an answer drops the connection: the user reads that, not
+  // the HTTP client's words. It closes when it crashes, and also when the model is changed or the cards are lent, so the
+  // sentence promises nothing; while the agent tries again the retry line says more (`SessionRetry.retryable`).
+  // `metadata.engine` lets the interface offer «Riprova» once the agent has stopped trying.
+  if (
+    ctx.providerID === "mango" &&
+    !engineIsRemote() &&
+    APIError.isInstance(error) &&
+    error.data.metadata?.code === "ECONNRESET"
+  )
+    return {
+      ...error,
+      data: {
+        ...error.data,
+        message: tr(
+          "Il modello si è chiuso a metà risposta.",
+          "The model closed in the middle of the answer.",
+        ),
+        metadata: { ...error.data.metadata, engine: "closed" },
+      },
+    }
   return error
 }
 

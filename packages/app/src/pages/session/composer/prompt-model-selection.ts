@@ -1,7 +1,7 @@
 import { batch, createMemo, startTransition } from "solid-js"
 import { useModels } from "@/context/models"
 import type { ModelKey, ModelSelection } from "@/context/local"
-import { cycleModelVariant, getConfiguredAgentVariant, resolveModelVariant } from "@/context/model-variant"
+import { getConfiguredAgentVariant, resolveModelVariant } from "@/context/model-variant"
 import { usePrompt } from "@/context/prompt"
 import { useSDK } from "@/context/sdk"
 import { useSync } from "@/context/sync"
@@ -111,17 +111,6 @@ export function createPromptModelSelection(input: { agent: () => { model?: Model
             if (!model) return
             prompt.model.set({ providerID: model.provider.id, modelID: model.id, variant: value ?? null })
             models.variant.set({ providerID: model.provider.id, modelID: model.id }, value)
-          }),
-        )
-      },
-      cycle() {
-        const variants = this.list()
-        if (variants.length === 0) return
-        this.set(
-          cycleModelVariant({
-            variants,
-            selected: this.selected(),
-            configured: this.configured(),
           }),
         )
       },

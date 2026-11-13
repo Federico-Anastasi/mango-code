@@ -6,8 +6,8 @@
 //! The two PCs measured in `optimize/knowledge` (general.md, G90-G92) run the same 35B MoE at 13.5 GiB/s (a laptop, one
 //! DDR4-2400 channel) and about 24 GiB/s (a desktop, DDR4-3600, compute-bound): a single bandwidth is 26% over for the
 //! first and 30% under for the second, and the PCs nobody measured (DDR5, soldered LPDDR, one stick on a desktop) are
-//! further off. A figure would be wrong by more than half for many of them, so the page says a band that stays true under
-//! a factor two: the words come from `first-run.js`.
+//! further off. A figure would be wrong by more than half for many of them, so the interface says a band that stays true
+//! under a factor two, in its own words.
 
 use serde::{Deserialize, Serialize};
 

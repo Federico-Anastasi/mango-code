@@ -1,9 +1,10 @@
 // "Use the engine of another PC" with two real apps on this PC and the fake engine: A shares its engine (127.0.0.1, the hook
-// `MANGO_SHARE_PC_ONLY`), B is a laptop at its first start (no graphics card, no models, nothing on disk) that pastes A's code
-// and talks through it without downloading a byte. Then the failures (wrong code, a PC that does not answer, A that disappears
-// and comes back, a renewed key), the way back to the engine of the PC, and C, an app that already works and moves to A's engine
-// and back. No GPU and no real model; the firewall is not tried (127.0.0.1). The photos are in %TEMP%\mango-engine-remote-*.png,
-// at 860 px (a 150% laptop).
+// `MANGO_SHARE_PC_ONLY`), B is an app at its first start (no models, nothing on disk) that pastes A's code and talks through it
+// without downloading a byte. Then the failures (wrong code, a PC that does not answer, A that disappears and comes back, a
+// renewed key), the way back to the engine of the PC, and C, an app that already works and moves to A's engine and back.
+// Everything goes through the bridge of the window (`engineShare`, `engineRemote`), as the settings use it: the app's own page
+// only shows the error of a start, and there the way back to this PC's engine. No GPU and no real model; the firewall is not
+// tried (127.0.0.1). The photos are in %TEMP%\mango-engine-remote-*.png, of the window as it opens.
 
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -18,13 +19,10 @@ import { start, type Environment } from "./environment";
 
 const SAID = "Hello from the shared engine.";
 const OWN = "Hello from my own engine.";
-const MIB = 1024 * 1024;
 
 const appWindow = (t: { url: string }) => t.url.includes("tauri.localhost") || t.url.startsWith("tauri://");
 const visible = (id: string) => `!document.getElementById('${id}').hidden`;
 const text = (id: string) => `document.getElementById('${id}').innerText`;
-/** The headings of the page are in capitals (the style): what is read is compared without the case. */
-const lower = (id: string) => `${text(id)}.toLowerCase()`;
 
 async function waitUntil(condition: () => Promise<boolean> | boolean, what: string, ms = 60_000) {
   const t0 = Date.now();
@@ -63,9 +61,8 @@ const shot = async (p: Page, name: string) => {
   const r = await p.send("Page.captureScreenshot", { format: "png" });
   fs.writeFileSync(path.join(os.tmpdir(), `mango-engine-remote-${name}.png`), Buffer.from(r.result.data, "base64"));
 };
-const narrow = (p: Page) => p.send("Emulation.setDeviceMetricsOverride", { width: 860, height: 900, deviceScaleFactor: 1, mobile: false });
 
-// What a download would ask: nothing may come.
+// What a download would ask (the files of the models stand in for Hugging Face here): nothing may come.
 let downloads = 0;
 const never = http.createServer((_, res) => {
   downloads++;
@@ -73,15 +70,6 @@ const never = http.createServer((_, res) => {
 });
 await new Promise<void>((ok) => never.listen(0, "127.0.0.1", ok));
 const neverUrl = `http://127.0.0.1:${(never.address() as net.AddressInfo).port}`;
-
-/** A laptop without a graphics card, with nothing on disk. */
-const laptop = () => ({
-  computer: { gpus: [], cpu: "Intel Core i5-1135G7", cores: 4, ram_mib: 8192 },
-  general: "llamacpp",
-  engines: [{ name: "llamacpp", build: "cuda-12", bytes: 40 * MIB, file: path.join("llamacpp", "fake-cuda-12", "llama-server.exe"), url: `${neverUrl}/engine` }],
-  models: [{ key: "fake", label: "Fake model", images: false, file: "fake.gguf", url: `${neverUrl}/fake.gguf`, engine: "llamacpp", profile: null }],
-  recommendations: [{ model: "fake", placement: "cpu", context: 16384, reason: "Gira sul processore, più lento.", bytes: 24 * MIB }],
-});
 
 const opened: Environment[] = [];
 let A: Environment; // shares its engine
@@ -91,6 +79,8 @@ let code = "";
 let key = "";
 
 const bridgeA = (call: string) => pa.evaluate(`window.__MANGO_DESKTOP__.engineShare.${call}`);
+/** A command of the bridge from a window: what it answered, or { rejected: { code, message } }. */
+const ask = (p: Page, call: string) => p.evaluate(`window.__MANGO_DESKTOP__.${call}.then((v) => v ?? null, (e) => ({ rejected: e }))`);
 
 beforeAll(async () => {
   portA = await freePort();
@@ -110,109 +100,98 @@ afterAll(async () => {
   }
 }, 60_000);
 
-// --- the PC with the engine: the sharing sits on the "Models and engine" page --------------------------------------
+// --- the PC with the engine: the sharing, from the bridge -----------------------------------------------------------
 
-test("A: the sharing section is on the Models and engine page, with where to paste the code", async () => {
-  await narrow(pa);
-  await pa.evaluate(`window.__MANGO_DESKTOP__.openModels()`);
-  await waitUntil(() => pa.evaluate(visible("choice")), "the Models and engine page");
-  await waitUntil(() => pa.evaluate(visible("share")), "the sharing section");
-  const off: string = await pa.evaluate(lower("share"));
-  expect(off).toContain("condividi il motore con i miei pc");
-  expect(off).toContain("spento, la porta è chiusa");
-  expect(off).toContain("uso il motore di un altro mio pc");
-  expect(off).not.toContain("mango://");
-  expect(await pa.evaluate(visible("share-details"))).toBe(false);
-
-  await pa.evaluate(`document.getElementById('share-on').click()`);
-  await waitUntil(() => pa.evaluate(visible("share-details")), "the sharing turned on");
-  const on: string = await pa.evaluate(text("share"));
-  expect(on).toContain(`127.0.0.1:${portA}`);
-  expect(on).toContain("Copia il codice");
-  expect(on).toContain("Nuova chiave");
-  expect(on).toContain("in chiaro sul Wi-Fi");
-  // The page shows the address, never the key.
-  expect(on).not.toMatch(/[0-9a-f]{48}/);
-  expect(await pa.evaluate(`document.documentElement.innerHTML.match(/[0-9a-f]{48}/)`)).toBeNull();
-  await pa.evaluate(`document.getElementById('share').scrollIntoView()`);
-  await Bun.sleep(300);
-  await shot(pa, "condividi");
-
-  const state = await bridgeA("state()");
-  expect(state).toMatchObject({ enabled: true, listening: true });
-  code = state.home.code;
+test("A: the sharing is off at first; on, it gives the address and the code, and the window never holds the key", async () => {
+  const off = await bridgeA("state()");
+  expect(off).toMatchObject({ enabled: false, listening: false });
+  const on = await bridgeA("setEnabled(true)");
+  expect(on).toMatchObject({ enabled: true, listening: true });
+  code = on.home.code;
   key = code.split("/").pop()!;
-  // Cancel goes back to where it was; the sharing stays on.
-  await pa.evaluate(`document.getElementById('cancel').click()`);
-  await waitUntil(() => pa.evaluate(`location.href.startsWith('${A.agent}')`), "the return to the web UI");
-  expect((await bridgeA("state()")).enabled).toBe(true);
+  expect(code).toBe(`mango://127.0.0.1:${portA}/${key}`);
+  // The code is given to whoever asks for it to copy it; nothing in the page keeps it.
+  expect(await pa.evaluate(`document.documentElement.innerHTML.includes(${JSON.stringify(key)})`)).toBe(false);
 }, 120_000);
 
-// --- B: a laptop at its first start ---------------------------------------------------------------------------------
+// --- B: an app at its first start ---------------------------------------------------------------------------------
 
 let B: Environment;
 let pb: Page;
 
-test("B: at the first start the page offers the engine of another PC and the models only as a second road", async () => {
-  B = await start([{ text: "unused" }], { window: true, firstRun: laptop });
+test("B: with no model yet the app opens on its home, and pasting a code is what the bridge offers besides the models", async () => {
+  B = await start([{ text: "unused" }], { window: true, noModels: true, env: { MANGO_HF_URL: neverUrl } });
   opened.push(B);
-  pb = await page(B.cdp!, appWindow, 120_000);
-  await narrow(pb);
-  await waitUntil(() => pb.evaluate(visible("choice")), "the choice page");
-  const card: string = await pb.evaluate(lower("remote"));
-  expect(card).toContain("uso il motore di un altro mio pc");
-  expect(card).toContain("collega");
-  expect(await pb.evaluate(visible("local"))).toBe(true);
-  expect(await pb.evaluate(text("computer"))).toContain("Nessuna scheda video utilizzabile");
-  // Nothing to share before there is an engine.
-  expect(await pb.evaluate(`document.getElementById('share').hidden`)).toBe(true);
-  // The field of the code hides what is pasted, like a password.
-  expect(await pb.evaluate(`document.getElementById('remote-code').type`)).toBe("password");
+  pb = await page(B.cdp!, () => true, 120_000);
+  await waitUntil(() => pb.evaluate(`location.href.startsWith('${B.agent}')`), "the window on the web UI");
+  expect(await (await fetch(`${B.engine}/control/state`)).json()).toMatchObject({ model: { phase: "none" }, default_model: null });
+  expect(await pb.evaluate(`typeof window.__MANGO_DESKTOP__.engineRemote.connect`)).toBe("function");
   await shot(pb, "primo-avvio");
 }, 200_000);
 
-async function paste(p: Page, value: string) {
-  await p.evaluate(`(() => { const i = document.getElementById('remote-code'); i.value = ${JSON.stringify(value)}; document.getElementById('remote-form').requestSubmit(); })()`);
-}
-
 test("B: a text that is not a code, a wrong key and a PC that does not answer each say what to do", async () => {
-  await paste(pb, "hello");
-  await waitUntil(() => pb.evaluate(`${text("remote-status")}.includes('codice di collegamento')`), "the sentence for a text that is not a code");
+  const notACode = await ask(pb, `engineRemote.connect("hello")`);
+  expect(notACode.rejected.code).toBe("bad_code");
+  expect(notACode.rejected.message).toContain("codice di collegamento");
+  expect(notACode.rejected.message).toContain("Impostazioni › Collegamenti");
 
   const wrong = code.slice(0, -1) + (key.endsWith("0") ? "1" : "0");
-  await paste(pb, wrong);
-  await waitUntil(() => pb.evaluate(`${text("remote-status")}.includes('non è valido, oppure la condivisione è spenta')`), "the sentence for a wrong key");
+  const rejected = await ask(pb, `engineRemote.connect(${JSON.stringify(wrong)})`);
+  expect(rejected.rejected.message).toContain("non è valido, oppure la condivisione è spenta");
 
   const nobody = await freePort();
-  await paste(pb, `mango://127.0.0.1:${nobody}/${key}`);
-  await waitUntil(() => pb.evaluate(`${text("remote-status")}.includes('non risponde')`), "the sentence for a PC that does not answer");
-  const said: string = await pb.evaluate(text("remote-status"));
-  expect(said).toContain("è acceso?");
-  expect(said).toContain("condivisione accesa");
-  expect(said).not.toContain(key);
-  await pb.evaluate(`document.getElementById('remote').scrollIntoView()`);
-  await Bun.sleep(300);
-  await shot(pb, "non-risponde");
-  // Still at the choice: nothing was saved and nothing started.
+  const silent = await ask(pb, `engineRemote.connect(${JSON.stringify(`mango://127.0.0.1:${nobody}/${key}`)})`);
+  expect(silent.rejected.code).toBe("unreachable");
+  expect(silent.rejected.message).toContain("non risponde");
+  expect(silent.rejected.message).toContain("è acceso?");
+  expect(silent.rejected.message).toContain("condivisione accesa");
+  expect(JSON.stringify(silent)).not.toContain(key);
+  // Nothing was saved and nothing started again: the window is where it was.
   expect(fs.existsSync(path.join(B.data, "remote-engine.json"))).toBe(false);
-  expect(await pb.evaluate(visible("choice"))).toBe(true);
+  expect(await pb.evaluate(`location.href.startsWith('${B.agent}')`)).toBe(true);
 }, 120_000);
 
 let mcB: MangoCode;
 
-test("B: the right code starts the app on A's engine, with no download and no graphics card read", async () => {
-  await paste(pb, code);
+/** A click with the mouse, like a person, on the Home of the first start. */
+async function click(p: Page, selector: string) {
+  const at = await p.evaluate(`(() => { const q = document.querySelector(${JSON.stringify(selector)})?.getBoundingClientRect(); return q && { x: q.x + q.width / 2, y: q.y + q.height / 2 }; })()`);
+  if (!at) throw new Error(`not on the page: ${selector}`);
+  for (const type of ["mouseMoved", "mousePressed", "mouseReleased"]) await p.send("Input.dispatchMouseEvent", { type, x: at.x, y: at.y, button: "left", clickCount: 1 });
+}
+/** Pastes `value` in the code box of the Home and presses «Connetti». */
+async function pasteCode(p: Page, value: string) {
+  if (!(await p.evaluate(`!!document.querySelector('[data-action="mango-other-pc-connect"]')`))) await click(p, '[data-action="mango-other-pc"]');
+  await waitUntil(() => p.evaluate(`!!document.querySelector('[data-action="mango-other-pc-connect"]')`), "the box for the code");
+  await p.evaluate(`(() => { const el = document.querySelector('[data-action="mango-other-pc-connect"]').parentElement.querySelector("input"); el.focus(); el.select(); })()`);
+  await p.send("Input.insertText", { text: value });
+  await waitUntil(() => p.evaluate(`!document.querySelector('[data-action="mango-other-pc-connect"]').disabled`), "«Connetti» on");
+  await click(p, '[data-action="mango-other-pc-connect"]');
+}
+
+test("B: on the Home a text that is not a code and a wrong key each say what to do, and nothing is saved", async () => {
+  await pasteCode(pb, "hello");
+  await waitUntil(() => pb.evaluate(`document.body.innerText.includes("codice di collegamento")`), "the sentence for a text that is not a code");
+  const wrong = code.slice(0, -1) + (key.endsWith("0") ? "1" : "0");
+  await pasteCode(pb, wrong);
+  await waitUntil(() => pb.evaluate(`document.body.innerText.includes("non è valido, oppure la condivisione è spenta")`), "the sentence for a wrong key");
+  expect(await pb.evaluate(`document.body.innerText.includes(${JSON.stringify(key)})`)).toBe(false);
+  expect(fs.existsSync(path.join(B.data, "remote-engine.json"))).toBe(false);
+  expect(await pb.evaluate(`!!document.querySelector('[data-component="mango-welcome"]')`)).toBe(true);
+}, 120_000);
+
+test("B: the right code pasted on the Home starts the app on A's engine, with no download", async () => {
+  await pasteCode(pb, code);
+  // The agent starts again on A's engine: the service file then has no engine of this PC.
   await waitUntil(() => {
     const f = path.join(B.data, "service.json");
-    return fs.existsSync(f) && readJson(f).agent !== undefined;
-  }, "B ready", 120_000);
-  const service = readJson(path.join(B.data, "service.json"));
-  expect(service.engine).toBeNull();
-  B.agent = service.agent;
+    return fs.existsSync(f) && readJson(f).agent !== undefined && readJson(f).engine === null;
+  }, "B on A's engine", 120_000);
   expect(downloads).toBe(0);
-  expect(fs.existsSync(path.join(B.data, "first-run.json"))).toBe(false);
+  // The app's own server is there all the same, and says whose engine is in use.
+  const told = await (await fetch(`${readJson(path.join(B.data, "service.json")).control}/control/state`)).json();
+  expect(told.model).toMatchObject({ phase: "remote", address: `127.0.0.1:${portA}`, models: ["Fake model"] });
   expect(fs.readdirSync(B.modelsDir).filter((f) => f.endsWith(".gguf"))).toEqual([]);
-  expect(fs.existsSync(path.join(B.enginesDir, "llamacpp", "fake-cuda-12"))).toBe(false);
   expect(readJson(path.join(B.data, "remote-engine.json"))).toEqual({ address: `127.0.0.1:${portA}`, key });
   await waitUntil(() => pb.evaluate(`location.href.startsWith('${B.agent}')`), "the window on the web UI");
   mcB = new MangoCode((await find(B.data))!);
@@ -240,7 +219,7 @@ const refusals = () => (fs.readFileSync(path.join(A.data, "logs", "manager.log")
 test("B: a whole conversation goes through A's engine, the models are A's, and the key stays out of every log", async () => {
   const models = await mcB.models(B.project);
   expect(models.map((m) => m.key)).toEqual(["fake"]);
-  expect(models[0].name).toBe("Fake model · sul PC 127.0.0.1");
+  expect(models[0].name).toBe("Fake model · sull'altro PC");
 
   // What the agent tells its clients (the window, a phone, another app) about its providers never has the key.
   for (const route of ["/config/providers", "/provider"]) expect(await (await fetch(`${B.agent}${route}`)).text()).not.toContain(key);
@@ -265,28 +244,19 @@ test("B: a whole conversation goes through A's engine, the models are A's, and t
 
 test("B: the chat names the PC whose model answers", async () => {
   await pb.send("Page.navigate", { url: `${B.agent}/${b64(B.project)}/session/${lastSession}` });
-  await waitUntil(() => pb.evaluate(`document.body.innerText.includes('Fake model · sul PC 127.0.0.1')`), "the model with the PC in the chat");
+  await waitUntil(() => pb.evaluate(`document.body.innerText.includes("Fake model · sull'altro PC")`), "the model with the PC in the chat");
   await Bun.sleep(500);
   await shot(pb, "chat");
 }, 60_000);
 
-test("B: Models and engine says which engine is in use, with no local models to choose", async () => {
-  await pb.evaluate(`window.__MANGO_DESKTOP__.openModels()`);
-  await waitUntil(() => pb.evaluate(visible("choice")), "the page");
-  await waitUntil(() => pb.evaluate(visible("remote-using")), "the state of the PC in use");
-  const using: string = await pb.evaluate(text("remote-using"));
-  expect(using).toContain("Stai usando il motore del PC 127.0.0.1");
-  expect(using).toContain("Fake model");
-  expect(using).toContain("Torna al motore di questo PC");
-  expect(await pb.evaluate(visible("local"))).toBe(false);
-  expect(await pb.evaluate(`document.getElementById('share').hidden`)).toBe(true);
-  expect(await pb.evaluate(`document.getElementById('start-download').hidden`)).toBe(true);
+test("B: the state says which engine is in use, and the window never holds the key", async () => {
+  const control = readJson(path.join(B.data, "service.json")).control;
+  const told = await (await fetch(`${control}/control/state`)).json();
+  expect(told.model).toMatchObject({ phase: "remote", address: `127.0.0.1:${portA}`, models: ["Fake model"] });
   expect(await pb.evaluate(`document.documentElement.innerHTML.includes(${JSON.stringify(key)})`)).toBe(false);
-  await shot(pb, "motore-remoto-attivo");
-  // The agent stayed on while the page was shown; Cancel goes back.
-  expect((await fetch(`${B.agent}/global/health`)).ok).toBe(true);
-  await pb.evaluate(`document.getElementById('cancel').click()`);
-  await waitUntil(() => pb.evaluate(`location.href.startsWith('${B.agent}')`), "the return to the web UI");
+  // A model of this PC cannot be picked meanwhile: the control server says why.
+  const use = await fetch(`${control}/control/model/use`, { method: "POST", body: JSON.stringify({ model: "fake" }) });
+  expect(use.status).toBe(409);
 }, 120_000);
 
 /** What the agent tells while it waits to try again: the sentence of the status "retry". */
@@ -312,6 +282,9 @@ test("B: A disappears in the middle: the chat says so, the app keeps answering, 
   // Nothing is stuck: the agent and the window answer.
   expect((await fetch(`${B.agent}/global/health`)).ok).toBe(true);
   expect(await pb.evaluate(`1 + 1`)).toBe(2);
+  // The state says it too: the app asks A every few seconds.
+  const reachable = async () => (await (await fetch(`${readJson(path.join(B.data, "service.json")).control}/control/state`)).json()).model.reachable;
+  await waitUntil(async () => (await reachable()) === false, "the state says A does not answer", 60_000);
 
   // A comes back with the same key (turning it off is what wipes it): the agent was trying again.
   A.app = A.launch([]);
@@ -320,6 +293,7 @@ test("B: A disappears in the middle: the chat says so, the app keeps answering, 
   stop();
   expect(steps.some((s) => s.type === "error")).toBe(false);
   expect(said(steps)).toBe(SAID);
+  await waitUntil(async () => (await reachable()) === true, "the state says A answers again", 60_000);
 }, 240_000);
 
 test("B: A renews the key: the chat says to paste the new code, and pasting it on the page puts B back at work", async () => {
@@ -330,13 +304,15 @@ test("B: A renews the key: the chat says to paste the new code, and pasting it o
 
   const steps = await turn(mcB, B, "Hello once more");
   const error = steps.find((s) => s.type === "error") as Extract<Step, { type: "error" }> | undefined;
-  expect(JSON.stringify(error?.error)).toContain("Modelli e motore");
+  expect(JSON.stringify(error?.error)).toContain("Impostazioni › Collegamenti");
 
-  await pb.evaluate(`window.__MANGO_DESKTOP__.openModels()`);
-  await waitUntil(() => pb.evaluate(visible("remote-using")), "the page");
-  await paste(pb, renewed);
+  const service = path.join(B.data, "service.json");
+  const written = fs.statSync(service).mtimeMs;
+  expect(await ask(pb, `engineRemote.connect(${JSON.stringify(renewed)})`)).toBeNull();
+  // The command answers before the agent starts again, and the service file of the new start looks like the old one:
+  // the agent is back when the file is written again.
+  await waitUntil(async () => fs.statSync(service).mtimeMs > written && !!(await find(B.data)), "the agent back", 120_000);
   await waitUntil(() => pb.evaluate(`location.href.startsWith('${B.agent}')`), "the window back on the web UI", 120_000);
-  await waitUntil(async () => !!(await find(B.data)), "the agent back", 120_000);
   mcB = new MangoCode((await find(B.data))!);
   expect(readJson(path.join(B.data, "remote-engine.json")).key).toBe(renewed.split("/").pop());
   code = renewed;
@@ -344,13 +320,12 @@ test("B: A renews the key: the chat says to paste the new code, and pasting it o
   expect(said(await turn(mcB, B, "Hello after the new code"))).toBe(SAID);
 }, 240_000);
 
-test("B: going back to this PC's engine forgets A and brings the first-start choice back, still without downloading", async () => {
-  await pb.evaluate(`window.__MANGO_DESKTOP__.openModels()`);
-  await waitUntil(() => pb.evaluate(visible("remote-using")), "the page");
-  await pb.evaluate(`document.getElementById('remote-back').click()`);
-  await waitUntil(() => pb.evaluate(`${visible("choice")} && ${visible("local")}`), "the choice of this PC's models");
+test("B: going back to this PC's engine forgets A and opens the home with no model, still without downloading", async () => {
+  expect(await ask(pb, `engineRemote.disconnect()`)).toBeNull();
+  await waitUntil(async () => (await find(B.data))?.engine != null, "B on its own engine", 120_000);
+  await waitUntil(() => pb.evaluate(`location.href.startsWith('${B.agent}')`), "the window on the web UI");
   expect(fs.existsSync(path.join(B.data, "remote-engine.json"))).toBe(false);
-  expect(await pb.evaluate(`document.getElementById('remote-using').hidden`)).toBe(true);
+  expect((await (await fetch(`${(await find(B.data))!.engine}/engine`)).json()).phase).toBe("stopped");
   expect(downloads).toBe(0);
 }, 120_000);
 
@@ -368,20 +343,17 @@ async function readyC() {
   return service;
 }
 
-test("C: moves to A's engine from Models and engine; its own engine stops and the conversation goes to A", async () => {
+test("C: moves to A's engine from the bridge; its own engine stops and the conversation goes to A", async () => {
   C = await start([{ text: OWN }], { window: true });
   opened.push(C);
   pc = await page(C.cdp!, (t) => t.url.startsWith(C.agent));
-  await narrow(pc);
   mcC = new MangoCode((await find(C.data))!);
   expect(said(await turn(mcC, C, "Hello"))).toBe(OWN);
 
-  await pc.evaluate(`window.__MANGO_DESKTOP__.openModels()`);
-  await waitUntil(() => pc.evaluate(visible("choice")), "the page");
-  expect(await pc.evaluate(visible("remote-using"))).toBe(false);
+  expect((await (await fetch(`${C.engine}/control/state`)).json()).model.phase).not.toBe("remote");
   const mine = chats(C);
   const theirs = chats(A);
-  await paste(pc, code);
+  expect(await ask(pc, `engineRemote.connect(${JSON.stringify(code)})`)).toBeNull();
   await waitUntil(async () => (await find(C.data))?.engine === null, "C restarted on A's engine", 180_000);
   await readyC();
   expect(said(await turn(mcC, C, "Hello from C"))).toBe(SAID);
@@ -397,7 +369,6 @@ test("C: if A is off at the next start the page says so and one button goes back
   await C.restart();
   await Bun.sleep(1500);
   pc = await page(C.cdp!, appWindow, 120_000);
-  await narrow(pc);
   await waitUntil(() => pc.evaluate(visible("error")), "the error page", 120_000);
   const sentence: string = await pc.evaluate(text("error-sentence"));
   expect(sentence).toContain("Il PC con il motore non risponde");

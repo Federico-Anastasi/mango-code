@@ -3,6 +3,7 @@ import { SessionV1 } from "@opencode-ai/core/v1/session"
 import { createXai } from "@ai-sdk/xai"
 import { APICallError, generateText, type ModelMessage } from "ai"
 import { MessageV2 } from "../../src/session/message-v2"
+import { SessionRetry } from "../../src/session/retry"
 import { ProviderTransform } from "@/provider/transform"
 import type { Provider } from "@/provider/provider"
 
@@ -2128,6 +2129,47 @@ describe("session.message-v2.latest", () => {
 
     expect(state.tasks).toHaveLength(1)
     expect(state.tasks[0]).toMatchObject({ type: "subtask", prompt: "inspect" })
+  })
+})
+
+describe("session.message-v2.fromError: this PC's engine that closes in the middle of an answer", () => {
+  const mango = ProviderV2.ID.make("mango")
+  const reset = () => Object.assign(new Error("read ECONNRESET"), { code: "ECONNRESET", syscall: "read" })
+
+  test("it says the model closed, the agent still retries, and the interface can offer Retry", () => {
+    const result = MessageV2.fromError(reset(), { providerID: mango }) as {
+      name: string
+      data: { message: string; isRetryable: boolean; metadata?: Record<string, string> }
+    }
+    expect(result.name).toBe("APIError")
+    expect(result.data.message).toMatch(/si è chiuso a metà risposta|closed in the middle of the answer/)
+    expect(result.data.isRetryable).toBe(true)
+    expect(result.data.metadata).toMatchObject({ code: "ECONNRESET", engine: "closed" })
+  })
+
+  test("only the retry line says Mango Code is loading it again: the error left once the agent stops promises nothing", () => {
+    const result = MessageV2.fromError(reset(), { providerID: mango })
+    const loading = /ricaricando|loading it again/
+    expect((result as { data: { message: string } }).data.message).not.toMatch(loading)
+    expect(SessionRetry.retryable(result, "mango")?.message).toMatch(loading)
+    const other = MessageV2.fromError(reset(), { providerID: ProviderV2.ID.make("openrouter") })
+    expect(SessionRetry.retryable(other, "openrouter")?.message).toBe("Connection reset by server")
+  })
+
+  test("another provider, or a connection that was never made, keeps its own message", () => {
+    const other = MessageV2.fromError(reset(), { providerID: ProviderV2.ID.make("openrouter") }) as {
+      data: { message: string; metadata?: Record<string, string> }
+    }
+    expect(other.data.message).toBe("Connection reset by server")
+    expect(other.data.metadata?.engine).toBeUndefined()
+    const refused = new APICallError({
+      message: "Cannot connect to API: fetch failed",
+      url: "http://127.0.0.1:47098/v1/chat/completions",
+      requestBodyValues: {},
+      isRetryable: true,
+    })
+    const local = MessageV2.fromError(refused, { providerID: mango }) as { data: { message: string } }
+    expect(local.data.message).toContain("Cannot connect")
   })
 })
 

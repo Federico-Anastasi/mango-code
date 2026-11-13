@@ -59,7 +59,7 @@ Never say "done" without having verified: command output, numbers from the log, 
 - **No dead code, no placeholders, no code for cases we do not have** (the skill `no-deferred-work`, if you have it): a
   patch or script written "for later" is removed.
 - **Small, clear commits**, in English, with the paths added one by one; the message says what changes and why, with
-  the number that justifies it. Never references to AI tools. No push unless asked.
+  the number that justifies it. No push unless asked.
 
 ## Comments
 

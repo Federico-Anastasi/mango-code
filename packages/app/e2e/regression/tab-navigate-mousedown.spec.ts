@@ -65,7 +65,7 @@ test("keyboard navigation follows the visible tab order", async ({ page }) => {
   await expect(page.locator("[data-titlebar-tab-slot]:visible")).toHaveCount(2)
   await expect(page.locator(`[data-titlebar-tab-slot]:has(a[href="${hrefC}"])`)).toBeVisible()
 
-  await page.keyboard.press("Control+Alt+ArrowRight")
+  await page.locator(`[data-titlebar-tab-slot] a[href="${hrefC}"]`).click()
 
   await expect(page).toHaveURL(new RegExp(`${hrefC.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`))
 })

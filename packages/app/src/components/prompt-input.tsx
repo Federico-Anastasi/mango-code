@@ -33,11 +33,10 @@ import { Button } from "@opencode-ai/ui/button"
 import { DockShellForm, DockTray } from "@opencode-ai/ui/dock-surface"
 import { Icon } from "@opencode-ai/ui/icon"
 import { ProviderIcon } from "@opencode-ai/ui/provider-icon"
-import { Tooltip, TooltipKeybind } from "@opencode-ai/ui/tooltip"
+import { Tooltip } from "@opencode-ai/ui/tooltip"
 import { ButtonV2 } from "@opencode-ai/ui/v2/button-v2"
 import { Icon as IconV2 } from "@opencode-ai/ui/v2/icon"
 import { IconButtonV2 } from "@opencode-ai/ui/v2/icon-button-v2"
-import { KeybindV2 } from "@opencode-ai/ui/v2/keybind-v2"
 import { MenuV2 } from "@opencode-ai/ui/v2/menu-v2"
 import { TooltipV2 } from "@opencode-ai/ui/v2/tooltip-v2"
 import { IconButton } from "@opencode-ai/ui/icon-button"
@@ -298,23 +297,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     return text.trim().length === 0 && imageAttachments().length === 0 && commentCount() === 0
   })
   const stopping = createMemo(() => working() && blank())
-  const tip = () => {
-    if (stopping()) {
-      return (
-        <div class="flex items-center gap-2">
-          <span>{language.t("prompt.action.stop")}</span>
-          <span class="text-icon-base text-12-medium text-[10px]!">{language.t("common.key.esc")}</span>
-        </div>
-      )
-    }
-
-    return (
-      <div class="flex items-center gap-2">
-        <span>{language.t("prompt.action.send")}</span>
-        <Icon name="enter" size="small" class="text-icon-base" />
-      </div>
-    )
-  }
+  const tip = () => (stopping() ? language.t("prompt.action.stop") : language.t("prompt.action.send"))
 
   const contextItems = createMemo(() => {
     const items = prompt.context.items()
@@ -446,42 +429,6 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
         }),
     })
   }
-
-  const setMode = (mode: "normal" | "shell") => {
-    setStore("mode", mode)
-    setStore({ popover: null, slashMenu: false, slashMenuQuery: "" })
-    requestAnimationFrame(() => editorRef?.focus())
-  }
-
-  const shellModeKey = "mod+shift+x"
-  const normalModeKey = "mod+shift+e"
-
-  command.register("prompt-input", () => [
-    {
-      id: "file.attach",
-      title: language.t("prompt.action.attachFile"),
-      category: language.t("command.category.file"),
-      keybind: "mod+u",
-      disabled: store.mode !== "normal",
-      onSelect: pick,
-    },
-    {
-      id: "prompt.mode.shell",
-      title: language.t("command.prompt.mode.shell"),
-      category: language.t("command.category.session"),
-      keybind: shellModeKey,
-      disabled: store.mode === "shell",
-      onSelect: () => setMode("shell"),
-    },
-    {
-      id: "prompt.mode.normal",
-      title: language.t("command.prompt.mode.normal"),
-      category: language.t("command.category.session"),
-      keybind: normalModeKey,
-      disabled: store.mode === "normal",
-      onSelect: () => setMode("normal"),
-    },
-  ])
 
   const closePopover = () => setStore({ popover: null, slashMenu: false, slashMenuQuery: "" })
 
@@ -707,13 +654,12 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
 
   const slashCommands = createMemo<SlashCommand[]>(() => {
     const builtin = command.options
-      .filter((opt) => !opt.disabled && !opt.id.startsWith("suggested.") && opt.slash)
+      .filter((opt) => !opt.disabled && opt.slash)
       .map((opt) => ({
         id: opt.id,
         trigger: opt.slash!,
         title: opt.title,
         description: opt.description,
-        keybind: opt.keybind,
         type: "builtin" as const,
       }))
 
@@ -1238,13 +1184,6 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     })
 
   const handleKeyDown = (event: KeyboardEvent) => {
-    if ((event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey && event.key.toLowerCase() === "u") {
-      event.preventDefault()
-      if (store.mode !== "normal") return
-      pick()
-      return
-    }
-
     if (event.key === "Backspace") {
       const selection = window.getSelection()
       if (selection && selection.isCollapsed) {
@@ -1324,17 +1263,13 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
       return
     }
 
-    const ctrl = event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey
-
     if (store.popover) {
       if (event.key === "Tab") {
         selectPopoverActive()
         event.preventDefault()
         return
       }
-      const nav = event.key === "ArrowUp" || event.key === "ArrowDown" || event.key === "Enter"
-      const ctrlNav = ctrl && (event.key === "n" || event.key === "p")
-      if (nav || ctrlNav) {
+      if (event.key === "ArrowUp" || event.key === "ArrowDown" || event.key === "Enter") {
         if (store.popover === "at") {
           atOnKeyDown(event)
           event.preventDefault()
@@ -1342,26 +1277,11 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
         }
         if (store.popover === "slash") {
           slashOnKeyDown(event)
-          if (event.key === "ArrowUp" || event.key === "ArrowDown" || ctrlNav) {
-            scrollSlashActiveIntoView()
-          }
+          if (event.key !== "Enter") scrollSlashActiveIntoView()
         }
         event.preventDefault()
         return
       }
-    }
-
-    if (ctrl && event.code === "KeyG") {
-      if (store.popover) {
-        closePopover()
-        event.preventDefault()
-        return
-      }
-      if (working()) {
-        void abort()
-        event.preventDefault()
-      }
-      return
     }
 
     if (event.key === "ArrowUp" || event.key === "ArrowDown") {
@@ -1416,12 +1336,9 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
       return
     }
 
-    const ctrl = event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey
-    const nav = event.key === "ArrowUp" || event.key === "ArrowDown" || event.key === "Enter"
-    const ctrlNav = ctrl && (event.key === "n" || event.key === "p")
-    if (!nav && !ctrlNav) return
+    if (event.key !== "ArrowUp" && event.key !== "ArrowDown" && event.key !== "Enter") return
     slashOnKeyDown(event)
-    if (event.key === "ArrowUp" || event.key === "ArrowDown" || ctrlNav) scrollSlashActiveIntoView()
+    if (event.key !== "Enter") scrollSlashActiveIntoView()
     event.preventDefault()
   }
 
@@ -1462,8 +1379,6 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
           slashOnInput(value)
         }}
         onSlashMenuKeyDown={handleSlashMenuKeyDown}
-        commandKeybind={command.keybind}
-        commandKeybindParts={command.keybindParts}
         newLayoutDesigns={false}
         t={(key) => language.t(key as Parameters<typeof language.t>[0])}
       />
@@ -1610,11 +1525,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                 "pointer-events": buttonsSpring() > 0.5 ? "auto" : "none",
               }}
             >
-              <TooltipKeybind
-                placement="top"
-                title={language.t("prompt.action.attachFile")}
-                keybind={command.keybind("file.attach")}
-              >
+              <Tooltip placement="top" value={language.t("prompt.action.attachFile")}>
                 <Button
                   data-action="prompt-attach"
                   type="button"
@@ -1628,7 +1539,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                 >
                   <Icon name="plus" class="size-4.5" />
                 </Button>
-              </TooltipKeybind>
+              </Tooltip>
             </div>
           </div>
         </div>
@@ -1663,12 +1574,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                     data-component="prompt-agent-control"
                     classList={{ "animate-in fade-in duration-300": agentsShouldFadeIn() }}
                   >
-                    <TooltipKeybind
-                      placement="top"
-                      gutter={4}
-                      title={language.t("command.agent.cycle")}
-                      keybind={command.keybind("agent.cycle")}
-                    >
+                    <Tooltip placement="top" gutter={4} value={language.t("command.agent.cycle")}>
                       <Select
                         size="normal"
                         options={props.controls.agents.options}
@@ -1683,7 +1589,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                         triggerProps={{ "data-action": "prompt-agent" }}
                         variant="ghost"
                       />
-                    </TooltipKeybind>
+                    </Tooltip>
                   </div>
                 </Show>
                 <Show when={!providersLoading()}>
@@ -1695,12 +1601,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                       <Show
                         when={props.controls.model.paid}
                         fallback={
-                          <TooltipKeybind
-                            placement="top"
-                            gutter={4}
-                            title={language.t("command.model.choose")}
-                            keybind={command.keybind("model.choose")}
-                          >
+                          <Tooltip placement="top" gutter={4} value={language.t("command.model.choose")}>
                             <Button
                               data-action="prompt-model"
                               as="div"
@@ -1725,15 +1626,10 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                               </span>
                               <Icon name="chevron-down" size="small" class="shrink-0" />
                             </Button>
-                          </TooltipKeybind>
+                          </Tooltip>
                         }
                       >
-                        <TooltipKeybind
-                          placement="top"
-                          gutter={4}
-                          title={language.t("command.model.choose")}
-                          keybind={command.keybind("model.choose")}
-                        >
+                        <Tooltip placement="top" gutter={4} value={language.t("command.model.choose")}>
                           <ModelSelectorPopover
                             model={props.controls.model.selection}
                             trigger={(triggerProps) => (
@@ -1761,7 +1657,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                             )}
                             onClose={restoreFocus}
                           />
-                        </TooltipKeybind>
+                        </Tooltip>
                       </Show>
                     </div>
                     <Show when={showVariantControl()}>
@@ -1769,12 +1665,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                         data-component="prompt-variant-control"
                         classList={{ "animate-in fade-in duration-300": providersShouldFadeIn() }}
                       >
-                        <TooltipKeybind
-                          placement="top"
-                          gutter={4}
-                          title={language.t("command.model.variant.cycle")}
-                          keybind={command.keybind("model.variant.cycle")}
-                        >
+                        <Tooltip placement="top" gutter={4} value={language.t("command.model.variant.cycle")}>
                           <Select
                             size="normal"
                             options={variants()}
@@ -1790,7 +1681,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                             triggerProps={{ "data-action": "prompt-model-variant" }}
                             variant="ghost"
                           />
-                        </TooltipKeybind>
+                        </Tooltip>
                       </div>
                     </Show>
                   </Show>

@@ -43,7 +43,7 @@ const DEFAULT_FILE = () => path.join(env.data, "settings.json");
 /** The default settings file: besides `prompt` it holds the language the environment starts with. */
 const readDefault = () => JSON.parse(fs.readFileSync(DEFAULT_FILE(), "utf8"));
 
-const chatRequests = () =>
+const engineRequests = () =>
   fs
     .readFileSync(env.engineLog, "utf8")
     .split("\n")
@@ -55,8 +55,29 @@ const chatRequests = () =>
       } catch {
         return [];
       }
-    })
-    .filter((r) => r?.route?.startsWith("/v1/chat/completions") && !r.headers?.["x-mango-warmup"]);
+    });
+const chatRequests = () => engineRequests().filter((r) => r?.route?.startsWith("/v1/chat/completions"));
+/** The weights the agent keeps for the settings page (its state folder, given by the app). */
+const WEIGHTS_FILE = () => path.join(env.data, "agent", "state", "opencode", "prompt-weights.json");
+const readJson = (f: string) => JSON.parse(fs.readFileSync(f, "utf8"));
+
+async function waitUntil(condition: () => Promise<boolean> | boolean, what: string, ms = 60_000) {
+  const t0 = Date.now();
+  while (!(await Promise.resolve(condition()).catch(() => false))) {
+    if (Date.now() - t0 > ms) throw new Error(`waited too long for: ${what}`);
+    await Bun.sleep(200);
+  }
+}
+
+/** Closes the app and starts it again on the same folders, until its agent answers and its model is loaded. */
+async function restart() {
+  const serviceFile = path.join(env.data, "service.json");
+  const closed = readJson(serviceFile).pid;
+  await env.restart();
+  await waitUntil(() => fs.existsSync(serviceFile) && readJson(serviceFile).pid !== closed, "the service file of the new start", 180_000);
+  await waitUntil(async () => (await fetch(url())).ok, "the settings of the new start");
+  await waitUntil(async () => (await (await fetch(`${env.engine}/engine`)).json()).phase === "running", "the model loaded again", 180_000);
+}
 
 /** A new conversation: its first request, as it reached the engine. */
 async function fresh(): Promise<{ tools: string[]; system: string; user: string }> {
@@ -80,11 +101,14 @@ async function requestTokens(r: { tools: string[]; system: string; user: string 
   return (await response.json()).tokens.length as number;
 }
 
-/** The measurement starts with the first request and ends later: wait until every entry that is on has its weight. */
-async function measured() {
+/** One entry of each kind that is on, the app's MCP server among them. */
+const ON = [["tools", "bash"], ["mcp", "echo"], ["mcp", "animation"], ["plugins", "mango-discipline"]];
+
+/** The measurement starts with the first request and ends later: wait until `entries` have their weight. */
+async function measured(entries = ON) {
   for (let i = 0; i < 60; i++) {
     const s = await read();
-    if (entry(s, "tools", "bash")?.tokens != null && entry(s, "mcp", "echo")?.tokens != null && entry(s, "mcp", "animation")?.tokens != null && entry(s, "plugins", "mango-discipline")?.tokens != null) return s;
+    if (entries.every(([type, name]) => entry(s, type, name)?.tokens != null)) return s;
     await Bun.sleep(500);
   }
   throw new Error("the entries were not measured");
@@ -238,6 +262,34 @@ test("apps only add: extra folders are entries that are on, and settings cannot 
   expect((await fresh()).system).toContain("GINGER");
   await mc.setExtraFolders(env.project, []);
 }, 180_000);
+
+test("the weights outlive the app; without them, a conversation taken up again measures them", async () => {
+  // a conversation to take up again later
+  const id = await mc.createSession(env.project);
+  for await (const _ of mc.turn(id, env.project, "Hello", { model: "fake" }));
+  const before = await measured();
+  const counted = () => engineRequests().filter((r) => r?.route === "/tokenize").length;
+
+  await restart();
+  const after = await read();
+  expect(after.model).toBe("fake");
+  expect(after.items.filter((v: any) => v.tokens === null).map((v: any) => `${v.type}:${v.name}`)).toEqual([]);
+  for (const v of after.items) expect(v.tokens, `${v.type} ${v.name}`).toBe(entry(before, v.type, v.name)?.tokens);
+  // nothing is read or counted again to show them
+  const tokenized = counted();
+  await Bun.sleep(2000);
+  expect(counted()).toBe(tokenized);
+
+  // without the file the page has no weights, until the conversation goes on: its first request measures them
+  fs.rmSync(WEIGHTS_FILE());
+  await restart();
+  expect((await read()).items.filter((v: any) => v.tokens !== null)).toEqual([]);
+  for await (const _ of mc.turn(id, env.project, "Again", { model: "fake" }));
+  // the app added its MCP server to the agent that was running: the agent started again does not have it
+  const again = await measured(ON.filter(([, name]) => name !== "animation"));
+  expect(entry(again, "tools", "bash").tokens).toBe(entry(before, "tools", "bash").tokens);
+  expect(fs.existsSync(WEIGHTS_FILE())).toBe(true);
+}, 400_000);
 
 test("wrong requests or files that cannot be read say what is wrong", async () => {
   expect((await change({ type: "thing", name: "x", enabled: false, scope: "all" })).status).toBe(400);

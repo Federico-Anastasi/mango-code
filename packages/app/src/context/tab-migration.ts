@@ -7,6 +7,7 @@ export function migrateTabs(value: unknown, fallback: ServerConnection.Key): Tab
     if (!tab || typeof tab !== "object") return []
     if ("server" in tab && typeof tab.server !== "string") return []
     const server = ("server" in tab ? tab.server : fallback) as ServerConnection.Key
+    if (tab.type === "settings") return [{ type: tab.type, server }]
     if (tab.type === "session" && typeof tab.sessionId === "string") {
       return [{ type: tab.type, server, sessionId: tab.sessionId }]
     }

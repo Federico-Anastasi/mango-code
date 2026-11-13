@@ -226,6 +226,37 @@ describe("InstanceStore", () => {
     }),
   )
 
+  // mango-code: `/mango/reload` disposes every instance; a prompt that arrives meanwhile must not start on the old one.
+  it.live("a load while the instance is being disposed waits and gets a new instance", () =>
+    Effect.gen(function* () {
+      const dir = yield* tmpdirScoped({ git: true })
+      const store = yield* InstanceStore.Service
+      const disposing = yield* Deferred.make<void>()
+      const releaseDispose = yield* Deferred.make<() => void>()
+      yield* registerDisposerScoped((directory) => {
+        if (directory !== dir) return Promise.resolve()
+        Deferred.doneUnsafe(disposing, Effect.void)
+        return new Promise<void>((resolve) => {
+          Deferred.doneUnsafe(releaseDispose, Effect.succeed(resolve))
+        })
+      })
+
+      const first = yield* store.load({ directory: dir })
+      const disposeAll = yield* store.disposeAll().pipe(Effect.forkScoped)
+      yield* Deferred.await(disposing)
+      const loading = yield* store.load({ directory: dir }).pipe(Effect.forkScoped)
+      const release = yield* Deferred.await(releaseDispose)
+      yield* Effect.sleep("20 millis")
+      // still waiting for the dispose
+      expect(loading.pollUnsafe()).toBeUndefined()
+      yield* Effect.sync(release)
+      yield* Fiber.join(disposeAll)
+      const second = yield* Fiber.join(loading)
+      expect(second).not.toBe(first)
+      expect(yield* store.load({ directory: dir })).toBe(second)
+    }),
+  )
+
   it.live("re-arms disposeAll after completion", () =>
     Effect.gen(function* () {
       const dir1 = yield* tmpdirScoped({ git: true })

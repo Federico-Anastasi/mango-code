@@ -86,12 +86,22 @@ agent `team` of the app's server, dev and agents are hidden `opencode serve` pro
 
 ## The browser
 
-`mango-chrome-mcp.mjs` chooses the browser the agent attaches to, in this order (the choice is written to
-`mcp-chrome.log`, "browser: ..."; a port that shows Mango Code's own window is never used):
+`mango-chrome-mcp.mjs` chooses the browser the agent attaches to (the choice is written to `mcp-chrome.log`,
+"browser: ..."; a port that shows Mango Code's own window is never used):
 
-0. **your Chrome**, if you turned on "Use my Chrome" in the app and Chrome's remote debugging is active;
-1. the app's **preview panel**;
+1. the app's **preview panel**: every page the agent opens goes there, sites of the internet included;
 2. otherwise a browser of its own, started now, with an empty profile (no logins).
+
+**Your Chrome** is the exception, and the agent has to ask for it: `new_page` with `userChrome: true`, for a page that
+needs your sign-ins. It works if you turned on "Use my Chrome" in the app and Chrome's remote debugging is active; if not,
+the call is refused with a sentence that says what to do, and the page is not opened anywhere else. In your Chrome the
+page is always a new tab, and `navigate_page` with an address works only on the tabs the agent opened itself in this
+session: it never sends one of your own tabs to an address. The choice is made again at every `new_page`. If the
+connection to your Chrome fails (Chrome closed, its "Allow remote debugging?" denied or left unanswered) or you turn
+"Use my Chrome" off, the agent drops it and goes back to the panel.
+
+A file path given to a browser tool with no folder before it (`filePath`: `mail\last-run.json`) is taken from the project
+folder; one that leaves the project is refused, as before.
 
 Your Chrome shows "Allow remote debugging?" at every connection: it does so on purpose on the default profile, and since
 Chrome 136 no program can turn that debugging on for you. When the agent finishes a site it opens it in the panel, with a
@@ -112,8 +122,8 @@ keep the conversations' **disk memory** (`--cache-disk`): the system prompt and 
 stay ready after an engine shutdown (loaned GPUs, model switch, closing).
 
 Models without images get their own web instructions: `mango-discipline.js` adds `MANGO-web-text.md` (pages are read
-with `take_snapshot`) instead of `MANGO-web-images.md`, depending on the request's model; the list of models that see
-images reaches the plugins in `MANGO_IMAGE_MODELS`.
+with `take_snapshot`) instead of `MANGO-web-images.md`, depending on the request's model: whether it sees images is
+in its configuration (`modalities`), which the agent reads again without restarting.
 
 ### The engines (forks `mango-prism` and `mango-toq`)
 
@@ -124,11 +134,17 @@ A profile declares its engine, with no fallback to another (without a profile th
 CUDA graphs below Ampere, the clock keeper, the MTP draft's buffer, the trellis weights of toq, the disk memory) and what
 was measured with it: `optimize/knowledge/3060ti-1080-1660s.md`.
 
+`prism` has two CUDA 12 builds. The GTX 16 family declares the compute capability of the RTX 20 (7.5) without having
+their tensor cores, and llama.cpp picks its kernels by that capability: `cuda-12-gtx16` is built without the tensor-core
+kernels there, and reads the prompt about twice as fast on those cards. The choice holds for every card of that
+capability, so a `cuda-12` profile runs on `cuda-12-gtx16` only where the PC's Turing cards are all without tensor cores
+(`Hardware::turing_without_tensor_cores`) and the profile's engine has that build; the profile does not say it.
+
 ### The context
 
-128k is the **target**, and it sits at global level in the JSON so that it isn't lowered out of laziness. A model can
-declare its own `ctx` **only if it was measured** that at 128k it doesn't fit, and it writes in its `_ctx` what it
-measured. The agent's config uses the **effective** ctx of the loaded model.
+128k is the **target**, at global level in the JSON. A model's own `ctx` is the maximum it supports (the GGUF header):
+the general plan uses the smaller of the two and goes lower only if memory is not enough; a profile has the context
+measured on its hardware. The agent's config uses the **effective** ctx of the loaded model.
 
 ## Gotchas and useful truths
 
@@ -154,7 +170,8 @@ measured. The agent's config uses the **effective** ctx of the loaded model.
   attach to (see The browser) and cuts the `performance` and `emulation` categories at the source. It is launched with
   `node` on a fixed path and not with `npx`: on Windows the `.cmd` shim opens a `cmd.exe` that inherits the console. Its
   stdout is written from a thread of its own (`mango-mcp-stdout.cjs`) and a guard (`mango-mcp-watchdog.cjs`) ends the
-  process if the main loop freezes: on Windows a pipe that nobody reads blocks a Node process in the middle of a write.
+  process if the main loop freezes: on Windows a pipe that nobody reads blocks a process in the middle of a write, under
+  Node and under the agent's runtime alike (`integration/tests/browser-mcp.test.ts`).
 - **`mango-web-diet`**, the context diet while browsing. `wait_for` **always** appends the page's accessibility tree
   (~33,000 characters on a busy page, ~8k tokens) and nobody asks for it: there it is cut on output. `click`, `fill`,
   `press_key` have `includeSnapshot` (default **false**): if the tree is there, the model asked for it. The flag is
@@ -187,4 +204,3 @@ measured. The agent's config uses the **effective** ctx of the loaded model.
 | `opencode/` | the agent built from the repo, `web/mango-code.exe` (`app/scripts/build-agent.ps1`). Generated, gitignored |
 | `mango-paths.json` | where binaries and weights are on THIS machine. Optional, written by hand, gitignored |
 | `package.json` | the node dependencies (readability, jsdom, turndown, chrome-devtools-mcp, document libraries) |
-| `docs/known-issues.md` | open problems, with the cause |

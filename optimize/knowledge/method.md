@@ -13,9 +13,9 @@ What we learned in months of measurements on three old NVIDIA GPUs and on CPU. U
 ## The method
 
 - **M1. Find out whether the number is stable before chasing it:** three repetitions and the spread. A spread of 3-7 tok/s was not "the model": it was the clocks.
-- **M2. One variable at a time against a fixed base,** same idle machine; the round resumes where it stopped (one line per measurement in `esiti.jsonl`, with status: running, does not start, error, fallback without pipeline, and peak memory per GPU). Failures are data.
+- **M2. One variable at a time against a fixed base,** same idle machine; the round resumes where it stopped (one line per measurement in the round's log, with status: running, does not start, error, fallback without pipeline, and peak memory per GPU). Failures are data.
 - **M3. Measure what the user lives:** context depth (0, 64k, 118-128k) and not only the empty context; real text (code and summary) for speculative decoding; the server with the product's exact arguments, with `--fit off` so that an OOM stays an OOM; one server per point when the argument cannot be changed while running.
-- **M4. Re-measure the adopted configuration as the product launches it:** the "launcher-3.6" row of the bench is the same as the trial row.
+- **M4. Re-measure the adopted configuration as the product launches it:** the bench row of the configuration as the product launches it is the same as the trial row.
 - **M5. Look in the log after every "does not start":** almost all the causes are compute memory (compute buffer, draft context, cuBLAS), not the model; and the lines that report a fallback (`retrying without pipeline parallelism`, `fused Gated Delta Net ... disabled`).
 - **M6. The bottleneck before the lever:** decode that grows with cores says the limit is the processor; bytes read per token ÷ bandwidth says whether it is memory. Then the lever (engine, format, active parts), not the side tuning.
 - **M7. Quality with the same engine and the same configuration as the speed:** answer forced with a grammar, perplexity only between files of the same model, KLD against the reference, answers saved one by one, uncertainty stated (one-shot MMLU ±0.9 on 1548 questions, with thinking ±1.7 on 400).

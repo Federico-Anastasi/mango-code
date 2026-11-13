@@ -56,7 +56,8 @@ function powershellNotes(name: string) {
 - Prefer full cmdlet names (\`Get-ChildItem\`, \`Set-Content\`, \`Remove-Item\`, \`New-Item\`) over aliases.
 - Use \`$(...)\` for subexpressions and \`@(...)\` for arrays.
 - A native executable whose path contains spaces needs the call operator: \`& "path/to/exe" args\`.
-- Escape special characters with the backtick.`
+- Escape special characters with the backtick.
+- In error messages line numbers start at 2: line 1 of your command is reported as line 2.`
   }
   return ""
 }

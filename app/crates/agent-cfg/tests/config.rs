@@ -4,7 +4,7 @@
 
 use agent_cfg::tools::{instructions, Detection};
 use agent_cfg::team::{self, Choices};
-use agent_cfg::{plan, AgentInputs, BrowserInputs, AgentModel, ModelInfo};
+use agent_cfg::{plan, set_models, AgentInputs, BrowserInputs, AgentModel};
 use mango_common::{tr, Paths};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
@@ -56,9 +56,10 @@ impl Drop for Sandbox {
 fn inputs() -> AgentInputs {
     AgentInputs {
         engine_url: "http://127.0.0.1:8080".into(),
+        control_url: "http://127.0.0.1:8080".into(),
         engine_key: None,
-        models: vec![AgentModel { key: "toq".into(), label: "TOQ-v1".into(), ctx: 122880, images: false, info: Default::default() }],
-        default_model: "toq".into(),
+        models: vec![AgentModel { key: "toq".into(), label: "TOQ-v1".into(), ctx: 122880, images: false }],
+        default_model: Some("toq".into()),
         port: 4196,
         voice_url: None,
         tools: pc(),
@@ -174,28 +175,14 @@ fn the_comparison_sees_the_differences_of_the_model_with_images() {
     assert_eq!(got["tools"]["chrome-devtools_take_screenshot"], json!(true));
 }
 
-/// What the model menu says (size, where it runs, how fast, the warning) goes to the web UI through the agent's environment, by model key.
-#[test]
-fn the_menu_info_goes_to_the_agent_in_the_environment() {
-    let sb = Sandbox::new("models-info");
-    let paths = sb.paths(dist());
-    let mut inp = inputs();
-    inp.models[0].info = ModelInfo { bytes: Some(9_489_952_128), place: "cpu", speed: Some("slow".into()), weak: true };
-    inp.models.push(AgentModel { key: "far".into(), label: "Far".into(), ctx: 8192, images: false, info: ModelInfo { place: "remote", ..Default::default() } });
-    let p = plan(&paths, &inp).unwrap();
-    let info = p.spec.env.iter().find(|(n, _)| n == "MANGO_MODELS_INFO").map(|(_, v)| serde_json::from_str::<serde_json::Value>(v).unwrap()).unwrap();
-    assert_eq!(info["toq"], json!({"bytes": 9_489_952_128u64, "place": "cpu", "speed": "slow", "weak": true}));
-    assert_eq!(info["far"], json!({"bytes": null, "place": "remote", "speed": null, "weak": false}));
-}
-
 #[test]
 fn one_model_for_each_local_model() {
     let sb = Sandbox::new("models");
     let paths = sb.paths(dist());
     let mut inp = inputs();
-    inp.models.push(AgentModel { key: "3.8".into(), label: "Qwen3.8-27B".into(), ctx: 81920, images: true, info: Default::default() });
-    inp.models.push(AgentModel { key: "lfm".into(), label: "LFM2.5".into(), ctx: 131072, images: false, info: Default::default() });
-    inp.default_model = "3.8".into();
+    inp.models.push(AgentModel { key: "3.8".into(), label: "Qwen3.8-27B".into(), ctx: 81920, images: true });
+    inp.models.push(AgentModel { key: "lfm".into(), label: "LFM2.5".into(), ctx: 131072, images: false });
+    inp.default_model = Some("3.8".into());
     let p = plan(&paths, &inp).unwrap();
     let got = read_json(&p.config_dir.join("opencode.json"));
     let m = got["provider"]["mango"]["models"].as_object().unwrap();
@@ -208,12 +195,104 @@ fn one_model_for_each_local_model() {
     assert_eq!(m["3.8"]["name"], json!("Qwen3.8-27B"));
     assert_eq!(got["model"], json!("mango/3.8"));
     assert_eq!(got["small_model"], json!("mango/3.8"));
-    let env = |k: &str| p.spec.env.iter().find(|(n, _)| n == k).map(|(_, v)| v.clone());
-    assert_eq!(env("MANGO_IMAGE_MODELS").as_deref(), Some("3.8"));
+    // Which models see images is in the config (the plugins read it from the request's model), not in the environment.
+    assert!(p.spec.env.iter().all(|(n, _)| n != "MANGO_IMAGE_MODELS"));
 
-    inp.default_model = "xyz".into();
+    inp.default_model = Some("xyz".into());
     let e = plan(&paths, &inp).unwrap_err();
     assert!(format!("{e:#}").contains("xyz"), "{e:#}");
+}
+
+/// Before the first download there is nothing to offer: the agent still gets a config it can start with, without a
+/// default model. Models that are declared but not on disk yet do not need one either.
+#[test]
+fn the_agent_is_configured_without_any_model_on_the_computer() {
+    let sb = Sandbox::new("no-model");
+    let paths = sb.paths(dist());
+    let mut inp = inputs();
+    inp.default_model = None;
+    let p = plan(&paths, &inp).unwrap();
+    let got = read_json(&p.config_dir.join("opencode.json"));
+    assert_eq!((got.get("model"), got.get("small_model")), (None, None));
+    assert_eq!(got["provider"]["mango"]["models"].as_object().unwrap().keys().collect::<Vec<_>>(), ["toq"]);
+
+    inp.models.clear();
+    let p = plan(&paths, &inp).unwrap();
+    let got = read_json(&p.config_dir.join("opencode.json"));
+    assert_eq!(got["provider"]["mango"]["models"], json!({}));
+    assert_eq!(got.get("model"), None);
+}
+
+/// A choice changed a model's context, or the user added a model: the app writes the models again, and only them and
+/// the default, in the config of the agent and of the Team's hidden processes.
+#[test]
+fn the_models_are_written_again_with_their_new_context() {
+    let sb = Sandbox::new("set-models");
+    let paths = sb.paths(dist());
+    let p = plan(&paths, &with_team(&paths, &Choices::default())).unwrap();
+    let before = read_json(&p.config_dir.join("opencode.json"));
+    let models = [
+        AgentModel { key: "toq".into(), label: "TOQ-v1".into(), ctx: 65536, images: false },
+        AgentModel { key: "mine".into(), label: "My model".into(), ctx: 32768, images: true },
+    ];
+    set_models(&paths, &models, Some("toq")).unwrap();
+
+    let mut after = read_json(&p.config_dir.join("opencode.json"));
+    let m = after["provider"]["mango"]["models"].as_object().unwrap();
+    assert_eq!(m.keys().collect::<Vec<_>>(), ["toq", "mine"]);
+    assert_eq!(m["toq"]["limit"], json!({"context": 65536, "output": 8192}));
+    assert_eq!(m["mine"]["name"], json!("My model"));
+    assert_eq!(m["mine"]["modalities"]["input"], json!(["text", "image"]));
+    // Each entry is the same as a model written at start, notes of the template left out.
+    let mut first = before["provider"]["mango"]["models"]["toq"].clone();
+    first["limit"] = json!({"context": 65536, "output": 8192});
+    assert_eq!(m["toq"], first);
+    // Nothing else changes.
+    after["provider"]["mango"]["models"] = before["provider"]["mango"]["models"].clone();
+    assert_eq!(after, before);
+    assert!(!p.config_dir.join("opencode.json.tmp").exists(), "the file is moved in place, nothing is left beside it");
+    for hidden in ["dev-home", "agent-home"] {
+        let got = read_json(&team::folder(&paths).join(hidden).join("opencode.json"));
+        assert_eq!(got["provider"]["mango"]["models"]["toq"]["limit"]["context"], json!(65536), "{hidden}");
+    }
+    // The Team's hidden agents keep their cloud model.
+    let agents = read_json(&team::folder(&paths).join("agent-home").join("opencode.json"));
+    assert!(agents["model"].as_str().unwrap().starts_with("openrouter/"), "{}", agents["model"]);
+
+    // The default changes with the list: the next one is the caller's (the first on the computer).
+    set_models(&paths, &models[1..], Some("mine")).unwrap();
+    let got = read_json(&p.config_dir.join("opencode.json"));
+    assert_eq!((&got["model"], &got["small_model"]), (&json!("mango/mine"), &json!("mango/mine")));
+    assert_eq!(got["provider"]["mango"]["models"].as_object().unwrap().keys().collect::<Vec<_>>(), ["mine"]);
+    let dev = read_json(&team::folder(&paths).join("dev-home").join("opencode.json"));
+    assert_eq!(dev["model"], json!("mango/mine"));
+
+    // Nothing on the computer: no default; a default that is not offered is an error.
+    set_models(&paths, &models, None).unwrap();
+    let got = read_json(&p.config_dir.join("opencode.json"));
+    assert_eq!((got.get("model"), got.get("small_model")), (None, None));
+    let e = set_models(&paths, &models[1..], Some("toq")).unwrap_err();
+    assert!(format!("{e:#}").contains("toq"), "{e:#}");
+}
+
+/// The first model arrives on a computer that had none: the agent gets its default.
+#[test]
+fn from_no_default_to_one() {
+    let sb = Sandbox::new("set-models-first");
+    let paths = sb.paths(dist());
+    let p = plan(&paths, &AgentInputs { default_model: None, ..inputs() }).unwrap();
+    assert_eq!(read_json(&p.config_dir.join("opencode.json")).get("model"), None);
+    set_models(&paths, &inputs().models, Some("toq")).unwrap();
+    let got = read_json(&p.config_dir.join("opencode.json"));
+    assert_eq!((&got["model"], &got["small_model"]), (&json!("mango/toq"), &json!("mango/toq")));
+}
+
+/// Without the agent's config there is nothing to write again: it says so.
+#[test]
+fn the_agents_config_must_be_there() {
+    let sb = Sandbox::new("set-models-missing");
+    let e = set_models(&sb.paths(dist()), &inputs().models, Some("toq")).unwrap_err();
+    assert!(format!("{e:#}").contains("opencode.json"), "{e:#}");
 }
 
 #[test]
@@ -237,7 +316,7 @@ fn process_port_environment_and_health() {
     assert_eq!(env("OPENCODE_CONFIG_DIR"), Some(&*p.config_dir.to_string_lossy()));
     assert_eq!(env("MANGO_HOME"), Some(&*paths.dist.to_string_lossy()));
     assert_eq!(env("MANGO_ENGINE_URL"), Some("http://127.0.0.1:8080"));
-    assert_eq!(env("MANGO_IMAGE_MODELS"), Some(""));
+    assert_eq!(env("MANGO_CONTROL_URL"), Some("http://127.0.0.1:8080"));
     // The prompt settings for all folders live in the app's data (with MANGO_DATA, in the test's).
     assert_eq!(env("MANGO_SETTINGS"), Some(&*paths.data.join("settings.json").to_string_lossy()));
     assert_eq!(env("MANGO_SYSTEM_LANGUAGE"), Some(mango_common::i18n::system_lang().code()));
@@ -410,7 +489,6 @@ fn team_on_manager_and_cloud_models() {
     assert_eq!(env_of(&p, "MANGO_TEAM_AGENT"), Some("team"));
     assert_eq!(env_of(&p, "MANGO_AGENT_MAX"), Some("4"));
     assert_eq!(env_of(&p, "MANGO_AGENT_PORTS"), Some("4092,4093,4094,4095"));
-    assert_eq!(env_of(&p, "MANGO_IMAGE_MODELS"), Some(id), "the manager sees images");
     assert_eq!(env_of(&p, team::KEY_VAR), Some(TEST_KEY));
 }
 
@@ -569,6 +647,8 @@ fn the_engine_of_another_pc_is_reached_with_its_key_from_the_environment_and_the
     let p = plan(&paths, &AgentInputs { team: with_team(&paths, &Choices::default()).team, ..another_pcs_engine() }).unwrap();
     assert_eq!(env_of(&p, "MANGO_ENGINE_KEY"), Some(ENGINE_KEY));
     assert_eq!(env_of(&p, "MANGO_ENGINE_URL"), Some("http://192.168.1.20:47098"));
+    // The control server stays this PC's.
+    assert_eq!(env_of(&p, "MANGO_CONTROL_URL"), Some("http://127.0.0.1:8080"));
     assert!(!p.spec.env_remove.iter().any(|k| k == "MANGO_ENGINE_KEY"));
     let got = read_json(&p.config_dir.join("opencode.json"));
     assert_eq!(got["provider"]["mango"]["options"]["apiKey"], json!("{env:MANGO_ENGINE_KEY}"));

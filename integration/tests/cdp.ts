@@ -1,11 +1,13 @@
 // A minimal CDP client to drive the web UI inside the app's window (WebView2 with remote debugging):
-// evaluate code in the page, collect console messages and exceptions, take screenshots.
+// evaluate code in the page, collect console messages and exceptions, take screenshots, listen to its events.
 
 export interface Page {
   evaluate: (expression: string) => Promise<any>;
   send: (method: string, params?: object) => Promise<any>;
   /** Console messages and exceptions of the page, in order. */
   console: string[];
+  /** Calls `handler` with the params of every event `method` of the page (a domain enabled with `send`). */
+  on: (method: string, handler: (params: any) => void) => void;
   close: () => void;
 }
 
@@ -30,8 +32,10 @@ export async function page(port: number, choose: (t: { url: string; type: string
   let n = 0;
   const pending = new Map<number, (v: any) => void>();
   const console: string[] = [];
+  const handlers: { method: string; handler: (params: any) => void }[] = [];
   ws.onmessage = (m) => {
     const v = JSON.parse(String(m.data));
+    for (const h of handlers) if (h.method === v.method) h.handler(v.params);
     if (v.id) pending.get(v.id)?.(v);
     else if (v.method === "Runtime.consoleAPICalled") console.push(`${v.params.type}: ${v.params.args.map((a: any) => a.value ?? a.description ?? "").join(" ")}`);
     else if (v.method === "Runtime.exceptionThrown") console.push(`EXCEPTION: ${v.params.exceptionDetails?.exception?.description ?? v.params.exceptionDetails?.text}`);
@@ -48,5 +52,5 @@ export async function page(port: number, choose: (t: { url: string; type: string
     if (r.result?.exceptionDetails) throw new Error(r.result.exceptionDetails.exception?.description ?? r.result.exceptionDetails.text);
     return r.result?.result?.value;
   };
-  return { evaluate, send, console, close: () => ws.close() };
+  return { evaluate, send, console, on: (method, handler) => void handlers.push({ method, handler }), close: () => ws.close() };
 }

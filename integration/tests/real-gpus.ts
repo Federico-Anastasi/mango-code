@@ -1,4 +1,4 @@
-// Releasing and resuming the GPUs on the real engine (U5): the development app with a real model (the default
+// Releasing and resuming the GPUs on the real engine: the development app with a real model (the default
 // one unless given), data and ports in a temporary folder. It measures the seconds of "release" and "resume", the
 // GPUs' memory before and after, and how many tokens the engine rereads when the conversation resumes.
 // It holds the GPUs for a couple of minutes: it is not part of `bun test`.
@@ -11,10 +11,8 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { MangoCode, find } from "../client/mango-code";
-import { writeLanguage } from "./environment";
+import { APP_EXE, writeLanguage } from "./environment";
 
-const REPO = path.resolve(import.meta.dir, "..", "..");
-const APP_EXE = path.join(REPO, "app", "target", "debug", "mango-code.exe");
 const model = process.argv[2];
 
 const freePort = () =>

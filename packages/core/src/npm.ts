@@ -156,6 +156,8 @@ const layer = Layer.effect(
         yield* Effect.gen(function* () {
           const nodeModulesExists = yield* afs.existsSafe(path.join(dir, "node_modules"))
           if (!nodeModulesExists) {
+            // Nothing asked for and nothing declared: reify would only leave a lockfile in the folder.
+            if (add.length === 0 && !(yield* afs.existsSafe(path.join(dir, "package.json")))) return true
             yield* reify({ add, dir })
             return true
           }

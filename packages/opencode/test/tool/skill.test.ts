@@ -5,6 +5,7 @@ import { Ripgrep } from "@opencode-ai/core/ripgrep"
 import { Cause, Effect, Exit } from "effect"
 import { afterEach, describe, expect } from "bun:test"
 import path from "path"
+import { rm } from "fs/promises"
 import type { Tool } from "@/tool/tool"
 import { SkillTool } from "../../src/tool/skill"
 import { ToolRegistry } from "@/tool/registry"
@@ -89,6 +90,51 @@ Use this skill.
       expect(result.output).toContain(`<skill_content name="tool-skill">`)
       expect(result.output).toContain(`Base directory for this skill: ${skill}`)
       expect(result.output).toContain(`<file>${file}</file>`)
+    }),
+  )
+
+  it.instance("execute says a skill removed after the start no longer exists", () =>
+    Effect.gen(function* () {
+      const dir = (yield* TestInstance).directory
+      const skill = path.join(dir, ".opencode", "skill", "gone-skill")
+      const other = path.join(dir, ".opencode", "skill", "kept-skill")
+      const text = (name: string) => `---\nname: ${name}\ndescription: Skill for tool tests.\n---\n\n# ${name}\n`
+      yield* Effect.promise(() => Bun.write(path.join(skill, "SKILL.md"), text("gone-skill")))
+      yield* Effect.promise(() => Bun.write(path.join(other, "SKILL.md"), text("kept-skill")))
+
+      const home = process.env.OPENCODE_TEST_HOME
+      process.env.OPENCODE_TEST_HOME = dir
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          process.env.OPENCODE_TEST_HOME = home
+        }),
+      )
+
+      const registry = yield* ToolRegistry.Service
+      const agent = { name: "build", mode: "primary" as const, permission: [], options: {} }
+      const tool = (yield* registry.tools({
+        providerID: "opencode" as any,
+        modelID: "gpt-5" as any,
+        agent,
+      })).find((tool) => tool.id === SkillTool.id)
+      if (!tool) throw new Error("Skill tool not found")
+      const ctx: Tool.Context = { ...baseCtx, ask: () => Effect.void }
+
+      // The first call loads the list of the instance; the folder goes away afterwards, as in a project that changes
+      // while the app is open.
+      yield* tool.execute({ name: "gone-skill" }, ctx)
+      yield* Effect.promise(() => rm(skill, { recursive: true }))
+
+      const exit = yield* tool.execute({ name: "gone-skill" }, ctx).pipe(Effect.exit)
+      expect(Exit.isFailure(exit)).toBe(true)
+      if (!Exit.isFailure(exit)) return
+      const error = Cause.squash(exit.cause)
+      expect(error).toBeInstanceOf(Error)
+      if (!(error instanceof Error)) return
+      expect(error.message).toContain('Skill "gone-skill" no longer exists')
+      expect(error.message).toContain("kept-skill")
+      expect(error.message).not.toContain("ripgrep")
+      expect(error.message).not.toContain("gone-skill, ")
     }),
   )
 

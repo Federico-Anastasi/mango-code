@@ -1,4 +1,4 @@
-import { createEffect, createMemo, For, Show, type Accessor, type JSX } from "solid-js"
+import { createEffect, createMemo, For, type Accessor, type JSX } from "solid-js"
 import {
   DragDropProvider,
   DragDropSensors,
@@ -9,7 +9,7 @@ import {
 } from "@thisbeyond/solid-dnd"
 import { ConstrainDragXAxis } from "@/utils/solid-dnd"
 import { IconButton } from "@opencode-ai/ui/icon-button"
-import { Tooltip, TooltipKeybind } from "@opencode-ai/ui/tooltip"
+import { Tooltip } from "@opencode-ai/ui/tooltip"
 import { type LocalProject } from "@/context/layout"
 
 export const SidebarContent = (props: {
@@ -22,11 +22,9 @@ export const SidebarContent = (props: {
   handleDragEnd: () => void
   handleDragOver: (event: DragEvent) => void
   openProjectLabel: JSX.Element
-  openProjectKeybind: Accessor<string | undefined>
   onOpenProject: () => void
   renderProjectOverlay: () => JSX.Element
   settingsLabel: Accessor<string>
-  settingsKeybind: Accessor<string | undefined>
   onOpenSettings: () => void
   helpLabel: Accessor<string>
   onOpenHelp: () => void
@@ -66,17 +64,7 @@ export const SidebarContent = (props: {
               <SortableProvider ids={props.projects().map((p) => p.worktree)}>
                 <For each={props.projects()}>{(project) => props.renderProject(project)}</For>
               </SortableProvider>
-              <Tooltip
-                placement={placement()}
-                value={
-                  <div class="flex items-center gap-2">
-                    <span>{props.openProjectLabel}</span>
-                    <Show when={!props.mobile && !!props.openProjectKeybind()}>
-                      <span class="text-icon-base text-12-medium">{props.openProjectKeybind()}</span>
-                    </Show>
-                  </div>
-                }
-              >
+              <Tooltip placement={placement()} value={props.openProjectLabel}>
                 <IconButton
                   icon="plus"
                   variant="ghost"
@@ -90,7 +78,7 @@ export const SidebarContent = (props: {
           </DragDropProvider>
         </div>
         <div class="shrink-0 w-full pt-3 pb-6 flex flex-col items-center gap-2">
-          <TooltipKeybind placement={placement()} title={props.settingsLabel()} keybind={props.settingsKeybind() ?? ""}>
+          <Tooltip placement={placement()} value={props.settingsLabel()}>
             <IconButton
               icon="settings-gear"
               variant="ghost"
@@ -98,7 +86,7 @@ export const SidebarContent = (props: {
               onClick={props.onOpenSettings}
               aria-label={props.settingsLabel()}
             />
-          </TooltipKeybind>
+          </Tooltip>
         </div>
       </div>
 

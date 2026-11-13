@@ -3,16 +3,13 @@ import * as mod from "./tooltip"
 import { create } from "../storybook/scaffold"
 
 const docs = `### Overview
-Tooltip for contextual hints and keybind callouts.
+Tooltip for contextual hints.
 
 Use for short hints; avoid long descriptions.
 
 ### API
 - Required: \`value\` (tooltip content).
 - Optional: \`inactive\`, \`forceOpen\`, placement props from Kobalte.
-
-### Variants and states
-- Supports keybind-style tooltip via \`TooltipKeybind\`.
 
 ### Behavior
 - Opens on hover/focus; can be forced open.
@@ -42,14 +39,6 @@ export default {
 }
 
 export const Basic = story.Basic
-
-export const Keybind = {
-  render: () => (
-    <mod.TooltipKeybind title="Search" keybind="Cmd+K">
-      <span style={{ "text-decoration": "underline" }}>Hover for keybind</span>
-    </mod.TooltipKeybind>
-  ),
-}
 
 export const ForcedOpen = {
   args: {

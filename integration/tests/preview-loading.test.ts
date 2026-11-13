@@ -186,6 +186,23 @@ test("every kind of content ends the loading", async () => {
   await ends(() => go("http://127.0.0.1:47779/"), "an address that refuses the connection");
 }, 90_000);
 
+test("a data: page arrives and is not given up, however its text is written in the address", async () => {
+  // WebView2 reports no end of loading for a data: address and its own address for the page is not one the app can read
+  // (`Webview::url` fails): the panel used to wait the limit and then say the address does not answer
+  const written = [
+    `data:text/html,<title>Data page</title><h1 style="color:#c40">Hello, panel</h1> two words & more`,
+    "data:text/html,%3Ctitle%3EData%20page%3C/title%3E%3Ch1%3EHello%3C/h1%3E",
+    "data:text/html;base64,PHRpdGxlPkRhdGEgcGFnZTwvdGl0bGU+PGgxPkhlbGxvPC9oMT4=",
+  ];
+  for (const address of written) {
+    expect(await go(address)).toBe("ok");
+    await until(`${address.slice(0, 40)} arrives`, (s) => s.url.startsWith("data:text/html") && !s.loading, 8000);
+  }
+  await Bun.sleep(LIMIT_MS + 2500);
+  expect(await state()).toMatchObject({ failed: null, loading: false });
+  expect((await state()).url).toStartWith("data:text/html");
+}, 60_000);
+
 test("an address that does not answer is given up, with a sentence and a way to try again", async () => {
   hanging = true;
   // a page is showing: it is replaced by the sentence, not left looking as if the new address were fine

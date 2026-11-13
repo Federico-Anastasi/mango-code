@@ -516,3 +516,92 @@ describe("prompt submit worktree selection", () => {
     expect(optimisticSeeded).toEqual([true])
   })
 })
+
+// mango-code: a message sent while the local model is not ready waits in the interface.
+describe("prompt submit while the model is not ready", () => {
+  const input = (extra: Partial<Parameters<typeof createPromptSubmit>[0]>) =>
+    createPromptSubmit({
+      prompt,
+      info: () => ({ id: "session-1" }),
+      imageAttachments: () => [],
+      commentCount: () => 0,
+      mode: () => "normal",
+      working: () => false,
+      editor: () => undefined,
+      queueScroll: () => undefined,
+      promptLength: (value) => value.reduce((sum, part) => sum + ("content" in part ? part.content.length : 0), 0),
+      addToHistory: () => undefined,
+      resetHistoryNavigation: () => undefined,
+      setMode: () => undefined,
+      setPopover: () => undefined,
+      ...extra,
+    })
+  const event = { preventDefault: () => undefined } as unknown as Event
+
+  test("the message waits: nothing reaches the server, the draft is handed over, and nothing counts as sent", async () => {
+    params = { id: "session-1" }
+    const waited: unknown[] = []
+    let submitted = 0
+    await input({
+      shouldWait: () => true,
+      onWait: (draft) => void waited.push(draft),
+      onSubmit: () => void submitted++,
+    }).handleSubmit(event)
+    expect(sentPrompts).toEqual([])
+    expect(optimistic).toEqual([])
+    expect(submitted).toBe(0)
+    expect(waited).toEqual([
+      expect.objectContaining({
+        sessionID: "session-1",
+        prompt: [{ type: "text", content: "ls", start: 0, end: 2 }],
+        model: { providerID: "provider", modelID: "model" },
+      }),
+    ])
+  })
+
+  test("in a new conversation the conversation is made on the server and the message waits", async () => {
+    const waited: { sessionID: string }[] = []
+    await input({
+      info: () => undefined,
+      newSessionWorktree: () => selected,
+      onNewSessionWorktreeReset: () => undefined,
+      shouldWait: () => true,
+      onWait: (draft) => void waited.push(draft),
+    }).handleSubmit(event)
+    expect(createdSessions).toEqual(["/repo/worktree-a"])
+    expect(waited.map((draft) => draft.sessionID)).toEqual(["session-1"])
+    expect(sentPrompts).toEqual([])
+  })
+
+  test("a message that waits when sent still waits if the model becomes ready while its conversation is made", async () => {
+    let ready = false
+    let open = () => {}
+    createSessionGate = new Promise<void>((resolve) => (open = resolve))
+    const waited: { model: unknown }[] = []
+    const sending = input({
+      info: () => undefined,
+      newSessionWorktree: () => selected,
+      onNewSessionWorktreeReset: () => undefined,
+      shouldWait: () => !ready,
+      onWait: (draft) => void waited.push(draft),
+    }).handleSubmit(event)
+    await Bun.sleep(0)
+    ready = true
+    open()
+    await sending
+    await Bun.sleep(0)
+    expect(sentPrompts).toEqual([])
+    expect(waited).toEqual([expect.objectContaining({ model: { providerID: "provider", modelID: "model" } })])
+  })
+
+  test("a shell command does not wait, and a message goes as usual when nothing waits", async () => {
+    params = { id: "session-1" }
+    const waited: unknown[] = []
+    await input({ mode: () => "shell", shouldWait: () => true, onWait: (draft) => void waited.push(draft) }).handleSubmit(event)
+    expect(sentShell).toHaveLength(1)
+    await input({ shouldWait: () => false, onWait: (draft) => void waited.push(draft) }).handleSubmit(event)
+    await Bun.sleep(0)
+    expect(sentPrompts).toEqual(["/repo/main"])
+    expect(waited).toEqual([])
+  })
+})

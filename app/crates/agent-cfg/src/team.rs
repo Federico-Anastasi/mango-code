@@ -65,17 +65,19 @@ pub fn read_choices(paths: &Paths) -> Result<Choices> {
     let text = match std::fs::read_to_string(&f) {
         Ok(t) => t,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Choices::default()),
-        Err(e) => return Err(e).with_context(|| tr!("impossibile leggere {}", "cannot read {}", f.display())),
+        Err(e) => return Err(e).with_context(|| mango_common::user_text(&tr!("Non riesco a leggere le scelte del Team.", "I can't read the Team's choices."), f.display())),
     };
-    serde_json::from_str(text.trim_start_matches('\u{feff}'))
-        .with_context(|| tr!("{} non è valido: correggilo o toglilo", "{} is not valid: fix it or remove it", f.display()))
+    serde_json::from_str(text.trim_start_matches('\u{feff}')).with_context(|| {
+        mango_common::user_text(&tr!("Le scelte del Team sono rovinate: salvale di nuovo.", "The Team's choices are damaged: save them again."), f.display())
+    })
 }
 
 /// Checks the choices against the catalog and saves them.
 pub fn write_choices(paths: &Paths, choices: &Choices) -> Result<()> {
     choices.check(&mango_common::catalog::read(paths)?.root)?;
     let f = paths.data.join(CHOICES_FILE);
-    mango_common::write_atomic(&f, serde_json::to_string_pretty(choices)?).with_context(|| tr!("impossibile scrivere {}", "cannot write {}", f.display()))
+    mango_common::write_atomic(&f, serde_json::to_string_pretty(choices)?)
+        .with_context(|| mango_common::user_text(&tr!("Non riesco a salvare le scelte del Team.", "I can't save the Team's choices."), f.display()))
 }
 
 /// A catalog cloud model, with the numbers opencode's config asks for.

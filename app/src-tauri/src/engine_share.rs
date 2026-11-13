@@ -1,7 +1,7 @@
-//! "Share the engine with my PCs" on the "Models and engine" page: turns the sharing of the engine on and off (`engine::share`),
+//! "Share the engine with my PCs", in the settings: turns the sharing of the engine on and off (`engine::share`),
 //! gives the codes to copy and renews the key. The commands go through the bridge: only the app window sees them.
 
-use crate::bridge::{err, BridgeError};
+use crate::bridge::{err, shown, BridgeError};
 use engine::share::{Share, SharedModel, State};
 use tauri::{AppHandle, Manager};
 
@@ -45,10 +45,10 @@ pub fn engine_share_state(app: AppHandle) -> Result<State, BridgeError> {
 
 #[tauri::command]
 pub fn engine_share_set_enabled(app: AppHandle, enabled: bool) -> Result<State, BridgeError> {
-    service(&app)?.set_enabled(enabled).map_err(|e| err("io", format!("{e:#}")))
+    service(&app)?.set_enabled(enabled).map_err(|e| shown(&app, "io", "engine sharing", e))
 }
 
 #[tauri::command]
 pub fn engine_share_new_key(app: AppHandle) -> Result<State, BridgeError> {
-    service(&app)?.new_key().map_err(|e| err("io", format!("{e:#}")))
+    service(&app)?.new_key().map_err(|e| shown(&app, "io", "engine sharing", e))
 }

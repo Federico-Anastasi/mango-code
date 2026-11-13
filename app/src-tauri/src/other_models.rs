@@ -1,17 +1,13 @@
-//! The commands of the "Other models" section of the choice page: search Hugging Face, analyze a link or
-//! a file on the computer, save the token, add a model to the user's list or remove it. The logic is in
-//! `engine_cfg::other_models` and `mango_common::download::hugging_face`; here only the connection to the page.
+//! The commands of "Another model", in the settings' Models section, through the bridge (`otherModels` and `token` of
+//! `__MANGO_DESKTOP__`): search Hugging Face, analyze a link or a file on the computer, save the token, add a model to the
+//! user's list or remove it. The logic is in `engine_cfg::other_models` and `mango_common::download::hugging_face`.
 
-use crate::AppState;
-use engine_cfg::other_models::{self, Analysis};
+use engine_cfg::other_models::{self, Analysis, Tested};
 use mango_common::credentials;
 use mango_common::download::hugging_face::{self, SearchResult};
 use mango_common::download::HF_CREDENTIAL;
 use mango_common::{tr, Paths};
 use serde::Serialize;
-use serde_json::Value;
-use std::path::PathBuf;
-use tauri::State;
 
 /// What the "search or paste a link" box finds.
 #[derive(Serialize)]
@@ -19,75 +15,118 @@ use tauri::State;
 pub enum Found {
     Results { results: Vec<SearchResult> },
     Analysis { repo: String, analysis: Box<Analysis> },
+    /// The repo of a model of the catalog: it is already among the tested ones, tuned for Mango Code.
+    Tested(Tested),
 }
 
-/// A link (or `owner/name`) opens the repo with its quantizations; anything else is a search by name.
-#[tauri::command]
-pub async fn other_models_open(state: State<'_, AppState>, text: String) -> Result<Found, String> {
-    let paths = paths(&state)?;
-    work(move || {
-        let Some(reference) = hugging_face::parse_reference(&text) else {
-            return Ok(Found::Results { results: hugging_face::search(text.trim())? });
-        };
-        let repo = hugging_face::repo(&reference.repo, reference.revision.as_deref())?;
-        let mut analysis = other_models::analyze_hugging_face(&paths, &engine_cfg::detect()?, &repo)?;
-        analysis.prefer(reference.quant.as_deref(), reference.path.as_deref());
-        Ok(Found::Analysis { repo: repo.id, analysis: Box::new(analysis) })
-    })
-    .await
+/// A link (or `owner/name`) opens the repo with its quantizations, or, a link to the repo alone, leads to the catalog's
+/// model it is the repo of; anything else is a search by name.
+fn open(paths: &Paths, text: &str) -> anyhow::Result<Found> {
+    let Some(reference) = hugging_face::parse_reference(text) else {
+        return Ok(Found::Results { results: hugging_face::search(text.trim())? });
+    };
+    if let Some(tested) = other_models::tested(paths, &reference)? {
+        return Ok(Found::Tested(tested));
+    }
+    let repo = hugging_face::repo(&reference.repo, reference.revision.as_deref())?;
+    let mut analysis = other_models::analyze_hugging_face(paths, &engine_cfg::detect()?, &repo)?;
+    analysis.prefer(reference.quant.as_deref(), reference.path.as_deref());
+    Ok(Found::Analysis { repo: repo.id, analysis: Box::new(analysis) })
 }
 
-/// A GGUF already on the computer, chosen from the page.
-#[tauri::command]
-pub async fn other_models_local(state: State<'_, AppState>, path: String) -> Result<Analysis, String> {
-    let paths = paths(&state)?;
-    work(move || other_models::analyze_local(&paths, &engine_cfg::detect()?, &PathBuf::from(path))).await
+/// Checks the token with Hugging Face, then saves it in the Windows Credential Manager.
+fn save_token(token: &str) -> anyhow::Result<()> {
+    let token = token.trim();
+    anyhow::ensure!(!token.is_empty(), "{}", tr!("Incolla il token di Hugging Face.", "Paste the Hugging Face token."));
+    hugging_face::verify_token(token)?;
+    credentials::save(HF_CREDENTIAL, token)
 }
 
-/// Puts the model in the user's list and makes the page read the choice again, with the new model already ticked.
-#[tauri::command]
-pub async fn other_models_add(state: State<'_, AppState>, key: String, entry: Value) -> Result<(), String> {
-    let paths = paths(&state)?;
-    let k = key.clone();
-    work(move || other_models::add(&paths, &k, entry)).await?;
-    state.choice.reassess(Some(key))
-}
+/// The commands. They answer `{ code: "refused", message }` with the sentence for the user, the whole error in
+/// `startup.log` (`downloads::refused`), and a change to the user's list makes the interface read the models again
+/// (`catalog_revision`).
+pub mod bridge {
+    use super::{open, other_models, save_token, Analysis, Found};
+    use crate::bridge::{err, BridgeError};
+    use crate::downloads::{blocking, refused};
+    use crate::AppState;
+    use anyhow::Context;
+    use mango_common::credentials;
+    use mango_common::download::HF_CREDENTIAL;
+    use mango_common::{tr, Paths};
+    use serde_json::Value;
+    use std::path::PathBuf;
+    use tauri::{AppHandle, Manager, Window};
+    use tauri_plugin_dialog::DialogExt;
 
-#[tauri::command]
-pub async fn other_models_remove(state: State<'_, AppState>, key: String) -> Result<(), String> {
-    let paths = paths(&state)?;
-    work(move || mango_common::catalog::remove_user(&paths, &key)).await?;
-    state.choice.reassess(None)
-}
+    fn paths(app: &AppHandle) -> anyhow::Result<Paths> {
+        app.state::<AppState>().paths.get().cloned().with_context(|| tr!("Mango Code si sta ancora avviando.", "Mango Code is still starting."))
+    }
 
-/// Whether there is a Hugging Face token saved by the app.
-#[tauri::command]
-pub fn other_models_token_status() -> Result<bool, String> {
-    credentials::read(HF_CREDENTIAL).map(|t| t.is_some()).map_err(|e| format!("{e:#}"))
-}
+    /// A name searches Hugging Face; a link (or `owner/name`, a result of the search) gives the analysis of that repo,
+    /// or the catalog's model it is the repo of.
+    #[tauri::command]
+    pub async fn other_models_search(app: AppHandle, text: String) -> Result<Found, BridgeError> {
+        blocking(app, move |app| open(&paths(app)?, &text)).await
+    }
 
-/// Checks the token with Hugging Face and saves it in the Windows Credential Manager.
-#[tauri::command]
-pub async fn other_models_token_save(token: String) -> Result<(), String> {
-    work(move || {
-        let token = token.trim();
-        anyhow::ensure!(!token.is_empty(), "{}", tr!("Incolla il token di Hugging Face.", "Paste the Hugging Face token."));
-        hugging_face::verify_token(token)?;
-        credentials::save(HF_CREDENTIAL, token)
-    })
-    .await
-}
+    /// The analysis of a GGUF on the computer.
+    #[tauri::command]
+    pub async fn other_models_analyze(app: AppHandle, file: String) -> Result<Analysis, BridgeError> {
+        blocking(app, move |app| other_models::analyze_local(&paths(app)?, &engine_cfg::detect()?, &PathBuf::from(file))).await
+    }
 
-#[tauri::command]
-pub fn other_models_token_remove() -> Result<(), String> {
-    credentials::remove(HF_CREDENTIAL).map_err(|e| format!("{e:#}"))
-}
+    /// The Windows file picker for a GGUF; `None` if the user cancels.
+    #[tauri::command]
+    pub async fn other_models_pick_file(app: AppHandle, window: Window) -> Result<Option<String>, BridgeError> {
+        let picked = app.dialog().file().set_parent(&window).add_filter("GGUF", &["gguf"]).blocking_pick_file();
+        picked
+            .map(|p| p.into_path().map(|p| p.display().to_string()).map_err(|e| err("io", tr!("percorso non valido: {e}", "invalid path: {e}"))))
+            .transpose()
+    }
 
-fn paths(state: &AppState) -> Result<Paths, String> {
-    state.paths.get().cloned().ok_or_else(|| tr!("percorsi non ancora noti", "paths not known yet"))
-}
+    /// Puts a quantization of the analysis (`key`, its `entry`) in the user's list. A file on the computer is there at
+    /// once: it arrived, and without a default saved it can become it (`keep_default`).
+    #[tauri::command]
+    pub async fn user_models_add(app: AppHandle, key: String, entry: Value) -> Result<(), BridgeError> {
+        blocking(app, move |app| {
+            let paths = paths(app)?;
+            other_models::add(&paths, &key, entry)?;
+            if let Some(catalog) = crate::choices_changed(app) {
+                crate::keep_default(app, &paths, &catalog, crate::Keep::Arrived(&key));
+            }
+            Ok(())
+        })
+        .await
+    }
 
-/// Runs a job that waits for the network or the disk outside the command thread.
-async fn work<T: Send + 'static>(f: impl FnOnce() -> anyhow::Result<T> + Send + 'static) -> Result<T, String> {
-    tauri::async_runtime::spawn_blocking(f).await.map_err(|e| e.to_string())?.map_err(|e| format!("{e:#}"))
+    /// Takes a model that is not on the computer out of the user's list (`models.remove` takes one that is there).
+    #[tauri::command]
+    pub async fn user_models_remove(app: AppHandle, key: String) -> Result<(), BridgeError> {
+        blocking(app, move |app| {
+            let paths = paths(app)?;
+            mango_common::catalog::remove_user(&paths, &key)?;
+            engine_cfg::choices::forget_model(&paths, &key)?;
+            crate::choices_changed(app);
+            Ok(())
+        })
+        .await
+    }
+
+    /// Whether a Hugging Face token is saved.
+    #[tauri::command]
+    pub fn token_status(app: AppHandle) -> Result<bool, BridgeError> {
+        credentials::read(HF_CREDENTIAL).map(|t| t.is_some()).map_err(|e| refused(&app, e))
+    }
+
+    /// Checks the token with Hugging Face and saves it in the Windows Credential Manager.
+    #[tauri::command]
+    pub async fn token_save(app: AppHandle, token: String) -> Result<(), BridgeError> {
+        blocking(app, move |_| save_token(&token)).await
+    }
+
+    #[tauri::command]
+    pub fn token_remove(app: AppHandle) -> Result<(), BridgeError> {
+        credentials::remove(HF_CREDENTIAL).map_err(|e| refused(&app, e))
+    }
 }

@@ -68,7 +68,7 @@ import { patchFiles } from "./apply-patch-file"
 import { partDefaultOpen } from "./part-default-open"
 import { animate } from "motion"
 import { attached, inline, kind, typeLabel } from "./message-file"
-import { readPartText } from "./message-part-text"
+import { HIDDEN_TOOLS, hasContent, readPartText } from "./message-part-text"
 import { SessionProgressIndicatorV2 } from "../v2/components/session-progress-indicator-v2"
 
 async function writeClipboard(text: string): Promise<boolean> {
@@ -650,7 +650,6 @@ function taskSession(
 }
 
 const CONTEXT_GROUP_TOOLS = new Set(["read", "glob", "grep", "list"])
-const HIDDEN_TOOLS = new Set(["todowrite"])
 
 function list<T>(value: T[] | undefined | null, fallback: T[]) {
   if (Array.isArray(value)) return value
@@ -769,7 +768,7 @@ export function renderable(part: PartType, showReasoningSummaries = true) {
     if (part.tool === "question") return part.state.status !== "pending" && part.state.status !== "running"
     return true
   }
-  if (part.type === "text") return !!part.text?.trim()
+  if (part.type === "text") return hasContent(part.text)
   if (part.type === "reasoning") return showReasoningSummaries && !!part.text?.trim() && !shortReasoning(part)
   return !!PART_MAPPING[part.type]
 }
@@ -1676,7 +1675,7 @@ PART_MAPPING["tool"] = function ToolPartDisplay(props) {
     const state = part().state
     return state.status === "completed" ? state.attachments : undefined
   }
-  const controlledOpen =() => (props.onToolOpenChange ? (props.toolOpen ?? props.defaultOpen) : undefined)
+  const controlledOpen = () => (props.onToolOpenChange ? (props.toolOpen ?? props.defaultOpen) : undefined)
   const handleToolOpenChange = (open: boolean) => props.onToolOpenChange?.(open)
 
   return (

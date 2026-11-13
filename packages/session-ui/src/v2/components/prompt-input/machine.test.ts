@@ -88,19 +88,21 @@ describe("prompt input v2 interaction machine", () => {
     expect(result.handled).toBeTrue()
   })
 
-  test("closes a popover with ctrl-g before stopping a run", () => {
+  test("Ctrl+G, Ctrl+N and Ctrl+P leave a popover as it is", () => {
     const state = {
       ...createPromptInputV2InteractionState(),
       popover: { type: "context" as const, query: "", activeID: "first" },
     }
-    const result = transitionPromptInputV2(
-      state,
-      { type: "key.down", key: "g", ctrl: true, composing: false, ids: ["first"] },
-      persisted(),
-    )
+    for (const key of ["g", "n", "p"]) {
+      const result = transitionPromptInputV2(
+        state,
+        { type: "key.down", key, ctrl: true, composing: false, ids: ["first", "second"] },
+        persisted(),
+      )
 
-    expect(result.state.popover).toEqual({ type: "closed" })
-    expect(result.handled).toBeTrue()
+      expect(result.state.popover).toEqual(state.popover)
+      expect(result.handled).toBeFalse()
+    }
   })
 
   test("opens the searchable command menu for a populated draft", () => {

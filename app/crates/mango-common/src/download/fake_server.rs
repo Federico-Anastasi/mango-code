@@ -22,11 +22,17 @@ pub struct Route {
     pub ignore_range: bool,
     /// A request with `Range` gets a 206 from this byte, whatever it asked for, saying so in `Content-Range`.
     pub resume_from: Option<usize>,
+    /// Refuses with this status and, if not empty, this `X-Error-Code` (as Hugging Face does).
+    pub refusal: Option<(u16, &'static str)>,
 }
 
 impl Route {
     pub fn file(body: Vec<u8>) -> Route {
-        Route { body, interrupt_at: None, stall_at: None, ignore_range: false, resume_from: None }
+        Route { body, interrupt_at: None, stall_at: None, ignore_range: false, resume_from: None, refusal: None }
+    }
+
+    pub fn refuse(status: u16, error_code: &'static str) -> Route {
+        Route { refusal: Some((status, error_code)), ..Route::file(Vec::new()) }
     }
 }
 
@@ -113,13 +119,20 @@ impl FakeServer {
 }
 
 fn reply(rq: tiny_http::Request, v: Route, range: Option<String>, released: &Arc<AtomicBool>) -> io::Result<()> {
+    if let Some((status, code)) = v.refusal {
+        let r = Response::empty(status);
+        return match code {
+            "" => rq.respond(r),
+            c => rq.respond(r.with_header(Header::from_bytes("X-Error-Code", c).unwrap())),
+        };
+    }
     let total = v.body.len();
     let from = range
         .as_deref()
         .filter(|_| !v.ignore_range)
         .and_then(|r| r.strip_prefix("bytes="))
-        .and_then(|r| r.strip_suffix('-'))
-        .and_then(|n| n.parse::<usize>().ok());
+        .and_then(|r| r.split_once('-'))
+        .and_then(|(n, _)| n.parse::<usize>().ok());
     match from.map(|asked| v.resume_from.unwrap_or(asked)) {
         Some(from) => {
             let h = Header::from_bytes("Content-Range", format!("bytes {from}-{}/{total}", total - 1)).unwrap();

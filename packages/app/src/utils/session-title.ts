@@ -12,10 +12,11 @@ export function withTimestampedFallback(info: Info) {
   return info.title ?? `${info.parentID ? "Child" : "New"} session - ${new Date(info.time.created).toISOString()}`
 }
 
-/** Title to show: the provisional English titles with a timestamp become `untitled` (if given). */
-export function sessionTitle(title?: string, untitled?: string) {
+/**
+ * Title to show: the provisional English titles with a timestamp become `untitled`, in the app's language. It is
+ * required: a caller without it would show «New session» whatever the language.
+ */
+export function sessionTitle(title: string | undefined, untitled: string) {
   if (!title) return title
-  const match = title.match(pattern)
-  if (!match) return title
-  return untitled ?? match[1]
+  return pattern.test(title) ? untitled : title
 }

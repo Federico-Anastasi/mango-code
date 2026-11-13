@@ -26,7 +26,7 @@ use std::time::Instant;
 const USAGE: &str = "usage: mango-tune detect | trial | log | profile (see the optimize skill)";
 const KEY: &str = "trial";
 /// The build folders in the installation: `<engine>/<version>-<build>`.
-const BUILD: [&str; 4] = ["cuda-12", "cuda-13", "vulkan", "cpu"];
+const BUILD: [&str; 5] = ["cuda-12", "cuda-12-gtx16", "cuda-13", "vulkan", "cpu"];
 
 fn main() -> Result<()> {
     let mut args = std::env::args().skip(1);
@@ -326,7 +326,7 @@ fn measure_tune(p: &mut Trial, points: &[String], point_tokens: &[usize], repeat
             gguf: PathBuf::from(&a.model),
         })
     });
-    let m = EngineManager::new(planner, Box::new(engine_cfg::gpu_memory), &logs, None);
+    let m = EngineManager::new(planner, Box::new(engine_cfg::gpu_memory), &logs);
     let before = engine_cfg::gpu_memory();
     let t0 = Instant::now();
     m.start(KEY, &mut |_| {})?;
