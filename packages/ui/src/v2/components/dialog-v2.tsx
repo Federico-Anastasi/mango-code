@@ -64,16 +64,17 @@ export function DialogHeader(props: DialogHeaderProps) {
           <svg
             width="16"
             height="16"
-            viewBox="0 0 16 16"
+            viewBox="0 0 24 24"
             fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
             xmlns="http://www.w3.org/2000/svg"
             aria-hidden="true"
           >
-            <path
-              d="M12.4446 3.55469L3.55566 12.4436M3.55566 3.55469L12.4446 12.4436"
-              stroke="currentColor"
-              stroke-linejoin="round"
-            />
+            <path d="M18 6 6 18" />
+            <path d="m6 6 12 12" />
           </svg>
         </Kobalte.CloseButton>
       )}

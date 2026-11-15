@@ -4,13 +4,14 @@ import { InstanceState } from "@/effect/instance-state"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import { Ripgrep } from "@opencode-ai/core/ripgrep"
 import { assertExternalDirectoryEffect } from "./external-directory"
+import { ProjectPath } from "./project-path"
 import DESCRIPTION from "./glob.txt"
 import * as Tool from "./tool"
 
 export const Parameters = Schema.Struct({
   pattern: Schema.String.annotate({ description: "The glob pattern to match files against" }),
   path: Schema.optional(Schema.String).annotate({
-    description: `The directory to search in. Omit it to use the current working directory (never pass "undefined" or "null"). Must be a valid directory path if provided.`,
+    description: `The directory to search in, relative to the project folder. Omit it to search the project folder (never pass "undefined" or "null").`,
   }),
 })
 
@@ -35,8 +36,8 @@ export const GlobTool = Tool.define(
             },
           })
 
-          let search = params.path ?? ins.directory
-          search = path.isAbsolute(search) ? search : path.resolve(ins.directory, search)
+          const located = ProjectPath.locate(params.path ?? ".", ins.directory)
+          const search = located.path
           const info = yield* fs.stat(search).pipe(Effect.catch(() => Effect.succeed(undefined)))
           if (info?.type === "File") {
             throw new Error(`glob path must be a directory: ${search}`)
@@ -50,7 +51,7 @@ export const GlobTool = Tool.define(
           const files = yield* ripgrep.glob({ cwd: search, pattern: params.pattern, limit })
           const truncated = files.length === limit
 
-          const output = []
+          const output = located.note ? [located.note, ""] : []
           if (files.length === 0) output.push("No files found")
           if (files.length > 0) {
             output.push(...files.map((file) => path.resolve(search, file.path)))

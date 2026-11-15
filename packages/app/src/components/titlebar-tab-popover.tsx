@@ -25,7 +25,6 @@ export function TabPreviewPopover(props: {
   onOpenChange: (open: boolean) => void
   data: TabPreviewData
 }) {
-  let triggerEl: HTMLDivElement | undefined
   // When opened during a rapid tab-hopping streak, this preview appears and
   // disappears instantly (no repeated enter/exit animation) — only the first,
   // "cold" preview animates. Mirrors how browsers reuse one tab tooltip.
@@ -53,17 +52,11 @@ export function TabPreviewPopover(props: {
       placement="bottom-start"
       gutter={6}
     >
-      <Kobalte.Trigger ref={triggerEl} as="div" data-component="session-tab-popover-trigger" tabIndex={-1}>
+      <Kobalte.Trigger as="div" data-component="session-tab-popover-trigger" tabIndex={-1}>
         {props.trigger}
       </Kobalte.Trigger>
       <Kobalte.Portal>
         <Kobalte.Content
-          ref={(el) => {
-            // Portalled content lives outside the themed subtree, so mirror the
-            // active theme like the v2 tooltip does.
-            const theme = triggerEl?.closest("[data-theme]")?.getAttribute("data-theme")
-            if (theme) el.setAttribute("data-theme", theme)
-          }}
           data-component="session-tab-popover"
           data-instant={instant() || undefined}
         >

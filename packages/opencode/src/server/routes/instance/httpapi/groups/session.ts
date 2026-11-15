@@ -71,6 +71,7 @@ export const SummarizePayload = Schema.Struct({
 export const PromptPayload = Schema.Struct(Struct.omit(SessionPrompt.PromptInput.fields, ["sessionID"]))
 export const CommandPayload = Schema.Struct(Struct.omit(SessionPrompt.CommandInput.fields, ["sessionID"]))
 export const ShellPayload = Schema.Struct(Struct.omit(SessionPrompt.ShellInput.fields, ["sessionID"]))
+export const ImagePayload = Schema.Struct(Struct.omit(SessionPrompt.ImageInput.fields, ["sessionID"]))
 export const RevertPayload = Schema.Struct(Struct.omit(SessionRevert.RevertInput.fields, ["sessionID"]))
 export const PermissionResponsePayload = Schema.Struct({
   response: PermissionV1.Reply,
@@ -97,6 +98,7 @@ export const SessionPaths = {
   promptAsync: `${root}/:sessionID/prompt_async`,
   command: `${root}/:sessionID/command`,
   shell: `${root}/:sessionID/shell`,
+  image: `${root}/:sessionID/image`,
   revert: `${root}/:sessionID/revert`,
   unrevert: `${root}/:sessionID/unrevert`,
   permissions: `${root}/:sessionID/permissions/:permissionID`,
@@ -365,6 +367,20 @@ export const SessionApi = HttpApi.make("session")
             identifier: "session.shell",
             summary: "Run shell command",
             description: "Execute a shell command within the session context and return the AI's response.",
+          }),
+        ),
+        HttpApiEndpoint.post("image", SessionPaths.image, {
+          params: { sessionID: SessionID },
+          query: WorkspaceRoutingQuery,
+          payload: ImagePayload,
+          success: described(SessionV1.WithParts, "Created message"),
+          error: [HttpApiError.BadRequest, ApiNotFoundError, SessionBusyError],
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "session.image",
+            summary: "Draw a picture",
+            description:
+              "Draw a picture from the user's own words as a turn of the session, without the model that writes for the answer: the words are rewritten into a description (asking the user a question when needed), the Mango Code app draws, and the turn ends with an assistant message holding one completed image_generate tool part with the picture attached.",
           }),
         ),
         HttpApiEndpoint.post("revert", SessionPaths.revert, {

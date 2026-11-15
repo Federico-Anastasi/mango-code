@@ -22,7 +22,7 @@ use anyhow::{bail, Result};
 use mango_common::tr;
 
 pub const MIB: u64 = 1 << 20;
-/// Memory that Windows (screen, DWM) and the CUDA context take from each card. Measured on 30/10 from the engine
+/// Memory that Windows (screen, DWM) and the CUDA context take from each card. Measured from the engine
 /// log: 3060 Ti 8191 - 7128 free = 1063 MiB, 1660 S 6143 - 5134 = 1009 MiB.
 pub(crate) const SYSTEM_RESERVE_MIB: u64 = 1100;
 /// Margin above the measurement: the user's desktop may take more than ours.
@@ -332,7 +332,7 @@ mod tests {
         p.layer_devices.iter().map(|d| d.to_string()).collect::<Vec<_>>().join(",")
     }
 
-    /// A check that must give zero: the three GPUs reproduce the measured configuration.
+    /// The three GPUs reproduce the measured configuration.
     #[test]
     fn three_gpus_reproduce_the_measured_configuration() {
         let g = three_cards();

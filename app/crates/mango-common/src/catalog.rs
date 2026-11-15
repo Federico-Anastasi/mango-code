@@ -1,6 +1,10 @@
 //! The model catalog as the app sees it: the recommended models of `<dist>/mango-models.json` plus, if it exists,
 //! the user's own from `<data>/user-models.json` (same format as the entries of `models`). The user's models are
 //! added to the Mango Code catalog and don't replace it: a key that is already taken is an error.
+//!
+//! One entry of the user's is not a model of its own: a file chosen on the computer that is the very file of a Mango
+//! Code model (same name, same size). It is that model, with what the catalog knows about it (its template, its
+//! sampling, its profiles), run from the user's file: listed once, never downloaded, never deleted (`ModelCatalog::same`).
 
 use crate::i18n::{lang, Lang};
 use crate::{tr, user_error, Paths};
@@ -49,12 +53,30 @@ pub struct Sampling {
     pub repeat_penalty: Option<f64>,
 }
 
+/// What a model that makes images is made of (`image` in `mango-models.json`): its three files, as paths in the
+/// models folder, and the values whoever made it gives for running it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ImageModel {
+    /// The weights that draw.
+    pub diffusion: String,
+    /// The model that reads the request.
+    pub encoder: String,
+    /// The one that turns the result into pixels.
+    pub vae: String,
+    pub steps: u32,
+    pub cfg_scale: f64,
+}
+
 /// The merged catalog: the root of `mango-models.json` with the user's entries also in `models`.
 #[derive(Debug)]
 pub struct ModelCatalog {
     pub root: Value,
     /// The keys that come from the user's file, in alphabetical order.
     pub user: Vec<String>,
+    /// The entries of the user's file that are a Mango Code model's own file, each with the key of that model: they
+    /// are not in `models`, and the model's files point at the user's.
+    pub same: BTreeMap<String, String>,
 }
 
 #[derive(Deserialize)]
@@ -90,7 +112,7 @@ pub fn read(paths: &Paths) -> Result<ModelCatalog> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
         Err(e) => return Err(user_error(&cannot_read_user_list(), format!("{}: {e}", fu.display()))),
     }) else {
-        return Ok(ModelCatalog { root, user: Vec::new() });
+        return Ok(ModelCatalog { root, user: Vec::new(), same: BTreeMap::new() });
     };
     let user: UserModelsFile = serde_json::from_str(txt.trim_start_matches('\u{feff}'))
         .map_err(|e| user_error(&invalid_user_list(), format!("{}: {e}", fu.display())))?;
@@ -100,14 +122,77 @@ pub fn read(paths: &Paths) -> Result<ModelCatalog> {
             format!("{}: missing «models»", f.display()),
         )
     })?;
-    let keys: Vec<String> = user.models.keys().cloned().collect();
+    let ours: Vec<String> = models.keys().cloned().collect();
+    let mut keys = Vec::new();
+    let mut same = BTreeMap::new();
     for (key, entry) in user.models {
         if models.contains_key(&key) {
             return Err(user_error(&key_taken(&key), format!("{}: key «{key}» already in the catalog", fu.display())));
         }
-        models.insert(key, entry);
+        let free = ours.iter().filter(|k| !same.values().any(|taken| taken == *k));
+        match own_copy(models, free, &entry) {
+            Some((model, files)) => {
+                run_from(&mut models[&model], &files);
+                same.insert(key, model);
+            }
+            None => {
+                models.insert(key.clone(), entry);
+                keys.push(key);
+            }
+        }
     }
-    Ok(ModelCatalog { root, user: keys })
+    Ok(ModelCatalog { root, user: keys, same })
+}
+
+fn file_name(path: &str) -> &str {
+    path.rsplit(['/', '\\']).next().unwrap_or(path)
+}
+
+/// The Mango Code model, among `ours`, that `entry` of the user's is a copy of, with where each of its files is on the
+/// user's disk: an entry made from a file chosen on the computer whose files have the names and the sizes of all the
+/// model's. Not a model that draws or runs in the cloud, nor one with files for an engine of its own.
+fn own_copy<'a>(models: &Map<String, Value>, ours: impl Iterator<Item = &'a String>, entry: &Value) -> Option<(String, Vec<(String, String)>)> {
+    if entry.get("origin").and_then(Value::as_str) != Some("local") {
+        return None;
+    }
+    let file = |f: &Value| Some((f.get("path")?.as_str()?.to_string(), f.get("size")?.as_u64()?));
+    let mine: Vec<(String, u64)> = entry.get("files")?.as_array()?.iter().filter_map(file).collect();
+    for key in ours {
+        let model = &models[key];
+        if ["image", "cloud", "requires_engine"].iter().any(|field| model.get(field).is_some()) {
+            continue;
+        }
+        let Some(files) = model.get("files").and_then(Value::as_array).filter(|files| !files.is_empty()) else { continue };
+        let found: Option<Vec<(String, String)>> = files
+            .iter()
+            .map(|f| {
+                let (path, size) = file(f).filter(|_| f.get("engine").is_none())?;
+                let (own, _) = mine.iter().find(|(own, weighs)| file_name(own) == file_name(&path) && *weighs == size)?;
+                Some((path, own.clone()))
+            })
+            .collect();
+        if let Some(found) = found {
+            return Some((key.clone(), found));
+        }
+    }
+    None
+}
+
+/// Points `model` at the user's files: each (`path` in the catalog, where it is on the user's disk). A file without a
+/// hash is one Mango Code never downloads or deletes.
+fn run_from(model: &mut Value, files: &[(String, String)]) {
+    for (path, own) in files {
+        for field in ["gguf", "mmproj"] {
+            if model.get(field).and_then(Value::as_str) == Some(path) {
+                model[field] = Value::String(own.clone());
+            }
+        }
+        let listed = model.get_mut("files").and_then(Value::as_array_mut).into_iter().flatten();
+        for file in listed.filter(|f| f.get("path").and_then(Value::as_str) == Some(path)).filter_map(Value::as_object_mut) {
+            file.insert("path".into(), Value::String(own.clone()));
+            file.remove("sha256");
+        }
+    }
 }
 
 /// Adds (or replaces) the entry `key` in the user's list. A key that is already a Mango Code model is an error,
@@ -213,6 +298,33 @@ mod tests {
         let c = read(&p).unwrap();
         assert!(c.user.is_empty());
         assert_eq!(c.root["models"].as_object().unwrap().keys().collect::<Vec<_>>(), ["a"]);
+    }
+
+    #[test]
+    fn a_file_of_the_users_that_is_a_models_own_file_is_that_model() {
+        let dist = r#"{ "default": "ling", "models": {
+            "ling": { "label": "Ling", "gguf": "L/ling-q4.gguf", "sampling": { "top_k": 20 }, "files": [ { "path": "L/ling-q4.gguf", "size": 10, "sha256": "aa" } ] },
+            "toq": { "label": "T", "gguf": "t.gguf", "files": [ { "path": "t.gguf", "size": 10, "sha256": "bb" }, { "path": "t.toq", "size": 10, "sha256": "cc", "engine": "toq" } ] }
+        } }"#;
+        let own = |path: &str, size: u64, origin: &str| serde_json::json!({ "label": "x", "gguf": path, "origin": origin, "files": [ { "path": path, "size": size } ] });
+        let user = serde_json::json!({ "models": {
+            "local-ling": own("C:\\mine\\ling-q4.gguf", 10, "local"),
+            "local-ling-again": own("D:/copies/ling-q4.gguf", 10, "local"),
+            "local-other-size": own("C:\\mine\\x\\ling-q4.gguf", 11, "local"),
+            "local-t": own("C:\\mine\\t.gguf", 10, "local"),
+            "hf-ling": own("X/ling-q4.gguf", 10, "hugging-face"),
+        } });
+        let (_d, p) = paths(dist, Some(&user.to_string()));
+        let c = read(&p).unwrap();
+
+        assert_eq!(c.same, BTreeMap::from([("local-ling".to_string(), "ling".to_string())]));
+        assert_eq!(c.user, ["hf-ling", "local-ling-again", "local-other-size", "local-t"], "a second copy, another size, a model with an engine of its own, a download: each stays the user's");
+        let ling = &c.root["models"]["ling"];
+        assert_eq!((ling["label"].as_str(), ling["sampling"]["top_k"].as_u64()), (Some("Ling"), Some(20)), "what the catalog knows about it");
+        assert_eq!(ling["gguf"], "C:\\mine\\ling-q4.gguf");
+        assert_eq!(ling["files"], serde_json::json!([ { "path": "C:\\mine\\ling-q4.gguf", "size": 10 } ]), "the user's file, without a hash: never downloaded, never deleted");
+        assert!(c.root["models"].get("local-ling").is_none(), "listed once");
+        assert_eq!(c.root["models"]["toq"]["gguf"], "t.gguf");
     }
 
     #[test]

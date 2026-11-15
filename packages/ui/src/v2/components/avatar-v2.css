@@ -14,7 +14,7 @@
   height: 28px;
   border-radius: var(--avatar-radius);
   border: 0.5px solid var(--v2-border-border-base);
-  font-weight: 530;
+  font-weight: 500;
   font-size: var(--avatar-font-size);
   line-height: 1;
   letter-spacing: var(--avatar-tracking);
@@ -23,18 +23,6 @@
   color: var(--avatar-fg);
   user-select: none;
   -webkit-user-select: none;
-}
-
-[data-component="avatar-v2"]::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  background: linear-gradient(180deg, var(--v2-alpha-light-16) 0%, var(--v2-alpha-light-0) 100%);
-  pointer-events: none;
-}
-
-[data-component="avatar-v2"][data-has-image]::before {
-  display: none;
 }
 
 [data-component="avatar-v2"][data-kind="org"] {

@@ -160,7 +160,7 @@ export function TargetSessionRouteContent() {
     // when session content falls back to the route error boundary.
     <TargetServerScopedProviders directory={directory} sessionID={() => params.id}>
       <TargetSessionSettingsCommand />
-      <SessionRouteErrorBoundary sessionID={params.id} serverKey={requireServerKey(params.serverKey)} padded>
+      <SessionRouteErrorBoundary sessionID={params.id} serverKey={requireServerKey(params.serverKey)}>
         <ResolvedTargetSessionRoute />
       </SessionRouteErrorBoundary>
     </TargetServerScopedProviders>
@@ -173,15 +173,15 @@ function TargetSessionSettingsCommand() {
 }
 
 export function SessionRouteErrorBoundary(
-  props: ParentProps<{ sessionID?: string; serverKey?: ServerConnection.Key; padded?: boolean }>,
+  props: ParentProps<{ sessionID?: string; serverKey?: ServerConnection.Key }>,
 ) {
   const settings = useSettings()
   return (
     <ErrorBoundary
       fallback={(error) =>
         settings.general.newLayoutDesigns() ? (
-          <SessionRouteFrame padded={props.padded}>
-            <SessionPanelFrame newLayout raised={!!props.sessionID}>
+          <SessionRouteFrame>
+            <SessionPanelFrame newLayout>
               <SessionErrorFallback error={error} sessionID={props.sessionID} serverKey={props.serverKey} />
             </SessionPanelFrame>
           </SessionRouteFrame>
@@ -319,23 +319,21 @@ function SessionProviders(props: ParentProps) {
   )
 }
 
-function SessionRouteFrame(props: ParentProps<{ padded?: boolean }>) {
+function SessionRouteFrame(props: ParentProps) {
   return (
-    <div class="relative size-full overflow-hidden flex flex-col" classList={{ "p-2": props.padded }}>
+    <div class="relative size-full overflow-hidden flex flex-col">
       {props.children}
     </div>
   )
 }
 
-function SessionPanelFrame(props: ParentProps<{ newLayout: boolean; raised?: boolean }>) {
+function SessionPanelFrame(props: ParentProps<{ newLayout: boolean }>) {
   return (
     <div
       classList={{
         "flex-1 min-h-0 flex flex-col": true,
-        "bg-v2-background-bg-base": props.newLayout,
+        "bg-v2-background-bg-deep overflow-hidden": props.newLayout,
         "bg-background-stronger": !props.newLayout,
-        "rounded-[10px] overflow-hidden max-md:rounded-none": props.newLayout,
-        "shadow-[var(--v2-elevation-raised)] max-md:shadow-none": props.newLayout && props.raised,
       }}
     >
       {props.children}
@@ -2172,9 +2170,6 @@ export default function Page() {
       <div
         ref={panelRow}
         class="flex-1 min-h-0 flex flex-col md:flex-row"
-        classList={{
-          "gap-2 p-2 max-md:gap-0 max-md:p-0": settings.general.newLayoutDesigns(),
-        }}
       >
         <div
           classList={{
@@ -2189,13 +2184,13 @@ export default function Page() {
           {settings.general.newLayoutDesigns() ? (
             <Show when={sessionPanelKey()} keyed>
               {(_) => (
-                <SessionPanelFrame newLayout raised={!!params.id}>
+                <SessionPanelFrame newLayout>
                   <ErrorBoundary fallback={sessionErrorFallback}>{sessionPanelContent()}</ErrorBoundary>
                 </SessionPanelFrame>
               )}
             </Show>
           ) : (
-            <SessionPanelFrame newLayout={false} raised={!!params.id}>
+            <SessionPanelFrame newLayout={false}>
               {sessionPanelContent()}
             </SessionPanelFrame>
           )}

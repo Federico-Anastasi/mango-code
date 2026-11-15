@@ -8,19 +8,13 @@
   gap: 8px;
   width: 280px;
   height: 28px;
-  border: 0;
-  border-radius: 6px;
-  outline: 1px solid transparent;
-  outline-offset: 0;
-  background:
-    linear-gradient(180deg, var(--v2-alpha-light-2) 0%, var(--v2-alpha-light-0) 100%), var(--v2-background-bg-base);
-  box-shadow: var(--v2-elevation-button-neutral);
+  border: 1px solid var(--mango-line);
+  border-radius: 7px;
+  outline: none;
+  background: var(--mango-ground);
   flex: none;
   align-self: stretch;
-  transition:
-    background 85ms ease-out,
-    outline-color 85ms ease-out,
-    box-shadow 85ms ease-out;
+  transition: border-color 150ms;
 }
 
 [data-component="text-input-v2"][data-appearance="large"] {
@@ -28,19 +22,17 @@
 }
 
 [data-component="text-input-v2"]:where(:hover):not([data-disabled], [data-invalid]):not(:focus-within) {
-  background:
-    linear-gradient(0deg, var(--v2-overlay-simple-overlay-hover), var(--v2-overlay-simple-overlay-hover)),
-    linear-gradient(180deg, var(--v2-alpha-light-2) 0%, var(--v2-alpha-light-0) 100%), var(--v2-background-bg-base);
+  border-color: var(--mango-text-faint);
 }
 
+/* The keyboard focus: the same ring as every control */
 [data-component="text-input-v2"]:where(:focus-within):not([data-disabled], [data-invalid]) {
-  outline-color: var(--v2-border-border-focus);
-  box-shadow: none;
+  outline: 2px solid var(--mango-action-text);
+  outline-offset: 2px;
 }
 
 [data-component="text-input-v2"]:where([data-invalid]):not([data-disabled]) {
-  outline-color: var(--v2-state-fg-danger);
-  box-shadow: none;
+  border-color: var(--mango-error);
 }
 
 [data-component="text-input-v2"]:where([data-disabled]) {
@@ -66,7 +58,7 @@
   align-items: center;
   justify-content: center;
   padding-inline-start: 8px;
-  color: var(--v2-icon-icon-muted);
+  color: var(--mango-text-muted);
 }
 
 [data-component="text-input-v2"] [data-slot="text-input-v2-leading-icon"] :is(svg, [data-slot="icon-svg"]) {
@@ -89,17 +81,16 @@
   border: 0;
   background: transparent;
   outline: none;
+  font-family: var(--mango-font-text);
   font-style: normal;
-  font-weight: 440;
+  font-weight: 400;
   font-size: 13px;
   line-height: 1;
-  letter-spacing: -0.04px;
-  color: var(--v2-text-text-base);
-  font-variation-settings: "slnt" 0;
+  color: var(--mango-text);
 }
 
 [data-component="text-input-v2"] [data-slot="text-input-v2-input"]::placeholder {
-  color: var(--v2-text-text-faint);
+  color: var(--mango-text-faint);
   user-select: none;
 }
 
@@ -127,19 +118,19 @@
   border: 0;
   border-radius: 4px;
   background: transparent;
-  color: var(--v2-icon-icon-muted);
+  color: var(--mango-text-muted);
   cursor: pointer;
   outline: none;
 }
 
 [data-component="text-input-v2"]
   [data-slot="text-input-v2-icon-button"]:is(:hover, [data-state="hover"]):not(:disabled) {
-  background-color: var(--v2-overlay-simple-overlay-hover);
+  background-color: color-mix(in srgb, var(--mango-text) 6%, transparent);
 }
 
 [data-component="text-input-v2"]
   [data-slot="text-input-v2-icon-button"]:is(:active, [data-state="pressed"]):not(:disabled) {
-  background-color: var(--v2-overlay-simple-overlay-pressed);
+  background-color: color-mix(in srgb, var(--mango-text) 10%, transparent);
 }
 
 [data-component="text-input-v2"] [data-slot="text-input-v2-icon-button"]:focus {
@@ -147,8 +138,8 @@
 }
 
 [data-component="text-input-v2"] [data-slot="text-input-v2-icon-button"]:focus-visible {
-  outline: 2px solid var(--v2-border-border-focus);
-  outline-offset: 1px;
+  outline: 2px solid var(--mango-action-text);
+  outline-offset: 2px;
 }
 
 [data-component="text-input-v2"]:where([data-disabled]) [data-slot="text-input-v2-icon-button"] {
@@ -171,11 +162,11 @@
 }
 
 [data-component="text-input-v2"][data-invalid]:not([data-disabled]) [data-slot="text-input-v2-input"] {
-  color: var(--v2-state-fg-danger);
-  caret-color: var(--v2-state-fg-danger);
+  color: var(--mango-error);
+  caret-color: var(--mango-error);
 }
 
 [data-component="text-input-v2"][data-invalid]:not([data-disabled]) [data-slot="text-input-v2-input"]::placeholder {
-  color: var(--v2-state-fg-danger);
+  color: var(--mango-error);
   opacity: 1;
 }

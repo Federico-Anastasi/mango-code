@@ -1,4 +1,4 @@
-import { Button } from "@opencode-ai/ui/button"
+import { ButtonV2 } from "@opencode-ai/ui/v2/button-v2"
 import { Dialog } from "@opencode-ai/ui/dialog"
 import { TextField } from "@opencode-ai/ui/text-field"
 import { Icon } from "@opencode-ai/ui/icon"
@@ -40,7 +40,7 @@ export function DialogEditProject(props: { project: LocalProject; server: Server
                 <div
                   class="relative size-16 rounded-md transition-colors cursor-pointer"
                   classList={{
-                    "border-text-interactive-base bg-surface-info-base/20": model.store.dragOver,
+                    "border-text-interactive-base bg-v2-background-bg-layer-01": model.store.dragOver,
                     "border-border-base hover:border-border-strong": !model.store.dragOver,
                     "overflow-hidden": !!model.store.iconOverride,
                   }}
@@ -157,12 +157,12 @@ export function DialogEditProject(props: { project: LocalProject; server: Server
         </div>
 
         <div class="flex justify-end gap-2">
-          <Button type="button" variant="ghost" size="large" onClick={model.close}>
+          <ButtonV2 type="button" variant="ghost" size="large" onClick={model.close}>
             {language.t("common.cancel")}
-          </Button>
-          <Button type="submit" variant="primary" size="large" disabled={model.save.isPending}>
+          </ButtonV2>
+          <ButtonV2 type="submit" variant="primary" size="large" disabled={model.save.isPending}>
             {model.save.isPending ? language.t("common.saving") : language.t("common.save")}
-          </Button>
+          </ButtonV2>
         </div>
       </form>
     </Dialog>

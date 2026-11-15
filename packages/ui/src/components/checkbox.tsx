@@ -16,13 +16,18 @@ export function Checkbox(props: CheckboxProps) {
       <Kobalte.Control data-slot="checkbox-checkbox-control">
         <Kobalte.Indicator data-slot="checkbox-checkbox-indicator">
           {local.icon || (
-            <svg viewBox="0 0 12 12" fill="none" width="10" height="10" xmlns="http://www.w3.org/2000/svg">
-              <path
-                d="M3 7.17905L5.02703 8.85135L9 3.5"
-                stroke="currentColor"
-                stroke-width="1.5"
-                stroke-linecap="square"
-              />
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              width="12"
+              height="12"
+              xmlns="http://www.w3.org/2000/svg"
+            >
+              <path d="M20 6 9 17l-5-5" />
             </svg>
           )}
         </Kobalte.Indicator>

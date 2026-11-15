@@ -46,7 +46,7 @@ describe("projectFilePath", () => {
   test("joins with the separator of the project folder", () => {
     expect(projectFilePath("C:\\Users\\Alice\\Project", "docs/report.docx")).toBe("C:\\Users\\Alice\\Project\\docs\\report.docx")
     expect(projectFilePath("C:\\Users\\Alice\\Project\\", "a.pdf")).toBe("C:\\Users\\Alice\\Project\\a.pdf")
-    expect(projectFilePath("/home/mango/p", "docs/a.pdf")).toBe("/home/mango/p/docs/a.pdf")
+    expect(projectFilePath("/home/alice/p", "docs/a.pdf")).toBe("/home/alice/p/docs/a.pdf")
   })
 
   test("an already absolute path is left alone", () => {
@@ -82,12 +82,26 @@ describe("producedFilePath", () => {
     expect(producedFilePath("edit", { filePath: "/p/a.ts" }, "ok")).toBe("/p/a.ts")
   })
 
+  test("write and edit: the path the tool wrote wins over the one the model gave", () => {
+    const written = { filepath: "C:\\workspace\\page.html" }
+    expect(producedFilePath("write", { filePath: "/workspace/page.html" }, "ok", written)).toBe("C:\\workspace\\page.html")
+    expect(producedFilePath("edit", { filePath: "page.html" }, "ok", { filediff: { file: "D:\\P\\page.html" } })).toBe("D:\\P\\page.html")
+    expect(producedFilePath("write", { filePath: "C:\\P\\a.txt" }, "ok", {})).toBe("C:\\P\\a.txt")
+  })
+
   test("documents_create: the path in the confirmation message", () => {
     expect(producedFilePath("documents_create", { file: "shopping.docx" }, "File created: C:\\P\\shopping.docx (10 KB)")).toBe(
       "C:\\P\\shopping.docx",
     )
     expect(producedFilePath("documents_create", {}, "File created: C:\\P\\a.docx (3 KB)")).toBe("C:\\P\\a.docx")
     expect(producedFilePath("documents_create", {}, "ERROR: missing file name")).toBeUndefined()
+  })
+
+  test("image_generate: the file the picture says it was written to, whatever name was asked", () => {
+    expect(producedFilePath("image_generate", { name: "vespa" }, "ok", { file: "C:\\P\\images\\vespa-2.png" })).toBe(
+      "C:\\P\\images\\vespa-2.png",
+    )
+    expect(producedFilePath("image_generate", { name: "vespa" }, "ok", {})).toBeUndefined()
   })
 
   test("other tools produce no files", () => {

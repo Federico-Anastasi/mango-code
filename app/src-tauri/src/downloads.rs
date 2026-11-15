@@ -8,6 +8,7 @@ use crate::bridge::{err, BridgeError};
 use anyhow::{bail, Context, Result};
 use engine_cfg::Hardware;
 use mango_common::download::{EngineUnusable, NoSpace, Stopped, Trouble};
+use mango_common::i18n::{lang, Lang};
 use mango_common::{tr, Paths};
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
@@ -575,11 +576,15 @@ impl Downloads {
 /// The sentence for a download that failed: what happened and what to do, without addresses or hashes (those go to the
 /// log). `label` is what it brings: the model, or the engine alone (`engine_only`).
 fn failure(label: &str, engine_only: bool, e: &anyhow::Error) -> String {
-    let gb = |b: u64| b as f64 / (1u64 << 30) as f64;
+    // one decimal, written as the language writes it
+    let gb = |b: u64| {
+        let s = format!("{:.1}", b as f64 / (1u64 << 30) as f64);
+        if lang() == Lang::It { s.replace('.', ",") } else { s }
+    };
     if let Some(s) = e.chain().find_map(|c| c.downcast_ref::<NoSpace>()) {
         return tr!(
-            "Sul disco non c'è spazio per «{label}»: servono {:.1} GB, ne sono liberi {:.1}. Libera spazio e riprova.",
-            "There is no room on the disk for «{label}»: {:.1} GB are needed, {:.1} are free. Free some space and try again.",
+            "Sul disco non c'è spazio per «{label}»: servono {} GB, ne sono liberi {}. Libera spazio e riprova.",
+            "There is no room on the disk for «{label}»: {} GB are needed, {} are free. Free some space and try again.",
             gb(s.needed),
             gb(s.free)
         );
@@ -1177,7 +1182,7 @@ mod tests {
         until("the download active", || f.states() == states(&[("3.5-4b", Status::Active)]));
         let hw = (w.real.hardware)().unwrap();
         std::thread::scope(|s| {
-            let removal = s.spawn(|| crate::model_choices::take_off(&w.real.paths, &hw, Some(&f.downloads), Some(&engine), "3.5-4b"));
+            let removal = s.spawn(|| crate::model_choices::take_off(&w.real.paths, &hw, Some(&f.downloads), Some(&engine), None, "3.5-4b"));
             until("the removal waiting for the download", || f.downloads.removing("3.5-4b"));
             let refused = engine.acquire(Some("3.5-4b")).err();
             f.go();
@@ -1214,15 +1219,99 @@ mod tests {
         choices::set_model(paths, "local-mine", Choices { place: WhereChoice::Cpu, ..Choices::default() }).unwrap();
         choices::set_default(paths, Some("local-mine")).unwrap();
 
-        crate::model_choices::take_off(paths, &hw, None, None, "local-mine").unwrap();
+        crate::model_choices::take_off(paths, &hw, None, None, None, "local-mine").unwrap();
         assert_eq!(mango_common::catalog::read(paths).unwrap().user, ["hf-mine"], "it is no longer in the list");
         assert!(mine.is_file(), "the user's file stays where it is");
         let saved = choices::read(paths).unwrap();
         assert!(saved.default.is_none() && saved.models.is_empty(), "{saved:?}");
 
-        crate::model_choices::take_off(paths, &hw, None, None, "hf-mine").unwrap();
+        crate::model_choices::take_off(paths, &hw, None, None, None, "hf-mine").unwrap();
         assert!(mango_common::catalog::read(paths).unwrap().user.is_empty());
         assert!(!paths.models.join("owner").exists(), "the downloaded file goes, and its empty folders");
+    }
+
+    /// A file the user chose on the computer that is a Mango Code model's own file is that model, listed once: what was
+    /// chosen for the user's entry is chosen for the model, and taking the model off leaves the file where it is and
+    /// drops the entry, so the model is one to download again.
+    #[test]
+    fn a_model_of_the_catalog_run_from_the_users_own_file() {
+        use engine_cfg::choices;
+        let w = real_world();
+        let hw = (w.real.hardware)().unwrap();
+        let paths = &w.real.paths;
+        let mine = w._dir.path().join("elsewhere").join("Ling-3.0-tiny-Q4_K_M.gguf");
+        std::fs::create_dir_all(mine.parent().unwrap()).unwrap();
+        std::fs::write(&mine, b"x").unwrap();
+        let file = serde_json::json!({ "path": mine.display().to_string(), "size": 4_823_894_944u64 });
+        let list = serde_json::json!({ "models": { "local-ling": {
+            "label": "Ling-3.0-tiny-Q4_K_M", "kind": "File on this computer", "gguf": file["path"], "origin": "local", "ctx": 131072,
+            "files": [file], "memory": { "kv_kib_token": 7, "state_mib": 20 },
+        } } });
+        std::fs::create_dir_all(&paths.data).unwrap();
+        std::fs::write(paths.data.join(mango_common::catalog::USER_FILE), list.to_string()).unwrap();
+        std::fs::write(paths.data.join(choices::FILE), r#"{ "default": "local-ling" }"#).unwrap();
+
+        let views = engine_cfg::models_view(paths, &hw).unwrap();
+        assert!(!views.iter().any(|v| v.key == "local-ling"), "listed once, as the model it is");
+        let ling = views.iter().find(|v| v.key == "ling").unwrap();
+        assert_eq!((ling.user, ling.own_files.clone()), (false, vec![mine.display().to_string()]));
+        assert_eq!(choices::read(paths).unwrap().default.as_deref(), Some("ling"));
+
+        crate::model_choices::take_off(paths, &hw, None, None, None, "ling").unwrap();
+        assert!(mine.is_file(), "the user's file stays where it is");
+        let catalog = mango_common::catalog::read(paths).unwrap();
+        assert!(catalog.same.is_empty() && catalog.user.is_empty(), "{catalog:?}");
+        assert!(choices::read(paths).unwrap().default.is_none());
+        let again = engine_cfg::models_view(paths, &hw).unwrap();
+        assert!(again.iter().find(|v| v.key == "ling").unwrap().own_files.is_empty(), "one to download, like the others");
+    }
+
+    /// A model that makes pictures is downloaded and taken off like the others, with the image engine; the one the user made
+    /// the default for pictures leaves that choice when it goes, and the catalog's default stands again.
+    #[test]
+    fn a_model_that_makes_pictures_taken_off_is_no_longer_the_users_default() {
+        use engine_cfg::choices;
+        let w = real_world();
+        let hw = (w.real.hardware)().unwrap();
+        let paths = &w.real.paths;
+        let need = w.real.need("flux2-klein-4b").unwrap();
+        assert!(need.weights_bytes > 2_000_000_000 && need.engine_bytes > 0, "its files and the image engine: {need:?}");
+
+        let files = ["FLUX.2-klein-4B-GGUF/flux-2-klein-4b-Q4_0.gguf", "Qwen3-4B-GGUF/Qwen3-4B-Q4_K_M.gguf", "FLUX.2-klein-4B-GGUF/flux2-vae.safetensors"];
+        files.into_iter().for_each(|f| w.put(f));
+        choices::set_image_default(paths, Some("flux2-klein-4b")).unwrap();
+        assert_eq!(engine_cfg::image_views(paths, &hw).unwrap().default.as_deref(), Some("flux2-klein-4b"));
+
+        crate::model_choices::take_off(paths, &hw, None, None, None, "flux2-klein-4b").unwrap();
+        assert!(files.into_iter().all(|f| !paths.models.join(f).exists()), "its files go");
+        assert_eq!(choices::read(paths).unwrap().image_default, None);
+        assert_eq!(engine_cfg::image_views(paths, &hw).unwrap().default.as_deref(), Some("z-image-turbo"));
+    }
+
+    /// A file that cannot be deleted (open in another program) stops the removal with the error, and the model, which may
+    /// be missing files already, is the default of nothing; asked again once the file is free, the removal ends.
+    #[test]
+    fn a_removal_that_stops_halfway_says_so_and_leaves_no_default_behind() {
+        use engine_cfg::choices;
+        use std::os::windows::fs::OpenOptionsExt;
+        let w = real_world();
+        let hw = (w.real.hardware)().unwrap();
+        let paths = &w.real.paths;
+        let files = ["FLUX.2-klein-4B-GGUF/flux-2-klein-4b-Q4_0.gguf", "Qwen3-4B-GGUF/Qwen3-4B-Q4_K_M.gguf", "FLUX.2-klein-4B-GGUF/flux2-vae.safetensors"];
+        files.into_iter().for_each(|f| w.put(f));
+        choices::set_image_default(paths, Some("flux2-klein-4b")).unwrap();
+
+        // open without sharing, as the image engine holds the files of its model
+        let held = std::fs::OpenOptions::new().read(true).share_mode(0).open(paths.models.join(files[1])).unwrap();
+        let e = crate::model_choices::take_off(paths, &hw, None, None, None, "flux2-klein-4b").unwrap_err();
+        assert!(!format!("{e:#}").is_empty());
+        assert!(paths.models.join(files[1]).is_file(), "the file that is held stays");
+        assert_eq!(choices::read(paths).unwrap().image_default, None, "no default points to a model that may be incomplete");
+        assert!(!engine_cfg::image_views(paths, &hw).unwrap().models.iter().find(|m| m.key == "flux2-klein-4b").unwrap().present);
+
+        drop(held);
+        crate::model_choices::take_off(paths, &hw, None, None, None, "flux2-klein-4b").unwrap();
+        assert!(files.into_iter().all(|f| !paths.models.join(f).exists()));
     }
 
     /// A paused download being taken off: resuming it is refused until the removal ends.
@@ -1281,7 +1370,7 @@ mod tests {
         assert_eq!(
             failure("M", false, &e),
             tr!(
-                "Sul disco non c'è spazio per «M»: servono 3.0 GB, ne sono liberi 1.0. Libera spazio e riprova.",
+                "Sul disco non c'è spazio per «M»: servono 3,0 GB, ne sono liberi 1,0. Libera spazio e riprova.",
                 "There is no room on the disk for «M»: 3.0 GB are needed, 1.0 are free. Free some space and try again."
             )
         );

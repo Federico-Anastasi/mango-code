@@ -13,7 +13,7 @@ export type AddServerText = {
   params?: Record<string, string>
 }
 
-export type DistroStatusTone = "success" | "warning" | "muted"
+export type DistroStatusTone = "success" | "muted"
 
 export type DistroStatus = {
   label: AddServerText
@@ -21,7 +21,6 @@ export type DistroStatus = {
 }
 
 export type AddServerPrimaryButton = {
-  variant: "neutral" | "contrast"
   label: AddServerText
   disabled: boolean
   action: "install-opencode" | "add" | null
@@ -158,12 +157,12 @@ function addServerDistroStatus(input: {
   }
   if (!probe.canExecute) {
     if (!installed) {
-      return { label: { key: "wsl.onboarding.distroNotInstalled", params: { distro: input.name } }, tone: "warning" }
+      return { label: { key: "wsl.onboarding.distroNotInstalled", params: { distro: input.name } }, tone: "muted" }
     }
-    return { label: { key: "wsl.onboarding.openDistroOnce", params: { distro: input.name } }, tone: "warning" }
+    return { label: { key: "wsl.onboarding.openDistroOnce", params: { distro: input.name } }, tone: "muted" }
   }
   if (!probe.hasBash || !probe.hasCurl) {
-    return { label: { key: "wsl.onboarding.distroStatus.missingTools" }, tone: "warning" }
+    return { label: { key: "wsl.onboarding.distroStatus.missingTools" }, tone: "muted" }
   }
   const check = input.state?.opencodeChecks[input.name]
   if (!check) {
@@ -172,9 +171,9 @@ function addServerDistroStatus(input: {
     }
     return
   }
-  if (check.matchesDesktop === false) return { label: { key: "wsl.onboarding.updateOpencode" }, tone: "warning" }
-  if (!check.resolvedPath) return { label: { key: "wsl.onboarding.distroStatus.opencodeMissing" }, tone: "warning" }
-  if (check.error) return { label: { key: "wsl.onboarding.installOpencode" }, tone: "warning" }
+  if (check.matchesDesktop === false) return { label: { key: "wsl.onboarding.updateOpencode" }, tone: "muted" }
+  if (!check.resolvedPath) return { label: { key: "wsl.onboarding.distroStatus.opencodeMissing" }, tone: "muted" }
+  if (check.error) return { label: { key: "wsl.onboarding.installOpencode" }, tone: "muted" }
   return { label: { key: "wsl.onboarding.distroStatus.ready" }, tone: "success" }
 }
 
@@ -202,7 +201,6 @@ function addServerPrimaryButton(input: {
     input.state?.job?.kind === "install-opencode" && input.state.job.distro === input.selectedDistro
   if (!ready || probingOpencode) {
     return {
-      variant: "contrast",
       label: probingSelected ? { key: "wsl.onboarding.distroStatus.checking" } : { key: "wsl.server.add" },
       disabled: true,
       action: null,
@@ -213,7 +211,6 @@ function addServerPrimaryButton(input: {
   if (!addServerOpencodeReady(input.opencodeCheck)) {
     const update = !!input.opencodeCheck?.resolvedPath && input.opencodeCheck.matchesDesktop === false
     return {
-      variant: "neutral",
       label: installingOpencode
         ? { key: "wsl.onboarding.updatingOpencode" }
         : update
@@ -226,7 +223,6 @@ function addServerPrimaryButton(input: {
     }
   }
   return {
-    variant: "contrast",
     label: input.adding ? { key: "wsl.onboarding.adding" } : { key: "wsl.server.add" },
     disabled: input.adding || !!input.state?.job,
     action: "add",

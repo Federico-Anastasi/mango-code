@@ -716,6 +716,37 @@ describe("session HttpApi", () => {
     { git: true, config: { formatter: false, lsp: false } },
   )
 
+  // mango-code: a picture is asked in the person's words; what cannot be drawn is refused before a turn is written.
+  it.instance(
+    "refuses a picture request that cannot be drawn, without writing anything",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const headers = { "x-opencode-directory": test.directory, "content-type": "application/json" }
+        const session = yield* createSession({ title: "picture refused" })
+        const ask = (body: unknown) =>
+          request(pathFor(SessionPaths.image, { sessionID: session.id }), {
+            method: "POST",
+            headers,
+            body: JSON.stringify(body),
+          })
+
+        const refused = [
+          { request: "" },
+          { request: "   \n" },
+          { request: "x".repeat(32 * 1024 + 1) },
+          { request: "a cat", prompt: "" },
+          { request: "a cat", prompt: "  " },
+          { request: "a cat", seed: -1 },
+          { request: "a cat", seed: 1.5 },
+          { request: "a cat", seed: 2 ** 32 },
+        ]
+        for (const body of refused) expect((yield* ask(body)).status).toBe(400)
+        expect(yield* Session.use.messages({ sessionID: session.id })).toHaveLength(0)
+      }),
+    { git: true, config: { formatter: false, lsp: false } },
+  )
+
   // mango-code: in the app a folder too broad to be a project (here, the OneDrive folder) gets no conversation.
   it.instance(
     "refuses to create a session in a folder too broad to be a project",

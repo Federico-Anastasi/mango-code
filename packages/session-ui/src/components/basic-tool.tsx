@@ -36,6 +36,8 @@ export interface BasicToolProps {
   time?: ToolTime
   /** Progress while it works, for example "212 lines": shown before the time. */
   progress?: string
+  /** What it ended in, when the time alone does not say it (for example "Stopped"): shown before the time, once it is not working. */
+  outcome?: string
   hideDetails?: boolean
   defaultOpen?: boolean
   open?: boolean
@@ -108,8 +110,8 @@ export function BasicTool(props: BasicToolProps) {
   const timeLabel = () => {
     const ms = elapsed()
     const time = ms !== undefined && ms >= 1000 ? formatDuration(ms, i18n.t) : undefined
-    const parts = [pending() ? props.progress : undefined, time].filter(Boolean)
-    return parts.length > 0 ? `· ${parts.join(" · ")}` : undefined
+    const parts = [pending() ? props.progress : props.outcome, time].filter(Boolean)
+    return parts.length > 0 ? parts.join(" · ") : undefined
   }
   const hasChildren = () => (props.defer ? "children" in props : props.children)
   const dynamicTrigger = typeof props.trigger === "function" ? props.trigger(open) : undefined
@@ -205,6 +207,7 @@ export function BasicTool(props: BasicToolProps) {
   const trigger = () => (
     <div
       data-component="tool-trigger"
+      data-status={props.status}
       data-clickable={props.clickable ? "true" : undefined}
       data-hide-details={props.hideDetails ? "true" : undefined}
     >
@@ -267,6 +270,7 @@ export function BasicTool(props: BasicToolProps) {
             <Match when={true}>{props.trigger as JSX.Element}</Match>
           </Switch>
         </div>
+        <span data-slot="basic-tool-tool-outcome" aria-hidden="true" />
         <Show when={timeLabel()}>
           <span data-slot="basic-tool-tool-time">{timeLabel()}</span>
         </Show>

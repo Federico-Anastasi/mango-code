@@ -14,7 +14,7 @@ export function TabStateIndicator(props: ComponentProps<"svg">) {
       xmlns="http://www.w3.org/2000/svg"
       aria-hidden={rest["aria-hidden"] ?? "true"}
     >
-      <g opacity="0.25" fill="#808080">
+      <g opacity="0.25" fill="currentColor">
         <rect x="13.5" y="2.5" width="2" height="2" transform="rotate(90 13.5 2.5)" />
         <path d="M10.5 2.5L10.5 4.5L8.5 4.5L8.5 2.5L10.5 2.5Z" />
         <path d="M4.5 2.5L4.5 4.5L2.5 4.5L2.5 2.5L4.5 2.5Z" />

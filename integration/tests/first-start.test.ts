@@ -240,8 +240,8 @@ test("while it downloads the theme, the dictation, the model's settings and the 
   };
   await choose(before === "light" ? "Scuro" : "Chiaro");
   await waitUntil(async () => (await scheme()) !== before, "the theme changed");
-  await choose("Sistema");
-  await waitUntil(() => p.evaluate(`document.querySelector('[data-action="mango-home-theme"]').innerText.includes('Sistema')`) as Promise<boolean>, "the theme back to the system's");
+  await choose("Del sistema");
+  await waitUntil(() => p.evaluate(`document.querySelector('[data-action="mango-home-theme"]').innerText.includes('Del sistema')`) as Promise<boolean>, "the theme back to the system's");
 
   // dictation: off until the user says so; on, it downloads next to the model and says when it is ready
   const dictation = () => p.evaluate("window.__MANGO_DESKTOP__.dictation.state()") as Promise<{ enabled: boolean; status: string }>;

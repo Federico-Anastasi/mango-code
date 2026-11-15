@@ -1,0 +1,138 @@
+[data-component="picture-tool"] {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+  min-width: 0;
+}
+
+/* The frame has the proportions of the picture from the start: nothing moves when the picture arrives. */
+[data-component="picture-tool"] [data-slot="picture-frame"] {
+  position: relative;
+  box-sizing: border-box;
+  display: block;
+  max-width: 100%;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--mango-line);
+  border-radius: 10px;
+  background: var(--mango-surface);
+}
+
+[data-component="picture-tool"] button[data-slot="picture-frame"] {
+  cursor: pointer;
+}
+
+[data-component="picture-tool"] button[data-slot="picture-frame"]:focus-visible {
+  outline: 2px solid var(--mango-action-text);
+  outline-offset: 2px;
+}
+
+[data-component="picture-tool"] [data-slot="picture-image"],
+[data-component="picture-tool"] [data-slot="picture-preview"] {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* The small picture of the step is enlarged and softened: it shows where the picture is going, not how it will look. */
+[data-component="picture-tool"] [data-slot="picture-preview"] {
+  position: absolute;
+  inset: 0;
+  transform: scale(1.06);
+  filter: blur(8px);
+  image-rendering: auto;
+}
+
+[data-component="picture-tool"] [data-slot="picture-progress"] {
+  position: absolute;
+  inset-inline: 10px;
+  bottom: 10px;
+}
+
+[data-component="picture-tool"] [data-slot="picture-meta"] {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 28px;
+}
+
+[data-component="picture-tool"] [data-slot="picture-facts"] {
+  margin: 0;
+  font-family: var(--mango-font-code);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--mango-text-muted);
+}
+
+[data-component="picture-tool"] [data-slot="picture-description"] {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  max-width: 100%;
+}
+
+[data-component="picture-tool"] [data-action="picture-description"] {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  font-family: var(--mango-font-text);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--mango-text-muted);
+}
+
+[data-component="picture-tool"] [data-action="picture-description"]:hover {
+  color: var(--mango-text);
+}
+
+[data-component="picture-tool"] [data-action="picture-description"]:focus-visible {
+  outline: 2px solid var(--mango-action-text);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+[data-component="picture-tool"] [data-slot="picture-description-chevron"] {
+  width: 6px;
+  height: 6px;
+  border-inline-end: 1.5px solid currentColor;
+  border-block-end: 1.5px solid currentColor;
+  transform: rotate(-45deg);
+  transition: transform 150ms;
+}
+
+[data-component="picture-tool"] [data-slot="picture-description"][data-open] [data-slot="picture-description-chevron"] {
+  transform: rotate(45deg);
+}
+
+[data-component="picture-tool"] [data-slot="picture-description-hint"] {
+  margin: 0;
+  font-size: 12px;
+  color: var(--mango-text-muted);
+}
+
+[data-component="picture-tool"] [data-component="textarea-v2"] {
+  width: 100%;
+  max-width: 520px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-component="picture-tool"] [data-slot="picture-description-chevron"] {
+    transition: none;
+  }
+}
+
+/* A finger needs 44 px. */
+@media (max-width: 767px) {
+  [data-component="picture-tool"] :is([data-action="picture-again"], [data-action="picture-again-description"], [data-action="picture-description"]) {
+    min-height: 44px;
+  }
+}

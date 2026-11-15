@@ -39,6 +39,10 @@ import { resolveTools as toolsForRequest } from "./llm/request"
 import { titleFromText } from "./title-text"
 import { Shell } from "@opencode-ai/core/shell"
 import { ShellID } from "@/tool/shell/id"
+import { ImageTool, PictureFormat, PictureSize } from "@/tool/image"
+import { ImageTurn } from "./image-turn"
+import { Question } from "@/question"
+import { errorMessage } from "@/util/error"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import { Truncate } from "@/tool/truncate"
 import { Image } from "@/image/image"
@@ -77,7 +81,12 @@ const SUPPORTED_MCP_RESOURCE_ATTACHMENT_MIMES = new Set([
   "image/webp",
 ])
 
-const STRUCTURED_OUTPUT_DESCRIPTION = `Use this tool to return your final response in the requested structured format.
+// How many times in one turn the model is asked again after an answer cut for going on with blank lines only.
+const BLANK_RESTARTS = 2
+const BLANK_WAKE =
+  "Your answer stopped: after its last sentence it went on with blank lines only, and it was cut there. Go on from where you were: make the tool call you were about to make, or tell the user what is done and what is left."
+
+const STRUCTURED_OUTPUT_DESCRIPTION =`Use this tool to return your final response in the requested structured format.
 
 IMPORTANT:
 - You MUST call this tool exactly once at the end of your response
@@ -110,6 +119,8 @@ export interface Interface {
   readonly prompt: (input: PromptInput) => Effect.Effect<SessionV1.WithParts, Image.Error>
   readonly loop: (input: LoopInput) => Effect.Effect<SessionV1.WithParts>
   readonly shell: (input: ShellInput) => Effect.Effect<SessionV1.WithParts, Session.BusyError>
+  /** A picture asked for in the interface: a turn of the conversation, made without the model that writes. */
+  readonly image: (input: ImageInput) => Effect.Effect<SessionV1.WithParts, Session.BusyError>
   readonly command: (input: CommandInput) => Effect.Effect<SessionV1.WithParts, Image.Error>
   readonly resolvePromptParts: (template: string) => Effect.Effect<PromptInput["parts"]>
   readonly items: (modelID?: string) => Effect.Effect<PromptItems>
@@ -154,6 +165,7 @@ const layer = Layer.effect(
     const sys = yield* SystemPrompt.Service
     const skill = yield* Skill.Service
     const llm = yield* LLM.Service
+    const question = yield* Question.Service
     const events = yield* EventV2Bridge.Service
     const flags = yield* RuntimeFlags.Service
     const database = yield* Database.Service
@@ -580,6 +592,155 @@ const layer = Layer.effect(
       )
     })
 
+    // mango-code: a picture that the user asks for is a turn like the shell's: the user's words, then an assistant
+    // message with one `image_generate` part that goes from running to completed or error, the session busy meanwhile
+    // and the part ended as stopped when the session is aborted. The work itself is in `image-turn.ts`.
+    const imageImpl = Effect.fn("SessionPrompt.imageImpl")(function* (input: ImageInput, ready?: Latch.Latch) {
+      return yield* Effect.uninterruptibleMask((restore) =>
+        Effect.gen(function* () {
+          const markReady = ready ? ready.open.pipe(Effect.asVoid) : Effect.void
+          const { msg, part, directory } = yield* Effect.gen(function* () {
+            const ctx = yield* InstanceState.context
+            const session = yield* sessions.get(input.sessionID).pipe(Effect.orDie)
+            if (session.revert) {
+              yield* revert.cleanup(session)
+            }
+            const agent = input.agent ? yield* agents.get(input.agent) : yield* agents.defaultInfo()
+            if (!agent) {
+              const available = (yield* agents.list()).filter((a) => !a.hidden).map((a) => a.name)
+              const hint = available.length ? ` Available agents: ${available.join(", ")}` : ""
+              const error = new NamedError.Unknown({ message: `Agent not found: "${input.agent}".${hint}` })
+              yield* events.publish(Session.Event.Error, { sessionID: input.sessionID, error: error.toObject() })
+              throw error
+            }
+            // A picture needs no model that writes, but the messages of a conversation name one: the agent's, else the
+            // conversation's, else the default; with none of them, the name that says there is no model.
+            const model =
+              agent.model ??
+              (yield* rememberedModel(input.sessionID)) ??
+              (yield* provider.defaultModel().pipe(Effect.orElseSucceed(() => ImageTurn.NO_MODEL)))
+            const userMsg: SessionV1.User = {
+              id: input.messageID ?? MessageID.ascending(),
+              sessionID: input.sessionID,
+              time: { created: Date.now() },
+              role: "user",
+              agent: agent.name,
+              model: { providerID: model.providerID, modelID: model.modelID },
+            }
+            yield* sessions.updateMessage(userMsg)
+            yield* sessions.updatePart({
+              type: "text",
+              id: PartID.ascending(),
+              messageID: userMsg.id,
+              sessionID: input.sessionID,
+              text: input.request,
+            })
+            // The first words of a conversation name it; no model is asked afterwards to do it for a picture.
+            const title = titleFromText(input.request)
+            if (title && !session.parentID && Session.isDefaultTitle(session.title))
+              yield* sessions.setTitle({ sessionID: input.sessionID, title })
+
+            const msg: SessionV1.Assistant = {
+              id: MessageID.ascending(),
+              sessionID: input.sessionID,
+              parentID: userMsg.id,
+              mode: agent.name,
+              agent: agent.name,
+              cost: 0,
+              path: { cwd: ctx.directory, root: ctx.worktree },
+              time: { created: Date.now() },
+              role: "assistant",
+              tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+              modelID: model.modelID,
+              providerID: model.providerID,
+            }
+            yield* sessions.updateMessage(msg)
+            const part: SessionV1.ToolPart = {
+              type: "tool",
+              id: PartID.ascending(),
+              messageID: msg.id,
+              sessionID: input.sessionID,
+              tool: ImageTool.id,
+              callID: ulid(),
+              state: {
+                status: "running",
+                time: { start: Date.now() },
+                input: {
+                  request: input.request,
+                  format: input.format ?? "square",
+                  size: input.size ?? "small",
+                  ...(input.model ? { model: input.model } : {}),
+                },
+              },
+            }
+            yield* sessions.updatePart(part)
+            return { msg, part, directory: ctx.directory }
+          }).pipe(Effect.ensuring(markReady))
+
+          const show = (shown: ImageTurn.Shown) =>
+            Effect.gen(function* () {
+              if (part.state.status !== "running") return
+              part.state = {
+                status: "running",
+                time: part.state.time,
+                input: shown.input ?? part.state.input,
+                title: shown.title,
+                metadata: shown.metadata,
+              }
+              yield* sessions.updatePart(part)
+            })
+
+          const exit = yield* restore(
+            ImageTurn.run(
+              {
+                provider,
+                llm,
+                question,
+                fs: fsys,
+                tool: { sessionID: input.sessionID, messageID: msg.id, callID: part.callID },
+                directory,
+                show,
+              },
+              input,
+            ),
+          ).pipe(Effect.exit)
+
+          const failure = Exit.isFailure(exit) ? Cause.squash(exit.cause) : undefined
+          const stopped = Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)
+          yield* Effect.uninterruptible(
+            Effect.gen(function* () {
+              const completed = Date.now()
+              msg.time.completed = completed
+              yield* sessions.updateMessage(msg)
+              if (part.state.status !== "running") return
+              const base = { input: part.state.input, time: { start: part.state.time.start, end: completed } }
+              part.state = Exit.isSuccess(exit)
+                ? {
+                    ...base,
+                    status: "completed",
+                    title: exit.value.title,
+                    output: exit.value.output,
+                    metadata: exit.value.metadata,
+                    attachments: [
+                      { ...exit.value.attachment, id: PartID.ascending(), sessionID: input.sessionID, messageID: msg.id },
+                    ],
+                  }
+                : {
+                    ...base,
+                    status: "error",
+                    error: stopped ? "The picture was stopped." : errorMessage(failure),
+                    metadata: { ...part.state.metadata, ...(stopped ? { stopped: true } : {}) },
+                  }
+              yield* sessions.updatePart(part)
+            }),
+          )
+
+          if (Exit.isFailure(exit) && !stopped && Cause.hasDies(exit.cause)) return yield* Effect.die(failure)
+          return { info: msg, parts: [part] }
+        }),
+      )
+    })
+
     const getModel = Effect.fn("SessionPrompt.getModel")(function* (
       providerID: ProviderV2.ID,
       modelID: ModelV2.ID,
@@ -600,7 +761,9 @@ const layer = Layer.effect(
       return yield* Effect.die(err)
     })
 
-    const currentModel = Effect.fnUntraced(function* (sessionID: SessionID) {
+    // The model a conversation was using: its own, else the one of its last message that names one (a picture turn
+    // without a model that writes names none that counts); `undefined` when there is none.
+    const rememberedModel = Effect.fnUntraced(function* (sessionID: SessionID) {
       const current = yield* db
         .select({ model: SessionTable.model })
         .from(SessionTable)
@@ -615,10 +778,17 @@ const layer = Layer.effect(
         }
       }
       const match = yield* sessions
-        .findMessage(sessionID, (m) => m.info.role === "user" && !!m.info.model)
+        .findMessage(
+          sessionID,
+          (m) => m.info.role === "user" && !!m.info.model && m.info.model.providerID !== ImageTurn.NO_MODEL.providerID,
+        )
         .pipe(Effect.orDie)
       if (Option.isSome(match) && match.value.info.role === "user") return match.value.info.model
-      return yield* provider.defaultModel().pipe(Effect.orDie)
+      return undefined
+    })
+
+    const currentModel = Effect.fnUntraced(function* (sessionID: SessionID) {
+      return (yield* rememberedModel(sessionID)) ?? (yield* provider.defaultModel().pipe(Effect.orDie))
     })
 
     const createUserMessage = Effect.fn("SessionPrompt.createUserMessage")(function* (input: PromptInput) {
@@ -1215,6 +1385,7 @@ const layer = Layer.effect(
         const ctx = yield* InstanceState.context
         let structured: unknown
         let step = 0
+        let blanks = 0
         const session = yield* sessions.get(sessionID).pipe(Effect.orDie)
 
         while (true) {
@@ -1444,6 +1615,31 @@ const layer = Layer.effect(
             }
 
             if (result === "stop") return "break" as const
+            if (result === "blank") {
+              if (++blanks > BLANK_RESTARTS) {
+                handle.message.finish = "stop"
+                yield* sessions.updateMessage(handle.message)
+                return "break" as const
+              }
+              // The model is told what happened and asked to go on: it had a call to make.
+              const wake = yield* sessions.updateMessage({
+                id: MessageID.ascending(),
+                role: "user",
+                sessionID,
+                time: { created: Date.now() },
+                agent: lastUser.agent,
+                model: lastUser.model,
+              })
+              yield* sessions.updatePart({
+                id: PartID.ascending(),
+                messageID: wake.id,
+                sessionID,
+                type: "text",
+                synthetic: true,
+                text: BLANK_WAKE,
+                time: { start: Date.now(), end: Date.now() },
+              })
+            }
             if (result === "compact") {
               yield* compaction.create({
                 sessionID,
@@ -1478,6 +1674,13 @@ const layer = Layer.effect(
     )(function* (input: ShellInput) {
       const ready = yield* Latch.make()
       return yield* state.startShell(input.sessionID, lastAssistant(input.sessionID), shellImpl(input, ready), ready)
+    })
+
+    const imageTurn: (input: ImageInput) => Effect.Effect<SessionV1.WithParts, Session.BusyError> = Effect.fn(
+      "SessionPrompt.image",
+    )(function* (input: ImageInput) {
+      const ready = yield* Latch.make()
+      return yield* state.startShell(input.sessionID, lastAssistant(input.sessionID), imageImpl(input, ready), ready)
     })
 
     const command = Effect.fn("SessionPrompt.command")(function* (input: CommandInput) {
@@ -1810,6 +2013,7 @@ const layer = Layer.effect(
       prompt,
       loop,
       shell,
+      image: imageTurn,
       command,
       resolvePromptParts,
       items: pageItems,
@@ -1858,6 +2062,24 @@ export const ShellInput = Schema.Struct({
   command: Schema.String,
 })
 export type ShellInput = Schema.Schema.Type<typeof ShellInput>
+
+export const ImageInput = Schema.Struct({
+  sessionID: SessionID,
+  messageID: Schema.optional(MessageID),
+  agent: Schema.optional(Schema.String),
+  /** The user's own words, in any language. */
+  request: Schema.String,
+  format: Schema.optional(PictureFormat),
+  size: Schema.optional(PictureSize),
+  /** Key of the image model; without it the control server's default. */
+  model: Schema.optional(Schema.String),
+  /** Who rewrites the words into the description: absent, Ling if it is on this computer, else the default model; `false`, nobody. */
+  rewrite: Schema.optional(Schema.Union([Schema.Literal(false), ModelRef])),
+  /** A description already written: nothing rewrites it. */
+  prompt: Schema.optional(Schema.String),
+  seed: Schema.optional(Schema.Number),
+})
+export type ImageInput = Schema.Schema.Type<typeof ImageInput>
 
 export const CommandInput = Schema.Struct({
   messageID: Schema.optional(MessageID),
@@ -1952,6 +2174,7 @@ export const node = LayerNode.make({
     EventV2Bridge.node,
     RuntimeFlags.node,
     Database.node,
+    Question.node,
   ],
 })
 

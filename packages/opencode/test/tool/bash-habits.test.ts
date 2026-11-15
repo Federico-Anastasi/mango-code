@@ -92,4 +92,102 @@ describe("BashHabits.notes", () => {
     expect(notes("if ($true) { cd src && bun x.ts }")[0]).toContain("cmd1; if ($?) { cmd2 }")
     expect(notes("echo a || echo b", "pwsh")).toEqual([])
   })
+
+  test("names the commands that only bash has, and the `find` that is another program here", () => {
+    expect(notes("wc -l style.css", "pwsh")[0]).toContain("(Get-Content file).Count")
+    expect(notes("pkill -f server; lsof -i :3000", "pwsh")[0]).toContain("`pkill`, `lsof` do not exist on this computer")
+    expect(notes("find . -name '*.js'", "pwsh")[0]).toContain("Glob tool")
+    expect(notes('find "text" file.txt', "pwsh")).toEqual([])
+  })
+})
+
+describe("BashHabits.adapt", () => {
+  const project = "C:\\Users\\name\\Desktop\\bike-shop"
+  const adapt = (command: string, present = ["python"]) =>
+    BashHabits.adapt({ command, directory: project, missing: (name) => !present.includes(name) })
+  const run = (command: string, present?: string[]) => adapt(command, present).command
+
+  test("leaves a command written for PowerShell as it is", () => {
+    for (const command of ["Get-ChildItem -Force", "cmd /c dir", "findstr /s /i text *.js", "bun test 2>&1", "curl http://localhost:3000/home/page"])
+      expect(adapt(command)).toEqual({ command, notes: [] })
+  })
+
+  test("sends output to PowerShell's null device", () => {
+    expect(run("bun x.ts 2>/dev/null")).toBe("bun x.ts 2>$null")
+    expect(run("bun x.ts > /dev/null 2>&1")).toBe("bun x.ts >$null 2>&1")
+    expect(run("bun x.ts &>/dev/null")).toBe("bun x.ts *>$null")
+    expect(run("curl -s -o /dev/null http://localhost:3000")).toBe("curl -s -o NUL http://localhost:3000")
+  })
+
+  test("runs the PowerShell command that does the same job", () => {
+    expect(run("ls -la")).toBe("Get-ChildItem -Force")
+    expect(run("cd site && ls -l css")).toBe("cd site && Get-ChildItem -Force css")
+    expect(run("ps aux")).toBe("Get-Process")
+    expect(run("rm -rf dist")).toBe("Remove-Item -Recurse -Force dist")
+    expect(run("kill -9 4242")).toBe("Stop-Process -Force -Id 4242")
+    expect(run("mkdir -p css/img")).toBe("New-Item -ItemType Directory -Force -Path css/img | Out-Null")
+    expect(run("python3 -m http.server")).toBe("python -m http.server")
+    expect(run("python3 x.py", ["python", "python3"])).toBe("python3 x.py")
+    expect(run("python3 x.py", [])).toBe("python3 x.py")
+  })
+
+  test("takes a Unix path from the project folder, and says so", () => {
+    const got = adapt("ls -la /home/user/bike-shop/")
+    expect(got.command).toBe("Get-ChildItem -Force C:/Users/name/Desktop/bike-shop")
+    expect(got.notes[0]).toContain("`/home/user/bike-shop/` is not a path here")
+    expect(run("cat /tmp/server.log")).toBe("cat C:/Users/name/Desktop/bike-shop/server.log")
+    expect(run("python -c \"import os; os.chdir('/home/user/bike-shop')\"")).toBe(
+      "python -c \"import os; os.chdir('C:/Users/name/Desktop/bike-shop')\"",
+    )
+  })
+
+  test("turns a drive written the Git Bash way into the drive", () => {
+    expect(run("cd /c/Users/name/Desktop/bike-shop && ls -la")).toBe("cd C:/Users/name/Desktop/bike-shop && Get-ChildItem -Force")
+    expect(run('cd "/c/Users/name/Documents" && pwd')).toBe('cd "C:/Users/name/Documents" && pwd')
+    expect(run("ls -la /C:/Users/name/Desktop/bike-shop/")).toBe("Get-ChildItem -Force C:/Users/name/Desktop/bike-shop/")
+    expect(adapt("cd /c/Users/name/Documents").notes).toEqual([])
+    expect(run("cmd /c dir")).toBe("cmd /c dir")
+  })
+
+  test("lists several names at once", () => {
+    expect(run("ls -lh *.html *.css *.js")).toBe("Get-ChildItem -Force *.html,*.css,*.js")
+    expect(run("cd site && ls -la a b; echo done")).toBe("cd site && Get-ChildItem -Force a,b; echo done")
+  })
+
+  test("ends a pipeline with PowerShell's own filter", () => {
+    expect(run(`pip list 2>/dev/null | grep -iE "diffusers|torch"`)).toBe(`pip list 2>$null | Select-String -Pattern "diffusers|torch"`)
+    expect(run("git log --oneline | head -5")).toBe("git log --oneline | Select-Object -First 5")
+    expect(run("git log --oneline | tail -n 3 | wc -l")).toBe("git log --oneline | Select-Object -Last 3 | Measure-Object -Line | ForEach-Object Lines")
+    expect(run(`bun test 2>&1 | grep -v pass | head`)).toBe("bun test 2>&1 | Select-String -NotMatch -CaseSensitive -Pattern pass | Select-Object -First 10")
+    expect(run(`Get-Process | grep "a\\|b"`)).toBe(`Get-Process | Select-String -CaseSensitive -Pattern "a|b"`)
+    expect(run("cd site && git status | grep modified; echo done")).toBe("cd site && git status | Select-String -CaseSensitive -Pattern modified; echo done")
+  })
+
+  test("leaves a filter it has no counterpart for, or that this computer has, as written", () => {
+    for (const command of ["git log | grep -c fix", "git log | grep -A2 fix", "grep -rn word src", "head -5 notes.txt"])
+      expect(run(command)).toBe(command)
+    expect(run("git log --oneline | head -5", ["python", "head"])).toBe("git log --oneline | head -5")
+  })
+
+  test("leaves alone a path that may be an address of a site, not a folder", () => {
+    for (const command of [`bun -e "fetch('/api/items')"`, `bun -e "app.get('/app/users', list)"`, "curl http://localhost:3000/home/user/page"])
+      expect(adapt(command)).toEqual({ command, notes: [] })
+  })
+
+  test("leaves a program running the way PowerShell does", () => {
+    expect(run("python3 -m http.server 8080 --bind 127.0.0.1 &")).toBe(
+      "Start-Process -WindowStyle Hidden python -ArgumentList '-m http.server 8080 --bind 127.0.0.1'",
+    )
+    expect(run("cd /home/user/bike-shop && python3 -m http.server 8080 > /dev/null 2>&1 &\necho started")).toBe(
+      "Start-Process -WindowStyle Hidden python -ArgumentList '-m http.server 8080' -WorkingDirectory C:/Users/name/Desktop/bike-shop\necho started",
+    )
+    expect(adapt("bun dev &").notes).toEqual([])
+  })
+
+  test("says that a job it cannot rewrite stops with the call", () => {
+    const got = adapt('bun -e "serve()" > out.log &')
+    expect(got.command).toBe('bun -e "serve()" > out.log &')
+    expect(got.notes[0]).toContain("the program is not running")
+    expect(adapt("cd src && bun x.ts").notes).toEqual([])
+  })
 })

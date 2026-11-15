@@ -76,6 +76,29 @@ export function ModelLabel(props: { name: string; status?: string; class?: strin
   )
 }
 
+/**
+ * The colour of the dot beside the model in the bar: ready is green, a load or a download on its way is amber, a model
+ * that did not start is red, and anything off (nothing chosen, the cards lent away, a remote engine out of reach) is grey.
+ */
+export function barTone(state: MangoState): "ready" | "progress" | "error" | "off" {
+  const model = state.model
+  if (model.phase === "ready") return "ready"
+  if (model.phase === "loading") return "progress"
+  if (model.phase === "failed") return "error"
+  if (model.phase === "remote") return model.reachable ? "ready" : "off"
+  if (model.phase === "none" && barDownload(state)) return "progress"
+  return "off"
+}
+
+/**
+ * What the dot says to those who do not see it, where the visible words do not say it already: a model that did not
+ * start (the bar then reads «no model in use») and a model that is ready.
+ */
+export function barDescription(state: MangoState, t: Translate) {
+  if (state.model.phase === "failed") return t("mango.failed.title", { model: state.model.label })
+  if (barTone(state) === "ready") return t("mango.menu.inUse")
+}
+
 /** The download the bar names when no model is in use and one is coming: its label leads to its row in Models. */
 export function barDownload(state: MangoState) {
   const download = comingDownload(state)
@@ -163,13 +186,15 @@ export function MangoModelBar() {
               as={ButtonV2}
               variant="ghost-muted"
               size="large"
-              class="min-w-0 max-w-[320px] shrink justify-start ![font-weight:440]"
+              class="min-w-0 max-w-[320px] shrink justify-start ![font-weight: 400]"
               data-action="titlebar-model"
               data-phase={state().model.phase}
+              aria-description={barDescription(state(), language.t)}
               title={state().model.phase === "remote" ? undefined : language.t("mango.bar.tooltip")}
               disabled={state().model.phase === "remote"}
             >
               <ModelLabel {...barParts(state(), language.t)} />
+              <span data-slot="state-dot" data-tone={barTone(state())} aria-hidden="true" />
               <Show when={state().model.phase !== "remote"}>
                 <Icon name="chevron-down" />
               </Show>
@@ -177,7 +202,7 @@ export function MangoModelBar() {
             <MenuV2.Portal>
               <MenuV2.Content
                 data-component="mango-model-menu"
-                class="w-[min(430px,calc(100vw-24px))] overflow-hidden rounded-md border-0 bg-v2-background-bg-layer-01 !p-0.5 shadow-[var(--v2-elevation-floating)] focus:outline-none"
+                class="w-[min(430px,calc(100vw-24px))] overflow-hidden !p-0.5 focus:outline-none"
               >
                 <Show
                   when={present().length > 0}

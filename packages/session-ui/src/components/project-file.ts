@@ -99,12 +99,24 @@ export function projectFileProblem(cause: unknown): "missing" | "blocked" | "lar
 }
 
 /**
- * File a tool wrote, read from the tool part: `write` and `edit` (path in the parameters) and
- * `documents_create` (path in the confirmation message). It serves folders without git, where the
- * session's changes are not recorded.
+ * File a tool wrote, read from the tool part: `write` and `edit` (the path the tool says it wrote, which is whole:
+ * `filepath` for `write`, `filediff.file` for `edit`; a part without it gives the path in the parameters), `image_generate` (the file in its metadata) and `documents_create` (path in the
+ * confirmation message). It serves folders without git, where the session's changes are not recorded, and files written outside the project.
  */
-export function producedFilePath(tool: string, input: Record<string, unknown> | undefined, output: unknown) {
-  if ((tool === "write" || tool === "edit") && typeof input?.filePath === "string") return input.filePath
+export function producedFilePath(
+  tool: string,
+  input: Record<string, unknown> | undefined,
+  output: unknown,
+  metadata?: Record<string, unknown>,
+) {
+  // a picture says where it was written: the app may have given it another name than the one asked for
+  if (tool === "image_generate" && typeof metadata?.file === "string") return metadata.file
+  if (tool === "write" || tool === "edit") {
+    const filediff = metadata?.filediff
+    const written = metadata?.filepath ?? (typeof filediff === "object" && filediff && "file" in filediff ? filediff.file : undefined)
+    if (typeof written === "string") return written
+    if (typeof input?.filePath === "string") return input.filePath
+  }
   if (tool === "documents_create" && typeof output === "string") return output.match(/^File created: (.+) \(\d+ KB\)/m)?.[1]
 }
 

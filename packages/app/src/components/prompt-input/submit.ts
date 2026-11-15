@@ -11,6 +11,10 @@ import { useLayout } from "@/context/layout"
 import { useLocal, type ModelSelection } from "@/context/local"
 import { type ContextItem, type ImageAttachmentPart, type Prompt, type usePrompt } from "@/context/prompt"
 import { useSDK, type DirectorySDK } from "@/context/sdk"
+import { useServerSDK } from "@/context/server-sdk"
+import { askPicture, type PictureRequest } from "@/utils/mango-picture"
+import { authHeaders } from "@/utils/server"
+import type { PicturePick } from "@/context/prompt-state"
 import { useSync, type DirectorySync } from "@/context/sync"
 import { Identifier } from "@/utils/id"
 import { Worktree as WorktreeState } from "@/utils/worktree"
@@ -224,6 +228,16 @@ type PromptSubmitInput = {
   onNewSessionWorktreeReset?: () => void
   shouldQueue?: Accessor<boolean>
   onQueue?: (draft: FollowupDraft) => void
+  /**
+   * mango-code: the box asks for a picture: what is written is a request for the agent to draw (a turn of the
+   * conversation) and not a message for the model. `hold` keeps the engine that draws on until the turn ends.
+   */
+  picture?: {
+    on: Accessor<boolean>
+    request: (text: string) => PictureRequest | undefined
+    pick: Accessor<PicturePick | undefined>
+    hold: () => () => void
+  }
   /** mango-code: the model is not ready: the message waits in the interface and leaves when it is. */
   shouldWait?: Accessor<boolean>
   onWait?: (draft: FollowupDraft) => void
@@ -237,6 +251,7 @@ export function createPromptSubmit(input: PromptSubmitInput) {
   const sdk = useSDK()
   const sync = useSync()
   const serverSync = useServerSync()
+  const serverSDK = useServerSDK()
   const local = useLocal()
   const prompt = input.prompt
   const layout = useLayout()
@@ -329,9 +344,17 @@ export function createPromptSubmit(input: PromptSubmitInput) {
     const text = currentPrompt.map((part) => ("content" in part ? part.content : "")).join("")
     const images = input.imageAttachments().slice()
     const mode = input.mode()
+    const picture = mode === "normal" && input.picture?.on() === true
+    const asked = picture ? input.picture?.request(text) : undefined
+    const pick = picture ? { ...input.picture?.pick(), mode: "picture" as const } : undefined
 
-    if (text.trim().length === 0 && images.length === 0 && input.commentCount() === 0) {
+    if (text.trim().length === 0 && (picture || (images.length === 0 && input.commentCount() === 0))) {
       if (input.working()) void abort()
+      return
+    }
+
+    if (picture && !asked) {
+      showToast({ title: language.t("prompt.toast.promptSendFailed.title"), description: language.t("picture.none") })
       return
     }
 
@@ -426,6 +449,8 @@ export function createPromptSubmit(input: PromptSubmitInput) {
             model: { providerID: currentModel.provider.id, modelID: currentModel.id },
             variant: variant ?? null,
           })
+          // the new conversation opens on what was asked here
+          if (pick) prompt.capture({ dir: base64Encode(sessionDirectory), id: session.id }).picture.set(pick)
           layout.handoff.setTabs(base64Encode(sessionDirectory), session.id)
           const draftID = search.draftId
           if (draftID) tabs.promoteDraft(draftID, { server: tabs.draft(draftID).server, sessionId: session.id })
@@ -457,8 +482,8 @@ export function createPromptSubmit(input: PromptSubmitInput) {
       variant,
     }
 
-    const clearInput = () => {
-      submission.clear()
+    const clearInput = (kept?: Prompt) => {
+      submission.clear(kept)
       input.setMode("normal")
       input.setPopover(null)
     }
@@ -478,6 +503,94 @@ export function createPromptSubmit(input: PromptSubmitInput) {
         input.queueScroll()
       })
       return true
+    }
+
+    /**
+     * A worktree still being made is waited for before anything is asked in it. False when the user stopped the wait:
+     * `undo` has then put back what was sent.
+     */
+    const waitForWorktree = async (undo: () => void) => {
+      const worktree = WorktreeState.get(sdk().scope, sessionDirectory)
+      if (!worktree || worktree.status !== "pending") return true
+
+      if (sessionDirectory === projectDirectory) {
+        sync().set("session_status", session.id, { type: "busy" })
+      }
+
+      const controller = new AbortController()
+      const cleanup = () => {
+        if (sessionDirectory === projectDirectory) {
+          sync().set("session_status", session.id, { type: "idle" })
+        }
+        undo()
+      }
+
+      pending.set(pendingKey(session.id), { abort: controller, cleanup })
+
+      const abortWait = new Promise<Awaited<ReturnType<typeof WorktreeState.wait>>>((resolve) => {
+        if (controller.signal.aborted) {
+          resolve({ status: "failed", message: "aborted" })
+          return
+        }
+        controller.signal.addEventListener(
+          "abort",
+          () => {
+            resolve({ status: "failed", message: "aborted" })
+          },
+          { once: true },
+        )
+      })
+
+      const timeoutMs = 5 * 60 * 1000
+      const timer = { id: undefined as number | undefined }
+      const timeout = new Promise<Awaited<ReturnType<typeof WorktreeState.wait>>>((resolve) => {
+        timer.id = window.setTimeout(() => {
+          resolve({
+            status: "failed",
+            message: language.t("workspace.error.stillPreparing"),
+          })
+        }, timeoutMs)
+      })
+
+      const result = await Promise.race([
+        WorktreeState.wait(sdk().scope, sessionDirectory),
+        abortWait,
+        timeout,
+      ]).finally(() => {
+        if (timer.id === undefined) return
+        clearTimeout(timer.id)
+      })
+      pending.delete(pendingKey(session.id))
+      if (controller.signal.aborted) return false
+      if (result.status === "failed") throw new Error(result.message)
+      return true
+    }
+
+    if (asked) {
+      input.onSubmit?.()
+      // a picture is asked with words only: what was attached on the text side stays in the box
+      clearInput(currentPrompt.filter((part) => part.type === "image"))
+      serverSync().session.set("session_status", session.id, { type: "busy" })
+      const release = input.picture?.hold()
+      void waitForWorktree(() => {
+        serverSync().session.set("session_status", session.id, { type: "idle" })
+        restoreInput()
+      })
+        .then((ready) => {
+          if (!ready) return
+          return askPicture(
+            { url: serverSDK().url, headers: authHeaders(serverSDK().server.http) },
+            { sessionID: session.id, directory: sessionDirectory },
+            asked,
+          )
+        })
+        .catch((err) => {
+          serverSync().session.set("session_status", session.id, { type: "idle" })
+          showToast({ title: language.t("prompt.toast.promptSendFailed.title"), description: errorMessage(err) })
+          restoreInput()
+        })
+        .finally(() => release?.())
+      return
     }
 
     // A new conversation is already on the server here; the message waits in the interface.
@@ -567,64 +680,6 @@ export function createPromptSubmit(input: PromptSubmitInput) {
     for (const item of commentItems) submission.target().context.remove(item.key)
     clearInput()
 
-    const waitForWorktree = async () => {
-      const worktree = WorktreeState.get(sdk().scope, sessionDirectory)
-      if (!worktree || worktree.status !== "pending") return true
-
-      if (sessionDirectory === projectDirectory) {
-        sync().set("session_status", session.id, { type: "busy" })
-      }
-
-      const controller = new AbortController()
-      const cleanup = () => {
-        if (sessionDirectory === projectDirectory) {
-          sync().set("session_status", session.id, { type: "idle" })
-        }
-        removeOptimisticMessage()
-        if (restoreInput()) restoreCommentItems(submission.target(), commentItems)
-      }
-
-      pending.set(pendingKey(session.id), { abort: controller, cleanup })
-
-      const abortWait = new Promise<Awaited<ReturnType<typeof WorktreeState.wait>>>((resolve) => {
-        if (controller.signal.aborted) {
-          resolve({ status: "failed", message: "aborted" })
-          return
-        }
-        controller.signal.addEventListener(
-          "abort",
-          () => {
-            resolve({ status: "failed", message: "aborted" })
-          },
-          { once: true },
-        )
-      })
-
-      const timeoutMs = 5 * 60 * 1000
-      const timer = { id: undefined as number | undefined }
-      const timeout = new Promise<Awaited<ReturnType<typeof WorktreeState.wait>>>((resolve) => {
-        timer.id = window.setTimeout(() => {
-          resolve({
-            status: "failed",
-            message: language.t("workspace.error.stillPreparing"),
-          })
-        }, timeoutMs)
-      })
-
-      const result = await Promise.race([
-        WorktreeState.wait(sdk().scope, sessionDirectory),
-        abortWait,
-        timeout,
-      ]).finally(() => {
-        if (timer.id === undefined) return
-        clearTimeout(timer.id)
-      })
-      pending.delete(pendingKey(session.id))
-      if (controller.signal.aborted) return false
-      if (result.status === "failed") throw new Error(result.message)
-      return true
-    }
-
     void sendFollowupDraft({
       api: sdk().api.session,
       sync: sync(),
@@ -632,7 +687,11 @@ export function createPromptSubmit(input: PromptSubmitInput) {
       draft,
       messageID,
       optimisticBusy: sessionDirectory === projectDirectory,
-      before: waitForWorktree,
+      before: () =>
+        waitForWorktree(() => {
+          removeOptimisticMessage()
+          if (restoreInput()) restoreCommentItems(submission.target(), commentItems)
+        }),
     }).catch((err) => {
       pending.delete(pendingKey(session.id))
       if (sessionDirectory === projectDirectory) {

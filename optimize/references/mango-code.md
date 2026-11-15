@@ -12,8 +12,8 @@ match what you find on the PC, the PC is right: recheck (`hygiene.md`).
 | installed app | `%LOCALAPPDATA%\Mango Code\` (`mango-code.exe`); in development from the repo, `app\target\{release,debug}\` |
 | distribution (`dist`): catalog, templates, MCP | in the installed app's `resources\` folder; in the repo `launcher\` (the `MANGO_DIST` variable moves it) |
 | model catalog | `<dist>\mango-models.json`: for each model name, GGUF file, mmproj, repo, maximum context, chat template; `order` is the listing order. The user's models are in `%LOCALAPPDATA%\MangoCode\user-models.json` (same format, they are added) |
-| engine catalog | `<dist>\mango-engines.json`: downloadable versions per build (`cpu`, `vulkan`, `cuda-12`, `cuda-13`, and the `prism`, `toq` engines of the RTX 3060 Ti + GTX 1080 + GTX 1660 SUPER profiles; `prism` also has `cuda-12-gtx16`, which a `cuda-12` profile gets by itself on a PC whose Turing cards are all GTX 16) |
-| installed engines | `<engines>\<engine>\<version>-<build>\llama-server.exe`; an engine placed by hand in `<engines>\<name>\llama-server.exe` counts as installed. `<engines>` = `<data>\engine` or what `<dist>\mango-paths.json` says (`llama`) |
+| engine catalog | `<dist>\mango-engines.json`: downloadable versions per build (`cpu`, `vulkan`, `cuda-12`, `cuda-13`, and the `prism`, `toq` engines of the RTX 3060 Ti + GTX 1080 + GTX 1660 SUPER profiles; `prism` also has `cuda-12-gtx16`, which a `cuda-12` profile gets by itself on a PC whose Turing cards are all GTX 16). `sd` is the engine of the models that make images, not of the ones this skill tunes |
+| installed engines | `<engines>\<engine>\<version>-<build>\llama-server.exe` (`sd-server.exe` for `sd`); an engine placed by hand in `<engines>\<name>\llama-server.exe` counts as installed. `<engines>` = `<data>\engine` or what `<dist>\mango-paths.json` says (`llama`) |
 | downloaded models | `%LOCALAPPDATA%\MangoCode\models\` (or `mango-paths.json`, `models`) |
 | optimized profiles | `<dist>\profiles\<family>\*.json` (the distributed ones); yours in `%LOCALAPPDATA%\MangoCode\profiles\`, which the app reads: for the same model and GPUs, yours wins. Format: `launcher\profiles\README.md` |
 | user data | `%LOCALAPPDATA%\MangoCode\` (`MANGO_DATA` moves it) |
@@ -57,7 +57,7 @@ Three levels, from the closest to the product:
 
 ## How the app starts a model (to reproduce the same behavior)
 
-The engine manager (port 8080, `service.json`) keeps **one** `llama-server` running at a time and switches it when a request asks for another model. Fixed arguments: `-m`, `-c`, `--jinja`,
+The engine manager (port 47080, `service.json`) keeps **one** `llama-server` running at a time and switches it when a request asks for another model. Fixed arguments: `-m`, `-c`, `--jinja`,
 `--host 127.0.0.1`, `--port`, `--slot-save-path`, `-np 1`, `--no-warmup`, `--metrics`, the on-disk memory (`--cache-disk` with cap and age), then the model's `args`,
 `--mmproj` and `--chat-template-file` if the model has them, `-ub`, `-ts`. Environment: `CUDA_DEVICE_ORDER=PCI_BUS_ID`, `GGML_CUDA_GRAPHS_ANY_ARCH=1` (stock
 llama.cpp without patches ignores these two variables), then the model's `env`. An engine that does not start gives an error with the last lines of its log (`engine.log`).

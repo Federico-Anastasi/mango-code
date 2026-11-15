@@ -122,10 +122,10 @@ export const DialogServerV2: Component<{
         </div>
       </DialogBody>
       <DialogFooter>
-        <ButtonV2 variant="neutral" disabled={controller.formBusy()} onClick={() => dialog.close()}>
+        <ButtonV2 variant="ghost" disabled={controller.formBusy()} onClick={() => dialog.close()}>
           {language.t("common.cancel")}
         </ButtonV2>
-        <ButtonV2 variant="contrast" disabled={controller.formBusy()} onClick={controller.submitForm}>
+        <ButtonV2 variant="primary" disabled={controller.formBusy()} onClick={controller.submitForm}>
           {submitLabel()}
         </ButtonV2>
       </DialogFooter>

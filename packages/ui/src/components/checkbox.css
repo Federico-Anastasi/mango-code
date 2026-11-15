@@ -93,16 +93,24 @@
     box-shadow: var(--shadow-xs-border-focus);
   }
 
-  &[data-checked] [data-slot="checkbox-checkbox-control"],
   &[data-indeterminate] [data-slot="checkbox-checkbox-control"] {
     border-color: var(--border-base);
     background-color: var(--surface-weak);
   }
 
-  &[data-checked]:hover:not([data-disabled], [data-readonly]) [data-slot="checkbox-checkbox-control"],
   &[data-indeterminate]:hover:not([data-disabled]) [data-slot="checkbox-checkbox-control"] {
     border-color: var(--border-hover);
     background-color: var(--surface-hover);
+  }
+
+  &[data-checked] [data-slot="checkbox-checkbox-control"],
+  &[data-checked]:hover:not([data-disabled], [data-readonly]) [data-slot="checkbox-checkbox-control"] {
+    border-color: var(--mango-action);
+    background-color: var(--mango-action);
+  }
+
+  &[data-checked] [data-slot="checkbox-checkbox-indicator"] {
+    color: var(--mango-on-action);
   }
 
   &[data-checked] [data-slot="checkbox-checkbox-indicator"],

@@ -186,6 +186,16 @@ export class MangoCode {
     await this.call("POST", `${this.service.agent}/session/${id}/abort?${this.q(directory)}`);
   }
 
+  /**
+   * A picture as a turn of the session: the words go to the image model (rewritten into a description first, unless
+   * `rewrite` is `false` or `prompt` is given) without the model that writes for the answer. Returns when the turn has
+   * ended, with the assistant message whose `image_generate` part is `completed` (the picture attached) or `error`;
+   * `abort` stops it. See docs/INTEGRATION.md, section 7.
+   */
+  async pictureTurn(id: string, directory: string, request: PictureTurn): Promise<{ info: any; parts: any[] }> {
+    return this.call("POST", `${this.service.agent}/session/${id}/image?${this.q(directory)}`, request);
+  }
+
   // --- events ------------------------------------------------------------------------------------
 
   /**
@@ -386,4 +396,108 @@ export class MangoCode {
   async startModel(model: string): Promise<any> {
     return this.call("POST", `${this.engineUrl()}/engine/model`, { model });
   }
+
+  // --- pictures ----------------------------------------------------------------------------------
+
+  /** The models that make pictures (`ready`: usable now), the default one, the image engine that stayed on, the jobs. */
+  async images(): Promise<PictureState> {
+    return this.call("GET", `${this.service.control}/control/image`);
+  }
+
+  /**
+   * Makes a picture and returns its job when it has ended: `done`, `failed` (with `error`) or `cancelled`. `onStep`
+   * hears the job each time it is asked, with the step it is at and, while it is drawn, the small picture of that
+   * step (`preview`). While it is drawn the card is on loan from the engine manager: a model that writes there is put
+   * aside and comes back by itself. See docs/INTEGRATION.md, section 7.
+   */
+  async picture(request: PictureRequest, onStep?: (job: PictureJob) => void): Promise<PictureJob> {
+    const asked: PictureJob = await this.call("POST", `${this.service.control}/control/image/generate`, request);
+    for (;;) {
+      const job: PictureJob = await this.call("GET", `${this.service.control}/control/image/jobs/${asked.id}`);
+      onStep?.(job);
+      if (job.status === "done" || job.status === "failed" || job.status === "cancelled") return job;
+      await new Promise((resolve) => setTimeout(resolve, PICTURE_EVERY_MS));
+    }
+  }
+
+  /** The PNG of a job that is `done`, while the app remembers it (the last eight that ended). */
+  async pictureBytes(id: string): Promise<Uint8Array> {
+    const answer = await this.call("GET", `${this.service.control}/control/image/jobs/${id}/picture`);
+    return Uint8Array.from(Buffer.from(answer.png, "base64"));
+  }
+
+  /** Stops a picture, also in the middle of a step; one that waits never begins. */
+  async cancelPicture(id: string): Promise<PictureJob> {
+    return this.call("POST", `${this.service.control}/control/image/jobs/${id}/cancel`, {});
+  }
+
+  /** Stops the image engine that a request with `stay_on` left on, and gives its memory back. */
+  async unloadImages(): Promise<PictureState> {
+    return this.call("POST", `${this.service.control}/control/image/unload`, {});
+  }
+}
+
+// A job is asked every this often: a step of the fastest card takes longer.
+const PICTURE_EVERY_MS = 500;
+
+export interface PictureRequest {
+  /** Goes to the model as it is: nothing rewrites it. */
+  prompt: string;
+  /** In pixels. */
+  width: number;
+  height: number;
+  /** A key of `images().models`; without it, the default one. */
+  model?: string;
+  /** Without it Mango Code draws one, and tells it in the job. */
+  seed?: number;
+  /** The image engine stays on after the picture, for a run of pictures: stop it with `unloadImages()`. */
+  stay_on?: boolean;
+  /** An absolute path the picture is also written to. */
+  file?: string;
+}
+
+export interface PictureTurn {
+  /** The person's own words, in any language. */
+  request: string;
+  /** `square` by default. */
+  format?: "square" | "portrait" | "landscape";
+  /** `small` by default. */
+  size?: "small" | "large";
+  /** A key of `images().models`; without it, the default one. */
+  model?: string;
+  /** Who rewrites the words; without it Ling if it is on this computer, else the agent's default model; `false`: nobody. */
+  rewrite?: false | { providerID: string; modelID: string };
+  /** A description already written: nothing rewrites it. */
+  prompt?: string;
+  seed?: number;
+  /** The id of the user message the turn writes; without it the agent makes one. */
+  messageID?: string;
+  /** The agent whose model the messages name; without it the default one. */
+  agent?: string;
+}
+
+export interface PictureJob {
+  id: string;
+  status: "waiting" | "preparing" | "drawing" | "finishing" | "done" | "failed" | "cancelled";
+  model: string;
+  prompt: string;
+  width: number;
+  height: number;
+  seed: number | null;
+  step: number;
+  steps: number;
+  seconds: number;
+  /** Why it failed: the sentence for the user, and the technical one. */
+  error: string | null;
+  detail: string | null;
+  file: string | null;
+  /** The picture as it is at this step, small: a PNG in base64. */
+  preview: string | null;
+}
+
+export interface PictureState {
+  models: { key: string; label: string; license: string; bytes: number; ready: boolean }[];
+  default: string | null;
+  loaded: string | null;
+  jobs: PictureJob[];
 }

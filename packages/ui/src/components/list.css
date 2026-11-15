@@ -131,7 +131,7 @@
     gap: 12px;
     overflow-y: auto;
     overscroll-behavior: contain;
-    mask: linear-gradient(to bottom, #ffff calc(100% - var(--bottom-fade)), #0000);
+    mask: linear-gradient(to bottom, var(--mango-ground) calc(100% - var(--bottom-fade)), transparent);
     animation: scroll;
     animation-timeline: --scroll;
     scroll-timeline: --scroll y;

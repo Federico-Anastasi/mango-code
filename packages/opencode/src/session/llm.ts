@@ -25,6 +25,7 @@ import { EffectBridge } from "@/effect/bridge"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import * as Option from "effect/Option"
 import * as OtelTracer from "@effect/opentelemetry/Tracer"
+import { reason } from "@/tool/invalid"
 import { LLMAISDK } from "./llm/ai-sdk"
 import { LLMNativeRuntime } from "./llm/native-runtime"
 import { LLMRequestPrep } from "./llm/request"
@@ -305,7 +306,12 @@ const live: Layer.Layer<
               ...failed.toolCall,
               input: JSON.stringify({
                 tool: failed.toolCall.toolName,
-                error: failed.error.message,
+                error: reason({
+                  tool: failed.toolCall.toolName,
+                  arguments: failed.toolCall.input,
+                  error: failed.error.message,
+                  limit: prepared.params.maxOutputTokens,
+                }),
               }),
               toolName: "invalid",
             }

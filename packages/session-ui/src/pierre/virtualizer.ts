@@ -14,7 +14,7 @@ type Entry = {
 const cache = new WeakMap<Document | HTMLElement, Entry>()
 
 export const virtualMetrics: Partial<VirtualFileMetrics> = {
-  lineHeight: 24,
+  lineHeight: 20,
   hunkSeparatorHeight: 24,
   spacing: 0,
 }

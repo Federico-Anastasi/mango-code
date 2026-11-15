@@ -18,9 +18,8 @@ import { answer } from "./dialog";
 
 const [AGENT, ENGINE, DEBUG] = [47650, 47651, 47652];
 // A folder the test makes pass for the OneDrive folder (the agent reads the variable), and the PC's real Desktop (only read: it
-// is refused, nothing is made there). The projects folder is one of the test's own, never the user's Documents.
+// is refused, nothing is made there). The projects folder is the environment's, never the user's Documents.
 const oneDrive = fs.mkdtempSync(path.join(os.tmpdir(), "onedrive-"));
-const projectsRoot = fs.mkdtempSync(path.join(os.tmpdir(), "mango-projects-"));
 const desktop = path.join(os.homedir(), "Desktop");
 
 let env: Environment;
@@ -36,13 +35,12 @@ beforeAll(async () => {
       MANGO_ENGINE_PORT: String(ENGINE),
       WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${DEBUG}`,
       OneDrive: oneDrive,
-      MANGO_PROJECTS_FOLDER: projectsRoot,
     },
   });
   p = await page(DEBUG, (t) => t.url.startsWith(env.agent));
   await Bun.sleep(3000);
   projectsFolder = await p.evaluate("window.__MANGO_DESKTOP__.projectsFolder()");
-  expect(projectsFolder).toBe(projectsRoot);
+  expect(projectsFolder).toBe(path.join(env.root, "projects"));
   defaultFolder = path.join(projectsFolder, "Conversazioni");
 }, 200_000);
 
@@ -50,8 +48,7 @@ afterAll(() => {
   p?.close();
   env?.close();
   Bun.sleepSync(1500);
-  // only what the test made: its projects folder and the fake OneDrive
-  fs.rmSync(projectsRoot, { recursive: true, force: true });
+  // only what the test made: the fake OneDrive
   fs.rmSync(oneDrive, { recursive: true, force: true });
 });
 

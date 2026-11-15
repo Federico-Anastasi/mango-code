@@ -169,7 +169,7 @@ export function ModelSelectorPopover(props: {
       <Kobalte.Trigger as={props.trigger} />
       <Kobalte.Portal>
         <Kobalte.Content
-          class="w-72 h-80 flex flex-col p-2 rounded-md border border-border-base bg-surface-raised-stronger-non-alpha shadow-md z-50 outline-none overflow-hidden"
+          class="w-72 h-80 flex flex-col p-2 rounded-[10px] border border-border-base bg-surface-raised-stronger-non-alpha z-50 outline-none overflow-hidden"
           onEscapeKeyDown={(event) => {
             close("escape")
             event.preventDefault()
@@ -415,7 +415,7 @@ function ModelSelectorPopoverV2View(props: {
       <MenuV2.Portal>
         <MenuV2.Content
           ref={(element: HTMLDivElement) => (contentRef = element)}
-          class="w-[284px] overflow-hidden rounded-md border-0 bg-v2-background-bg-layer-01 !p-0 shadow-[var(--v2-elevation-floating)] focus:outline-none"
+          class="w-[284px] overflow-hidden !p-0 focus:outline-none"
           onPointerDownOutside={dismiss.preventTriggerRestore}
           onFocusOutside={dismiss.preventTriggerRestore}
           onCloseAutoFocus={dismiss.onCloseAutoFocus}
@@ -427,7 +427,7 @@ function ModelSelectorPopoverV2View(props: {
                 ref={(el) => (searchRef = el)}
                 value={store.search}
                 placeholder={language.t("dialog.model.search.placeholder")}
-                class="h-7 min-w-0 flex-1 border-0 bg-transparent text-[13px] font-[440] leading-5 tracking-[-0.04px] text-v2-text-text-base outline-none placeholder:text-v2-text-text-faint"
+                class="h-7 min-w-0 flex-1 border-0 bg-transparent text-[13px] font-normal leading-5 tracking-[-0.04px] text-v2-text-text-base outline-none placeholder:text-v2-text-text-faint"
                 spellcheck={false}
                 autocorrect="off"
                 autocomplete="off"
@@ -479,7 +479,7 @@ function ModelSelectorPopoverV2View(props: {
               <Show
                 when={models().length > 0}
                 fallback={
-                  <div class="flex h-12 items-center px-3 text-[13px] font-[440] leading-5 tracking-[-0.04px] text-v2-text-text-faint">
+                  <div class="flex h-12 items-center px-3 text-[13px] font-normal leading-5 tracking-[-0.04px] text-v2-text-text-faint">
                     {language.t("dialog.model.empty")}
                   </div>
                 }

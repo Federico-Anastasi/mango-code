@@ -19,6 +19,12 @@ export interface SoundSettings {
   errors: string
 }
 
+/** The model that rewrites a request for a picture, as the agent names a model. */
+export interface ImageRewriter {
+  providerID: string
+  modelID: string
+}
+
 export interface Settings {
   general: {
     autoSave: boolean
@@ -36,18 +42,30 @@ export interface Settings {
   }
   appearance: {
     fontSize: number
-    mono: string
-    sans: string
   }
   permissions: {
     autoApprove: boolean
   }
   notifications: NotificationSettings
   sounds: SoundSettings
+  images: {
+    /** A model that writes turns the request into the description the image model draws best, before the picture. */
+    rewrite: boolean
+    /** Who rewrites; `null`: automatic (Ling if it is on the computer, otherwise the default model). */
+    rewriter: ImageRewriter | null
+  }
 }
 
-export const monoDefault = "System Mono"
-export const sansDefault = "System Sans"
+export const defaultImageSettings: Settings["images"] = { rewrite: true, rewriter: null }
+
+/** A saved rewriter, or `null` (automatic) when what was saved is not a model: the settings file is the user's to edit. */
+export function readRewriter(value: unknown): ImageRewriter | null {
+  if (typeof value !== "object" || value === null) return null
+  const { providerID, modelID } = value as Partial<Record<keyof ImageRewriter, unknown>>
+  if (typeof providerID !== "string" || !providerID || typeof modelID !== "string" || !modelID) return null
+  return { providerID, modelID }
+}
+
 const legacyNewLayoutDesignsDefault = import.meta.env.VITE_OPENCODE_CHANNEL !== "prod"
 export const newLayoutDesignsDefault = true
 // Existing users can switch layouts until local midnight on this date. Set new Date(YYYY, M-1, D) to show.
@@ -117,44 +135,6 @@ export function resolveNewLayoutDesigns(retired: boolean, preference: boolean | 
   return preference ?? fallback
 }
 
-const monoFallback =
-  'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace'
-const sansFallback = 'ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif'
-
-const monoBase = monoFallback
-const sansBase = sansFallback
-
-function input(font: string | undefined) {
-  return font ?? ""
-}
-
-function family(font: string) {
-  if (/^[\w-]+$/.test(font)) return font
-  return `"${font.replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"`
-}
-
-function stack(font: string | undefined, base: string) {
-  const value = font?.trim() ?? ""
-  if (!value) return base
-  return `${family(value)}, ${base}`
-}
-
-export function monoInput(font: string | undefined) {
-  return input(font)
-}
-
-export function sansInput(font: string | undefined) {
-  return input(font)
-}
-
-export function monoFontFamily(font: string | undefined) {
-  return stack(font, monoBase)
-}
-
-export function sansFontFamily(font: string | undefined) {
-  return stack(font, sansBase)
-}
-
 const defaultSettings: Settings = {
   general: {
     autoSave: true,
@@ -168,8 +148,6 @@ const defaultSettings: Settings = {
   },
   appearance: {
     fontSize: 14,
-    mono: "",
-    sans: "",
   },
   permissions: {
     autoApprove: false,
@@ -187,6 +165,7 @@ const defaultSettings: Settings = {
     errorsEnabled: true,
     errors: "nope-03",
   },
+  images: { ...defaultImageSettings },
 }
 
 function withFallback<T>(read: () => T | undefined, fallback: T) {
@@ -297,13 +276,6 @@ export const { use: useSettings, provider: SettingsProvider } = createSimpleCont
     })
 
     createEffect(() => {
-      if (typeof document === "undefined") return
-      const root = document.documentElement
-      root.style.setProperty("--font-family-mono", monoFontFamily(store.appearance?.mono))
-      root.style.setProperty("--font-family-sans", sansFontFamily(store.appearance?.sans))
-    })
-
-    createEffect(() => {
       if (store.general?.followup !== "queue") return
       setStore("general", "followup", "steer")
     })
@@ -392,14 +364,6 @@ export const { use: useSettings, provider: SettingsProvider } = createSimpleCont
         setFontSize(value: number) {
           setStore("appearance", "fontSize", value)
         },
-        font: withFallback(() => store.appearance?.mono, defaultSettings.appearance.mono),
-        setFont(value: string) {
-          setStore("appearance", "mono", value.trim() ? value : "")
-        },
-        uiFont: withFallback(() => store.appearance?.sans, defaultSettings.appearance.sans),
-        setUIFont(value: string) {
-          setStore("appearance", "sans", value.trim() ? value : "")
-        },
       },
       permissions: {
         autoApprove: withFallback(() => store.permissions?.autoApprove, defaultSettings.permissions.autoApprove),
@@ -419,6 +383,16 @@ export const { use: useSettings, provider: SettingsProvider } = createSimpleCont
         errors: withFallback(() => store.notifications?.errors, defaultSettings.notifications.errors),
         setErrors(value: boolean) {
           setStore("notifications", "errors", value)
+        },
+      },
+      images: {
+        rewrite: withFallback(() => store.images?.rewrite, defaultImageSettings.rewrite),
+        setRewrite(value: boolean) {
+          setStore("images", "rewrite", value)
+        },
+        rewriter: createMemo(() => readRewriter(store.images?.rewriter)),
+        setRewriter(value: ImageRewriter | null) {
+          setStore("images", "rewriter", value)
         },
       },
       sounds: {

@@ -57,7 +57,7 @@ export type MangoDesktop = {
     setAutomatic?(automatic: boolean): Promise<MangoUpdateReport>
     install(): Promise<void>
   }
-  /** Project files, by absolute path: they reject with { code, message } (not_found, forbidden, blocked_type, ...). */
+  /** The files the agent wrote, by absolute path: they reject with { code, message } (not_found, blocked_type, ...). */
   fileInfo(path: string): Promise<{ size: number; isDir: boolean }>
   openPath(path: string): Promise<void>
   revealPath(path: string): Promise<void>
@@ -75,6 +75,8 @@ export type MangoDesktop = {
     cancel(key: string): Promise<void>
     /** The model loaded when the app opens; `null`: the first on the computer. */
     setDefault(key: string | null): Promise<void>
+    /** The model that makes a picture when a request names none; `null`: the catalog's. */
+    setImageDefault(key: string | null): Promise<void>
     /** Where the model runs and how. If it is the one in use and its place or context changed, it loads again after the answer in progress. */
     setChoices(key: string, choices: MangoModelChoices): Promise<void>
     /**
@@ -279,7 +281,7 @@ export type MangoPreview = {
   state(): Promise<MangoPreviewState>
   /** The panel's page in the default Windows browser. */
   openExternal(): Promise<void>
-  /** A PDF, a picture or a web page of a project, by absolute path; rejects with { code, message } (not_found, forbidden, blocked_type, too_large, ...). */
+  /** A PDF, a picture or a web page the agent wrote, by absolute path; rejects with { code, message } (not_found, blocked_type, too_large, ...). */
   openFile(path: string): Promise<void>
 }
 

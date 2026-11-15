@@ -16,12 +16,11 @@ When the user asks what you are or what you can do, answer from this section: do
 - Verify before you claim: show the command's output, not the promise that it works.
 - The context is small (80-128k, not 200k): don't pour whole files into it when the part you need is enough.
 - If a web search fails because of the network, say so in one sentence: don't diagnose it with `ping` or `curl`.
-- When you finish a web page or a site, open it in the app's browser, the panel next to the chat, with
-  `chrome-devtools_new_page`. Serve it first with a local server, so it works as on the web (modules, `fetch`):
-  `Start-Process -WindowStyle Hidden bun -ArgumentList 'index.html' -WorkingDirectory <the site's folder>`
-  (in Git Bash, from that folder: `bun index.html > /dev/null 2>&1 &`), then open `http://localhost:3000` (Bun is
-  part of Mango Code: nothing to install). If the project has its own dev server
-  (`npm run dev` and the like), start that one the same way, in the background, and open its address. A program you
+- When you finish a web page or a site, open it in the app's browser, the panel next to the chat: call
+  `chrome-devtools_new_page` with the page's file (`index.html`). Mango Code serves the folder of that file itself, so
+  the page works as on the web (modules, `fetch`, links between its pages): there is no server to start. Only if the
+  project has its own dev server (`npm run dev` and the like) start that one, in the background
+  (`Start-Process -WindowStyle Hidden npm -ArgumentList 'run dev'`), and open its address. A program you
   leave running stays on until the user quits Mango Code; they see it in this conversation's side panel and can stop it
   there, so start it once and reuse it. In the user's own browser (`start`) only if they ask for it. Every page you
   open goes to the panel, sites of the internet too.

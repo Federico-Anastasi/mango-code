@@ -33,6 +33,14 @@ import { bringBackPending, failureText, useMango } from "@/context/mango"
 import { dismissReady, MangoStatusLine } from "@/components/mango-composer"
 import { composerParts, ModelLabel, modelTag } from "@/components/mango-model-bar"
 import { engineModel, messageWaits, noModel } from "@/utils/mango-state"
+import {
+  createPromptPicture,
+  PictureChoices,
+  PictureModeControl,
+  PictureModelControl,
+  PictureNotice,
+  type PromptPicture,
+} from "@/components/prompt-picture"
 import { PromptInputV2, type PromptInputV2Suggestion } from "@opencode-ai/session-ui/v2/prompt-input"
 import {
   createPromptInputV2Controller,
@@ -52,6 +60,8 @@ export type PromptInputV2ComposerController = PromptInputV2Interaction & {
   readonly agents: PromptInputProps["controls"]["agents"]
   /** mango-code: the conversation whose messages wait for the model and whose engine line is shown. */
   readonly pending: { sessionID: () => string | undefined }
+  /** mango-code: what the box asks of a picture (the choice between a text and a picture, the model, format and size). */
+  readonly picture: PromptPicture
 }
 
 export function PromptInputV2Composer(props: PromptInputV2ComposerProps) {
@@ -72,9 +82,17 @@ export function PromptInputV2Composer(props: PromptInputV2ComposerProps) {
     props.controller.restoreFocus()
   })
 
+  const picture = () => props.controller.picture
   return (
     <div class="flex flex-col gap-3">
-      <MangoStatusLine sessionID={props.controller.pending.sessionID()} />
+      <Show
+        when={picture().on()}
+        fallback={<MangoStatusLine sessionID={props.controller.pending.sessionID()} />}
+      >
+        <Show when={picture().empty()}>
+          <PictureNotice picture={picture()} />
+        </Show>
+      </Show>
       <PromptInputV2
         controller={props.controller}
         borderUnderlay={props.borderUnderlay}
@@ -83,23 +101,40 @@ export function PromptInputV2Composer(props: PromptInputV2ComposerProps) {
         trailingControl={
           <PromptVoiceButton onText={dictation.final} onPartial={dictation.partial} onClear={dictation.clear} />
         }
+        modeControl={
+          <Show when={picture().available()}>
+            <PictureModeControl picture={picture()} />
+          </Show>
+        }
+        pictureControls={
+          <Show when={picture().on() && !picture().empty()}>
+            <PictureChoices picture={picture()} />
+          </Show>
+        }
         modelControl={
-          <>
-            <TeamSwitch agents={props.controller.agents} />
-            <PromptInputV2ModelControl
-              loading={props.controller.model.loading}
-              paid={props.controller.model.paid}
-              title={language.t("command.model.choose")}
-              model={props.controller.model.selection}
-              providerID={props.controller.model.selection.current()?.provider?.id}
-              modelName={modelLabel().name}
-              modelStatus={modelLabel().status}
-              onClose={props.controller.restoreFocus}
-              onUnpaidClick={() =>
-                dialog.show(() => <DialogSelectModelUnpaidV2 model={props.controller.model.selection} />)
-              }
-            />
-          </>
+          <Show
+            when={picture().on()}
+            fallback={
+              <>
+                <TeamSwitch agents={props.controller.agents} />
+                <PromptInputV2ModelControl
+                  loading={props.controller.model.loading}
+                  paid={props.controller.model.paid}
+                  title={language.t("command.model.choose")}
+                  model={props.controller.model.selection}
+                  providerID={props.controller.model.selection.current()?.provider?.id}
+                  modelName={modelLabel().name}
+                  modelStatus={modelLabel().status}
+                  onClose={props.controller.restoreFocus}
+                  onUnpaidClick={() =>
+                    dialog.show(() => <DialogSelectModelUnpaidV2 model={props.controller.model.selection} />)
+                  }
+                />
+              </>
+            }
+          >
+            <PictureModelControl picture={picture()} onClose={props.controller.restoreFocus} />
+          </Show>
         }
       />
     </div>
@@ -155,7 +190,9 @@ export function usePromptInputV2Controller(props: PromptInputV2ControllerProps):
       .join("")
     return text.trim().length === 0 && attachments().length === 0 && commentCount() === 0
   })
-  const stopping = createMemo(() => working() && blank())
+  const picture = createPromptPicture({ prompt, sessionID: () => props.controls.session.id })
+  // a picture being drawn is stopped from the send button, whatever is written for the next one
+  const stopping = createMemo(() => working() && (blank() || picture.on()))
   const placeholder = createMemo(() =>
     promptPlaceholder({
       mode: mode(),
@@ -170,11 +207,17 @@ export function usePromptInputV2Controller(props: PromptInputV2ControllerProps):
     messageWaits(mango.state()) && props.controls.model.selection.current()?.provider?.id === MANGO_PROVIDER
   // mango-code: no model on the computer and none coming: a message would leave with a model that is not on the disk.
   // The line above the box says it and leads to Models; a shell command needs no model.
-  const blocked = () =>
-    mode() === "normal" &&
-    noModel(mango.state(), mango.catalog()) &&
-    props.controls.model.selection.current()?.provider?.id === MANGO_PROVIDER
+  const blocked = () => {
+    // a picture is asked when the last one is done, and with a model that draws on the computer
+    if (picture.on()) return picture.empty() || working()
+    return (
+      mode() === "normal" &&
+      noModel(mango.state(), mango.catalog()) &&
+      props.controls.model.selection.current()?.provider?.id === MANGO_PROVIDER
+    )
+  }
   const designPlaceholder = () => {
+    if (picture.on()) return language.t("picture.placeholder")
     const id = props.controls.session.id
     if (mode() === "normal" && commentCount() === 0 && waits() && !(id && mango.pending.waiting(id).length > 0))
       return language.t("mango.placeholder.waiting")
@@ -251,6 +294,7 @@ export function usePromptInputV2Controller(props: PromptInputV2ControllerProps):
     onNewSessionWorktreeReset: props.onNewSessionWorktreeReset,
     shouldQueue: props.shouldQueue,
     onQueue: props.onQueue,
+    picture: { on: picture.on, request: picture.request, pick: picture.pick, hold: () => mango.pictures.enter() },
     shouldWait: waits,
     onWait: (draft) => mango.pending.add(draft),
     onAbort: props.onAbort,
@@ -423,6 +467,7 @@ export function usePromptInputV2Controller(props: PromptInputV2ControllerProps):
     },
     view: {
       placeholder: designPlaceholder,
+      picture: picture.on,
       // Mango Code's local model reads only text: the user is told as soon as they attach an image.
       attachmentNote: () => {
         const model = props.controls.model.selection.current()
@@ -456,6 +501,7 @@ export function usePromptInputV2Controller(props: PromptInputV2ControllerProps):
   })
   Object.defineProperty(controller, "model", { get: () => props.controls.model })
   Object.defineProperty(controller, "agents", { get: () => props.controls.agents })
+  Object.defineProperty(controller, "picture", { get: () => picture })
 
   const sessionID = () => props.controls.session.id
   Object.defineProperty(controller, "pending", { get: () => ({ sessionID }) })
@@ -583,7 +629,7 @@ function PromptInputV2ModelControl(props: {
               variant="ghost-muted"
               size="normal"
               style={{ height: "28px" }}
-              class="min-w-0 max-w-[260px] justify-start ![font-weight:440] group"
+              class="min-w-0 max-w-[260px] justify-start ![font-weight: 400] group"
               data-action="prompt-model"
               data-control-type="popover"
             >
@@ -609,7 +655,7 @@ function PromptInputV2ModelControl(props: {
               data-control-type="dialog"
               variant="ghost-muted"
               size="normal"
-              class="min-w-0 max-w-[220px] justify-start ![font-weight:440] group"
+              class="min-w-0 max-w-[220px] justify-start ![font-weight: 400] group"
               classList={{ "animate-in fade-in": shouldAnimate() }}
               style={{ height: "28px" }}
               onClick={props.onUnpaidClick}
@@ -627,7 +673,7 @@ function PromptInputV2ModelControl(props: {
                 variant="ghost-muted"
                 size="normal"
                 style={{ height: "28px" }}
-                class="min-w-0 max-w-[220px] justify-start ![font-weight:440] group"
+                class="min-w-0 max-w-[220px] justify-start ![font-weight: 400] group"
                 classList={{ "animate-in fade-in": shouldAnimate() }}
                 data-action="prompt-model"
                 data-control-type="popover"

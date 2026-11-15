@@ -4,45 +4,51 @@ const src = await Bun.file(new URL("../public/oc-theme-preload.js", import.meta.
 
 const run = () => Function(src)()
 
+const system = (dark: boolean) =>
+  Object.defineProperty(window, "matchMedia", {
+    value: () => ({ matches: dark }) as MediaQueryList,
+    configurable: true,
+  })
+
 beforeEach(() => {
   document.head.innerHTML = ""
   document.documentElement.removeAttribute("data-theme")
   document.documentElement.removeAttribute("data-color-scheme")
+  document.documentElement.removeAttribute("data-mango-theme")
   localStorage.clear()
-  Object.defineProperty(window, "matchMedia", {
-    value: () =>
-      ({
-        matches: false,
-      }) as MediaQueryList,
-    configurable: true,
-  })
+  system(false)
 })
 
 describe("theme preload", () => {
-  test("migrates legacy oc-1 to oc-2 before mount", () => {
-    localStorage.setItem("opencode-theme-id", "oc-1")
-    localStorage.setItem("opencode-theme-css-light", "--background-base:#fff;")
-    localStorage.setItem("opencode-theme-css-dark", "--background-base:#000;")
-
+  test("without a saved choice the page follows the system, and the suite's stylesheet is told which theme", () => {
     run()
+    expect(document.documentElement.dataset.colorScheme).toBe("light")
+    expect(document.documentElement.dataset.mangoTheme).toBe("light")
 
-    expect(document.documentElement.dataset.theme).toBe("oc-2")
-    // mango-code: without a saved choice the scheme is dark, not the system one.
+    system(true)
+    run()
     expect(document.documentElement.dataset.colorScheme).toBe("dark")
-    expect(localStorage.getItem("opencode-theme-id")).toBe("oc-2")
-    expect(localStorage.getItem("opencode-theme-css-light")).toBeNull()
-    expect(localStorage.getItem("opencode-theme-css-dark")).toBeNull()
-    expect(document.getElementById("oc-theme-preload")).toBeNull()
+    expect(document.documentElement.dataset.mangoTheme).toBe("dark")
   })
 
-  test("keeps cached css for non-default themes", () => {
-    localStorage.setItem("opencode-theme-id", "nightowl")
+  test("a saved choice wins over the system", () => {
+    localStorage.setItem("opencode-color-scheme", "dark")
+    run()
+    expect(document.documentElement.dataset.mangoTheme).toBe("dark")
+
+    system(true)
     localStorage.setItem("opencode-color-scheme", "light")
+    run()
+    expect(document.documentElement.dataset.mangoTheme).toBe("light")
+  })
+
+  test("the colours an older version kept for another theme are not put on the page", () => {
+    localStorage.setItem("opencode-theme-id", "nightowl")
     localStorage.setItem("opencode-theme-css-light", "--background-base:#fff;")
 
     run()
 
-    expect(document.documentElement.dataset.theme).toBe("nightowl")
-    expect(document.getElementById("oc-theme-preload")?.textContent).toContain("--background-base:#fff;")
+    expect(document.head.children).toHaveLength(0)
+    expect(document.documentElement.dataset.theme).toBeUndefined()
   })
 })

@@ -19,6 +19,8 @@ const DEBUG = path.join(path.resolve(process.env.CARGO_TARGET_DIR ?? path.join(R
 export const APP_EXE = path.join(DEBUG, "mango-code.exe");
 export const FAKE_ENGINE_EXE = path.join(DEBUG, "fake-engine.exe");
 export const LAUNCH_EXE = path.join(DEBUG, "mango-launch.exe");
+export const FAKE_SD_EXE = path.join(DEBUG, "fake-sd.exe");
+export const OFF_SCREEN_EXE = path.join(DEBUG, "off-screen.exe");
 
 // What must not end up in the distribution: machine files, generated files, packages (linked separately).
 const EXCLUDED = new Set(["node_modules", "runtime", "opencode", "mango-paths.json", "mango-secrets.json", "opencode.json"]);
@@ -112,12 +114,15 @@ export function writeLanguage(data: string, language = "it") {
  * (the catalog does not trust them as agents). `args`: the arguments of the first
  * start (a folder to open). `noModels`: the models folder stays empty, the engines are there: the app opens with no model. `files`: the real size and
  * hash of the file of some models, which the app can then download (from `MANGO_HF_URL`, repository `test/<model>`,
- * revision `main`).
+ * revision `main`). `imageModels`: models that make images, after the fake one that writes, the first the catalog's
+ * default for pictures; each has three files (`<id>-d.gguf`, `<id>-e.gguf`, `<id>-v.safetensors`, 1000 bytes each unless
+ * `bytes` or `files` say otherwise) and `imagePresent` says which of them are already on disk. The image engine is the
+ * fake one of app/crates/images (`fake-sd.exe`), installed for every build.
  *
  * `start` returns when the app is in use: the agent answers (`service.json`) and, if a model is on disk, it is loaded,
  * so a test talks to it at once. `modelLoading`: it returns as soon as the agent answers, while the model still loads.
  */
-type Options = { onRequest?: string[]; window?: boolean; args?: string[]; otherModels?: string[]; bytes?: Record<string, number>; chunkMs?: number; noDebug?: boolean; env?: Record<string, string>; context?: number; noModels?: boolean; modelLoading?: boolean; files?: Record<string, { size: number; sha256: string }> };
+type Options = { onRequest?: string[]; window?: boolean; args?: string[]; otherModels?: string[]; bytes?: Record<string, number>; chunkMs?: number; noDebug?: boolean; env?: Record<string, string>; context?: number; noModels?: boolean; modelLoading?: boolean; files?: Record<string, { size: number; sha256: string }>; imageModels?: string[]; imagePresent?: string[] };
 
 /**
  * Removes the environment's folder (hundreds of MB). Its files (WebView2's above all) stay locked for a few seconds after
@@ -163,11 +168,19 @@ async function startIn(
   fs.mkdirSync(models);
   // The fake general engine sits where the download puts it (`<engines>/llamacpp/<version>-<build>/`), for every
   // build: the test does not depend on the PC's GPUs.
-  fs.writeFileSync(path.join(dist, "mango-engines.json"), JSON.stringify({ llamacpp: { version: "fake", build: {} } }));
+  const pictures = options.imageModels ?? [];
+  fs.writeFileSync(
+    path.join(dist, "mango-engines.json"),
+    JSON.stringify({ llamacpp: { version: "fake", build: {} }, ...(pictures.length ? { sd: { version: "fake", exe: "sd-server.exe", build: {} } } : {}) }),
+  );
+  if (pictures.length && !fs.existsSync(FAKE_SD_EXE)) throw new Error(`${FAKE_SD_EXE} is missing: cargo build -p images`);
   // Every build is there, so the real plan (which looks at this PC's GPUs) finds the engine whatever build it picks.
   for (const b of ["cpu", "vulkan", "cuda-12", "cuda-13"]) {
     fs.mkdirSync(path.join(engines, "llamacpp", `fake-${b}`), { recursive: true });
     fs.copyFileSync(FAKE_ENGINE_EXE, path.join(engines, "llamacpp", `fake-${b}`, "llama-server.exe"));
+    if (!pictures.length) continue;
+    fs.mkdirSync(path.join(engines, "sd", `fake-${b}`), { recursive: true });
+    fs.copyFileSync(FAKE_SD_EXE, path.join(engines, "sd", `fake-${b}`, "sd-server.exe"));
   }
   const others = options.otherModels ?? [];
   const empty = options.noModels === true;
@@ -186,15 +199,30 @@ async function startIn(
       ...(onRequest ? { on_request: true } : {}),
     };
   };
+  const pictureModel = (id: string) => {
+    const file = options.files?.[id];
+    const names = { diffusion: `${id}-d.gguf`, encoder: `${id}-e.gguf`, vae: `${id}-v.safetensors` };
+    return {
+      label: `Picture ${id}`,
+      license: "Apache-2.0",
+      about: { it: `Disegna ${id}.`, en: `Draws ${id}.` },
+      image: { ...names, steps: 4, cfg_scale: 1.0 },
+      ...(file ? { repo: `test/${id}`, revision: "main" } : {}),
+      files: Object.values(names).map((name) => ({ path: name, size: file?.size ?? options.bytes?.[id] ?? 1000, sha256: file?.sha256 ?? "0".repeat(64) })),
+    };
+  };
+  for (const id of options.imagePresent ?? []) for (const name of ["d.gguf", "e.gguf", "v.safetensors"]) fs.writeFileSync(path.join(models, `${id}-${name}`), "");
   fs.writeFileSync(
     path.join(dist, "mango-models.json"),
     JSON.stringify({
       ctx: options.context ?? 16384,
       default: "fake",
       order: ["fake", ...others],
+      ...(pictures.length ? { image_default: pictures[0] } : {}),
       models: {
         fake: fakeModel("fake.gguf", "Fake model"),
         ...Object.fromEntries(others.map((id) => [id, fakeModel(`${id}.gguf`, `Model ${id}`, options.bytes?.[id], options.onRequest?.includes(id))])),
+        ...Object.fromEntries(pictures.map((id) => [id, pictureModel(id)])),
       },
     }),
   );
@@ -225,6 +253,8 @@ async function startIn(
     FAKE_ENGINE_CHUNK_MS: String(options.chunkMs ?? 20),
     // The fake models have a plan on this PC's real cards: what another program holds there must not keep them from starting.
     MANGO_ROOM_CHECK_OFF: "1",
+    // Where the app makes a project, and the folder of the conversations without one: never the user's Documents.
+    MANGO_PROJECTS_FOLDER: path.join(root, "projects"),
     ...(cdp ? { WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${cdp}` } : {}),
     ...options.env,
   } as Record<string, string>;

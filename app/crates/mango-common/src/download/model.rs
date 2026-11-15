@@ -2,7 +2,7 @@
 //! `files` from Hugging Face, at a fixed revision, into `<models>/<path>`. Only the files the engine the model will
 //! run on needs are downloaded (`catalog::file_for_engine`).
 
-use super::{download_stoppable, hugging_face_url, part_path, sha256_file, with_suffix, RemoteFile};
+use super::{download_stoppable, enough_space, free_space, hugging_face_url, part_path, sha256_file, with_suffix, RemoteFile};
 use crate::catalog::file_for_engine;
 use crate::{tr, user_text, Paths};
 use anyhow::{bail, Context, Result};
@@ -219,6 +219,13 @@ fn install_from(paths: &Paths, base: &str, model: &str, engine: &str, stop: &Ato
         }
     }
 
+    // Room for the whole model before its first file: one of several files must not fill the disk and stop at the next.
+    let left: u64 = to_do.iter().map(|(dest, remote)| remote.size.saturating_sub(fs::metadata(part_path(dest)).map_or(0, |m| m.len()))).sum();
+    if left > 0 {
+        fs::create_dir_all(&paths.models).with_context(|| user_text(&tr!("Non riesco a creare la cartella dei modelli.", "I can't create the models folder."), paths.models.display()))?;
+        enough_space(left, free_space(&paths.models)?, &paths.models)?;
+    }
+
     for (dest, remote) in &to_do {
         download_stoppable(remote, dest, stop, &mut |done, _| progress(before + done, total))?;
         write_verified(dest, &remote.sha256)?;
@@ -322,6 +329,25 @@ mod tests {
         install_from(&paths, &s.url, "m", "llamacpp", &AtomicBool::new(false), &mut |a, t| seen.push((a, t))).unwrap();
         assert_eq!(s.requests().len(), 2);
         assert!(seen.is_empty());
+    }
+
+    /// A model of several files asks for the room of all of them before the first: on a disk that cannot hold the whole
+    /// model nothing is asked from the network and nothing is left behind.
+    #[test]
+    fn a_model_the_disk_cannot_hold_downloads_none_of_its_files() {
+        let (g, mm) = (data(1_500_000, 0), data(400_000, 5));
+        let s = server(&g, &mm);
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = dist(tmp.path(), &g, &mm);
+        // the second file as big as no disk is
+        let catalog = paths.dist.join("mango-models.json");
+        fs::write(&catalog, fs::read_to_string(&catalog).unwrap().replace(&format!("\"size\": {}", mm.len()), &format!("\"size\": {}", 1u64 << 60))).unwrap();
+
+        let err = install_from(&paths, &s.url, "m", "llamacpp", &AtomicBool::new(false), &mut |_, _| {}).unwrap_err();
+        let no_space = err.chain().find_map(|c| c.downcast_ref::<super::super::NoSpace>()).unwrap_or_else(|| panic!("{err:#}"));
+        assert!(no_space.needed > 1 << 60, "{}", no_space.needed);
+        assert!(s.requests().is_empty(), "nothing is asked before the whole model is known to fit");
+        assert!(!paths.models.join("m-GGUF/m.gguf").exists() && !paths.models.join("m-GGUF/m.gguf.part").exists());
     }
 
     /// A download stopped halfway keeps what has arrived: the next call goes on from there, and `discard_partial`

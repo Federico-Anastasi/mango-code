@@ -23,6 +23,7 @@ type Kind =
   | "todo"
   | "skill"
   | "question"
+  | "picture"
   | "browser"
   | "document"
   | "documentRead"
@@ -46,6 +47,7 @@ const KINDS: Record<string, Kind> = {
   todowrite: "todo",
   skill: "skill",
   question: "question",
+  image_generate: "picture",
   "web-search_search": "websearch",
   "web-search_research": "websearch",
   "web-search_search_images": "images",

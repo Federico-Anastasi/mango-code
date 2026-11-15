@@ -1,9 +1,12 @@
-import { beforeAll, beforeEach, describe, expect, mock, test } from "bun:test"
+import { afterAll, beforeAll, beforeEach, describe, expect, mock, test } from "bun:test"
+import { createServer } from "node:http"
 import { createStore } from "solid-js/store"
 import type { Prompt, PromptStore } from "@/context/prompt"
 import type { ModelSelection } from "@/context/local"
 
 let createPromptSubmit: typeof import("./submit").createPromptSubmit
+let Worktree: typeof import("@/utils/worktree").Worktree
+let ServerScope: typeof import("@/utils/server-scope").ServerScope
 
 const createdClients: string[] = []
 const createdSessions: string[] = []
@@ -37,7 +40,42 @@ let params: { id?: string } = {}
 let search: { draftId?: string } = {}
 let selected = "/repo/worktree-a"
 let variant: string | undefined
+const pictureKept: unknown[] = []
+/** What was put in the box after it was emptied. */
+const promptSets: Prompt[] = []
+/** What the conversation was said to be doing, in order. */
+const statuses: string[] = []
+/** The sentence the agent refuses a picture with; none when it takes it. */
+let pictureRefusal: string | undefined
+/** What the agent's picture route got, and the address it listens on. */
+const pictureRoutes: Array<{ url: string; method: string; type: string | null; body: unknown }> = []
+// A plain http server: the page's own Response (the test's DOM) is not the one Bun.serve takes.
+const pictureAgent = createServer((request, response) => {
+  // the page's fetch asks first whether it may (a different origin): it may
+  const open = { "access-control-allow-origin": "*", "access-control-allow-headers": "*", "access-control-allow-methods": "*" }
+  if (request.method === "OPTIONS") return void response.writeHead(204, open).end()
+  let body = ""
+  request.on("data", (chunk) => (body += chunk))
+  request.on("end", () => {
+    pictureRoutes.push({
+      url: request.url ?? "",
+      method: request.method ?? "",
+      type: request.headers["content-type"] ?? null,
+      body: JSON.parse(body),
+    })
+    if (pictureRefusal)
+      return void response
+        .writeHead(409, { ...open, "content-type": "application/json" })
+        .end(JSON.stringify({ data: { message: pictureRefusal } }))
+    response.writeHead(200, { ...open, "content-type": "application/json" }).end(JSON.stringify({ info: {}, parts: [] }))
+  })
+})
+await new Promise<void>((ok) => pictureAgent.listen(0, "127.0.0.1", ok))
+const pictureAddress = `http://127.0.0.1:${(pictureAgent.address() as { port: number }).port}`
+afterAll(() => void pictureAgent.close())
 let createSessionGate: Promise<void> | undefined
+/** The folder name of the worktree the server makes: its state outlives a test, so a test that waits on one names its own. */
+let worktreeName = "new"
 
 let promptValue: Prompt = [{ type: "text", content: "ls", start: 0, end: 2 }]
 const [promptStore, setPromptStore] = createStore<PromptStore>({
@@ -55,8 +93,12 @@ const prompt = {
     current: () => undefined,
     set: () => undefined,
   },
+  picture: {
+    current: () => undefined,
+    set: (pick: unknown) => void pictureKept.push(pick),
+  },
   reset: () => undefined,
-  set: () => undefined,
+  set: (value: Prompt) => void promptSets.push(value),
   context: {
     add: () => undefined,
     remove: () => undefined,
@@ -108,13 +150,15 @@ const clientFor = (directory: string) => {
       abort: async () => ({ data: undefined }),
     },
     worktree: {
-      create: async () => ({ data: { directory: `${directory}/new` } }),
+      create: async () => ({ data: { directory: `${directory}/${worktreeName}` } }),
     },
   }
 }
 
 beforeAll(async () => {
   const rootClient = clientFor("/repo/main")
+  // only the encoding of a folder in an address is replaced: the rest of the module stays as it is
+  const encode = { ...(await import("@opencode-ai/core/util/encode")) }
 
   mock.module("@solidjs/router", () => ({
     useNavigate: () => () => undefined,
@@ -132,10 +176,12 @@ beforeAll(async () => {
 
   mock.module("@opencode-ai/ui/toast", () => ({
     Toast: { Region: () => null },
+    toaster: { show: () => 0, dismiss: () => undefined },
     showToast: () => 0,
   }))
 
   mock.module("@opencode-ai/core/util/encode", () => ({
+    ...encode,
     base64Encode: (value: string) => value,
   }))
 
@@ -197,6 +243,10 @@ beforeAll(async () => {
     },
   }))
 
+  mock.module("@/context/server-sdk", () => ({
+    useServerSDK: () => () => ({ url: pictureAddress, server: { http: {} } }),
+  }))
+
   mock.module("@/context/sync", () => ({
     useSync: () => () => ({
       data: { command: commands },
@@ -225,7 +275,9 @@ beforeAll(async () => {
     useServerSync: () => () => ({
       session: {
         remember: () => undefined,
-        set: () => undefined,
+        set: (key: string, _id: string, value: { type?: string }) => {
+          if (key === "session_status" && value.type) statuses.push(value.type)
+        },
         sync: async () => {
           serverSessionSyncs++
         },
@@ -265,6 +317,8 @@ beforeAll(async () => {
 
   const mod = await import("./submit")
   createPromptSubmit = mod.createPromptSubmit
+  Worktree = (await import("@/utils/worktree")).Worktree
+  ServerScope = (await import("@/utils/server-scope")).ServerScope
 })
 
 beforeEach(() => {
@@ -287,8 +341,121 @@ beforeEach(() => {
   selected = "/repo/worktree-a"
   variant = undefined
   createSessionGate = undefined
+  worktreeName = "new"
+  pictureKept.length = 0
+  promptSets.length = 0
+  statuses.length = 0
+  pictureRefusal = undefined
+  pictureRoutes.length = 0
   serverSessionSyncs = 0
   for (const key of Object.keys(storedSessions)) delete storedSessions[key]
+})
+
+describe("prompt submit of a picture", () => {
+  const asked = { request: "a red Vespa", format: "portrait", size: "large", model: "pic1" } as const
+  const submitWith = (picture: { on: boolean; request: unknown }, extra: Record<string, unknown> = {}) =>
+    createPromptSubmit({
+      prompt,
+      info: () => ({ id: "session-1" }),
+      imageAttachments: () => [],
+      commentCount: () => 0,
+      mode: () => "normal",
+      working: () => false,
+      editor: () => undefined,
+      queueScroll: () => undefined,
+      promptLength: (value) => value.reduce((sum, part) => sum + ("content" in part ? part.content.length : 0), 0),
+      addToHistory: () => undefined,
+      resetHistoryNavigation: () => undefined,
+      setMode: () => undefined,
+      setPopover: () => undefined,
+      onSubmit: () => undefined,
+      picture: {
+        on: () => picture.on,
+        request: () => picture.request as typeof asked | undefined,
+        pick: () => ({ format: "portrait" }),
+        hold: () => () => undefined,
+      },
+      ...extra,
+    })
+  const send = (submit: ReturnType<typeof submitWith>) =>
+    submit.handleSubmit({ preventDefault: () => undefined } as unknown as Event)
+
+  test("the words go to the agent's route for a picture, not to the model as a message", async () => {
+    params = { id: "session-1" }
+    await send(submitWith({ on: true, request: asked }))
+    await Bun.sleep(50)
+    expect(pictureRoutes).toEqual([
+      { url: "/session/session-1/image?directory=%2Frepo%2Fmain", method: "POST", type: "application/json", body: asked },
+    ])
+    expect(sentPrompts).toEqual([])
+    expect(optimistic).toEqual([])
+  })
+
+  test("a new conversation is created as for a message and opens on the picture side", async () => {
+    await send(submitWith({ on: true, request: asked }, { info: () => undefined }))
+    await Bun.sleep(50)
+    expect(createdSessions).toEqual(["/repo/main"])
+    expect(pictureKept).toEqual([{ format: "portrait", mode: "picture" }])
+    expect(pictureRoutes.map((route) => route.url)).toEqual(["/session/session-1/image?directory=%2Frepo%2Fmain"])
+  })
+
+  test("an agent that refuses the picture gives the words back to the box, and the conversation is not left working", async () => {
+    params = { id: "session-1" }
+    pictureRefusal = "No model that draws is on this computer."
+    promptValue = [{ type: "text", content: "a red Vespa", start: 0, end: 11 }]
+    await send(submitWith({ on: true, request: asked }))
+    await Bun.sleep(50)
+    expect(pictureRoutes).toHaveLength(1)
+    expect(statuses).toEqual(["busy", "idle"])
+    expect(promptSets).toEqual([[{ type: "text", content: "a red Vespa", start: 0, end: 11 }]])
+  })
+
+  test("an attachment made on the text side is not part of the picture and stays in the box", async () => {
+    params = { id: "session-1" }
+    const attached = { type: "image", id: "a1", filename: "photo.png", mime: "image/png", blob: {} } as unknown as Prompt[number]
+    promptValue = [{ type: "text", content: "a red Vespa", start: 0, end: 11 }, attached]
+    await send(submitWith({ on: true, request: asked }))
+    await Bun.sleep(50)
+    expect(pictureRoutes.map((route) => route.body)).toEqual([asked])
+    expect(promptSets).toEqual([[{ type: "text", content: "", start: 0, end: 0 }, attached]])
+  })
+
+  test("in a new worktree the picture is asked when the worktree is ready, in its folder", async () => {
+    worktreeName = "picture-ready"
+    await send(submitWith({ on: true, request: asked }, { info: () => undefined, newSessionWorktree: () => "create" }))
+    await Bun.sleep(50)
+    expect(createdSessions).toEqual(["/repo/main/picture-ready"])
+    expect(pictureRoutes).toEqual([])
+    Worktree.ready(ServerScope.local, "/repo/main/picture-ready")
+    await Bun.sleep(50)
+    expect(pictureRoutes.map((route) => route.url)).toEqual([
+      "/session/session-1/image?directory=%2Frepo%2Fmain%2Fpicture-ready",
+    ])
+  })
+
+  test("a worktree that could not be made asks for no picture", async () => {
+    worktreeName = "picture-failed"
+    await send(submitWith({ on: true, request: asked }, { info: () => undefined, newSessionWorktree: () => "create" }))
+    Worktree.failed(ServerScope.local, "/repo/main/picture-failed", "no room on the disk")
+    await Bun.sleep(50)
+    expect(pictureRoutes).toEqual([])
+  })
+
+  test("with the picture side off the words go to the model as ever", async () => {
+    params = { id: "session-1" }
+    await send(submitWith({ on: false, request: asked }))
+    await Bun.sleep(50)
+    expect(pictureRoutes).toEqual([])
+    expect(sentPrompts).toEqual(["/repo/main"])
+  })
+
+  test("words without a model that draws send nothing", async () => {
+    params = { id: "session-1" }
+    await send(submitWith({ on: true, request: undefined }))
+    await Bun.sleep(50)
+    expect(pictureRoutes).toEqual([])
+    expect(sentPrompts).toEqual([])
+  })
 })
 
 describe("prompt submit worktree selection", () => {

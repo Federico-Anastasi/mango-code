@@ -3,6 +3,7 @@
 // engine of another PC, the cloud (OpenRouter and the Team) and Hugging Face. A card opens below itself what it needs (the
 // QR, the codes, the field for a code or a key). Everything goes through the bridge, which only the app's window has:
 // elsewhere (the phone, a browser) the cards say how things are and «si fa dal computer».
+import { Tag } from "@opencode-ai/ui/v2/badge-v2"
 import { ButtonV2 } from "@opencode-ai/ui/v2/button-v2"
 import { Switch } from "@opencode-ai/ui/v2/switch-v2"
 import { TextInputV2 } from "@opencode-ai/ui/v2/text-input-v2"
@@ -13,6 +14,7 @@ import type { MangoEngineShareState, MangoPhoneState } from "@/utils/mango-deskt
 import { PhoneAccess } from "../settings-v2/phone"
 import { SettingsTeamV2 } from "../settings-v2/team"
 import { createCommands, useControl } from "./control"
+import { PaneHeader } from "./header"
 
 type CardId = "phone" | "share" | "remote" | "cloud" | "token"
 
@@ -23,13 +25,13 @@ export const SettingsLinks: Component = () => {
   const card = (id: CardId) => ({ open: open() === id, onOpen: () => toggle(id) })
   return (
     <div class="settings-v2-tab-body" data-component="settings-links">
-      <p class="settings-page-note">{language.t("settings.links.lead")}</p>
+      <PaneHeader title={language.t("settings.section.links")} lead={language.t("settings.links.lead")} />
       <Show when={!window.__MANGO_DESKTOP__}>
         <p class="settings-page-note" data-slot="settings-pc-only">
           {language.t("settings.pcOnly")}
         </p>
       </Show>
-      <div class="settings-page-card-grid">
+      <div class="settings-page-box">
         <PhoneCard {...card("phone")} />
         <ShareCard {...card("share")} />
         <RemoteCard {...card("remote")} />
@@ -43,8 +45,9 @@ export const SettingsLinks: Component = () => {
 type CardProps = { open: boolean; onOpen: () => void }
 
 /**
- * A card: title (with its switch, if it has one), a line, and at the foot how it is and what can be done. `pill`: how it
- * is; without the bridge the page cannot read it, and the foot says nothing rather than «off» or «no key».
+ * A row of the card: the title with how it is, a line under it, and on the right what can be done and its switch, if it
+ * has one; what it needs opens below. `pill`: how it is; without the bridge the page cannot read it, and the row says
+ * nothing rather than «off» or «no key».
  */
 const LinkCard: Component<{
   id: CardId
@@ -52,51 +55,48 @@ const LinkCard: Component<{
   line: string
   open: boolean
   switch?: { checked: boolean; disabled: boolean; onChange: (checked: boolean) => void }
-  pill?: { text: string; tone?: "ok" | "bad" }
-  action?: { label: string; disabled: boolean; onClick: () => void }
+  pill?: { text: string; tone?: "ready" | "error" }
+  action?: { label: string; disabled: boolean; onClick: () => void; destructive?: boolean }
   error?: string
   children?: JSX.Element
 }> = (props) => (
   <div class="settings-page-link-card" data-link-card={props.id} data-open={props.open ? "" : undefined}>
-    <div class="settings-page-link-card-head">
-      <span data-slot="settings-v2-row-title">{props.title}</span>
-      <Show when={props.switch}>
-        {(control) => (
-          <span data-action={`settings-${props.id}-switch`}>
-            <Switch
-              checked={control().checked}
-              disabled={control().disabled}
-              onChange={control().onChange}
-              aria-label={props.title}
-            />
-          </span>
-        )}
-      </Show>
+    <div class="settings-page-row">
+      <div class="settings-page-row-copy">
+        <span class="settings-page-row-heading">
+          <span data-slot="settings-v2-row-title">{props.title}</span>
+          <Show when={props.pill}>{(pill) => <Tag variant={pill().tone}>{pill().text}</Tag>}</Show>
+        </span>
+        <span class="settings-page-row-line">{props.line}</span>
+      </div>
+      <div class="settings-page-row-meta">
+        <Show when={props.action}>
+          {(action) => (
+            <ButtonV2
+              variant={action().destructive ? "danger" : "ghost"}
+              disabled={action().disabled}
+              onClick={action().onClick}
+              data-action={`settings-${props.id}-open`}
+            >
+              {action().label}
+            </ButtonV2>
+          )}
+        </Show>
+        <Show when={props.switch}>
+          {(control) => (
+            <span data-action={`settings-${props.id}-switch`}>
+              <Switch
+                checked={control().checked}
+                disabled={control().disabled}
+                onChange={control().onChange}
+                aria-label={props.title}
+              />
+            </span>
+          )}
+        </Show>
+      </div>
     </div>
-    <p class="settings-page-row-line">{props.line}</p>
-    <div class="settings-page-link-card-foot">
-      <Show when={props.pill}>
-        {(pill) => (
-          <span class="settings-page-pill" data-tone={pill().tone}>
-            {pill().text}
-          </span>
-        )}
-      </Show>
-      <Show when={props.action}>
-        {(action) => (
-          <ButtonV2
-            variant="ghost"
-            class="ml-auto"
-            disabled={action().disabled}
-            onClick={action().onClick}
-            data-action={`settings-${props.id}-open`}
-          >
-            {action().label}
-          </ButtonV2>
-        )}
-      </Show>
-    </div>
-    <Show when={props.error}>{(message) => <p class="settings-page-error">{message()}</p>}</Show>
+    <Show when={props.error}>{(message) => <p class="settings-page-error settings-page-row-note">{message()}</p>}</Show>
     <Show when={props.open && props.children}>
       <div class="settings-page-link-card-detail">{props.children}</div>
     </Show>
@@ -137,7 +137,7 @@ const PhoneCard: Component<CardProps> = (props) => {
       pill={
         phone()
           ? state()?.enabled
-            ? { text: language.t("settings.links.on"), tone: "ok" }
+            ? { text: language.t("settings.links.on"), tone: "ready" }
             : { text: language.t("settings.links.off") }
           : undefined
       }
@@ -193,7 +193,7 @@ const ShareCard: Component<CardProps> = (props) => {
       pill={
         share()
           ? state()?.enabled
-            ? { text: language.t("settings.links.on"), tone: "ok" }
+            ? { text: language.t("settings.links.on"), tone: "ready" }
             : { text: language.t("settings.links.off") }
           : undefined
       }
@@ -287,7 +287,7 @@ const RemoteCard: Component<CardProps> = (props) => {
       open={props.open}
       pill={
         using()
-          ? { text: language.t("settings.links.remote.using"), tone: "ok" }
+          ? { text: language.t("settings.links.remote.using"), tone: "ready" }
           : { text: language.t("settings.links.remote.none") }
       }
       action={{
@@ -327,7 +327,7 @@ const RemoteCard: Component<CardProps> = (props) => {
                 disabled={!remote() || commands.busy("remote")}
                 autocomplete="off"
               />
-              <ButtonV2 type="submit" variant="contrast" disabled={!remote() || commands.busy("remote")}>
+              <ButtonV2 type="submit" variant="neutral" disabled={!remote() || commands.busy("remote")}>
                 {language.t("settings.links.remote.go")}
               </ButtonV2>
             </form>
@@ -380,7 +380,7 @@ const CloudCard: Component<CardProps> = (props) => {
       pill={
         team()
           ? info()?.key
-            ? { text: language.t("settings.links.cloud.key"), tone: "ok" }
+            ? { text: language.t("settings.links.cloud.key"), tone: "ready" }
             : { text: language.t("settings.links.cloud.noKey") }
           : undefined
       }
@@ -431,7 +431,7 @@ const TokenCard: Component<CardProps> = (props) => {
       pill={
         token()
           ? saved()
-            ? { text: language.t("settings.token.savedPill"), tone: "ok" }
+            ? { text: language.t("settings.token.savedPill"), tone: "ready" }
             : { text: language.t("settings.token.none") }
           : undefined
       }
@@ -440,6 +440,7 @@ const TokenCard: Component<CardProps> = (props) => {
         saved()
           ? {
               label: language.t("settings.token.remove"),
+              destructive: true,
               disabled: !token() || commands.busy("token"),
               onClick: () => void work(() => token()?.remove()),
             }
@@ -469,7 +470,7 @@ const TokenCard: Component<CardProps> = (props) => {
           disabled={commands.busy("token")}
           autocomplete="new-password"
         />
-        <ButtonV2 type="submit" variant="contrast" disabled={commands.busy("token") || !value().trim()}>
+        <ButtonV2 type="submit" variant="neutral" disabled={commands.busy("token") || !value().trim()}>
           {language.t("settings.token.save")}
         </ButtonV2>
       </form>

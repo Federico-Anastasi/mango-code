@@ -106,7 +106,8 @@ const open = async (section: string) => {
 test("Computer: the cards, the processor and the engine, and a choice saved for small models", async () => {
   await open("computer");
   await waitFor(`!!document.querySelector('[data-component="settings-computer"] [data-component="settings-v2-list"]')`, 30_000);
-  const text: string = await p.evaluate(`document.querySelector('[data-component="settings-computer"]').innerText`);
+  // as written: the stylesheet shows the titles of the groups in capitals
+  const text: string = await p.evaluate(`document.querySelector('[data-component="settings-computer"]').textContent`);
   for (const said of ["Schede video", "Di serie, per un modello che sta in una scheda", "Processore e memoria", "Motore", "è quello di questa versione di Mango Code"])
     expect(text, said).toContain(said);
   await shot("computer");

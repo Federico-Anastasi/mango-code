@@ -7,6 +7,8 @@
 //!   of the image encoder across the GPUs (`split.rs`);
 //! - otherwise the **general plan** (`general.rs`): official llama.cpp with the arguments computed from the
 //!   hardware.
+//!
+//! A model that makes images has a plan of its own (`image.rs`), with the image engine.
 
 pub mod other_models;
 pub mod choices;
@@ -14,6 +16,7 @@ mod catalog;
 mod general;
 mod gguf;
 pub mod hardware;
+mod image;
 pub mod memory;
 mod profiles;
 #[cfg(test)]
@@ -24,6 +27,7 @@ mod view;
 
 pub use catalog::{catalog, catalog_for, default_to_save, download_of, startup_model, DownloadPlan, Origin, ModelEntry};
 pub use general::Placement;
+pub use image::{image_models, image_plan, image_plan_for, image_views, Draws, ImageCatalog, ImageEntry, ImagePlan, ImageView, ImageViews};
 pub use view::{after_failure, taken_before_start, CardsTaken, computer_view, engine_label, engine_updates, models_view, recommended, AfterFailure, ComputerView, EngineUpdate, Limits, ModelView, Recommendation, Verdict, Where};
 pub use speed::{cpu_speed, Speed};
 pub use hardware::{gpu_memory, detect, choose_build, Cpu, Hardware, Vendor, Gpu};
@@ -41,7 +45,7 @@ pub struct EnginePlan {
     /// Model key in mango-models.json (e.g. "toq").
     pub key: String,
     pub spec: ProcSpec,
-    /// E.g. "http://127.0.0.1:8080".
+    /// E.g. "http://127.0.0.1:47080".
     pub url: String,
     /// Model name for the interface (e.g. "TOQ-v1").
     pub label: String,
@@ -131,6 +135,9 @@ fn build_plan(
     let cfg = model_cfg(file, key)?;
     if cfg.cloud.is_some() {
         bail!("{}", tr!("Il modello «{key}» è un modello online, non si avvia in locale.", "The model «{key}» is an online model, it doesn't start locally."));
+    }
+    if cfg.image.is_some() {
+        bail!("{}", tr!("Il modello «{key}» fa immagini: non si avvia come un modello che scrive.", "The model «{key}» makes images: it doesn't start as a model that writes."));
     }
     let scope = choices::read(paths)?.scope(key);
 

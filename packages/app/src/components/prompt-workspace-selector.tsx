@@ -116,7 +116,7 @@ export function PromptGitStatus(props: { branch?: string; noGit?: boolean }) {
             class="min-w-0 max-w-[220px]"
             contentClass="max-w-[calc(100vw-32px)] break-all"
           >
-            <div class="flex h-7 min-w-0 max-w-[220px] items-center gap-1.5 px-2 text-[13px] font-[440] leading-5 tracking-[-0.04px]">
+            <div class="flex h-7 min-w-0 max-w-[220px] items-center gap-1.5 px-2 text-[13px] font-normal leading-5 tracking-[-0.04px]">
               <Icon name="branch" size="small" class="shrink-0 text-v2-icon-icon-muted" />
               <span class="min-w-0 truncate">{value()}</span>
             </div>

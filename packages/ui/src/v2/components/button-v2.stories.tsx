@@ -4,7 +4,7 @@ const docs = `### Overview
 Button v2 with visual variants and three sizes.
 
 ### API
-- \`variant\`: "neutral" | "danger" | "warning" | "contrast" | "ghost" | "ghost-muted" | "loading".
+- \`variant\`: "primary" | "neutral" | "danger" | "warning" | "outline" | "contrast" | "ghost" | "ghost-muted" | "loading".
 - \`size\`: "small" | "normal" | "large".
 - \`icon\`: Optional icon name.
 - Inherits Kobalte Button props and native button attributes.
@@ -60,9 +60,9 @@ export const Variants = {
         "flex-wrap": "wrap",
       }}
     >
+      <ButtonV2 variant="primary">Primary</ButtonV2>
       <ButtonV2 variant="neutral">Neutral</ButtonV2>
       <ButtonV2 variant="danger">Danger</ButtonV2>
-      <ButtonV2 variant="warning">Warning</ButtonV2>
       <ButtonV2 variant="contrast">Contrast</ButtonV2>
       <ButtonV2 variant="ghost">Ghost</ButtonV2>
       <ButtonV2 variant="ghost-muted" icon="edit">
@@ -118,7 +118,7 @@ export const Icon = {
 
 export const AllStates = {
   render: () => {
-    const variants = ["neutral", "danger", "warning", "contrast", "ghost", "ghost-muted", "loading"] as const
+    const variants = ["primary", "neutral", "danger", "warning", "contrast", "ghost", "ghost-muted", "loading"] as const
     const states = ["default", "hover", "pressed", "focus", "disabled"] as const
     const toTitleCase = (value: string) => value.charAt(0).toUpperCase() + value.slice(1)
     return (

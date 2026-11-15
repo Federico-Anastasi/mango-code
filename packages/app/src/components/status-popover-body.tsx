@@ -427,7 +427,7 @@ export function StatusPopoverBody(props: { shown: Accessor<boolean> }) {
                             "bg-icon-success-base": status() === "connected",
                             "bg-icon-critical-base": status() === "failed",
                             "bg-border-weak-base": status() === "disabled",
-                            "bg-icon-warning-base":
+                            "bg-[var(--mango-text-faint)]":
                               status() === "needs_auth" || status() === "needs_client_registration",
                           }}
                         />

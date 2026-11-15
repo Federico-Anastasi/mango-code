@@ -94,6 +94,38 @@ describe("tool.write", () => {
         expect(content).toBe("relative content")
       }),
     )
+
+    it.instance("writes a file outside the project and says which folder the project is", () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const folder = `${test.directory}-outside`
+        const filepath = path.join(folder, "page.html")
+        const result = yield* run({ filePath: filepath, content: "outside" })
+        const content = yield* Effect.promise(() => fs.readFile(filepath, "utf-8"))
+        yield* Effect.promise(() => fs.rm(folder, { recursive: true, force: true }))
+
+        expect(content).toBe("outside")
+        expect(result.output).toBe(
+          `Wrote file successfully, outside the project folder: ${filepath}. The project folder is ${test.directory}.`,
+        )
+        expect(result.metadata.filepath).toBe(filepath)
+      }),
+    )
+
+    it.instance("takes a path that starts with a slash from the project's drive, and records it whole", () =>
+      Effect.gen(function* () {
+        if (process.platform !== "win32") return
+        const test = yield* TestInstance
+        // the project folder as a model used to Linux writes it: forward slashes, no drive
+        const rooted = `${test.directory.slice(2).replaceAll("\\", "/")}/rooted.txt`
+        const result = yield* run({ filePath: rooted, content: "rooted" })
+
+        expect(result.metadata.filepath).toBe(path.join(test.directory, "rooted.txt"))
+        expect(result.output).toBe("Wrote file successfully.")
+        const content = yield* Effect.promise(() => fs.readFile(path.join(test.directory, "rooted.txt"), "utf-8"))
+        expect(content).toBe("rooted")
+      }),
+    )
   })
 
   describe("existing file overwrite", () => {

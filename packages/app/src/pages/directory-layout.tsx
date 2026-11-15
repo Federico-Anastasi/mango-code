@@ -14,6 +14,11 @@ import { sessionHref } from "@/utils/session-route"
 import { useServerSync } from "@/context/server-sync"
 import { usePlatform } from "@/context/platform"
 import { phoneProjectFiles } from "@/utils/phone-files"
+import { useServerSDK } from "@/context/server-sdk"
+import { useMango } from "@/context/mango"
+import { openPictureModels } from "@/components/prompt-picture"
+import { askPicture } from "@/utils/mango-picture"
+import { authHeaders } from "@/utils/server"
 
 export function DirectoryDataProvider(
   props: ParentProps<{
@@ -28,6 +33,9 @@ export function DirectoryDataProvider(
   const sync = useSync()
   const serverSync = useServerSync()
   const platform = usePlatform()
+  const language = useLanguage()
+  const serverSDK = useServerSDK()
+  const mango = useMango()
   const directory = () => (typeof props.directory === "function" ? props.directory() : props.directory)
   const slug = createMemo(() => base64Encode(directory()))
   const href = (sessionID: string) => {
@@ -70,6 +78,36 @@ export function DirectoryDataProvider(
           onNavigateToSession={(sessionID: string) => navigate(href(sessionID))}
           onSessionHref={href}
           files={platform.projectFiles ?? phoneProjectFiles(directory)}
+          pictures={{
+            chooseModel: () => openPictureModels(mango),
+            busy: () => {
+              const id = params.id
+              return !id || (sync().data.session_status[id]?.type ?? "idle") !== "idle"
+            },
+            // A picture made again is the user's own turn of the conversation, as one asked in the box.
+            again: async (asked) => {
+              const id = params.id
+              if (!id) return
+              serverSync().session.set("session_status", id, { type: "busy" })
+              const release = mango.pictures.enter()
+              try {
+                await askPicture(
+                  { url: serverSDK().url, headers: authHeaders(serverSDK().server.http) },
+                  { sessionID: id, directory },
+                  asked,
+                )
+              } catch (error) {
+                serverSync().session.set("session_status", id, { type: "idle" })
+                showToast({
+                  variant: "error",
+                  title: language.t("prompt.toast.promptSendFailed.title"),
+                  description: error instanceof Error ? error.message : language.t("common.requestFailed"),
+                })
+              } finally {
+                release()
+              }
+            },
+          }}
         >
           <LocalProvider>{props.children}</LocalProvider>
         </DataProvider>

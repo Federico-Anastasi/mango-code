@@ -6,35 +6,26 @@
   padding: 0 2px 2px 0;
   width: 280px;
   min-height: 80px;
-  border: 0;
-  border-radius: 6px;
-  outline: 1px solid transparent;
-  outline-offset: 0;
-  background:
-    linear-gradient(180deg, var(--v2-alpha-light-2) 0%, var(--v2-alpha-light-0) 100%), var(--v2-background-bg-base);
-  box-shadow: var(--v2-elevation-button-neutral);
+  border: 1px solid var(--mango-line);
+  border-radius: 7px;
+  outline: none;
+  background: var(--mango-ground);
   flex: none;
   align-self: stretch;
-  transition:
-    background 85ms ease-out,
-    outline-color 85ms ease-out,
-    box-shadow 85ms ease-out;
+  transition: border-color 150ms;
 }
 
 [data-component="textarea-v2"]:where(:hover):not([data-disabled], [data-invalid]):not(:focus-within) {
-  background:
-    linear-gradient(0deg, var(--v2-overlay-simple-overlay-hover), var(--v2-overlay-simple-overlay-hover)),
-    linear-gradient(180deg, var(--v2-alpha-light-2) 0%, var(--v2-alpha-light-0) 100%), var(--v2-background-bg-base);
+  border-color: var(--mango-text-faint);
 }
 
 [data-component="textarea-v2"]:where(:focus-within):not([data-disabled], [data-invalid]) {
-  outline-color: var(--v2-border-border-focus);
-  box-shadow: none;
+  outline: 2px solid var(--mango-action-text);
+  outline-offset: 2px;
 }
 
 [data-component="textarea-v2"]:where([data-invalid]):not([data-disabled]) {
-  outline-color: var(--v2-state-fg-danger);
-  box-shadow: none;
+  border-color: var(--mango-error);
 }
 
 [data-component="textarea-v2"]:where([data-disabled]) {
@@ -54,25 +45,24 @@
   background: transparent;
   outline: none;
   resize: vertical;
+  font-family: var(--mango-font-text);
   font-style: normal;
-  font-weight: 440;
+  font-weight: 400;
   font-size: 13px;
   line-height: 1.35;
-  letter-spacing: -0.04px;
-  color: var(--v2-text-text-base);
-  font-variation-settings: "slnt" 0;
+  color: var(--mango-text);
 }
 
 [data-component="textarea-v2"] [data-slot="textarea-v2-textarea"]::placeholder {
-  color: var(--v2-text-text-faint);
+  color: var(--mango-text-faint);
 }
 
 [data-component="textarea-v2"][data-invalid]:not([data-disabled]) [data-slot="textarea-v2-textarea"] {
-  color: var(--v2-state-fg-danger);
-  caret-color: var(--v2-state-fg-danger);
+  color: var(--mango-error);
+  caret-color: var(--mango-error);
 }
 
 [data-component="textarea-v2"][data-invalid]:not([data-disabled]) [data-slot="textarea-v2-textarea"]::placeholder {
-  color: var(--v2-state-fg-danger);
+  color: var(--mango-error);
   opacity: 1;
 }

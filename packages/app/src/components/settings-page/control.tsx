@@ -17,6 +17,7 @@ export const { use: useControl, provider: ControlProvider } = createSimpleContex
       applyView(setView, {
         state: mango.state(),
         catalog: mango.catalog(),
+        images: mango.imageModels(),
         computer: mango.computer(),
         failed: mango.failed(),
         computerFailed: mango.computerFailed(),

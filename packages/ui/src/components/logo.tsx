@@ -59,30 +59,18 @@ export const Splash = (props: Pick<ComponentProps<"svg">, "ref" | "class">) => {
   )
 }
 
-// Wordmark: Inter 600, tight letter spacing, "code" in the orange of the mark (like "mangOS").
-export const Logo = (props: { class?: string }) => {
+// The wordmark: the mark, then «mango» in the text colour and the product's name in the product colour, lowercase, in the
+// title typeface. The size is the font size of the element (17px in the top bar, 34px at the start): the mark is 1.45 times
+// that. With `compact` only the mark is left in a window narrower than 640px.
+export const Logo = (props: { class?: string; compact?: boolean }) => {
   return (
-    <svg
-      xmlns="http://www.w3.org/2000/svg"
-      viewBox="0 0 640 140"
-      fill="none"
-      classList={{ [props.class ?? ""]: !!props.class }}
-    >
-      <g transform="translate(0 -14) scale(0.8)">
+    <span data-component="logo" data-compact={props.compact ? "" : undefined} classList={{ [props.class ?? ""]: !!props.class }}>
+      <svg data-slot="logo-shape" viewBox="10 26 180 180" fill="none" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
         <MangoShape />
-      </g>
-      <text
-        x="168"
-        y="112"
-        font-family="Inter, sans-serif"
-        font-weight="600"
-        font-size="96"
-        textLength="452"
-        lengthAdjust="spacingAndGlyphs"
-        fill="var(--text-strong)"
-      >
-        mango <tspan fill="#FFA61F">code</tspan>
-      </text>
-    </svg>
+      </svg>
+      <span data-slot="logo-words">
+        mango <span data-slot="logo-product">code</span>
+      </span>
+    </span>
   )
 }

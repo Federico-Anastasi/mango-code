@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { dict as en } from "@/i18n/en"
 import { parseState } from "@/utils/mango-state"
-import { arrivingParts, barDownload, barParts, composerParts, modelTag } from "./mango-model-bar"
+import { arrivingParts, barDescription, barDownload, barParts, barTone, composerParts, modelTag } from "./mango-model-bar"
 import { downloadParts, etaText, fitsText, onWhere, queueText, readingText, statusLine } from "./mango-text"
 
 // The English sentences of the app, filled like the interface fills them.
@@ -215,6 +215,29 @@ describe("the line above the composer", () => {
 })
 
 describe("the model in the top bar", () => {
+  test("the dot beside the model: green when ready, amber while on its way, red when it did not start, grey when off", () => {
+    expect(barTone(state({ phase: "ready", model: "3.6", label: "Qwen", where }))).toBe("ready")
+    expect(barTone(state({ phase: "loading", model: "3.6", label: "Qwen", seconds: 12 }))).toBe("progress")
+    expect(barTone(state({ phase: "lent", model: "3.6", label: "Qwen" }))).toBe("off")
+    expect(barTone(state({ phase: "none" }))).toBe("off")
+    expect(barTone(state({ phase: "failed", model: "3.6", label: "Qwen", reason: "" }))).toBe("error")
+    const coming = { model: "3.6", label: "Qwen", state: "active", done: 3, total: 100, bytes_per_second: 1 }
+    expect(barTone(state({ phase: "none" }, [coming]))).toBe("progress")
+    // a download that stopped is not on its way
+    expect(barTone(state({ phase: "none" }, [{ ...coming, state: "paused" }]))).toBe("off")
+    expect(barTone(state({ phase: "remote", models: [], reachable: true }))).toBe("ready")
+    expect(barTone(state({ phase: "remote", models: [], reachable: false }))).toBe("off")
+  })
+
+  test("those who do not see the dot are told when a model is ready or did not start", () => {
+    expect(barDescription(state({ phase: "ready", model: "3.6", label: "Qwen", where }), t)).toBe("In use")
+    expect(barDescription(state({ phase: "failed", model: "3.6", label: "Qwen", reason: "" }), t)).toBe(
+      "Qwen does not start",
+    )
+    expect(barDescription(state({ phase: "loading", model: "3.6", label: "Qwen", seconds: 1 }), t)).toBeUndefined()
+    expect(barDescription(state({ phase: "none" }), t)).toBeUndefined()
+  })
+
   test("its name, and what it is doing while it is not simply ready, apart: the name gives way first", () => {
     expect(barParts(state({ phase: "ready", model: "3.6", label: "Qwen", where }), t)).toEqual({ name: "Qwen" })
     expect(barParts(state({ phase: "loading", model: "3.6", label: "Qwen", seconds: 12 }), t)).toEqual({

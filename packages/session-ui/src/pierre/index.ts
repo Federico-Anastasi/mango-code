@@ -75,11 +75,11 @@ const unsafeCSS = `
 }
 
 ::highlight(opencode-find) {
-  background-color: rgb(from var(--surface-warning-base) r g b / 0.35);
+  background-color: color-mix(in srgb, var(--mango-action) 30%, transparent);
 }
 
 ::highlight(opencode-find-current) {
-  background-color: rgb(from var(--surface-warning-strong) r g b / 0.55);
+  background-color: color-mix(in srgb, var(--mango-action) 55%, transparent);
 }
 
 [data-diff] [data-line][data-comment-selected]:not([data-selected-line]) {
@@ -207,8 +207,8 @@ export function createDefaultOptions<T>(style: FileDiffOptions<T>["diffStyle"]) 
 
 export const styleVariables = {
   "--diffs-font-family": "var(--font-family-mono)",
-  "--diffs-font-size": "var(--font-size-small)",
-  "--diffs-line-height": "24px",
+  "--diffs-font-size": "12.5px",
+  "--diffs-line-height": "20px",
   "--diffs-tab-size": 2,
   "--diffs-font-features": "var(--font-family-mono--font-feature-settings)",
   "--diffs-header-font-family": "var(--font-family-sans)",

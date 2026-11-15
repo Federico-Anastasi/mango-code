@@ -18,7 +18,6 @@ To click you have two ways, and **they don't mix**:
 - **coordinates** -> `click_at(x, y)`, read from the screenshot: the cheap way when you already have the image. If it
   misses, don't keep trying by eye: take the snapshot and use the uid.
 
-The `pageId` changes: before acting on a page you haven't just opened, `list_pages`. `No page found` means you are
-using an old id.
+The `pageId` changes: before acting on a page you haven't just opened, `list_pages`.
 
 To check an image found with `search_images`, download it and `read` the file.

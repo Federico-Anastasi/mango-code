@@ -267,6 +267,10 @@ export function applyDirectoryEvent(input: {
     case "session.status": {
       const props = event.properties as { sessionID: string; status: SessionStatus }
       input.setStore("session_status", props.sessionID, reconcile(props.status))
+      // A turn that was stopped while it asked a question sends no `question.rejected`: with the session idle nobody
+      // is waiting for an answer, and the question must not stay open.
+      if (props.status.type === "idle" && input.store.question[props.sessionID]?.length)
+        input.setStore("question", props.sessionID, [])
       break
     }
     case "message.updated": {

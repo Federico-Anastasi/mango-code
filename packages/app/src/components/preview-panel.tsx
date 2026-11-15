@@ -39,12 +39,15 @@ const SYNC_MS = 700
 
 /**
  * Whether something opened above the page (a dialog, a menu, a list, a popover) is in the way of the native panel,
- * which is drawn above all the page: then it has to step aside. Kobalte marks its topmost open layer with
- * `data-kb-top-layer` and, while a modal one is open (dialogs, menus, lists), blocks the pointer on the whole body.
+ * which is drawn above all the page: then it has to step aside. While a modal layer is open (dialogs, menus, lists)
+ * Kobalte blocks the pointer on the whole body; its toasts carry `data-kb-top-layer`; a menu that is not modal (the
+ * model's in the top bar) is only a positioned popup, found by its role.
  */
+const LAYERS = "[data-kb-top-layer], [data-popper-positioner] [role='menu']"
+
 function layerOver(rect: DOMRect, own: HTMLElement | undefined) {
   if (document.body.style.pointerEvents === "none") return true
-  return [...document.querySelectorAll<HTMLElement>("[data-kb-top-layer]")].some((layer) => {
+  return [...document.querySelectorAll<HTMLElement>(LAYERS)].some((layer) => {
     if (own?.contains(layer)) return false
     const box = layer.getBoundingClientRect()
     return box.width > 0 && box.height > 0 && box.left < rect.right && box.right > rect.left && box.top < rect.bottom && box.bottom > rect.top
@@ -132,8 +135,12 @@ export function PreviewPanel(props: {
     })
     observer.observe(el)
     observer.observe(stage)
-    // Layers open and close in portals under the body: the panel steps aside and comes back with them.
-    const portals = new MutationObserver(() => place())
+    // Layers open and close in portals under the body: the panel steps aside and comes back with them. A popup gets
+    // its place a frame after it is added.
+    const portals = new MutationObserver(() => {
+      place()
+      requestAnimationFrame(place)
+    })
     portals.observe(document.body, { childList: true, attributes: true, attributeFilter: ["style"] })
     const topLayer = new MutationObserver(() => place())
     topLayer.observe(document.body, { subtree: true, attributes: true, attributeFilter: ["data-kb-top-layer"] })
@@ -182,12 +189,12 @@ export function PreviewPanel(props: {
       ref={panel}
       // Next to the chat, like the review panel, from 768 px (a laptop at 150% is ~860 px wide): never more than 55%
       // of the room, so the chat stays readable. Only below 768 px it covers the chat; its X or the globe bring it back.
-      // A card like the chat's, with the same gap around it: the chat's frame already leaves the gap between the two.
-      class="relative flex order-last shrink-0 flex-col my-2 me-2 max-md:absolute max-md:inset-0 max-md:z-30 max-md:m-0 max-md:!w-full max-md:!max-w-none"
+      // A side column on the surface colour, separated from the chat by a line.
+      class="relative flex order-last shrink-0 flex-col max-md:absolute max-md:inset-0 max-md:z-30 max-md:!w-full max-md:!max-w-none"
       style={{ width: `${props.width}px`, "max-width": `${MAX_SHARE * 100}%` }}
       aria-label={language.t("preview.title")}
     >
-      {/* Outside the card, which cuts what goes over its rounded edge: the handle sits across it. */}
+      {/* Outside the column, which clips what goes over its edge: the handle sits across it. */}
       <div class="absolute inset-y-0 -start-1 z-10">
         <ResizeHandle
           direction="horizontal"
@@ -200,7 +207,7 @@ export function PreviewPanel(props: {
       </div>
       <div
         ref={card}
-        class="flex-1 min-h-0 flex flex-col overflow-hidden rounded-[10px] bg-v2-background-bg-base shadow-[var(--v2-elevation-raised)] max-md:rounded-none max-md:shadow-none"
+        class="flex-1 min-h-0 flex flex-col overflow-hidden border-s border-v2-border-border-base bg-v2-background-bg-base max-md:border-s-0"
       >
         <div class="flex h-10 shrink-0 items-center gap-1 border-b border-border-weaker-base px-2">
           <IconButtonV2

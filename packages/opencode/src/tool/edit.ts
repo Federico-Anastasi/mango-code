@@ -16,6 +16,7 @@ import { Format } from "../format"
 import { InstanceState } from "@/effect/instance-state"
 import { Snapshot } from "@/snapshot"
 import { assertExternalDirectoryEffect } from "./external-directory"
+import { ProjectPath } from "./project-path"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import * as Bom from "@/util/bom"
 
@@ -45,7 +46,7 @@ function lock(filePath: string) {
 }
 
 export const Parameters = Schema.Struct({
-  filePath: Schema.String.annotate({ description: "The absolute path to the file to modify" }),
+  filePath: Schema.String.annotate({ description: "The path of the file, relative to the project folder (index.html, css/style.css). A full path only for a file outside the project" }),
   oldString: Schema.String.annotate({ description: "The text to replace" }),
   newString: Schema.String.annotate({
     description: "The text to replace it with (must be different from oldString)",
@@ -77,10 +78,9 @@ export const EditTool = Tool.define(
           }
 
           const instance = yield* InstanceState.context
-          const filePath = path.isAbsolute(params.filePath)
-            ? params.filePath
-            : path.join(instance.directory, params.filePath)
-          yield* assertExternalDirectoryEffect(ctx, filePath)
+          const located = ProjectPath.locate(params.filePath, instance.directory)
+          const filePath = located.path
+          const outside = yield* assertExternalDirectoryEffect(ctx, filePath)
 
           let diff = ""
           let contentOld = ""
@@ -193,7 +193,12 @@ export const EditTool = Tool.define(
             },
           })
 
-          let output = "Edit applied successfully."
+          // mango-code: writing outside the project is allowed; one line tells the model where the file went and which
+          // folder the project is, so that a path given by habit (a Linux path on Windows) is seen at once.
+          let output = outside
+            ? `Edit applied successfully, outside the project folder: ${filePath}. The project folder is ${instance.directory}.`
+            : "Edit applied successfully."
+          if (located.note) output += `\n${located.note}`
           yield* lsp.touchFile(filePath, "document")
           const diagnostics = yield* lsp.diagnostics()
           const normalizedFilePath = FSUtil.normalizePath(filePath)

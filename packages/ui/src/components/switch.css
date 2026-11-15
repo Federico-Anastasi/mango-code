@@ -40,12 +40,6 @@
     border: 1px solid var(--border-base);
     background: var(--icon-invert-base);
 
-    /* shadows/shadow-xs */
-    box-shadow:
-      0 1px 2px -1px rgba(19, 16, 16, 0.04),
-      0 1px 2px 0 rgba(19, 16, 16, 0.06),
-      0 1px 3px 0 rgba(19, 16, 16, 0.08);
-
     transform: translateX(-1px);
     transition:
       transform 150ms,

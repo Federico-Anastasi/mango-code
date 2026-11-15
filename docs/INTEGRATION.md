@@ -20,8 +20,9 @@ else: it uses the models and the engine of the app, in the way `claude -p` uses 
 - The agent works in `--dir` (default: the folder the command runs from). Its answer goes to stdout; the tools it calls and
   the rest of what it does, to stderr. The conversation is saved among the folder's sessions, and the app lists it.
 - `--model` is a key of `launcher/mango-models.json`; without it, the app's default.
-- Nobody is there to answer: the app's configuration asks for no permission, and one that a project's own rules ask for is
-  refused. Use the HTTP session below when the program has to decide.
+- Nobody is there to answer: the app's configuration asks for one permission only, the first picture of a conversation
+  (section 7), and that one, like any permission a project's own rules ask for, is refused. Use the HTTP session below when the
+  program has to decide, or ask for the picture yourself on the routes of section 7.
 - Exit code: `0` answered; `1` the agent could not answer (the reason is on stderr); `2` wrong command line; `3` Mango Code
   cannot be used (not installed next to the program, or it does not start),
   with the sentence on stderr.
@@ -39,7 +40,7 @@ contract: never match on them.
 As soon as its agent answers, Mango Code writes `%LOCALAPPDATA%\MangoCode\service.json`, and removes it on exit:
 
 ```json
-{ "version": 1, "pid": 12345, "agent": "http://127.0.0.1:4096", "engine": "http://127.0.0.1:8080", "control": "http://127.0.0.1:8080", "window": true }
+{ "version": 1, "pid": 12345, "agent": "http://127.0.0.1:4096", "engine": "http://127.0.0.1:47080", "control": "http://127.0.0.1:47080", "window": true }
 ```
 
 The file does not wait for a model: the default model loads after it is written, in the background, and there may be no
@@ -73,7 +74,7 @@ Environment variables an app can set when it starts Mango Code (tests, a second 
 |---|---|
 | `MANGO_DATA` | the data folder (default `%LOCALAPPDATA%\MangoCode`); `service.json` is written there, and the client reads it from there |
 | `MANGO_AGENT_PORT` | port of the agent server (default 4096) |
-| `MANGO_ENGINE_PORT` | port of the engine manager (default 8080) |
+| `MANGO_ENGINE_PORT` | port of the engine manager (default 47080) |
 | `MANGO_PHONE_PORT` | port of the phone service (default 47096) |
 | `MANGO_SHARE_PORT` | port of the shared engine (default 47098) |
 | `MANGO_ROOM_CHECK_OFF` | development builds only: a model starts on the graphics cards without first checking that other programs leave it room there (the integration tests, whose fake models have a plan on the PC's real cards) |
@@ -400,7 +401,160 @@ stop: `model`, `token` in memory, `written`, `bytes`, `ms`, `error`), `restore` 
 it), `loan_ended` (the process of a loan exited: `pid`, `who`, `since`, `reason`) and `resume_after_loan` (the automatic
 restart that follows, with `error` if it failed). Next to it sit the engine's log and TOQ's.
 
-## 7. What Claude Code has that Mango Code does not
+## 7. Pictures
+
+Mango Code makes pictures with the models marked `image` in `mango-models.json`, drawn by stable-diffusion.cpp. A program
+on this computer asks for one on the `engine` address, under `/control/image`:
+
+| what | call |
+|---|---|
+| the models and the state | `GET /control/image` → `{ models: [{key, label, license, bytes, ready}], default, loaded, jobs: [job] }` (the catalog's default model first, then by key; `default` is the one the user chose in the settings, otherwise the catalog's) |
+| ask for a picture | `POST /control/image/generate` `{ "prompt", "width", "height", "model"?, "seed"?, "stay_on"?, "file"? }` → `202` and the job |
+| follow it | `GET /control/image/jobs/<id>` → the job |
+| get the picture | `GET /control/image/jobs/<id>/picture` → `{ "png": "<base64>" }` |
+| stop it | `POST /control/image/jobs/<id>/cancel` → the job |
+| stop the image engine | `POST /control/image/unload` → the answer of `GET /control/image` |
+
+The job: `{ id, status, model, prompt, width, height, seed, step, steps, seconds, error, detail, file, preview }`.
+
+| `status` | means |
+|---|---|
+| `waiting` | another picture is being made: one at a time, in the order they were asked |
+| `preparing` | the card is being freed, the image engine starts, loads the model and reads the request |
+| `drawing` | `step` of `steps` are done; `preview` is the picture as it is at this step, small, a PNG in base64 |
+| `finishing` | the result is turned into pixels |
+| `done` | the picture is there: `seed` is the one it was made with, `file` where it was written |
+| `failed` | `error` is the sentence for the user, `detail` the technical one |
+| `cancelled` | it was stopped |
+
+The settings read the models that make pictures from `GET /control/models` (`GET /mango/models` from the agent), which
+besides `models` carries `image_models: [{key, label, about, license, present, bytes, where: {placement, gpus}}]` and
+`image_default`, and the image engine that is on from `GET /control/state` (`image_loaded`, a model key or `null`). `bytes`
+is what a download brings (the files and the image engine that are not on the disk), or what the files weigh when the
+model is there.
+
+**The request.** `prompt` goes to the model as it is: nothing rewrites it. `width` and `height` are in pixels and have no
+default. Without `model` the picture is made by `default`; a model is usable when `ready` (its files and the image engine
+are on disk), otherwise the job fails and says what is missing. Without `seed` Mango Code draws one and tells it in the
+job. `file` is an absolute path the picture is also written to, with the folders that are missing. A file that is there is
+never replaced, and neither is one that another job writes first: the picture is written when it is ready, without
+overwriting, and if the name is taken at that moment it takes the first free one of `name-2.png`, `name-3.png`, … in the same
+folder. The job's `file` (once `done`) is the path really written, so read it from the job rather than assuming the one you
+asked for. A field the route does not know, a missing `prompt` or a relative `file` give `400` and begin nothing.
+
+**The image engine, on or off.** With `"stay_on": true` the engine stays on after the picture, with the model loaded: it is
+for a run of pictures, and the next one starts sooner. It then holds the model in RAM (6.6 GB for Z-Image Turbo) and a
+little memory on its card until `unload`, a picture of another model, or a picture asked without `stay_on`. Without it
+the engine is started for the picture and stopped after it, and all the memory goes back.
+
+**The card.** With CUDA a picture is drawn on one NVIDIA card: one with tensor cores if there is one, then the one with
+the most memory. While it is drawn the card is on loan from the engine manager (section 6): a model that writes there is
+put aside, its conversation saved, and comes back by itself when the picture is done; `GET /engine` shows the loan with
+`who: "Mango Code: image"`. The loans of other programs are not touched.
+
+`cancel` stops a picture within a second, also in the middle of a step; a job that waits never begins. The last eight
+jobs that ended are remembered, with their pictures; an older `id` gives `404`. Errors have the shape
+`{ "error": { "message", "type": "mango_image" } }`. Like every route of the engine manager these refuse the requests of
+web pages, and they are served on `127.0.0.1` only.
+
+**From another program, with the client.** `picture(request, onStep?)` asks for the picture and returns its job when it
+has ended, telling `onStep` each state on the way; `pictureBytes(id)` gives the PNG:
+
+```ts
+const mc = new MangoCode(await launch());
+const job = await mc.picture({ prompt: "a red Vespa in front of the Colosseum, photograph", width: 1280, height: 720, file: "C:\\Projects\\film\\backdrop.png" }, (j) => console.log(j.status, j.step, j.steps));
+if (job.status !== "done") throw new Error(job.error ?? job.status);
+```
+
+**From the interface and from a phone.** The same six routes are on the agent's address under `/mango/image`
+(`GET /mango/image`, `POST /mango/image/generate`, and so on): the agent forwards each to the control server and returns
+its status and body, as it does for the model, the models and the computer (section 5). A `POST` there says it carries
+JSON also when it has no body. The number of a job is made of letters, digits and dashes: any other gives `404`. Test:
+`packages/opencode/test/server/mango-control.test.ts`.
+
+**The request, rewritten.** `prompt` reaches the image model as it is. To turn what a person asks in their own words
+and language into the description the image model draws best, ask the agent first:
+`POST <agent>/mango/image/rewrite?directory=<folder>` `{ "request", "answers"?, "model"? }`. A model that writes reads the
+request with Mango Code's rules for it and answers `{ "prompt", "model" }`, the description in English, or
+`{ "question", "options", "model" }` when something only the person knows is missing (a name to write, what a logo is
+for): ask it, then send the same request again with `answers: [{ "question", "options", "answer" }]`.
+
+- `model` `{ "providerID", "modelID" }` is who writes; the answer says who did. Without it: Ling if it is on this
+  computer (the rules were tuned on it), otherwise the agent's default model. Any model the agent offers can do it,
+  also one that does not run on this computer.
+- Rewriting is a choice of whoever asks for the picture: a request can go to `generate` as it is.
+- `502`: the model did not answer, or not in the form the rules ask for; `404`: there is no such model, or none at
+  all. With Ling on a graphics card a request takes about half a second.
+- Test: `packages/opencode/test/server/mango-image-rewrite.test.ts`.
+
+**From the model that writes.** In a session the model has the tool `image_generate` `{ "prompt", "name", "format"?,
+"size"? }`: it asks the control server for the picture, follows the job and ends with the picture attached to its
+result, so the user sees it in the conversation and a model that reads images can look at it and make it again.
+
+- `format` is `square` (default), `portrait` (9:16) or `landscape` (16:9); `size` is `small` (default: 768×768, 576×1024,
+  1024×576) or `large` (1024×1024, 720×1280, 1280×720).
+- The file is `<name>.png` in the folder `images` of the session's working folder (`immagini` when the app speaks
+  Italian). The tool asks for the first of `<name>.png`, `<name>-2.png`, … that is not there; the app writes without
+  overwriting and, if that name has been taken meanwhile (another conversation in the same folder), takes the next free
+  one. The result, its title and its metadata carry the path the job reports in `file`. A name Windows keeps for itself
+  (`nul`, `con`, `com1`, …) gets `-picture` after it. The PNG carries the request, the model and the seed in its text,
+  written by the image engine.
+- Permission `image`: the user is asked at the first picture of a conversation, and after that the model goes on by
+  itself. A session opened over HTTP answers it like any other permission (section 4), or opens with a rule that allows it.
+- Stopping the turn cancels the picture, and so does any failure to follow the job; a job that ended by itself is not
+  cancelled. Every request to the control server has a time limit of a few seconds (30 for the picture itself): an app that
+  does not answer ends the call with the sentence that the app is not answering. An agent the app did not start does not
+  offer the tool.
+- Test: `packages/opencode/test/tool/image.test.ts`.
+
+**From the interface: a picture as a turn.** A person who asks for a picture in the interface does not go through the model
+that writes for the answer: the request is a turn of the conversation that the agent makes by itself, like a shell command.
+`POST <agent>/session/<id>/image` (operation `session.image`):
+
+```
+{ "request": "<the person's own words, any language>",
+  "format"?: "square" | "portrait" | "landscape",      // default square
+  "size"?: "small" | "large",                          // default small
+  "model"?: "<key of the image model>",                // without it the app's default
+  "rewrite"?: false | { "providerID", "modelID" },     // who rewrites; absent: Ling if it is here, else the default model; false: the words go to the image model as they are
+  "prompt"?: "<a description already written>",        // nothing rewrites it
+  "seed"?: 0..4294967295, "messageID"?: "...", "agent"?: "..." }
+```
+
+`request` and `prompt` must not be empty or only spaces and are at most 32 KiB long (as for the rewrite route); `seed` is a
+whole number from 0 to 4294967295; anything else gives `400` before any message is written.
+
+The answer comes when the turn ends and is the assistant message with its parts, as for the shell. Meanwhile the session is
+busy (a second request gets `409`) and the abort route stops the turn: the picture is cancelled in the app. The session then holds:
+
+1. a user message with one text part, `request` as it was written;
+2. an assistant message with one `image_generate` tool part (the tool of the paragraph above, so one renderer shows both) that
+   is `running` while the turn goes on, and ends `completed`, with the picture attached as a `data:image/png;base64,` file, or
+   `error` with the sentence for the user (`metadata.stopped: true` when it was stopped).
+
+While it is `running` the part's `metadata.stage` says where it is: `rewriting`, then the job's own `waiting`, `preparing`, `drawing`
+(with `step`, `steps` and `preview`, the small PNG in base64) and `finishing`; the part is written when one of these changes.
+When the model that rewrites asks a question, it is asked through the agent's question service (section 4), shown at the part,
+with up to four options and a free answer; at most three questions are asked, then the model must describe. A question
+that is dismissed (`POST /question/<id>/reject`) leaves the choice to the model: it describes without asking more, and the
+picture is made. The description
+is then in the part's `input.prompt`, with `input.name` (the file name), and the picture is drawn in the folder `images` of
+the session's working folder, under the name the job reports in `file` (see above). No permission is asked: the person asked
+for it. The image engine stays on afterwards (`stay_on`). A later turn of the model that writes finds the picture in its
+history like any other tool call; its result only says what was made (`Picture saved as <file> (<width>x<height>).`), since
+the person asked for the picture and judged it, unlike the tool, where the model that asked is told to look at it.
+
+The turn needs no model that writes when `rewrite` is `false` or `prompt` is given. The messages of a conversation name a
+model: the agent's, else the conversation's, else the default; with none of these they name `mango-images/none`, which no
+model-looking code takes for the conversation's model. When rewriting is asked and no model can do it, the part ends as an
+`error` with the sentence "there is no model that writes" (in the app's language); a `rewrite` model that the agent no
+longer offers is replaced by the automatic choice. An agent that the app did not start has no control server to draw
+with: the part ends as an `error` ("Pictures are made by the Mango Code app, and this agent was not started by it.") before
+any model is asked, and the tool is not offered there.
+
+Test: `packages/opencode/test/session/image-turn.test.ts`.
+
+## 8. What Claude Code has that Mango Code does not
 
 - **Subagents**: the `task` tool is off (a local model with one slot gains nothing by splitting itself).
 - **Effort / reasoning levels**: the model always reasons; there is no selector.
@@ -411,7 +565,7 @@ restart that follows, with `error` if it failed). Next to it sit the engine's lo
   (changing model costs 20-80 s of loading).
 - **Claude Code hooks** (`.claude/settings.json`): they are not read.
 
-## 8. Example
+## 9. Example
 
 ```ts
 import { launch, MangoCode } from "./integration/client/mango-code";
@@ -428,7 +582,7 @@ for await (const s of mc.turn(id, directory, "Which files are here?", { model: "
 
 From the command line: `bun integration/example-cli.ts <folder> "<message>" [model]`.
 
-## 9. The client
+## 10. The client
 
 `integration/client/mango-code.ts` exports:
 
@@ -438,5 +592,5 @@ From the command line: `bun integration/example-cli.ts <folder> "<message>" [mod
 | `notReady(dataDir?)` | the `reason` of a running but not ready Mango Code, or `null` |
 | `launch({ exe?, dataDir?, timeoutMs? })` | `find()`, or start with `--service` and wait until ready |
 | `dataDir()`, `executable()` | the data folder and the installed executable |
-| `new MangoCode(service)` | the session: `createSession`, `sessions`, `messages`, `send`, `abort`, `listen`, `turn`, `replyPermission`, `replyQuestion`, `rejectQuestion`, `addMcp`, `mcpStatus`, `setExtraFolders`, `models`, `engine`, `release`, `resume`, `startModel` |
-| types | `Service`, `AgentEvent`, `Step`, `Rule`, `McpServer`, `MessageOptions` |
+| `new MangoCode(service)` | the session: `createSession`, `sessions`, `messages`, `send`, `abort`, `listen`, `turn`, `replyPermission`, `replyQuestion`, `rejectQuestion`, `addMcp`, `mcpStatus`, `setExtraFolders`, `models`, `engine`, `release`, `resume`, `startModel`, and for the pictures `images`, `picture`, `pictureBytes`, `cancelPicture`, `unloadImages`, `pictureTurn` |
+| types | `Service`, `AgentEvent`, `Step`, `Rule`, `McpServer`, `MessageOptions`, `PictureRequest`, `PictureJob`, `PictureState`, `PictureTurn` |

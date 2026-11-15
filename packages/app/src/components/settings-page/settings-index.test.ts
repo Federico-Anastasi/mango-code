@@ -90,7 +90,8 @@ describe("the search finds the settings of Agent, General and Help", () => {
     expect(ask("dettatura")).toEqual(["general: Dettatura"])
     expect(ask("tema scuro")).toEqual(["general: Tema"])
     expect(ask("permesso")).toEqual(["general: Serve un tuo permesso"])
-    expect(ask("carattere").map((found) => found.split(": ")[0])).toEqual(["general", "general"])
+    // the typefaces are the suite's: there is no row to choose them
+    expect(ask("carattere")).toEqual([])
     expect(ask("aggiorna")).toContain("help: Aggiorna da solo")
     expect(ask("registri")).toEqual(["help: Registri"])
     expect(ask("segnala")).toEqual(["help: Segnala un problema"])
@@ -107,7 +108,7 @@ describe("the search finds the settings of Agent, General and Help", () => {
     expect(ask("microfono")).toEqual(["general: Dettatura"])
     expect(ask("microphone", en)).toEqual(["general: Dictation"])
     expect(ask("aggiornamento")).toEqual(["help: Controlla ora", "help: Aggiorna da solo"])
-    expect(ask("updates", en)).toEqual(["help: Check for updates", "help: Update on its own"])
+    expect(ask("updates", en)).toEqual(["help: Check now", "help: Update on its own"])
     expect(ask("qr")).toEqual(["links: Telefono"])
     expect(ask("qr", en)).toEqual(["links: Phone"])
     expect(ask("gpu")).toEqual(["computer: Schede video"])
@@ -130,9 +131,21 @@ describe("the search finds the settings of Agent, General and Help", () => {
     expect(ask("notifica")).toEqual(alerts)
   })
 
+  test("the pictures are found by the words a person writes for them, in both languages", () => {
+    for (const query of ["immagini", "foto", "disegna", "immagine"])
+      expect(ask(query), query).toContain("models: Fanno immagini")
+    expect(ask("riscrivi")).toEqual(["models: Riscrivi la richiesta", "models: Chi riscrive"])
+    expect(ask("chi riscrive")).toEqual(["models: Chi riscrive"])
+    expect(ask("prompt")).toContain("models: Riscrivi la richiesta")
+    for (const query of ["pictures", "images", "photo", "draw"])
+      expect(ask(query, en), query).toContain("models: They make pictures")
+    expect(ask("rewrite", en)).toEqual(["models: Rewrite the request", "models: Who rewrites"])
+    expect(ask("who rewrites", en)).toEqual(["models: Who rewrites"])
+  })
+
   test("and in English", () => {
     expect(ask("mcp", en)).toContain("agent: MCP servers")
-    expect(ask("update", en)).toEqual(["help: Check for updates", "help: Update on its own", "computer: Engine"])
+    expect(ask("update", en)).toEqual(["help: Update on its own", "computer: Engine", "help: Check now"])
     expect(ask("sound", en)).toEqual(["general: Answer ready", "general: Your permission is needed", "general: Error"])
   })
 })
@@ -140,7 +153,7 @@ describe("the search finds the settings of Agent, General and Help", () => {
 describe("the index and the page", () => {
   /** The files that draw each section. */
   const FILES: Record<SettingsSection, string[]> = {
-    models: ["models.tsx", "other-model.tsx"],
+    models: ["models.tsx", "other-model.tsx", "images.tsx"],
     computer: ["computer.tsx"],
     agent: ["agent.tsx"],
     links: ["links.tsx"],

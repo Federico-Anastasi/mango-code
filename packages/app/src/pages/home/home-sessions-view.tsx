@@ -23,7 +23,7 @@ import {
 } from "./home-sessions-controller"
 import { DialogDeleteSession, DialogRenameSession } from "./home-session-dialogs"
 
-const HOME_SECTION_LABEL = "text-v2-text-text-muted [font-weight:440]"
+const HOME_SECTION_LABEL = "text-[11px] uppercase tracking-[0.08em] text-v2-text-text-muted [font-weight: 600]"
 const HOME_SESSION_SEARCH_RESULTS_ID = "home-session-search-results"
 
 // Middle-click or Cmd+click on macOS (Ctrl+click elsewhere) opens a session
@@ -89,7 +89,7 @@ export function HomeSessionsView(props: HomeSessionsViewProps) {
       class="min-h-0 min-w-0 flex-1 flex flex-col"
       aria-label={props.language.t("sidebar.project.recentSessions")}
     >
-      <div class="sticky top-0 z-30 shrink-0 bg-v2-background-bg-base pb-3 pt-6 lg:pt-12" onWheel={props.onWheel}>
+      <div class="sticky top-0 z-30 shrink-0 bg-v2-background-bg-deep pb-3 pt-6 lg:pt-12" onWheel={props.onWheel}>
         <HomeSessionSearch {...props} />
         <div class="pointer-events-none absolute right-0 top-[84px] z-20 flex gap-1 lg:top-[108px]">
           <ButtonV2
@@ -97,7 +97,7 @@ export function HomeSessionsView(props: HomeSessionsViewProps) {
             variant="ghost-muted"
             size="normal"
             icon={props.view() === "archived" ? undefined : "archive"}
-            class="pointer-events-auto h-7 px-2 [font-weight:530]"
+            class="pointer-events-auto h-7 px-2 [font-weight: 500]"
             onClick={() => props.onSetView(props.view() === "archived" ? "active" : "archived")}
           >
             {props.view() === "archived"
@@ -111,7 +111,7 @@ export function HomeSessionsView(props: HomeSessionsViewProps) {
                 variant="ghost-muted"
                 size="normal"
                 icon="edit"
-                class="pointer-events-auto h-7 px-2 [font-weight:530]"
+                class="pointer-events-auto h-7 px-2 [font-weight: 500]"
                 onClick={props.onCreateSession}
               >
                 {props.language.t("command.session.new")}
@@ -190,7 +190,7 @@ function HomeArchivedList(props: HomeSessionsViewProps) {
         <Show
           when={props.archived().length > 0}
           fallback={
-            <p class="px-3 pt-8 text-center text-[13px] leading-5 tracking-[-0.04px] text-v2-text-text-muted [font-weight:440]">
+            <p class="px-3 pt-8 text-center text-[13px] leading-5 tracking-[-0.04px] text-v2-text-text-muted [font-weight: 400]">
               {props.archivedFailed()
                 ? props.language.t("home.sessions.archived.failed")
                 : props.language.t("home.sessions.archived.empty")}
@@ -269,7 +269,7 @@ function HomeSessionSearch(props: HomeSessionsViewProps) {
             data-component="home-session-search-panel"
             class={`
               absolute flex flex-col overflow-hidden rounded-[12px]
-              bg-v2-background-bg-base shadow-[var(--v2-elevation-floating)]
+              border border-v2-border-border-base bg-v2-background-bg-base
             `}
             style={{ top: "-6px", left: "-6px", width: "calc(100% + 12px)" }}
           >
@@ -278,7 +278,7 @@ function HomeSessionSearch(props: HomeSessionsViewProps) {
                 <Show
                   when={!props.searchLoading()}
                   fallback={
-                    <div class="flex items-center justify-center px-4 py-3 text-v2-text-text-muted [font-weight:440]">
+                    <div class="flex items-center justify-center px-4 py-3 text-v2-text-text-muted [font-weight: 400]">
                       <Spinner class="size-4" />
                     </div>
                   }
@@ -289,7 +289,7 @@ function HomeSessionSearch(props: HomeSessionsViewProps) {
                       <p
                         class={`
                           my-1.5 px-4 pb-2 text-[13px] leading-4 tracking-[-0.04px]
-                          text-v2-text-text-muted [font-weight:440]
+                          text-v2-text-text-muted [font-weight: 400]
                         `}
                       >
                         {props.searchNoResultsLabel()}
@@ -300,7 +300,7 @@ function HomeSessionSearch(props: HomeSessionsViewProps) {
                       <p
                         class={`
                           my-1.5 pl-[18px] pr-6 text-[13px] leading-4 tracking-[-0.04px]
-                          text-v2-text-text-muted [font-weight:440]
+                          text-v2-text-text-muted [font-weight: 400]
                         `}
                       >
                         {props.language.t("home.sessions.search.sessions")}
@@ -327,9 +327,9 @@ function HomeSessionSearch(props: HomeSessionsViewProps) {
         </Show>
         <label
           class={`
-            relative z-20 flex h-9 w-full items-center gap-2 rounded-[6px] py-1 pl-3 pr-2
-            bg-v2-background-bg-layer-02/60 text-v2-icon-icon-muted transition-[background-color,box-shadow]
-            duration-[120ms] ease-in-out hover:bg-v2-background-bg-layer-02 focus-within:bg-v2-background-bg-layer-02
+            relative z-20 flex h-9 w-full items-center gap-2 rounded-[7px] border border-v2-border-border-base py-1 pl-3 pr-2
+            bg-v2-background-bg-deep text-v2-icon-icon-muted transition-[border-color]
+            duration-[150ms] ease-in-out hover:border-v2-border-border-strong focus-within:border-v2-border-border-strong
           `}
         >
           <IconV2 name="magnifying-glass" />
@@ -337,7 +337,7 @@ function HomeSessionSearch(props: HomeSessionsViewProps) {
             ref={props.onSetSearchInput}
             class={`
               relative z-20 min-w-0 flex-1 border-0 bg-transparent outline-0
-              text-v2-text-text-base [font-weight:440] placeholder:text-v2-text-text-faint
+              text-v2-text-text-base [font-weight: 400] placeholder:text-v2-text-text-faint
             `}
             value={props.searchValue()}
             placeholder={props.searchPlaceholder()}
@@ -464,7 +464,7 @@ function HomeSessionGroupHeader(props: {
       ref={props.onSetRef}
       class={`
         pointer-events-none sticky top-[84px] flex h-7 min-w-0 items-center justify-between
-        bg-v2-background-bg-base pl-3 lg:top-[108px]
+        bg-v2-background-bg-deep pl-3 lg:top-[108px]
       `}
       classList={{ "home-session-group-header z-[5]": !!props.elevated, "z-10": !props.elevated }}
     >
@@ -519,7 +519,7 @@ function HomeSessionRow(props: HomeSessionsViewProps & { record: HomeSessionReco
             data-component="home-session-row"
             class={`
               flex h-10 min-w-0 w-full flex-1 shrink-0 items-center gap-2 rounded-[6px] bg-transparent py-3
-              pl-3 pr-28 text-left text-v2-text-text-muted [font-weight:530]
+              pl-3 pr-28 text-left text-v2-text-text-muted [font-weight: 500]
             `}
           >
             {leading()}
@@ -531,7 +531,7 @@ function HomeSessionRow(props: HomeSessionsViewProps & { record: HomeSessionReco
           data-component="home-session-row"
           class={`
             flex h-10 min-w-0 w-full flex-1 shrink-0 cursor-default items-center gap-2 rounded-[6px] border-0
-            bg-transparent py-3 pl-3 pr-20 text-left text-v2-text-text-muted [font-weight:530]
+            bg-transparent py-3 pl-3 pr-20 text-left text-v2-text-text-muted [font-weight: 500]
             transition-[background-color,color,box-shadow] duration-[120ms] ease-in-out
             hover:bg-v2-overlay-simple-overlay-hover focus-visible:bg-v2-overlay-simple-overlay-hover focus-visible:outline-none
           `}
@@ -579,7 +579,7 @@ function HomeSessionRow(props: HomeSessionsViewProps & { record: HomeSessionReco
             variant="ghost-muted"
             size="normal"
             icon="reset"
-            class="h-7 px-2 [font-weight:530]"
+            class="h-7 px-2 [font-weight: 500]"
             onClick={() => void props.onRestoreSession(props.record.session)}
           >
             {props.language.t("home.session.restore")}
@@ -615,7 +615,7 @@ function HomeSessionRow(props: HomeSessionsViewProps & { record: HomeSessionReco
 function HomeSessionTitle(props: { title: string; showProjectName: boolean; search?: boolean }) {
   return (
     <span
-      class="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap text-v2-text-text-base [font-weight:530]"
+      class="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap text-v2-text-text-base [font-weight: 500]"
       classList={{
         "text-[13px] leading-4 tracking-[-0.04px]": !!props.search,
         "max-w-[min(70%,480px)] flex-[0_1_auto]": props.showProjectName,
@@ -630,7 +630,7 @@ function HomeSessionTitle(props: { title: string; showProjectName: boolean; sear
 function HomeSessionProjectName(props: { name: string; search?: boolean }) {
   return (
     <span
-      class="min-w-0 flex-[1_1_auto] overflow-hidden text-ellipsis whitespace-nowrap text-v2-text-text-muted [font-weight:440]"
+      class="min-w-0 flex-[1_1_auto] overflow-hidden text-ellipsis whitespace-nowrap text-v2-text-text-muted [font-weight: 400]"
       classList={{ "text-[13px] leading-4 tracking-[-0.04px]": !!props.search }}
     >
       {props.name}
@@ -644,7 +644,7 @@ function HomeSessionsEmpty(props: { onNewSession?: () => void; language: ReturnT
       <div
         class={`
           shrink-0 text-[13px] leading-[13px] tracking-[-0.04px]
-          text-v2-text-text-base [font-weight:530]
+          text-v2-text-text-base [font-weight: 500]
         `}
       >
         {props.language.t("home.sessions.empty")}
@@ -652,14 +652,14 @@ function HomeSessionsEmpty(props: { onNewSession?: () => void; language: ReturnT
       <p
         class={`
           mb-1 text-center text-[13px] leading-5 tracking-[-0.04px]
-          text-v2-text-text-muted [font-weight:440]
+          text-v2-text-text-muted [font-weight: 400]
         `}
       >
         {props.language.t(props.onNewSession ? "home.sessions.empty.description" : "home.sessions.empty.noProject")}
       </p>
       <Show when={props.onNewSession}>
         {(onNewSession) => (
-          <ButtonV2 data-action="home-new-session" variant="neutral" size="normal" icon="edit" onClick={onNewSession()}>
+          <ButtonV2 data-action="home-new-session" variant="primary" size="normal" icon="edit" onClick={onNewSession()}>
             {props.language.t("command.session.new")}
           </ButtonV2>
         )}

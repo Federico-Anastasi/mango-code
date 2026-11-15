@@ -154,8 +154,8 @@ test("every section of the settings opens from the phone and says what is done f
   for (const action of ["settings-models-add", "settings-models-folder"]) expect(await ui.locator(`[data-action="${action}"]`).isDisabled(), action).toBe(true);
   // the cards of the connections cannot read what they would say (the phone is on, a key may be saved): they claim nothing, except the other PC's engine, which the agent's state tells
   await ui.goto(`${base}/settings?section=links`);
-  await ui.waitForSelector('[data-link-card="remote"] .settings-page-pill', { timeout: 30_000 });
-  expect(await ui.locator(".settings-page-link-card .settings-page-pill").allInnerTexts()).toEqual(["Non collegato"]);
+  await ui.waitForSelector('[data-link-card="remote"] [data-component="tag"]', { timeout: 30_000 });
+  expect(await ui.locator('.settings-page-link-card [data-component="tag"]').allInnerTexts()).toEqual(["Non collegato"]);
   await ui.goto(`${base}/settings?section=help`);
   expect(await ui.locator('[data-action="settings-open-logs"]').isDisabled()).toBe(true);
 }, 150_000);

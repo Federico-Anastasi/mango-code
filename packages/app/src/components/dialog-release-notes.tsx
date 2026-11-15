@@ -1,6 +1,7 @@
 import { createSignal } from "solid-js"
 import { Dialog } from "@opencode-ai/ui/dialog"
 import { Button } from "@opencode-ai/ui/button"
+import { ButtonV2 } from "@opencode-ai/ui/v2/button-v2"
 import { useDialog } from "@opencode-ai/ui/context/dialog"
 import { useLanguage } from "@/context/language"
 import { useSettings } from "@/context/settings"
@@ -84,13 +85,13 @@ export function DialogReleaseNotes(props: { highlights: Highlight[] }) {
           <div class="flex flex-col gap-12">
             <div class="flex flex-col items-start gap-3">
               {isLast() ? (
-                <Button variant="primary" size="large" onClick={handleClose}>
+                <ButtonV2 variant="primary" size="large" onClick={handleClose}>
                   {language.t("dialog.releaseNotes.action.getStarted")}
-                </Button>
+                </ButtonV2>
               ) : (
-                <Button variant="secondary" size="large" onClick={handleNext}>
+                <ButtonV2 variant="neutral" size="large" onClick={handleNext}>
                   {language.t("dialog.releaseNotes.action.next")}
-                </Button>
+                </ButtonV2>
               )}
 
               <Button variant="ghost" size="small" onClick={handleDisable}>

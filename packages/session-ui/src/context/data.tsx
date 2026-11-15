@@ -2,6 +2,7 @@ import type { Message, Session, Part, SnapshotFileDiff, SessionStatus, Provider 
 import type { FileDiffInfo } from "@opencode-ai/client/promise"
 import { createSimpleContext } from "@opencode-ai/ui/context"
 import { PreloadMultiFileDiffResult } from "@pierre/diffs/ssr"
+import type { PictureFormat, PictureSize } from "../components/picture-state"
 
 export type NormalizedProviderListResponse = {
   all: Map<string, Provider>
@@ -57,6 +58,23 @@ export type ProjectFiles = {
   reveal?(path: string): Promise<void>
 }
 
+/**
+ * mango-code: a picture of the conversation made again as a turn of it (the app draws): the same request, format, size
+ * and model, with a description of its own that nothing rewrites. `busy` is true while the conversation is working.
+ */
+export type ProjectPictures = {
+  again(input: {
+    request: string
+    format: PictureFormat
+    size: PictureSize
+    model: string
+    prompt: string
+  }): Promise<void>
+  busy(): boolean
+  /** Opens the settings on the models that draw, to get one. */
+  chooseModel(): void
+}
+
 export const { use: useData, provider: DataProvider } = createSimpleContext({
   name: "Data",
   init: (props: {
@@ -66,6 +84,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
     onNavigateToSession?: NavigateToSessionFn
     onSessionHref?: SessionHrefFn
     files?: ProjectFiles
+    pictures?: ProjectPictures
   }) => {
     return {
       get store() {
@@ -81,6 +100,9 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
       sessionHref: props.onSessionHref,
       get files() {
         return props.files
+      },
+      get pictures() {
+        return props.pictures
       },
     }
   },

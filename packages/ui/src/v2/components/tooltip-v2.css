@@ -15,12 +15,12 @@
   padding: 5px 6px;
   gap: 6px;
 
-  background: var(--v2-background-bg-layer-01);
-  box-shadow: var(--v2-elevation-floating);
-  border-radius: 4px;
+  background: var(--mango-surface);
+  border: 1px solid var(--mango-line);
+  border-radius: var(--mango-radius-control);
 
   font-style: normal;
-  font-weight: 530;
+  font-weight: 500;
   font-size: 11px;
   line-height: 12px;
   letter-spacing: 0.05px;

@@ -13,6 +13,11 @@
     gap: var(--tool-content-gap);
   }
 
+  /* Reasoning is text, not a tool: it has no bordered row, only room between its title and its body. */
+  &.reasoning-collapsible {
+    gap: 4px;
+  }
+
   [data-slot="collapsible-trigger"] {
     width: 100%;
     display: flex;

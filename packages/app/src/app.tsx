@@ -306,7 +306,7 @@ function BodyDesignClass() {
     document.body.classList.toggle("text-12-regular", !enabled)
     document.body.classList.toggle("font-(family-name:--font-family-text)", enabled)
     document.body.classList.toggle("text-[13px]", enabled)
-    document.body.classList.toggle("font-[440]", enabled)
+    document.body.classList.toggle("font-normal", enabled)
   })
 
   return null
@@ -403,7 +403,7 @@ export function AppBaseProviders(
     <MetaProvider>
       <Font />
       <ThemeProvider
-        onThemeApplied={(_, mode, scheme) => {
+        onThemeApplied={(mode, scheme) => {
           void window.api?.setTitlebar?.({ mode, scheme })
         }}
       >

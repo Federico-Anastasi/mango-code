@@ -48,7 +48,7 @@ exports[`tool parameters JSON Schema (wire shape) edit 1`] = `
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "properties": {
     "filePath": {
-      "description": "The absolute path to the file to modify",
+      "description": "The path of the file, relative to the project folder (index.html, css/style.css). A full path only for a file outside the project",
       "type": "string",
     },
     "newString": {
@@ -78,7 +78,7 @@ exports[`tool parameters JSON Schema (wire shape) glob 1`] = `
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "properties": {
     "path": {
-      "description": "The directory to search in. Omit it to use the current working directory (never pass "undefined" or "null"). Must be a valid directory path if provided.",
+      "description": "The directory to search in, relative to the project folder. Omit it to search the project folder (never pass "undefined" or "null").",
       "type": "string",
     },
     "pattern": {
@@ -102,7 +102,7 @@ exports[`tool parameters JSON Schema (wire shape) grep 1`] = `
       "type": "string",
     },
     "path": {
-      "description": "The directory to search in. Defaults to the current working directory.",
+      "description": "The directory to search in, relative to the project folder. Defaults to the project folder.",
       "type": "string",
     },
     "pattern": {
@@ -112,6 +112,44 @@ exports[`tool parameters JSON Schema (wire shape) grep 1`] = `
   },
   "required": [
     "pattern",
+  ],
+  "type": "object",
+}
+`;
+
+exports[`tool parameters JSON Schema (wire shape) image 1`] = `
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "format": {
+      "description": "The shape of the picture: square (default), portrait (9:16) or landscape (16:9)",
+      "enum": [
+        "square",
+        "portrait",
+        "landscape",
+      ],
+      "type": "string",
+    },
+    "name": {
+      "description": "File name of the picture, without extension: a few lowercase words joined by dashes (cat-on-sofa)",
+      "type": "string",
+    },
+    "prompt": {
+      "description": "What the picture shows, in English: subject, setting, style, light, framing",
+      "type": "string",
+    },
+    "size": {
+      "description": "small (default) is quicker; large for the final picture",
+      "enum": [
+        "small",
+        "large",
+      ],
+      "type": "string",
+    },
+  },
+  "required": [
+    "prompt",
+    "name",
   ],
   "type": "object",
 }
@@ -258,7 +296,7 @@ exports[`tool parameters JSON Schema (wire shape) read 1`] = `
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "properties": {
     "filePath": {
-      "description": "The absolute path to the file or directory to read",
+      "description": "The path of the file or directory, relative to the project folder (index.html, css). A full path only outside the project",
       "type": "string",
     },
     "limit": {
@@ -453,7 +491,7 @@ exports[`tool parameters JSON Schema (wire shape) write 1`] = `
       "type": "string",
     },
     "filePath": {
-      "description": "The absolute path to the file to write (must be absolute, not relative)",
+      "description": "The path of the file, relative to the project folder (index.html, css/style.css). A full path only for a file outside the project",
       "type": "string",
     },
   },

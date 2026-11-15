@@ -1025,6 +1025,9 @@ export function createServerSession(
       case "session.status": {
         const props = event.properties as { sessionID: string; status: SessionStatus }
         setData("session_status", props.sessionID, reconcile(props.status))
+        // A turn that was stopped while it asked a question sends no `question.rejected`: with the session idle
+        // nobody is waiting for an answer, and the question must not stay open.
+        if (props.status.type === "idle" && data.question[props.sessionID]?.length) setData("question", props.sessionID, [])
         return
       }
       case "message.updated": {

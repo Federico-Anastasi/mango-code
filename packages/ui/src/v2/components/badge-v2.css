@@ -1,33 +1,46 @@
+/* A status label: a pill with a 1 px outline and text in the colour of the state, or neutral. Never filled. */
 [data-component="tag"] {
+  --tag-color: var(--mango-text-muted);
+  --tag-outline: var(--mango-line);
   box-sizing: border-box;
   display: inline-flex;
   flex-direction: row;
   align-items: center;
   justify-content: center;
   gap: 4px;
-  height: 16px;
-  padding: 0 4px;
+  height: 20px;
+  padding: 0 8px;
   user-select: none;
+  white-space: nowrap;
 
-  border-radius: 2px;
-  border: 0.5px solid var(--v2-border-border-base);
-  background: var(--v2-background-bg-layer-02);
+  border-radius: 999px;
+  border: 1px solid var(--tag-outline);
+  background: transparent;
 
+  font-family: var(--mango-font-text);
   font-style: normal;
-  font-weight: 530;
+  font-weight: 500;
   font-size: 11px;
   line-height: 1;
-  letter-spacing: 0.05px;
-  color: var(--v2-text-text-muted);
+  color: var(--tag-color);
   font-variant-numeric: tabular-nums;
 }
 
 [data-component="tag"][data-high-contrast] {
-  border-color: var(--v2-border-border-strong);
+  --tag-outline: var(--mango-text-muted);
 }
 
 [data-component="tag"][data-variant="accent"] {
-  border: 0;
-  background: var(--v2-background-bg-accent);
-  color: var(--v2-text-text-contrast);
+  --tag-color: var(--mango-action-text);
+  --tag-outline: var(--mango-action-text);
+}
+
+[data-component="tag"][data-variant="ready"] {
+  --tag-color: var(--mango-ready);
+  --tag-outline: var(--mango-ready);
+}
+
+[data-component="tag"][data-variant="error"] {
+  --tag-color: var(--mango-error);
+  --tag-outline: var(--mango-error);
 }

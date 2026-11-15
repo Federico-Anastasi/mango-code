@@ -13,7 +13,8 @@ isolation, run it in a virtual machine.
 
 - The agent server and the engine manager listen on `127.0.0.1` only, without a key: whoever can reach them is already
   a user of the PC. Requests that carry an `Origin` other than Mango Code's own web interface are refused, so a web page
-  you visit cannot drive the agent or the model.
+  you visit cannot drive the agent or the model. A page the agent shows you is served from its folder, read-only, on
+  a port of its own on `127.0.0.1`, kept until the app quits; a request that asks for another address is refused.
 - Access from your phone is off by default. When you turn it on, it uses a separate port on the addresses the settings show
   (your home network and Tailscale, never all the networks), a random key, a session cookie and numeric addresses only. If
   Windows calls the home network public (a café's), the settings say so. A session there controls an agent with a shell, so it

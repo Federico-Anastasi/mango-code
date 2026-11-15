@@ -474,7 +474,11 @@ pub struct EngineView {
 
 /// An engine's name for the user, with what it runs on: the build's name says nothing the user can act on.
 pub fn engine_label(engine: &str, build: Build) -> String {
-    let program = if engine == crate::catalog::GENERAL_ENGINE { "llama.cpp" } else { engine };
+    let program = match engine {
+        crate::catalog::GENERAL_ENGINE => "llama.cpp",
+        crate::catalog::IMAGE_ENGINE => "stable-diffusion.cpp",
+        other => other,
+    };
     let target = match build {
         Build::Cpu => tr!("il processore", "the processor"),
         Build::Vulkan | Build::Cuda12 | Build::Cuda12Gtx16 | Build::Cuda13 => tr!("le schede video", "the graphics cards"),

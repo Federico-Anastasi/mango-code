@@ -2,7 +2,8 @@
 // zoom at the next start; on the page in the Preview panel it zooms that page and leaves the chat alone. Real window and
 // Windows' own wheel (the test moves the pointer); each webview is read through its remote debugging (the window's is
 // `MANGO_WINDOW_CDP`, the panel keeps its own port). Fake engine, no GPU. Own port (47700).
-// `bun test --cwd integration tests/zoom.test.ts`.
+// `bun test --cwd integration tests/zoom.test.ts`. Skipped under `off-screen`: Windows' wheel only reaches the desktop on
+// the screen.
 
 import { afterAll, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -91,7 +92,7 @@ function panelPort(data: string) {
 
 const savedZoom = (data: string) => (fs.existsSync(path.join(data, "zoom.txt")) ? Number(fs.readFileSync(path.join(data, "zoom.txt"), "utf8")) : 1);
 
-test("the chat and the Preview panel zoom by themselves, and the window opens with the zoom it was left at", async () => {
+test.skipIf(!!process.env.MANGO_OFF_SCREEN)("the chat and the Preview panel zoom by themselves, and the window opens with the zoom it was left at", async () => {
   env = await start([{ text: "ok" }], { window: true, noDebug: true, env: { MANGO_WINDOW_CDP: String(DEBUG) } });
   const mc = new MangoCode((await find(env.data))!);
   const id = await mc.createSession(env.project, { title: "zoom" });

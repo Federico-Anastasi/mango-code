@@ -1,8 +1,10 @@
 // mango-code: Settings › Models. The list comes from
 // the agent's `/mango/models`, the downloads and the model in use from `/mango/state`; every change goes through the
 // bridge, which only the app's window has: elsewhere the controls stay visible, off, with «si fa dal computer».
+import { Tag } from "@opencode-ai/ui/v2/badge-v2"
 import { ButtonV2 } from "@opencode-ai/ui/v2/button-v2"
 import { Icon as IconV2 } from "@opencode-ai/ui/v2/icon"
+import { ProgressBarV2 } from "@opencode-ai/ui/v2/progress-bar-v2"
 import { SegmentedControlItemV2, SegmentedControlV2 } from "@opencode-ai/ui/v2/segmented-control-v2"
 import { Switch } from "@opencode-ai/ui/v2/switch-v2"
 import { formatFileSize } from "@opencode-ai/session-ui/project-file"
@@ -17,6 +19,7 @@ import { cardsText } from "@/components/mango-text"
 import type { MangoModelChoices } from "@/utils/mango-desktop"
 import { loadsDefaultNow, useAnswering } from "./answering"
 import { createCommands, useControl } from "./control"
+import { SettingsImages } from "./images"
 import { OtherModel } from "./other-model"
 import { RemoveModelDialog } from "./remove-model"
 
@@ -76,6 +79,7 @@ export const SettingsModels: Component<{ focus?: string }> = (props) => {
   const models = () => view.catalog ?? []
   const downloads = () => view.state?.downloads ?? []
   const downloading = (key: string) => downloads().some((download) => download.model === key)
+  const images = () => view.images?.models ?? []
   // a model that waits for the new engine stays with those on the computer
   const present = createMemo(() => models().filter((model) => model.present || model.waitsEngine))
   const toDownload = createMemo(() =>
@@ -96,14 +100,15 @@ export const SettingsModels: Component<{ focus?: string }> = (props) => {
   const rowOf = (key: string) => {
     if (arrivingRows(downloads()).some((download) => download.model === key))
       return `[data-download-row="${CSS.escape(key)}"]`
-    if ([...present(), ...toDownload()].some((model) => model.key === key))
+    if ([...present(), ...toDownload(), ...images()].some((model) => model.key === key))
       return `[data-model-row="${CSS.escape(key)}"]`
   }
   /** Opens a model's row, if it is on the computer, and brings it into view. False when the list does not have it. */
   const reveal = (key: string) => {
     const row = rowOf(key)
     if (!row) return false
-    if (present().some((model) => model.key === key)) setUi("open", key)
+    if (present().some((model) => model.key === key) || images().some((model) => model.key === key && model.present))
+      setUi("open", key)
     requestAnimationFrame(() => document.querySelector(row)?.scrollIntoView({ block: "center" }))
     return true
   }
@@ -117,7 +122,7 @@ export const SettingsModels: Component<{ focus?: string }> = (props) => {
     on(
       [
         () => props.focus,
-        () => [...present(), ...downloads()].map((row) => ("key" in row ? row.key : row.model)).join(),
+        () => [...present(), ...images(), ...downloads()].map((row) => ("key" in row ? row.key : row.model)).join(),
       ],
       ([focus]) => {
         if (!focus) return void (used = undefined)
@@ -159,7 +164,7 @@ export const SettingsModels: Component<{ focus?: string }> = (props) => {
           <p class="settings-page-pane-description">{language.t("settings.models.lead")}</p>
         </div>
         <ButtonV2
-          variant="contrast"
+          variant="primary"
           disabled={!bridge()?.otherModels}
           onClick={addModel}
           data-action="settings-models-add"
@@ -254,6 +259,12 @@ export const SettingsModels: Component<{ focus?: string }> = (props) => {
           </Show>
         )}
       </For>
+
+      <SettingsImages
+        open={ui.open}
+        onToggle={(key) => setUi("open", ui.open === key ? undefined : key)}
+        commands={commands}
+      />
 
       <h3 class="settings-v2-section-title">{language.t("settings.models.other.title")}</h3>
       <OtherModel onAdded={() => void control.now()} hasRow={(key) => !!rowOf(key)} reveal={reveal} />
@@ -360,7 +371,23 @@ const PresentModel: Component<
         onClick={props.onToggle}
       >
         <span class="settings-page-row-copy">
-          <span data-slot="settings-v2-row-title">{props.model.label}</span>
+          <span class="settings-page-row-heading">
+            <span data-slot="settings-v2-row-title">{props.model.label}</span>
+            <Show when={props.isDefault}>
+              <Tag variant="neutral">{language.t("settings.models.default.pill")}</Tag>
+            </Show>
+            <Show when={props.inUse}>
+              <Tag variant="ready">{language.t("settings.models.inUse")}</Tag>
+            </Show>
+            <Show when={props.loading}>
+              <Tag>{language.t("settings.models.loading")}</Tag>
+            </Show>
+            <Show when={!props.model.verdict.fits}>
+              <Tag variant="error" data-slot="settings-model-no-fit">
+                {language.t("settings.models.other.noFit")}
+              </Tag>
+            </Show>
+          </span>
           <Show when={props.model.about}>
             <span class="settings-page-row-line">{props.model.about}</span>
           </Show>
@@ -371,32 +398,14 @@ const PresentModel: Component<
           </Show>
         </span>
         <span class="settings-page-row-meta">
-          <Show when={props.isDefault}>
-            <span class="settings-page-pill" data-tone="accent">
-              {language.t("settings.models.default.pill")}
-            </span>
-          </Show>
-          <Show when={props.inUse}>
-            <span class="settings-page-pill" data-tone="ok">
-              {language.t("settings.models.inUse")}
-            </span>
-          </Show>
-          <Show when={props.loading}>
-            <span class="settings-page-pill">{language.t("settings.models.loading")}</span>
-          </Show>
-          <Show when={!props.model.verdict.fits}>
-            <span class="settings-page-pill" data-tone="bad" data-slot="settings-model-no-fit">
-              {language.t("settings.models.other.noFit")}
-            </span>
-          </Show>
-          <span>{facts(props.model, language).join(" · ")}</span>
+          <span class="settings-page-row-facts">{facts(props.model, language).join(" · ")}</span>
           <IconV2 name="chevron-down" class={props.open ? "rotate-180" : ""} />
         </span>
       </button>
 
       <Show when={props.open}>
         <div class="settings-page-detail" data-slot="settings-model-detail">
-          <div class="settings-page-field settings-page-field--wide">
+          <div class="settings-page-field">
             <b data-slot="settings-field-title">{language.t("settings.models.where.title")}</b>
             <SegmentedControlV2
               value={props.model.choices.where}
@@ -530,7 +539,7 @@ const PresentModel: Component<
               </ButtonV2>
             </Show>
             <ButtonV2
-              variant="ghost"
+              variant="danger"
               disabled={!models() || props.busy}
               onClick={remove}
               data-action="settings-model-remove"
@@ -564,16 +573,7 @@ const ArrivingModel: Component<RowProps & { download: Download }> = (props) => {
         <span class="settings-page-row-line" data-tone={props.download.state === "failed" ? "danger" : undefined}>
           {downloadLine(props.download, language)}
         </span>
-        <div
-          class="settings-page-bar"
-          role="progressbar"
-          aria-label={props.download.label}
-          aria-valuemin={0}
-          aria-valuemax={100}
-          aria-valuenow={Math.round(share())}
-        >
-          <u style={{ width: `${share()}%` }} />
-        </div>
+        <ProgressBarV2 class="settings-page-progress" value={share()} label={props.download.label} />
         <Show when={props.error}>
           {(message) => (
             <p class="settings-page-error" role="alert">
@@ -628,7 +628,7 @@ const CatalogModel: Component<RowProps & { model: CatalogEntry }> = (props) => {
   const fits = () => props.model.verdict.fits
   const verdict = () => {
     const where = props.model.verdict.where
-    if (!fits() || !where) return props.model.verdict.reason
+    if (!where) return props.model.verdict.reason
     return [
       language.t("settings.models.fits"),
       cardsText(where, language),
@@ -645,6 +645,11 @@ const CatalogModel: Component<RowProps & { model: CatalogEntry }> = (props) => {
         <Show when={props.model.about}>
           <span class="settings-page-row-line">{props.model.about}</span>
         </Show>
+        <Show when={!fits()}>
+          <span class="settings-page-row-line" data-slot="settings-model-reason">
+            {props.model.verdict.reason}
+          </span>
+        </Show>
         <Show when={props.error}>
           {(message) => (
             <p class="settings-page-error" role="alert">
@@ -655,16 +660,21 @@ const CatalogModel: Component<RowProps & { model: CatalogEntry }> = (props) => {
       </div>
       <div class="settings-page-row-meta">
         <Show when={props.model.recommended}>
-          <span class="settings-page-pill" data-tone="accent">
-            {language.t("settings.models.recommended")}
-          </span>
+          <Tag variant="accent">{language.t("settings.models.recommended")}</Tag>
         </Show>
-        <span class="settings-page-pill" data-tone={fits() ? "ok" : "bad"}>
-          {verdict()}
-        </span>
+        <Show
+          when={fits()}
+          fallback={
+            <Tag variant="error" data-slot="settings-model-no-fit">
+              {language.t("settings.models.other.noFit")}
+            </Tag>
+          }
+        >
+          <Tag variant="ready">{verdict()}</Tag>
+        </Show>
         <Show when={props.model.user}>
           <ButtonV2
-            variant="ghost"
+            variant="danger"
             disabled={!bridge()?.otherModels || props.busy}
             onClick={() => void props.run(() => bridge()?.otherModels?.remove(props.model.key))}
             data-action="settings-model-forget"

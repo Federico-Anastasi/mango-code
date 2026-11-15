@@ -21,7 +21,7 @@
         "timeout": false,
         "headerTimeout": 900000
       },
-      "_baseURL": "GENERATED: normally http://127.0.0.1:8080/v1, but with the engine of another PC it is that PC's address.",
+      "_baseURL": "GENERATED: normally http://127.0.0.1:47080/v1, but with the engine of another PC it is that PC's address.",
       "_options": "apiKey is fake but MUST be there (the OpenAI-compatible client refuses to start without it). timeout false and headerTimeout 15 min are needed: a 50k-token prefill can take two minutes before the first byte, and the default 30-60 s would cut the request on long contexts.",
       "models": {
         "local": {
@@ -95,8 +95,10 @@
     "todowrite": "allow",
     "external_directory": "allow",
     "task": "deny",
-    "websearch": "deny"
+    "websearch": "deny",
+    "image": "ask"
   },
+  "_permission_image": "A picture takes the graphics card from the model that writes, for seconds or minutes: the user is asked at the first one of a conversation (the `image_generate` tool asks only then).",
 
   "compaction": {
     "auto": true,

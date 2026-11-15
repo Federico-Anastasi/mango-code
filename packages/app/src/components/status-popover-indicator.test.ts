@@ -16,8 +16,8 @@ describe("serverStatusDotClass", () => {
     )
   })
 
-  test("uses the warning token for non-blocking issues while the server is online", () => {
-    expect(serverStatusDotClass({ ready: true, serverHealth: true, issue: true })).toBe("bg-icon-warning-base")
+  test("shows a non-blocking issue as a neutral dot while the server is online", () => {
+    expect(serverStatusDotClass({ ready: true, serverHealth: true, issue: true })).toBe("bg-[var(--mango-text-faint)]")
   })
 
   test("uses the critical token only after the server connection drops", () => {

@@ -1,7 +1,7 @@
 import { useFilteredList } from "@opencode-ai/ui/hooks"
 import { getDirectory, getFilename } from "@opencode-ai/core/util/path"
 import { createSignal, For, onMount, Show, splitProps, type JSX } from "solid-js"
-import { Button } from "@opencode-ai/ui/button"
+import { ButtonV2 } from "@opencode-ai/ui/v2/button-v2"
 import { FileIcon } from "@opencode-ai/ui/file-icon"
 import { Icon } from "@opencode-ai/ui/icon"
 import { installLineCommentStyles } from "./line-comment-styles"
@@ -13,18 +13,26 @@ export type LineCommentVariant = "default" | "editor" | "add"
 
 function InlineGlyph(props: { icon: "comment" | "plus" }) {
   return (
-    <svg data-slot="line-comment-icon" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+    <svg
+      data-slot="line-comment-icon"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="2"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+      aria-hidden="true"
+    >
       <Show
         when={props.icon === "comment"}
         fallback={
-          <path
-            d="M10 5.41699V10.0003M10 10.0003V14.5837M10 10.0003H5.4165M10 10.0003H14.5832"
-            stroke="currentColor"
-            stroke-linecap="square"
-          />
+          <>
+            <path d="M5 12h14" />
+            <path d="M12 5v14" />
+          </>
         }
       >
-        <path d="M16.25 3.75H3.75V16.25L6.875 14.4643H16.25V3.75Z" stroke="currentColor" stroke-linecap="square" />
+        <path d="M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z" />
       </Show>
     </svg>
   )
@@ -423,12 +431,12 @@ export const LineCommentEditor = (props: LineCommentEditorProps) => {
               </>
             }
           >
-            <Button size="small" variant="ghost" onClick={split.onCancel}>
+            <ButtonV2 size="small" variant="ghost" onClick={split.onCancel}>
               {split.cancelLabel ?? i18n.t("ui.common.cancel")}
-            </Button>
-            <Button size="small" variant="primary" disabled={split.value.trim().length === 0} onClick={submit}>
+            </ButtonV2>
+            <ButtonV2 size="small" variant="primary" disabled={split.value.trim().length === 0} onClick={submit}>
               {split.submitLabel ?? i18n.t("ui.lineComment.submit")}
-            </Button>
+            </ButtonV2>
           </Show>
         </div>
       </div>

@@ -51,9 +51,10 @@ const get = async (route: string) => (await fetch(`${env.engine}/control/${route
 const saved = () => JSON.parse(fs.readFileSync(path.join(env.data, "choices.json"), "utf8"));
 const row = (key: string) => `[data-model-row="${key}"]`;
 const rowText = (key: string) => p.evaluate(`document.querySelector(${JSON.stringify(row(key))})?.innerText ?? ""`) as Promise<string>;
+// The titles of the groups are shown in capitals by the stylesheet: they are matched as they are written.
 const section = (title: string) =>
   p.evaluate(`(() => {
-    const h = [...document.querySelectorAll('[data-component="settings-models"] h3')].find((e) => e.innerText.trim() === ${JSON.stringify(title)});
+    const h = [...document.querySelectorAll('[data-component="settings-models"] h3')].find((e) => e.textContent.trim() === ${JSON.stringify(title)});
     if (!h) return null;
     const rows = [];
     for (let el = h.nextElementSibling; el && el.tagName !== "H3"; el = el.nextElementSibling) rows.push(...el.querySelectorAll('[data-model-row], [data-download-row]'));
@@ -97,9 +98,10 @@ async function settled(model: string) {
 }
 
 beforeAll(async () => {
-  env = await start([{ text: "Eccomi." }], { window: true, context: 65536, otherModels: ["second", "third", "huge"], bytes: { huge: 10 * 2 ** 40 }, files, env: { MANGO_HF_URL: base } });
-  // the third model is not on the computer: it is one of the tested ones, to download
+  env = await start([{ text: "Eccomi." }], { window: true, context: 65536, otherModels: ["second", "third", "huge", "giant"], bytes: { huge: 10 * 2 ** 40, giant: 10 * 2 ** 40 }, files, env: { MANGO_HF_URL: base } });
+  // the third model and the giant one are not on the computer: they are among the tested ones, to download
   fs.rmSync(path.join(env.modelsDir, "third.gguf"));
+  fs.rmSync(path.join(env.modelsDir, "giant.gguf"));
   await env.restart();
   p = await page(env.cdp!, (t) => t.url.startsWith(env.agent), 120_000);
   await waitUntil(async () => (await get("state")).model.phase === "ready", "the model ready");
@@ -115,7 +117,7 @@ afterAll(() => {
 test("the models are in three lists: on the computer, on their way, tested ones to download", async () => {
   await waitUntil(async () => (await section("Provati con Mango Code, da scaricare"))?.includes("third") === true, "the lists");
   expect(await section("Sul computer")).toEqual(["fake", "second", "huge"]);
-  expect(await section("Provati con Mango Code, da scaricare")).toEqual(["third"]);
+  expect(await section("Provati con Mango Code, da scaricare")).toEqual(["third", "giant"]);
   // the first is the default and the one in use; the one that does not fit says so, closed
   const fake = await rowText("fake");
   expect(fake).toContain("Predefinito");
@@ -123,6 +125,17 @@ test("the models are in three lists: on the computer, on their way, tested ones 
   expect(await rowText("second")).not.toContain("In uso");
   expect(await p.evaluate(`!!document.querySelector('${row("huge")} [data-slot="settings-model-no-fit"]')`)).toBe(true);
   expect(await rowText("third")).toContain("Scarica");
+  // a tested one that does not fit says it with the short label, and why in a line that stays inside its row
+  expect(await p.evaluate(`!!document.querySelector('${row("giant")} [data-slot="settings-model-no-fit"]')`)).toBe(true);
+  const reason = await p.evaluate(`(() => {
+    const row = document.querySelector('${row("giant")}');
+    const line = row.querySelector('[data-slot="settings-model-reason"]');
+    const [outer, inner] = [row.getBoundingClientRect(), line?.getBoundingClientRect()];
+    return { text: line?.innerText ?? "", inside: !!inner && inner.left >= outer.left && inner.right <= outer.right };
+  })()`);
+  expect(reason.text).toContain("non ci sta in questo computer");
+  expect(reason.inside).toBe(true);
+  expect(await rowText("giant")).not.toContain("Scarica");
   // where the models are: the space they use, with the way to open the folder (not opened here)
   expect(await p.evaluate(`document.querySelector('[data-slot="settings-models-disk"]').innerText`)).toMatch(/Spazio usato dai modelli: .+ su /);
   expect(await exists('[data-action="settings-models-folder"]')).toBe(true);
@@ -187,7 +200,7 @@ test("«Scarica» brings a tested model in the background: it can be paused, goe
   await mouseClick(`${row("third")} [data-action="settings-model-download"]`);
   await waitUntil(() => exists('[data-download-row="third"]'), "the download among those on their way");
   expect(await section("In arrivo")).toEqual(["third"]);
-  expect(await section("Provati con Mango Code, da scaricare")).toBeNull();
+  expect(await section("Provati con Mango Code, da scaricare")).toEqual(["giant"]);
   // the model in use is not touched
   expect((await get("state")).model).toMatchObject({ phase: "ready", model: "second" });
 

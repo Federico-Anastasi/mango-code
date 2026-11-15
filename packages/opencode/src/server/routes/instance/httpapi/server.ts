@@ -81,6 +81,7 @@ import { SETTINGS_PATH, settingsEffect } from "@/server/shared/mango-settings"
 import { LANGUAGE_PATH, languageEffect } from "@/server/shared/mango-language"
 import { FOLDER_PATH, projectFolderEffect } from "@/server/shared/mango-project-folder"
 import { CONTROL_ROUTES, controlEffect } from "@/server/shared/mango-control"
+import { REWRITE_PATH, rewriteEffect } from "@/server/shared/mango-image-rewrite"
 import { RELOAD_PATH, makeReload } from "@/server/shared/mango-reload"
 import { PROCESSES_PATH, PROCESSES_STOP_PATH, processesEffect, processesStopEffect } from "@/server/shared/mango-processes"
 import { ServerAuth } from "@/server/auth"
@@ -267,11 +268,21 @@ const projectFolderRoute = HttpRouter.use((router) =>
   }),
 ).pipe(Layer.provide(authOnlyRouterLayer))
 
-// mango-code: the model, the models and the computer, from the app's control server (see shared/mango-control.ts).
+// mango-code: the model, the models, the computer and the pictures, from the app's control server (see
+// shared/mango-control.ts).
 const controlRoute = HttpRouter.use((router) =>
-  Effect.forEach(CONTROL_ROUTES, (route) =>
-    router.add(route.method, route.path, (request) => controlEffect(request, route.target)),
-  ),
+  Effect.forEach(CONTROL_ROUTES, (route) => router.add(route.method, route.path, controlEffect)),
+).pipe(Layer.provide(authOnlyRouterLayer))
+
+// mango-code: a request for a picture turned into the description for the image model (see
+// shared/mango-image-rewrite.ts).
+const imageRewriteRoute = HttpRouter.use((router) =>
+  Effect.gen(function* () {
+    const store = yield* InstanceStore.Service
+    const provider = yield* Provider.Service
+    const llm = yield* LLM.Service
+    yield* router.add("POST", REWRITE_PATH, (request) => rewriteEffect(request, store, provider, llm))
+  }),
 ).pipe(Layer.provide(authOnlyRouterLayer))
 
 // mango-code: the configuration read again when the app rewrote it (see shared/mango-reload.ts).
@@ -384,6 +395,7 @@ export function createRoutes(
     settingsRoute,
     languageRoute,
     projectFolderRoute,
+    imageRewriteRoute,
     controlRoute,
     reloadRoute,
     processesRoute,

@@ -851,6 +851,59 @@ it.instance("loop continues when finish is tool-calls", () =>
   }),
 )
 
+it.instance("loop cuts an answer that goes on with blank lines, tells the model and asks it again", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useServerConfig(providerCfg)
+    const prompt = yield* SessionPrompt.Service
+    const sessions = yield* Session.Service
+    const session = yield* sessions.create({
+      title: "Pinned",
+      permission: [{ permission: "*", pattern: "*", action: "allow" }],
+    })
+    yield* prompt.prompt({
+      sessionID: session.id,
+      agent: "build",
+      noReply: true,
+      parts: [{ type: "text", text: "hello" }],
+    })
+    yield* llm.text(`Let me check the page:${"\n".repeat(5000)}`)
+    yield* llm.text("checked")
+
+    const result = yield* prompt.loop({ sessionID: session.id })
+    expect(yield* llm.calls).toBe(2)
+    expect(result.parts.some((part) => part.type === "text" && part.text === "checked")).toBe(true)
+
+    const texts = (yield* MessageV2.stream(session.id)).flatMap((message) =>
+      message.parts.flatMap((part) => (part.type === "text" ? [`${message.info.role}: ${part.text}`] : [])),
+    )
+    expect(texts.filter((text) => text.includes("Let me check the page"))).toEqual(["assistant: Let me check the page:"])
+    expect(texts.some((text) => text.startsWith("user: Your answer stopped"))).toBe(true)
+  }),
+)
+
+it.instance("loop gives up on a model that answers with blank lines every time", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useServerConfig(providerCfg)
+    const prompt = yield* SessionPrompt.Service
+    const sessions = yield* Session.Service
+    const session = yield* sessions.create({
+      title: "Pinned",
+      permission: [{ permission: "*", pattern: "*", action: "allow" }],
+    })
+    yield* prompt.prompt({
+      sessionID: session.id,
+      agent: "build",
+      noReply: true,
+      parts: [{ type: "text", text: "hello" }],
+    })
+    for (const _ of [1, 2, 3, 4]) yield* llm.text(`Let me check:${"\n".repeat(5000)}`)
+
+    const result = yield* prompt.loop({ sessionID: session.id })
+    expect(yield* llm.calls).toBe(3)
+    if (result.info.role === "assistant") expect(result.info.finish).toBe("stop")
+  }),
+)
+
 it.instance("loop continues when finish is unknown", () =>
   Effect.gen(function* () {
     const { llm } = yield* useServerConfig(providerCfg)

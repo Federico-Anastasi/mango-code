@@ -11,7 +11,7 @@
   outline: 1px solid transparent;
   outline-offset: 0;
   background:
-    linear-gradient(180deg, var(--v2-alpha-light-2) 0%, var(--v2-alpha-light-0) 100%), var(--v2-background-bg-base);
+    var(--mango-ground);
   box-shadow: var(--v2-elevation-button-neutral);
   flex: none;
   align-self: stretch;
@@ -29,7 +29,7 @@
 [data-component="inline-input-v2"]:where(:hover):not([data-disabled], [data-invalid]):not(:focus-within) {
   background:
     linear-gradient(0deg, var(--v2-overlay-simple-overlay-hover), var(--v2-overlay-simple-overlay-hover)),
-    linear-gradient(180deg, var(--v2-alpha-light-2) 0%, var(--v2-alpha-light-0) 100%), var(--v2-background-bg-base);
+    var(--mango-ground);
 }
 
 [data-component="inline-input-v2"]:where(:hover):not([data-disabled], [data-invalid]):not(:focus-within)
@@ -88,7 +88,7 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   font-style: normal;
-  font-weight: 440;
+  font-weight: 400;
   font-size: 13px;
   line-height: 1;
   letter-spacing: -0.04px;
@@ -145,7 +145,7 @@
   background: transparent;
   outline: none;
   font-style: normal;
-  font-weight: 440;
+  font-weight: 400;
   font-size: 13px;
   line-height: 1;
   letter-spacing: -0.04px;

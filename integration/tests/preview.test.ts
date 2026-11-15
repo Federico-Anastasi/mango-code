@@ -44,5 +44,6 @@ test("the page the agent opens ends up in the Preview panel", async () => {
   const chosen = trace.match(/browser: app preview panel \(port (\d+)\)/);
   expect(chosen, trace).not.toBeNull();
   const pages: any[] = await (await fetch(`http://127.0.0.1:${chosen![1]}/json`)).json();
-  expect(pages.filter((p) => p.type === "page").map((p) => decodeURI(p.url))).toContain(url);
+  // The app serves the folder of the page on a port of its own: that address is what the panel shows.
+  expect(pages.filter((p) => p.type === "page").map((p) => p.url)).toContainEqual(expect.stringMatching(/^http:\/\/127\.0\.0\.1:\d+\/panel\.html$/));
 }, 120_000);

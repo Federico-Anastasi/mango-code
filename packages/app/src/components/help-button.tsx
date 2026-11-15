@@ -38,12 +38,17 @@ export function TabsInfoPopup() {
             <svg
               width="16"
               height="16"
-              viewBox="0 0 16 16"
+              viewBox="0 0 24 24"
               fill="none"
+              stroke="white"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
               xmlns="http://www.w3.org/2000/svg"
               aria-hidden="true"
             >
-              <path d="M4.25 11.75L11.75 4.25M11.75 11.75L4.25 4.25" stroke="white" />
+              <path d="M18 6 6 18" />
+              <path d="m6 6 12 12" />
             </svg>
           </button>
           <button
@@ -65,10 +70,10 @@ export function TabsInfoPopup() {
               onContextMenu={(event) => event.preventDefault()}
             />
             <div class="absolute inset-x-0 bottom-0 flex w-full flex-col items-start gap-1.5 bg-[linear-gradient(180deg,rgba(0,0,0,0)_0%,#000000_100%)] px-3 py-5">
-              <p class="w-full select-none text-[13px] font-[530] leading-none tracking-[-0.04px] text-[#FFFFFF]">
+              <p class="w-full select-none text-[13px] font-medium leading-none tracking-[-0.04px] text-[#FFFFFF]">
                 {language.t("help.tabs.title")}
               </p>
-              <p class="w-full select-none text-[13px] font-[440] leading-[140%] tracking-[-0.04px] text-[#808080]">
+              <p class="w-full select-none text-[13px] font-normal leading-[140%] tracking-[-0.04px] text-[#808080]">
                 {language.t("help.tabs.description")}
               </p>
             </div>
@@ -108,7 +113,7 @@ export function TabsInfoPopup() {
             "h-[52px] p-4": !windows(),
           }}
         >
-          <p class="min-h-0 min-w-0 flex-1 text-[13px] font-[530] leading-5 tracking-[-0.04px] tabular-nums text-v2-text-text-muted">
+          <p class="min-h-0 min-w-0 flex-1 text-[13px] font-medium leading-5 tracking-[-0.04px] tabular-nums text-v2-text-text-muted">
             {language.t("help.tabs.date")}
           </p>
           <Show when={!windows()}>
@@ -123,10 +128,10 @@ export function TabsInfoPopup() {
           </Show>
         </div>
         <div class="relative flex min-h-0 w-full flex-1 flex-col items-start gap-6 overflow-y-auto p-8">
-          <p class="w-full shrink-0 self-stretch text-[21px] font-[610] leading-6 tracking-[-0.37px] tabular-nums text-v2-text-text-base">
+          <p class="w-full shrink-0 self-stretch text-[21px] font-semibold leading-6 tracking-[-0.37px] tabular-nums text-v2-text-text-base">
             {language.t("help.tabs.title")}
           </p>
-          <div class="flex w-full flex-1 flex-col gap-4 text-[13px] font-[440] leading-5 tracking-[-0.04px] text-v2-text-text-base">
+          <div class="flex w-full flex-1 flex-col gap-4 text-[13px] font-normal leading-5 tracking-[-0.04px] text-v2-text-text-base">
             <p>{language.t("help.tabs.introduction")}</p>
             <img src={tabsImage} alt="" class="aspect-video w-full rounded-[6px] object-cover" />
             <p>{language.t("help.tabs.sessions")}</p>

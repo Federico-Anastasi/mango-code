@@ -93,7 +93,7 @@
     max-width: 100%;
     height: 20px;
     font-size: 13px;
-    font-weight: 530;
+    font-weight: 500;
     line-height: 20px;
     letter-spacing: -0.04px;
     color: var(--tec-title);
@@ -107,7 +107,7 @@
     flex-shrink: 0;
     height: 20px;
     font-size: 11px;
-    font-weight: 530;
+    font-weight: 500;
     line-height: 20px;
     letter-spacing: 0.05px;
     color: var(--tec-sep);
@@ -125,7 +125,7 @@
     text-overflow: ellipsis;
     white-space: nowrap;
     font-size: 13px;
-    font-weight: 440;
+    font-weight: 400;
     line-height: 20px;
     letter-spacing: -0.04px;
     color: var(--tec-subtitle);
@@ -143,7 +143,7 @@
     text-overflow: ellipsis;
     white-space: nowrap;
     font-size: 13px;
-    font-weight: 440;
+    font-weight: 400;
     line-height: 20px;
     letter-spacing: -0.04px;
     color: inherit;
@@ -184,7 +184,7 @@
   [data-slot="tool-error-card-suffix"] {
     padding: 0 0 0 24px;
     font-size: 13px;
-    font-weight: 440;
+    font-weight: 400;
     line-height: 1;
     letter-spacing: -0.04px;
     color: var(--tec-suffix);

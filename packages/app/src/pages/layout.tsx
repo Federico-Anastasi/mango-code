@@ -20,6 +20,7 @@ import { base64Encode } from "@opencode-ai/core/util/encode"
 import { decode64 } from "@/utils/base64"
 import { ResizeHandle } from "@opencode-ai/ui/resize-handle"
 import { Button } from "@opencode-ai/ui/button"
+import { ButtonV2 } from "@opencode-ai/ui/v2/button-v2"
 import { Icon as IconV2 } from "@opencode-ai/ui/v2/icon"
 import { IconButton } from "@opencode-ai/ui/icon-button"
 import { Tooltip } from "@opencode-ai/ui/tooltip"
@@ -1328,12 +1329,12 @@ export default function LegacyLayout(props: ParentProps) {
             <span class="text-12-regular text-text-weak">{description()}</span>
           </div>
           <div class="flex justify-end gap-2">
-            <Button variant="ghost" size="large" onClick={() => dialog.close()}>
+            <ButtonV2 variant="ghost" size="large" onClick={() => dialog.close()}>
               {language.t("common.cancel")}
-            </Button>
-            <Button variant="primary" size="large" disabled={data.status === "loading"} onClick={handleDelete}>
+            </ButtonV2>
+            <ButtonV2 variant="danger" size="large" disabled={data.status === "loading"} onClick={handleDelete}>
               {language.t("workspace.delete.button")}
-            </Button>
+            </ButtonV2>
           </div>
         </div>
       </Dialog>
@@ -1404,12 +1405,12 @@ export default function LegacyLayout(props: ParentProps) {
             </span>
           </div>
           <div class="flex justify-end gap-2">
-            <Button variant="ghost" size="large" onClick={() => dialog.close()}>
+            <ButtonV2 variant="ghost" size="large" onClick={() => dialog.close()}>
               {language.t("common.cancel")}
-            </Button>
-            <Button variant="primary" size="large" disabled={state.status === "loading"} onClick={handleReset}>
+            </ButtonV2>
+            <ButtonV2 variant="danger" size="large" disabled={state.status === "loading"} onClick={handleReset}>
               {language.t("workspace.reset.button")}
-            </Button>
+            </ButtonV2>
           </div>
         </div>
       </Dialog>

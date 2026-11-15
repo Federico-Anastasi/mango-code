@@ -122,11 +122,11 @@ export function DialogAddWslServer(props: DialogWslServerProps = {}) {
                   </div>
                 </DialogBody>
                 <DialogFooter>
-                  <ButtonV2 variant="neutral" disabled={model().busy} onClick={controller.closeCatalog}>
+                  <ButtonV2 variant="ghost" disabled={model().busy} onClick={controller.closeCatalog}>
                     {language.t("common.cancel")}
                   </ButtonV2>
                   <ButtonV2
-                    variant={model().installingCatalogDistro ? "loading" : "contrast"}
+                    variant={model().installingCatalogDistro ? "loading" : "primary"}
                     disabled={!model().installingCatalogDistro && (model().busy || !model().catalogTarget)}
                     style={{ width: "99px" }}
                     onClick={controller.installCatalogDistro}
@@ -207,11 +207,20 @@ export function DialogAddWslServer(props: DialogWslServerProps = {}) {
                   onClick={controller.openCatalog}
                 >
                   <span class="settings-v2-wsl-catalog-icon" aria-hidden="true">
-                    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
-                      <path
-                        d="M13.5564 10.4443V13.5554H4.22309C3.24087 13.5554 2.44531 13.5554 2.44531 13.5554V10.4443M11.112 5.99989L8.00087 9.111L4.88976 5.99989M8.00087 9.111L8.00087 2.44434"
-                        stroke="currentColor"
-                      />
+                    <svg
+                      width="16"
+                      height="16"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="2"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      xmlns="http://www.w3.org/2000/svg"
+                    >
+                      <path d="M12 15V3" />
+                      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                      <path d="m7 10 5 5 5-5" />
                     </svg>
                   </span>
                   <span class="settings-v2-wsl-catalog-copy">
@@ -221,8 +230,18 @@ export function DialogAddWslServer(props: DialogWslServerProps = {}) {
                     </span>
                   </span>
                   <span class="settings-v2-wsl-catalog-chevron" aria-hidden="true">
-                    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
-                      <path d="M6 12L10 8L6 4" stroke="currentColor" />
+                    <svg
+                      width="16"
+                      height="16"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="2"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      xmlns="http://www.w3.org/2000/svg"
+                    >
+                      <path d="m9 18 6-6-6-6" />
                     </svg>
                   </span>
                 </button>
@@ -230,11 +249,11 @@ export function DialogAddWslServer(props: DialogWslServerProps = {}) {
             </DialogBody>
 
             <DialogFooter>
-              <ButtonV2 variant="neutral" disabled={controller.adding()} onClick={controller.close}>
+              <ButtonV2 variant="ghost" disabled={controller.adding()} onClick={controller.close}>
                 {language.t("common.cancel")}
               </ButtonV2>
               <ButtonV2
-                variant={primaryButton().loading ? "loading" : primaryButton().variant}
+                variant={primaryButton().loading ? "loading" : "primary"}
                 disabled={!primaryButton().loading && primaryButton().disabled}
                 style={primaryButtonStyle()}
                 onClick={controller.runPrimary}
@@ -415,22 +434,16 @@ function DialogWslSetup(props: {
             height="24"
             viewBox="0 0 24 24"
             fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
             xmlns="http://www.w3.org/2000/svg"
             aria-hidden="true"
           >
-            <g clip-path="url(#settings-v2-wsl-warning-clip)">
-              <path
-                fill-rule="evenodd"
-                clip-rule="evenodd"
-                d="M12 -0.00244141L23.6926 20.2498H0.308594L12 -0.00244141ZM12.7954 6.32932C12.5844 6.11834 12.2982 5.99982 11.9999 5.99982C11.7015 5.99982 11.4154 6.11834 11.2044 6.32932C10.9934 6.5403 10.8749 6.82645 10.8749 7.12482V11.6248C10.8749 11.9232 10.9934 12.2093 11.2044 12.4203C11.4154 12.6313 11.7015 12.7498 11.9999 12.7498C12.2982 12.7498 12.5844 12.6313 12.7954 12.4203C13.0064 12.2093 13.1249 11.9232 13.1249 11.6248V7.12482C13.1249 6.82645 13.0064 6.5403 12.7954 6.32932ZM13.0605 17.5605C12.7792 17.8418 12.3977 17.9998 11.9999 17.9998C11.6021 17.9998 11.2205 17.8418 10.9392 17.5605C10.6579 17.2792 10.4999 16.8976 10.4999 16.4998C10.4999 16.102 10.6579 15.7205 10.9392 15.4392C11.2205 15.1579 11.6021 14.9998 11.9999 14.9998C12.3977 14.9998 12.7792 15.1579 13.0605 15.4392C13.3418 15.7205 13.4999 16.102 13.4999 16.4998C13.4999 16.8976 13.3418 17.2792 13.0605 17.5605Z"
-                fill="#DBDBDB"
-              />
-            </g>
-            <defs>
-              <clipPath id="settings-v2-wsl-warning-clip">
-                <rect width="24" height="24" fill="white" />
-              </clipPath>
-            </defs>
+            <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3" />
+            <path d="M12 9v4" />
+            <path d="M12 17h.01" />
           </svg>
           <h2 class="settings-v2-wsl-not-installed-title">{title()}</h2>
           <p class="settings-v2-wsl-not-installed-description">{description()}</p>
@@ -439,7 +452,7 @@ function DialogWslSetup(props: {
           </Show>
         </div>
         <Show when={props.state === "unavailable" && props.installable}>
-          <ButtonV2 variant="neutral" disabled={props.busy} onClick={props.onInstall}>
+          <ButtonV2 variant="primary" disabled={props.busy} onClick={props.onInstall}>
             {language.t("wsl.onboarding.installWsl")}
           </ButtonV2>
         </Show>

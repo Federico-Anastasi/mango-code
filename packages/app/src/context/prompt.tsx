@@ -13,6 +13,7 @@ import {
   createPromptSession,
   type ContextItem,
   type FileContextItem,
+  type PicturePick,
   type Prompt,
   type PromptModel,
   type PromptScope,
@@ -34,6 +35,7 @@ export type {
   FileAttachmentPart,
   FileContextItem,
   ImageAttachmentPart,
+  PicturePick,
   Prompt,
   PromptModel,
   PromptStore,
@@ -153,6 +155,10 @@ export const { use: usePrompt, provider: PromptProvider } = createSimpleContext(
       model: {
         current: withSuspense(() => session().model.current()),
         set: (model: PromptModel | undefined) => session().model.set(model),
+      },
+      picture: {
+        current: withSuspense(() => session().picture.current()),
+        set: (pick: PicturePick) => session().picture.set(pick),
       },
       context: {
         items: withSuspense(() => session().context.items()),

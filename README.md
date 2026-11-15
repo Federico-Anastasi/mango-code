@@ -27,7 +27,8 @@
 
 Mango Code is a desktop app for Windows, with an HTTP interface and a one-shot command for other programs. The agent is a fork of
 [opencode](https://github.com/anomalyco/opencode); the models run on [llama.cpp](https://github.com/ggml-org/llama.cpp)
-and on two engines of our own derived from it. The app is in English and Italian.
+and on two engines of our own derived from it; the pictures are drawn by
+[stable-diffusion.cpp](https://github.com/leejet/stable-diffusion.cpp). The app is in English and Italian.
 
 <p align="center">
   <img src="docs/images/home.png" alt="Mango Code: a new conversation, with the local model Qwen3.6-35B-A3B and the project invoice-tool" width="100%">
@@ -53,6 +54,10 @@ and on two engines of our own derived from it. The app is in English and Italian
   (small and fast, also on a laptop's processor), Qwen3.5-4B and Qwen3.5-2B (for 4 GB graphics cards). Most of them read images.
 - **Other open models.** Search Hugging Face, paste a link or pick a GGUF file already on your PC: before adding it,
   the app tells you whether it fits in memory and whether its chat template handles tools and long conversations.
+- **Pictures, made on your PC.** The box of a conversation has a "Picture" side: describe a picture and Z-Image Turbo
+  or FLUX.2 klein 4B draws it on your graphics card (10 to 20 seconds on an 8 GB card, one to three minutes on a 4 GB
+  one), in three formats and two sizes. A model that writes turns your words into the description the image model
+  draws best, which you can read and correct; the agent can also make a picture by itself while it works.
 - **Conversations that resume instantly.** Before the engine stops or switches model, it saves the conversation's
   state to disk; when you come back, it rereads only the new tokens instead of the whole conversation.
 
@@ -97,6 +102,8 @@ and on two engines of our own derived from it. The app is in English and Italian
 | The agent writes a page and checks it in the built-in browser. | What the model reads: the token cost of every tool, on or off per project. |
 | ![Mango Code fixing a bug with Qwen3.6 running locally](docs/images/chat.png) | ![Team mode: a cloud manager and cloud agents through OpenRouter](docs/images/team.png) |
 | Qwen3.6-35B-A3B, on the PC's own graphics cards, finds a bug, fixes it and runs the tests. | Team mode: a cloud manager and up to four cloud agents, through OpenRouter. |
+| ![A picture asked in the box and made on the PC with Z-Image Turbo](docs/images/pictures.png) | |
+| A picture asked in the box, made on the PC's own graphics card by Z-Image Turbo. | |
 
 ## Speed
 

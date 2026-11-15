@@ -68,7 +68,9 @@ const serialize = (message: SessionV1.WithParts) => {
       if (part.type === "text") return part.text ? [`[Assistant]: ${part.text}`] : []
       if (part.type === "reasoning") return part.text ? [`[Assistant reasoning]: ${part.text}`] : []
       if (part.type !== "tool") return []
-      const call = `[Assistant tool call]: ${part.tool}(${JSON.stringify(part.state.input)})`
+      // A summary needs to know what was called, not the file that was written: a long argument is cut like a long result.
+      const input = JSON.stringify(part.state.input, (_, value) => (typeof value === "string" ? truncate(value) : value))
+      const call = `[Assistant tool call]: ${part.tool}(${input})`
       if (part.state.status === "completed") {
         const attachments = (part.state.attachments ?? []).map(
           (item) => `[Attached ${item.mime}: ${item.filename ?? "file"}]`,
@@ -553,7 +555,7 @@ const layer = Layer.effect(
       if (result === "continue") {
         yield* events.publish(Event.Compacted, { sessionID: input.sessionID })
       }
-      return result
+      return result === "blank" ? "continue" : result
     })
 
     const create = Effect.fn("SessionCompaction.create")(function* (input: {

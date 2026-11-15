@@ -8,24 +8,33 @@ const ChevronRight: Component = () => (
     data-slot="menu-v2-item-chevron"
     width="16"
     height="16"
-    viewBox="0 0 16 16"
+    viewBox="0 0 24 24"
     fill="none"
+    stroke="currentColor"
+    stroke-width="2"
+    stroke-linecap="round"
+    stroke-linejoin="round"
     xmlns="http://www.w3.org/2000/svg"
     aria-hidden="true"
   >
-    <path d="M6 4L10 8L6 12V4Z" fill="currentColor" />
+    <path d="m9 18 6-6-6-6" />
   </svg>
 )
 
 const CheckMark: Component = () => (
-  <svg width="14" height="14" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-    <path
-      d="M3.53564 8.17857L6.39279 11.75L12.4642 4.25"
-      stroke="currentColor"
-      stroke-width="1"
-      stroke-linecap="round"
-      stroke-linejoin="round"
-    />
+  <svg
+    width="14"
+    height="14"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    stroke-width="2"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    xmlns="http://www.w3.org/2000/svg"
+    aria-hidden="true"
+  >
+    <path d="M20 6 9 17l-5-5" />
   </svg>
 )
 

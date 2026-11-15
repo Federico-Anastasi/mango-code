@@ -362,7 +362,6 @@ function DesktopRoot(props: { windowState: DesktopWindowState }) {
     const theme = useTheme()
 
     createEffect(() => {
-      theme.themeId()
       theme.mode()
       const bg = getComputedStyle(document.documentElement).getPropertyValue("--background-base").trim()
       if (bg) {

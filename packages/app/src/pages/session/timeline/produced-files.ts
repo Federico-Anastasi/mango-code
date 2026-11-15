@@ -13,7 +13,7 @@ export function producedFiles(parts: Part[]) {
   const seen = new Set<string>()
   return parts.flatMap((part) => {
     if (part.type !== "tool" || part.state.status !== "completed") return []
-    const path = producedFilePath(part.tool, part.state.input, part.state.output)
+    const path = producedFilePath(part.tool, part.state.input, part.state.output, part.state.metadata)
     if (!path || seen.has(samePathKey(path))) return []
     seen.add(samePathKey(path))
     return [path]
@@ -25,7 +25,7 @@ export function lastWrittenPage(parts: Part[]) {
   return parts
     .flatMap((part) => {
       if (part.type !== "tool" || part.state.status !== "completed") return []
-      const path = producedFilePath(part.tool, part.state.input, part.state.output)
+      const path = producedFilePath(part.tool, part.state.input, part.state.output, part.state.metadata)
       return path && projectFileKind(path) === "web" ? [path] : []
     })
     .at(-1)

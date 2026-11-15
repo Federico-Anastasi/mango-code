@@ -29,6 +29,11 @@ export type PromptInputV2ViewConfig = {
   placeholder?: Accessor<string>
   /** Notice for whoever attaches an image to a model that cannot see it. */
   attachmentNote?: Accessor<string | undefined>
+  /**
+   * The box asks for a picture: what is written is only the description. Attachments, commands, mentions and the shell
+   * do not apply to it, and the box does not open them.
+   */
+  picture?: Accessor<boolean>
   add?: {
     onAttach: () => void
   }
@@ -102,7 +107,9 @@ export function createPromptInputV2Controller(input: {
         setDraggingType: (type) => dispatch({ type: type ? "drag.enter" : "drag.leave" }),
       })
     : undefined
+  const picture = () => input.view.picture?.() === true
   const attach = () => {
+    if (picture()) return
     if (!attachments) {
       input.view.add?.onAttach()
       return
@@ -318,8 +325,9 @@ export function createPromptInputV2Controller(input: {
     canSubmit() {
       if (input.view.submit.blocked?.()) return false
       const persisted = draft.state
-      if (persisted.prompt.some((part) => part.type === "image")) return true
-      if (persisted.context.items.some((item) => !!item.comment?.trim())) return true
+      // a picture is asked with words only
+      if (!picture() && persisted.prompt.some((part) => part.type === "image")) return true
+      if (!picture() && persisted.context.items.some((item) => !!item.comment?.trim())) return true
       return persisted.prompt.some((part) => "content" in part && !!part.content.trim())
     },
     setEditor(element: HTMLElement) {
@@ -329,19 +337,20 @@ export function createPromptInputV2Controller(input: {
     restoreFocus,
     onInput(value: string, prompt?: PromptInputV2PersistedState["prompt"], cursor?: number) {
       if (prompt) draft.setPrompt(prompt, cursor)
+      if (picture() && prompt) return
       dispatch({ type: "input.changed", value, persist: !prompt })
     },
     onCursor(cursor: number) {
       draft.setCursor(cursor)
     },
     openCommands() {
-      dispatch({ type: "commands.open" })
+      if (!picture()) dispatch({ type: "commands.open" })
     },
     openContext() {
-      dispatch({ type: "context.open" })
+      if (!picture()) dispatch({ type: "context.open" })
     },
     openShell() {
-      dispatch({ type: "mode.shell" })
+      if (!picture()) dispatch({ type: "mode.shell" })
     },
     closeShell() {
       dispatch({ type: "mode.normal" })
@@ -365,6 +374,7 @@ export function createPromptInputV2Controller(input: {
       const clipboard = event.clipboardData
       if (
         attachments &&
+        !picture() &&
         (Array.from(clipboard?.items ?? []).some((item) => item.kind === "file") || !clipboard?.getData("text/plain"))
       ) {
         void attachments.handlePaste(event)
@@ -391,7 +401,7 @@ export function createPromptInputV2Controller(input: {
     },
     onDragEnter(event: DragEvent) {
       event.preventDefault()
-      dispatch({ type: "drag.enter" })
+      if (!picture()) dispatch({ type: "drag.enter" })
     },
     onDragOver(event: DragEvent) {
       event.preventDefault()
@@ -402,7 +412,7 @@ export function createPromptInputV2Controller(input: {
     onDrop(event: DragEvent) {
       event.preventDefault()
       dispatch({ type: "drag.leave" })
-      if (attachments) {
+      if (attachments && !picture()) {
         event.stopPropagation()
         void attachments.handleDrop(event)
         return

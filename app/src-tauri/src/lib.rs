@@ -26,6 +26,7 @@ mod engine_share;
 mod engine_remote;
 mod tray;
 mod report;
+mod sites;
 mod updater;
 mod zoom;
 
@@ -74,6 +75,10 @@ pub struct Status {
     pub stage: String,
     /// Text for the user, one line.
     pub detail: String,
+    /// The stage's place in the start and how many stages the start has: the page's bar is at `step` of `steps`.
+    /// Zero when there is no start to show (an error).
+    pub step: u8,
+    pub steps: u8,
     pub error: Option<ErrorInfo>,
 }
 
@@ -103,6 +108,8 @@ struct AppState {
     sup: OnceLock<Supervisor>,
     /// The control server: the engine manager, born before any model. It lives as long as the app, across "Retry" attempts.
     engine: OnceLock<EngineManager>,
+    /// The routes for pictures, born with the engine manager, which lends them the cards.
+    images: OnceLock<images::routes::Routes>,
     paths: OnceLock<Paths>,
     /// The microphone in the chat, off until the user turns it on.
     dictation: OnceLock<dictation::Dictation>,
@@ -123,6 +130,8 @@ struct AppState {
     folder: Mutex<Option<std::path::PathBuf>>,
     /// What the control server's routes remember (`control.rs`).
     control: control::Shared,
+    /// The folders served to the browser panel as sites (`sites.rs`).
+    sites: sites::Sites,
     /// The models being downloaded (`downloads.rs`), born at the first startup.
     downloads: OnceLock<downloads::Downloads>,
     /// The models and the default the agent knows, to tell it when they change (`agent_models.rs`).
@@ -143,7 +152,22 @@ pub(crate) fn publish(app: &AppHandle, s: Status) {
 }
 
 pub(crate) fn set_status(app: &AppHandle, stage: &str, detail: impl Into<String>) {
-    publish(app, Status { stage: stage.into(), detail: detail.into(), ..Default::default() });
+    let before = app.state::<AppState>().status.lock().unwrap().steps;
+    let (step, steps) = progress(stage, before);
+    publish(app, Status { stage: stage.into(), detail: detail.into(), step, steps, ..Default::default() });
+}
+
+/// The stages of a start, in order; one that uses another PC's engine has one more, in which it connects to it.
+const STAGES: [&str; 3] = ["startup", "agent", "ready"];
+const STAGES_WITH_ENGINE: [&str; 4] = ["startup", "engine", "agent", "ready"];
+
+/// Where `stage` is in the start and of how many stages: `(step, steps)`. `before` is how many stages the start had at
+/// the stage before: a start learns that it uses another PC's engine when it gets there, and keeps it until the next one.
+fn progress(stage: &str, before: u8) -> (u8, u8) {
+    let with_engine = stage == "engine" || (stage != "startup" && usize::from(before) == STAGES_WITH_ENGINE.len());
+    let stages: &[&str] = if with_engine { &STAGES_WITH_ENGINE } else { &STAGES };
+    let step = stages.iter().position(|s| *s == stage).map_or(0, |at| at + 1);
+    (step as u8, stages.len() as u8)
 }
 
 pub(crate) use mango_common::startup_log;
@@ -429,6 +453,11 @@ fn control_server(app: &AppHandle, paths: &Paths) -> Result<EngineManager> {
         let p = paths.clone();
         m.set_room_check(Box::new(move |key, lent, used| engine_cfg::taken_before_start(&p, &engine_cfg::detect()?, used, key, lent)));
     }
+    // The pictures: the image engine draws on a card the engine manager lends it, and gives it back.
+    let p = paths.clone();
+    let pictures = images::ImageManager::new(Box::new(move |key, port| engine_cfg::image_plan(&p, key, port)), images::lender(m.clone()), &paths.logs());
+    let p = paths.clone();
+    let _ = st.images.set(images::routes::Routes::new(pictures, Box::new(move || Ok(serde_json::to_value(engine_cfg::image_models(&p, &engine_cfg::detect()?)?)?))));
     engine::http::serve(m.clone(), manager_port, Some(std::sync::Arc::new(control::Routes(app.clone())))).with_context(|| tr!("Porta del motore", "Engine port"))?;
     let _ = st.engine.set(m.clone());
     engine_share::install(app, &paths.data, m.clone()).with_context(|| tr!("Condivisione del motore", "Engine sharing"))?;
@@ -677,16 +706,13 @@ pub fn run() {
             updater::install(app)?;
             let mut window = WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
                 .title("Mango Code")
-                // The Windows title bar follows the window theme: dark like the app, instead of
-                // the system white that clashes with the dark interface.
-                .theme(Some(tauri::Theme::Dark))
-                // What shows where the page does not reach (a window being resized, a page changing): the dark of the app, not white.
-                .background_color(tauri::window::Color(21, 23, 31, 255))
                 .inner_size(1360.0, 880.0)
                 .min_inner_size(900.0, 600.0)
                 // Ctrl+ / Ctrl- / Ctrl+0 and Ctrl+wheel: the browser's own zoom (`zoom.rs` remembers it)
                 .zoom_hotkeys_enabled(true)
-                .visible(!service_mode());
+                // Shown after `paint_ground` below: the system's theme is known only once the window exists, and
+                // the window must not appear in the wrong ground first.
+                .visible(false);
             // An instance with its own data (MANGO_DATA) keeps its own WebView2 data too: two WebView2 with
             // different options (the remote debugging of the tests) on the same folder do not start.
             if let Some(d) = std::env::var_os("MANGO_DATA") {
@@ -701,6 +727,11 @@ pub fn run() {
                 ));
             }
             let main = bridge::window(window, app.handle()).build()?;
+            // No theme is forced on the window: the title bar and the ground follow the system's.
+            paint_ground(&main, main.theme().unwrap_or(tauri::Theme::Dark));
+            if !service_mode() {
+                main.show()?;
+            }
             allow_microphone(&main);
             if let Ok(file) = mango_common::zoom_file() {
                 zoom::install(&main, file);
@@ -736,6 +767,11 @@ pub fn run() {
                     close_notice::on_close(&w);
                 }
             }
+            RunEvent::WindowEvent { label, event: tauri::WindowEvent::ThemeChanged(theme), .. } if label == "main" => {
+                if let Some(w) = main_window(app) {
+                    paint_ground(&w, theme);
+                }
+            }
             RunEvent::Exit => {
                 if let Ok(f) = mango_common::service_file() {
                     let _ = std::fs::remove_file(f);
@@ -744,6 +780,18 @@ pub fn run() {
             }
             _ => {}
         });
+}
+
+/// What shows where the page does not reach (a window being resized, a page changing): the ground of the page for the
+/// theme of the system, not white.
+fn paint_ground(window: &tauri::WebviewWindow, theme: tauri::Theme) {
+    let ground = match theme {
+        tauri::Theme::Light => tauri::window::Color(241, 240, 235, 255),
+        _ => tauri::window::Color(21, 21, 24, 255),
+    };
+    if let Err(e) = window.set_background_color(Some(ground)) {
+        eprintln!("Window background not set: {e}");
+    }
 }
 
 /// The dictation asks the window for the microphone. Edge's own question ("127.0.0.1:4196 wants to use your microphones")
@@ -772,5 +820,41 @@ fn allow_microphone(window: &tauri::WebviewWindow) {
     });
     if let Err(e) = result {
         eprintln!("Microphone permission handler not installed: {e}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::progress;
+
+    /// The bar of each stage of a start, in order: every stage is told how many stages the one before had.
+    fn bar(stages: &[&str]) -> Vec<(u8, u8)> {
+        let mut before = 0;
+        stages
+            .iter()
+            .map(|stage| {
+                let at = progress(stage, before);
+                before = at.1;
+                at
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_bar_advances_one_piece_at_each_stage_and_is_full_when_the_app_is_ready() {
+        assert_eq!(bar(&["startup", "agent", "ready"]), [(1, 3), (2, 3), (3, 3)]);
+    }
+
+    #[test]
+    fn a_start_through_another_pcs_engine_has_one_stage_more_and_never_goes_back() {
+        let stages = bar(&["startup", "engine", "agent", "ready"]);
+        assert_eq!(stages, [(1, 3), (2, 4), (3, 4), (4, 4)]);
+        let filled: Vec<f32> = stages.iter().map(|(step, steps)| f32::from(*step) / f32::from(*steps)).collect();
+        assert!(filled.windows(2).all(|pair| pair[0] < pair[1]), "{filled:?}");
+    }
+
+    #[test]
+    fn the_next_start_begins_again_from_the_stages_of_this_pc() {
+        assert_eq!(bar(&["startup", "engine", "agent", "ready", "startup", "agent"])[4..], [(1, 3), (2, 3)]);
     }
 }

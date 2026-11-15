@@ -9,7 +9,7 @@ mod engine;
 mod fake_server;
 
 pub use model::{discard_partial, install_model, remove_model, users_file};
-pub use engine::{engine_size, has_build, install_engine, installed_engine, older_engine, remove_old_engines, EngineUnusable};
+pub use engine::{engine_size, has_build, install_engine, installed_engine, installed_program, older_engine, remove_old_engines, EngineUnusable};
 
 use crate::{tr, user_text};
 use anyhow::{bail, Context, Result};

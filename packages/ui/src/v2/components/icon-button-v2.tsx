@@ -11,7 +11,7 @@ export interface IconButtonV2Props
   // icon: IconProps["name"]
   size?: "small" | "normal" | "large"
   // iconSize?: IconProps["size"]
-  variant?: "neutral" | "contrast" | "ghost" | "ghost-muted"
+  variant?: "primary" | "neutral" | "contrast" | "ghost" | "ghost-muted"
   state?: "rest" | "hover" | "pressed"
 }
 

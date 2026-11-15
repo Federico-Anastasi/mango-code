@@ -1,132 +1,247 @@
-/* Mango Code startup page. Colors and fonts like the web UI (oc-2 theme): dark #15171f,
-   light #fafafa, system font. Follows the system theme. No external resources. */
+/* The app's own page: what shows while the app starts, and the error that stops it. Colours and typefaces come from
+   suite/tokens.css alone (the theme follows the system); the gradient inside the mango is the mark's own drawing. No
+   external resources. */
 
 :root {
-  color-scheme: light dark;
-  --background: #fafafa;
-  --panel: #ffffff;
-  --border: #e6e4de;
-  --text: #171717;
-  --text-2: #6b6a66;
-  --accent: #f0532b;
-  --accent-2: #ffa61f;
-  --track: #ecebe6;
-  --halo: rgba(255, 166, 31, 0.22);
-  --code: #f3f2ee;
-  --font: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI", sans-serif;
-  --mono: ui-monospace, "Cascadia Mono", "Cascadia Code", Consolas, monospace;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #15171f;
-    --panel: #1b1e27;
-    --border: #2a2e3a;
-    --text: #f1f0eb;
-    --text-2: #9a9a96;
-    --track: #262a35;
-    --halo: rgba(255, 166, 31, 0.16);
-    --code: #12141b;
-  }
+  /* The product's colour: amber, in the shade that reads on the ground of each theme. */
+  --mango-product: var(--mango-action-text);
+  /* The glow behind the mark is the amber itself, not the darker shade the text takes on a light ground. */
+  --halo: color-mix(in srgb, var(--mango-action) 20%, transparent);
 }
 
 * { box-sizing: border-box; }
 
-html, body { height: 100%; margin: 0; }
+html { background: var(--mango-ground); }
 
 body {
-  background: var(--background);
-  color: var(--text);
-  font: 15px/1.5 var(--font);
+  min-height: 100dvh;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  background: radial-gradient(ellipse 520px 340px at 50% 44%, var(--halo), transparent 70%);
+  color: var(--mango-text);
+  font: 400 14px/1.5 var(--mango-font-text);
   -webkit-font-smoothing: antialiased;
   user-select: none;
   cursor: default;
 }
 
+/* The halo sits at the top when the page is the error, behind the small wordmark. */
+body:has(#error:not([hidden])) {
+  background-image: radial-gradient(ellipse 520px 240px at 50% 0%, var(--halo), transparent 70%);
+}
+
+[hidden] { display: none !important; }
+
 main {
-  min-height: 100%;
+  flex: 1;
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
-  padding: 32px 24px;
-  background: radial-gradient(ellipse 420px 300px at 50% 32%, var(--halo), transparent 70%);
+  padding: 32px 24px 0;
 }
 
-h1 {
-  margin: 14px 0 4px;
-  font-size: 28px;
-  font-weight: 650;
+.defs { position: absolute; width: 0; height: 0; }
+
+/* --- The wordmark --- */
+
+.lockup {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font: 700 17px/1 var(--mango-font-title);
   letter-spacing: -0.02em;
+  white-space: nowrap;
+  color: var(--mango-text);
+}
+.lockup svg { width: 1.45em; height: 1.45em; flex: none; }
+.lockup i { font-style: normal; color: var(--mango-product); }
+.lockup.large { font-size: 34px; gap: 14px; }
+
+/* --- Starting --- */
+
+.starting {
+  margin: auto 0;
+  padding-bottom: 48px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 24px;
+  text-align: center;
+}
+.line { margin: 0; min-height: 1.5em; color: var(--mango-text); }
+
+/* The start has a few stages and the bar advances one piece at each. */
+.bar {
+  width: min(260px, 100%);
+  height: 6px;
+  margin-top: -8px;
+  border-radius: var(--mango-radius-full);
+  background: var(--mango-raised);
+  overflow: hidden;
+}
+.bar > span {
+  display: block;
+  width: 0;
+  height: 100%;
+  border-radius: var(--mango-radius-full);
+  background: linear-gradient(90deg, var(--mango-action), var(--mango-action-end));
+  transition: width var(--mango-motion);
 }
 
-section { width: 100%; max-width: 420px; text-align: center; }
-[hidden] { display: none !important; }
-
-.logo {
-  width: 104px;
-  height: 104px;
-  filter: drop-shadow(0 10px 22px rgba(240, 83, 43, 0.28));
-  animation: float 3.6s ease-in-out infinite;
+/* The one thing that moves while nothing changes: the mango, slightly, for as long as the app is starting. */
+.starting .lockup svg { animation: alive 3.2s ease-in-out infinite; transform-origin: 50% 60%; }
+@keyframes alive {
+  0%, 100% { transform: translateY(0) rotate(0deg); }
+  50% { transform: translateY(-3px) rotate(-3deg); }
 }
-
-.subtitle { margin: 0 0 22px; color: var(--text-2); font-size: 16px; }
-#error .subtitle { color: var(--text); font-weight: 600; font-size: 17px; margin-bottom: 8px; }
 
 /* --- Error --- */
-.explanation { margin: 0 0 16px; color: var(--text-2); }
-#error-sentence { color: var(--text); }
 
-details {
-  text-align: left;
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  padding: 10px 14px;
-  margin-bottom: 20px;
+#error { width: 100%; max-width: 460px; text-align: center; }
+#error .lockup { margin-bottom: 32px; }
+
+h1#error-title {
+  margin: 0 0 8px;
+  font: 700 23px/1.2 var(--mango-font-title);
+  letter-spacing: -0.01em;
+  text-wrap: balance;
 }
-summary { cursor: pointer; font-weight: 550; color: var(--text-2); }
-summary:hover { color: var(--text); }
+.sentence { margin: 0 0 8px; color: var(--mango-text); overflow-wrap: anywhere; }
+.hint { margin: 0 0 24px; font-size: 13px; color: var(--mango-text-muted); }
+
+.card {
+  margin-bottom: 16px;
+  text-align: left;
+  background: var(--mango-surface);
+  border: 1px solid var(--mango-line);
+  border-radius: 10px;
+  overflow: hidden;
+}
+.card > * { padding: 13px 16px; }
+.card > * + * { border-top: 1px solid var(--mango-line); }
+
+summary { cursor: pointer; font-weight: 600; }
+summary:focus-visible { outline: 2px solid var(--mango-action-text); outline-offset: 2px; border-radius: 4px; }
 
 pre {
-  margin: 10px 0 8px;
-  padding: 10px 12px;
+  margin: 12px 0 8px;
+  padding: 8px 10px;
   max-height: 200px;
   overflow: auto;
-  background: var(--code);
-  border-radius: 8px;
-  font: 400 12px/1.5 var(--mono);
+  background: var(--mango-ground);
+  border: 1px solid var(--mango-line);
+  border-radius: 7px;
+  font: 400 12px/1.5 var(--mango-font-code);
+  font-variant-ligatures: none;
   white-space: pre-wrap;
-  word-break: break-word;
+  overflow-wrap: anywhere;
   user-select: text;
   cursor: text;
 }
 
-.actions { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; }
+/* A row of a card: the name and what it does on the left, the control on the right; under the name when it does not fit. */
+.row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; cursor: pointer; }
+.name { display: flex; flex-direction: column; gap: 2px; flex: 1 1 220px; min-width: 0; }
+.name b { font-weight: 600; }
+.name small { font-size: 13px; color: var(--mango-text-muted); overflow-wrap: anywhere; }
+.name small:empty { display: none; }
 
-button {
-  font: inherit;
-  font-weight: 600;
-  border-radius: 10px;
-  padding: 9px 22px;
-  border: 1px solid transparent;
+.actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
+
+/* --- Controls --- */
+
+button, .button {
+  font: 600 13px/1 var(--mango-font-text);
+  color: var(--mango-text);
+  background: var(--mango-raised);
+  border: 1px solid var(--mango-line);
+  border-radius: 7px;
+  padding: 9px 13px;
   cursor: pointer;
-  transition: filter .15s, background .15s;
+  white-space: nowrap;
 }
-button:focus-visible { outline: 2px solid var(--accent-2); outline-offset: 2px; }
 button:disabled { opacity: .55; cursor: default; }
-.primary { color: #fff; background: linear-gradient(135deg, var(--accent-2), var(--accent)); }
-.primary:hover:not(:disabled) { filter: brightness(1.08); }
-.secondary { color: var(--text); background: var(--panel); border-color: var(--border); }
-.secondary:hover:not(:disabled) { background: var(--track); }
-.link { padding: 2px 0; color: var(--accent); background: none; font-size: 13px; }
-.link:hover { text-decoration: underline; }
 
-.status { margin: 14px 0 0; min-height: 1.5em; font-size: 13px; color: var(--text-2); }
-.screenshot { display: block; margin: 12px 0 0; text-align: center; color: var(--text-2); font-size: 13px; }
+/* The one main action of the page. */
+button.primary {
+  flex: 1 1 100%;
+  padding: 12px 18px;
+  font-size: 14px;
+  color: var(--mango-on-action);
+  background: linear-gradient(90deg, var(--mango-action), var(--mango-action-end));
+  border-color: transparent;
+}
+button.primary:hover:not(:disabled) { filter: brightness(1.06); }
 
-@keyframes float { 50% { transform: translateY(-5px); } }
+/* Minor actions: no background, no border. */
+button.text { color: var(--mango-text-muted); background: none; border-color: transparent; padding: 4px 0; }
+button.text:hover:not(:disabled) { color: var(--mango-text); }
+
+button:focus-visible, .button:has(input:focus-visible), input[type="checkbox"]:focus-visible {
+  outline: 2px solid var(--mango-action-text);
+  outline-offset: 2px;
+}
+
+/* The file input is the label's button: it stays in the page for the keyboard, without showing. */
+.button { position: relative; }
+.button input { position: absolute; width: 1px; height: 1px; opacity: 0; overflow: hidden; }
+
+/* A switch: 36 x 20, amber when on. */
+input[type="checkbox"] {
+  appearance: none;
+  flex: none;
+  position: relative;
+  width: 36px;
+  height: 20px;
+  margin: 0;
+  border-radius: 999px;
+  background: var(--mango-line);
+  cursor: pointer;
+  transition: background 150ms;
+}
+input[type="checkbox"]::after {
+  content: "";
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--mango-text);
+  transition: transform 150ms, background 150ms;
+}
+input[type="checkbox"]:checked { background: var(--mango-action); }
+input[type="checkbox"]:checked::after { transform: translateX(16px); background: var(--mango-on-action); }
+
+/* --- Bottom --- */
+
+.status { width: 100%; max-width: 460px; margin: 16px 0 0; min-height: 1.5em; text-align: center; font-size: 13px; color: var(--mango-text-muted); overflow-wrap: anywhere; }
+
+footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 24px 16px;
+  font-size: 12px;
+  color: var(--mango-text-faint);
+}
+footer button.text { font-size: 12px; }
 
 @media (prefers-reduced-motion: reduce) {
-  * { animation: none !important; transition: none !important; }
+  * { transition: none !important; animation: none !important; }
+}
+
+/* Narrow window: what is touched is at least 44 px high, and the wordmark is smaller. */
+@media (max-width: 639px) {
+  main { padding: 24px 16px 0; }
+  footer { padding-left: 16px; padding-right: 16px; }
+  .lockup.large { font-size: 26px; gap: 12px; }
+  button, .button { min-height: 44px; display: inline-flex; align-items: center; justify-content: center; }
+  button.text { padding: 4px 8px; }
+  summary { padding: 12px 0; margin: -13px 0; }
+  .row { min-height: 44px; }
 }

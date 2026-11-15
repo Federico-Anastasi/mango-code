@@ -60,7 +60,7 @@ test("a start that fails shows the app's page with the error alone: Retry, Repor
   // The page has nothing but the error: no choice of models, no download, no engine of another PC.
   expect(await p.evaluate(`[...document.querySelectorAll('section')].map((s) => s.id)`)).toEqual(["error"]);
   expect(await p.evaluate(`document.getElementById('error-sentence').innerText`)).toContain(`La porta ${agentPort} è occupata`);
-  for (const [id, label] of [["retry", "Riprova"], ["report", "Segnala il problema"], ["logs", "Apri i log"]]) {
+  for (const [id, label] of [["retry", "Riprova"], ["report", "Segnala un problema"], ["logs", "Apri i log"]]) {
     expect(await p.evaluate(visible(id))).toBe(true);
     expect(await p.evaluate(`document.getElementById('${id}').innerText`)).toBe(label);
   }

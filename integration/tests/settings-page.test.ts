@@ -182,7 +182,8 @@ test("Agent: a row for each kind of entry, with its weight, and the switches cha
 test("General: the three alerts have a notification and a sound each, saved by the page", async () => {
   expect(await mouseClick('[data-component="settings-page"] [data-section="general"]')).toBe(true);
   await waitFor(`${pane("general")} !== null`);
-  const text = await p.evaluate(`${pane("general")}.innerText`);
+  // as written: the stylesheet shows the titles of the groups in capitals
+  const text = await p.evaluate(`${pane("general")}.textContent`);
   for (const row of ["Lingua", "Tema", "Grandezza", "Dettatura", "Mostra il ragionamento nella chat", "Avvisi", "Risposta pronta", "Serve un tuo permesso", "Errore"]) expect(text, row).toContain(row);
   // the row has two switches: the notification, then the sound
   const sound = `document.querySelectorAll('[data-action="settings-alert-errors"] input')[1]`;
@@ -194,7 +195,7 @@ test("General: the three alerts have a notification and a sound each, saved by t
 }, 60_000);
 
 test("General: «Grandezza» changes the window's zoom by the browser's steps, and follows a zoom changed elsewhere", async () => {
-  const value = `document.querySelector('[data-slot="settings-zoom-value"]').innerText`;
+  const value = `document.querySelector('[data-action="settings-zoom"] [data-slot="stepper-v2-value"]').innerText`;
   const zoom = () => p.evaluate(`window.__MANGO_DESKTOP__.zoom.get()`);
   await waitFor(`${value} === "100%"`);
   expect(await click('[data-action="settings-zoom"] button', "+")).toBe(true);
@@ -211,15 +212,11 @@ test("General: the language and the theme change the page at once and are kept",
   await waitFor(`${pane("general")} !== null`);
   // the language: the page reads in English, the app's choice (the agent's file) is English, and Italian brings it back
   const language = async () => (await (await fetch(`${env.agent}/mango/language`)).json()).language;
-  expect(await mouseClick('[data-action="settings-language"] [data-slot="select-v2-value"]')).toBe(true);
-  await waitFor(`!!document.querySelector('[role="option"]')`);
-  expect(await click('[role="option"]', "English")).toBe(true);
+  expect(await click('[data-action="settings-language"] button', "English")).toBe(true);
   await waitFor(`${pane("general")}.innerText.includes("Language")`);
   expect(await language()).toBe("en");
   expect(await p.evaluate(`document.querySelector('[data-component="settings-page"] [data-section="models"]').innerText.trim()`)).toBe("Models");
-  expect(await mouseClick('[data-action="settings-language"] [data-slot="select-v2-value"]')).toBe(true);
-  await waitFor(`!!document.querySelector('[role="option"]')`);
-  expect(await click('[role="option"]', "Italiano")).toBe(true);
+  expect(await click('[data-action="settings-language"] button', "Italiano")).toBe(true);
   await waitFor(`${pane("general")}.innerText.includes("Lingua")`);
   expect(await language()).toBe("it");
 
@@ -227,7 +224,7 @@ test("General: the language and the theme change the page at once and are kept",
   const mode = () => p.evaluate(`document.documentElement.dataset.colorScheme`) as Promise<string>;
   const choose = (label: string) => click('[data-action="settings-color-scheme"] [role="radio"], [data-action="settings-color-scheme"] button', label);
   const items = await p.evaluate(`[...document.querySelectorAll('[data-action="settings-color-scheme"] [role="radio"], [data-action="settings-color-scheme"] button')].map((e) => e.innerText.trim())`);
-  expect(items).toEqual(["Sistema", "Chiaro", "Scuro"]);
+  expect(items).toEqual(["Del sistema", "Chiaro", "Scuro"]);
   expect(await choose("Chiaro")).toBe(true);
   await waitFor(`document.documentElement.dataset.colorScheme === "light"`);
   expect(await choose("Scuro")).toBe(true);
@@ -237,8 +234,8 @@ test("General: the language and the theme change the page at once and are kept",
   await p.send("Page.reload");
   await waitFor(`!!document.querySelector('[data-action="settings-color-scheme"]')`, 30_000);
   expect(await mode()).toBe("dark");
-  expect(await choose("Sistema")).toBe(true);
-  await waitFor(`document.querySelector('[data-action="settings-color-scheme"] [aria-checked="true"], [data-action="settings-color-scheme"] [aria-pressed="true"], [data-action="settings-color-scheme"] [data-checked]')?.innerText.includes("Sistema")`);
+  expect(await choose("Del sistema")).toBe(true);
+  await waitFor(`document.querySelector('[data-action="settings-color-scheme"] [aria-checked="true"], [data-action="settings-color-scheme"] [aria-pressed="true"], [data-action="settings-color-scheme"] [data-checked]')?.innerText.includes("Del sistema")`);
 }, 90_000);
 
 test("Help: the automatic update is a switch, and the choice is the app's", async () => {
@@ -293,7 +290,7 @@ test("the search finds a setting of another section and brings its row into view
 test("Models: the model on the computer opens its choices, and a style chosen there is saved", async () => {
   expect(await mouseClick('[data-component="settings-page"] [data-section="models"]')).toBe(true);
   await waitFor(`document.querySelector('[data-model-row]') !== null`, 30_000);
-  const text = await p.evaluate(`${pane("models")}.innerText`);
+  const text = await p.evaluate(`${pane("models")}.textContent`);
   expect(text).toContain("Sul computer");
   expect(text).toContain("Un altro modello");
   const key = await p.evaluate(`document.querySelector('[data-model-row]').dataset.modelRow`);

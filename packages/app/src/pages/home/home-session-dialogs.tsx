@@ -45,7 +45,7 @@ export function DialogRenameSession(props: { title: string; onRename: (title: st
           <ButtonV2 type="button" variant="ghost" onClick={() => dialog.close()}>
             {language.t("common.cancel")}
           </ButtonV2>
-          <ButtonV2 type="submit" variant="contrast" disabled={!value().trim()}>
+          <ButtonV2 type="submit" variant="primary" disabled={!value().trim()}>
             {language.t("common.save")}
           </ButtonV2>
         </DialogFooter>

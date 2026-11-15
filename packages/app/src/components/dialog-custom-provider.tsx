@@ -1,4 +1,5 @@
 import { Button } from "@opencode-ai/ui/button"
+import { ButtonV2 } from "@opencode-ai/ui/v2/button-v2"
 import { useDialog } from "@opencode-ai/ui/context/dialog"
 import { Dialog } from "@opencode-ai/ui/dialog"
 import { IconButton } from "@opencode-ai/ui/icon-button"
@@ -315,7 +316,7 @@ export function CustomProviderForm(props: { autofocus?: boolean } = {}) {
           </Button>
         </div>
 
-        <Button
+        <ButtonV2
           class="w-auto self-start"
           type="submit"
           size="large"
@@ -323,7 +324,7 @@ export function CustomProviderForm(props: { autofocus?: boolean } = {}) {
           disabled={saveMutation.isPending}
         >
           {saveMutation.isPending ? language.t("common.saving") : language.t("common.submit")}
-        </Button>
+        </ButtonV2>
       </form>
     </div>
   )

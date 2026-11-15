@@ -1,0 +1,55 @@
+[data-component="stepper-v2"] {
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px;
+  border: 1px solid var(--mango-line);
+  border-radius: 8px;
+  background: var(--mango-ground);
+  font-family: var(--mango-font-text);
+  font-size: 13px;
+  color: var(--mango-text);
+}
+
+[data-component="stepper-v2"] [data-slot="stepper-v2-button"] {
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--mango-text-muted);
+  font: inherit;
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+}
+
+[data-component="stepper-v2"] [data-slot="stepper-v2-button"]:hover:not(:disabled) {
+  background: var(--mango-raised);
+  color: var(--mango-text);
+}
+
+[data-component="stepper-v2"] [data-slot="stepper-v2-button"]:focus-visible {
+  outline: 2px solid var(--mango-action-text);
+  outline-offset: 2px;
+}
+
+[data-component="stepper-v2"] [data-slot="stepper-v2-button"]:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+[data-component="stepper-v2"] [data-slot="stepper-v2-value"] {
+  min-width: 48px;
+  padding: 0 4px;
+  text-align: center;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}

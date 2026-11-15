@@ -3,8 +3,8 @@
 // WHY IT EXISTS. On Windows, process.stdout connected to a PIPE is BLOCKING (documented by
 // Node: "Pipes: synchronous on Windows and Linux"). If the client stops draining the pipe, the
 // NEXT write freezes the WHOLE event loop of the server: no timers, no stdin reads, no
-// heartbeat, no replies - and the process stays ALIVE at 0% CPU forever. Measured on 2026-08-26
-// on pid 10100: stuck for 15+ minutes, CPU delta 0 s over 5 s.
+// heartbeat, no replies - and the process stays ALIVE at 0% CPU forever. Measured:
+// stuck for 15+ minutes, CPU delta 0 s over 5 s.
 // setBlocking(false) does NOT help: tried, it freezes all the same.
 //
 // The cure is to move the write to a thread of its own. If the pipe fills up, THIS worker

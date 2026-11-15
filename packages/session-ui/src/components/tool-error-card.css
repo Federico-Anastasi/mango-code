@@ -1,26 +1,28 @@
 [data-component="card"][data-kind="tool-error-card"] {
-  --card-pad-y: 8px;
-  --card-line-pad: 12px;
+  /* The row of a failed tool is the same bordered row as every tool: only the dot and the outcome say it failed. */
+  padding: 0;
+  --card-accent: var(--mango-error);
+
+  &::before {
+    display: none;
+  }
+
+  [data-slot="basic-tool-tool-info-main"] {
+    width: 100%;
+  }
+
+  [data-slot="basic-tool-tool-subtitle"] {
+    margin-inline-start: auto;
+    color: var(--mango-error);
+  }
 
   [data-slot="basic-tool-tool-title"] {
     color: var(--v2-text-text-base);
   }
 
-  [data-slot="basic-tool-tool-subtitle"] {
-    color: var(--v2-text-text-muted);
-  }
-
   [data-slot="collapsible-arrow"],
   [data-slot="collapsible-arrow-icon"] {
     color: var(--v2-text-text-faint);
-  }
-
-  > [data-component="collapsible"].tool-collapsible {
-    gap: 0px;
-  }
-
-  > [data-component="collapsible"].tool-collapsible[data-open="true"] {
-    gap: 4px;
   }
 
   [data-component="tool-error-card-icon"] [data-component="icon"] {
@@ -29,8 +31,7 @@
 
   [data-slot="tool-error-card-content"] {
     position: relative;
-    padding-left: 24px;
-    margin-bottom: 8px;
+    padding: 8px 11px 8px 35px;
     -webkit-user-select: text;
     user-select: text;
   }

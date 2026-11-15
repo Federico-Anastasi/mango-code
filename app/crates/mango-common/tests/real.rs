@@ -3,8 +3,9 @@
 //! `cargo test -p mango-common --test real -- --ignored --test-threads=1`
 //!
 //! They load no model: `--version` loads no backend; installing a CUDA build also asks the engine for its GPUs
-//! (`--list-devices`).
+//! (`--list-devices`). The one exception makes an image, and says what it needs.
 
+use mango_common::catalog::ImageModel;
 use mango_common::download::{install_model, install_engine, installed_engine, download_stoppable, sha256_file, RemoteFile};
 use mango_common::{Build, Paths};
 use serde_json::Value;
@@ -99,6 +100,80 @@ fn the_forked_engines_install_and_start() {
         }
     }
     let _ = fs::remove_dir_all(&base);
+}
+
+/// The image engine, every build of the catalog: installed from the release's zips (CUDA 12 with its runtime, and it
+/// must see a GPU), then `sd-server.exe --version` names the commit of the catalog's version.
+#[test]
+#[ignore = "downloads ~1 GB from GitHub; CUDA 12 needs an NVIDIA GPU"]
+fn the_image_engine_installs_and_starts() {
+    let base = folder("sd");
+    let p = paths(&launcher(), &base);
+    let version = engine_catalog()["sd"]["version"].as_str().unwrap().to_string();
+    for build in [Build::Cpu, Build::Vulkan, Build::Cuda12] {
+        let dir = install_engine(&p, "sd", build, &AtomicBool::new(false), &mut |_, _| {}).unwrap_or_else(|e| panic!("sd {build}: {e:#}"));
+        assert_eq!(dir, p.engines.join("sd").join(format!("{version}-{build}")));
+        let out = Command::new(dir.join("sd-server.exe")).arg("--version").current_dir(&dir).output().unwrap();
+        let text = String::from_utf8_lossy(&out.stdout).into_owned() + &String::from_utf8_lossy(&out.stderr);
+        assert!(out.status.success() && text.contains(version.rsplit('-').next().unwrap()), "sd {build}: {text}");
+        println!("sd {build}: {}", text.lines().next().unwrap_or_default());
+    }
+    let _ = fs::remove_dir_all(&base);
+}
+
+/// A model that makes images of the real catalog, from nothing to a picture: the engine is installed from the catalog,
+/// the model's files are downloaded (or found and verified, see `MANGO_TEST_MODELS`), and the engine draws with them
+/// what the catalog says (`image`), with the weights kept in RAM. The picture must be a PNG of the size asked, and not
+/// one flat colour: some cards give a white or a black image with some settings.
+/// - `MANGO_TEST_IMAGE_MODEL`: the catalog key (default `z-image-turbo`);
+/// - `MANGO_TEST_MODELS`: a models folder that may already have the files, at the catalog's paths: a file that is
+///   there and right is not downloaded again. Without it, a temporary folder, and about 6.7 GB from Hugging Face;
+/// - `MANGO_TEST_IMAGE_SIDE`: the side in pixels (default 512);
+/// - the card is chosen with `CUDA_VISIBLE_DEVICES` (and `CUDA_DEVICE_ORDER=PCI_BUS_ID`), as for every CUDA program.
+/// The picture stays in the temporary folder, whose path is printed; the engine and what was downloaded there go.
+#[test]
+#[ignore = "downloads ~1 GB from GitHub and, without MANGO_TEST_MODELS, ~6.7 GB from Hugging Face; needs an NVIDIA GPU"]
+fn a_model_of_the_catalog_makes_an_image() {
+    let base = folder("image");
+    let mut p = paths(&launcher(), &base);
+    if let Some(models) = std::env::var_os("MANGO_TEST_MODELS") {
+        p.models = PathBuf::from(models);
+    }
+    let key = std::env::var("MANGO_TEST_IMAGE_MODEL").unwrap_or_else(|_| "z-image-turbo".into());
+    let side = std::env::var("MANGO_TEST_IMAGE_SIDE").unwrap_or_else(|_| "512".into());
+    let catalog = mango_common::catalog::read(&p).unwrap().root;
+    let image: ImageModel = serde_json::from_value(catalog["models"][&key]["image"].clone()).unwrap_or_else(|e| panic!("{key}: {e}"));
+
+    let engine = install_engine(&p, "sd", Build::Cuda12, &AtomicBool::new(false), &mut |_, _| {}).unwrap();
+    install_model(&p, &key, "sd", &AtomicBool::new(false), &mut |_, _| {}).unwrap();
+
+    let picture = base.join("picture.png");
+    let start = std::time::Instant::now();
+    let out = Command::new(engine.join("sd-cli.exe"))
+        .arg("--diffusion-model").arg(p.models.join(&image.diffusion))
+        .arg("--llm").arg(p.models.join(&image.encoder))
+        .arg("--vae").arg(p.models.join(&image.vae))
+        .args(["-p", "a red vespa parked in front of the Colosseum, photograph", "-s", "42", "--offload-to-cpu"])
+        .args(["--steps", &image.steps.to_string(), "--cfg-scale", &image.cfg_scale.to_string(), "-W", &side, "-H", &side])
+        .arg("-o").arg(&picture)
+        .current_dir(&engine)
+        .output()
+        .unwrap();
+    let text = String::from_utf8_lossy(&out.stdout).into_owned() + &String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "{text}");
+    println!("{key} at {side}: {:.1} s, {}", start.elapsed().as_secs_f64(), picture.display());
+    for line in text.lines().filter(|l| l.contains("CUDA") || l.contains("sampling completed") || l.contains("generate_image completed")) {
+        println!("  {line}");
+    }
+
+    // The PNG's header gives its size; pixels that are all alike compress to almost nothing.
+    let png = fs::read(&picture).unwrap();
+    assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n");
+    let number = |at: usize| u32::from_be_bytes(png[at..at + 4].try_into().unwrap());
+    assert_eq!((number(16), number(20)), (side.parse().unwrap(), side.parse().unwrap()));
+    assert!(png.len() > 50_000, "{} bytes: a flat picture?", png.len());
+    let _ = fs::remove_dir_all(base.join("engines"));
+    let _ = fs::remove_dir_all(base.join("models"));
 }
 
 /// This PC's driver (560.94) supports CUDA 12.6: the CUDA 13 build downloads and extracts, but the engine sees

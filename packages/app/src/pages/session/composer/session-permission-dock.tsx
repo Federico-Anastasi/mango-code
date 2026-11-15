@@ -1,6 +1,6 @@
 import { For, Show } from "solid-js"
 import type { PermissionRequest } from "@opencode-ai/sdk/v2"
-import { Button } from "@opencode-ai/ui/button"
+import { ButtonV2 } from "@opencode-ai/ui/v2/button-v2"
 import { DockPrompt } from "@opencode-ai/session-ui/dock-prompt"
 import { Icon } from "@opencode-ai/ui/icon"
 import { useLanguage } from "@/context/language"
@@ -12,7 +12,17 @@ export function SessionPermissionDock(props: {
 }) {
   const language = useLanguage()
 
+  // The first picture the model makes by itself in a conversation: what it will draw and how big, in plain words.
+  const picture = () => {
+    if (props.request.permission !== "image") return
+    const { prompt, width, height } = props.request.metadata ?? {}
+    if (typeof prompt !== "string" || typeof width !== "number" || typeof height !== "number") return
+    return { prompt, width, height }
+  }
+
   const toolDescription = () => {
+    const drawing = picture()
+    if (drawing) return language.t("picture.permission.text", { width: drawing.width, height: drawing.height })
     const key = `settings.permissions.tool.${props.request.permission}.description`
     const value = language.t(key as Parameters<typeof language.t>[0])
     if (value === key) return ""
@@ -34,20 +44,20 @@ export function SessionPermissionDock(props: {
         <>
           <div />
           <div data-slot="permission-footer-actions">
-            <Button variant="ghost" size="normal" onClick={() => props.onDecide("reject")} disabled={props.responding}>
+            <ButtonV2 variant="ghost" size="normal" onClick={() => props.onDecide("reject")} disabled={props.responding}>
               {language.t("ui.permission.deny")}
-            </Button>
-            <Button
-              variant="secondary"
+            </ButtonV2>
+            <ButtonV2
+              variant="neutral"
               size="normal"
               onClick={() => props.onDecide("always")}
               disabled={props.responding}
             >
               {language.t("ui.permission.allowAlways")}
-            </Button>
-            <Button variant="primary" size="normal" onClick={() => props.onDecide("once")} disabled={props.responding}>
+            </ButtonV2>
+            <ButtonV2 variant="primary" size="normal" onClick={() => props.onDecide("once")} disabled={props.responding}>
               {language.t("ui.permission.allowOnce")}
-            </Button>
+            </ButtonV2>
           </div>
         </>
       }
@@ -59,7 +69,18 @@ export function SessionPermissionDock(props: {
         </div>
       </Show>
 
-      <Show when={props.request.patterns.length > 0}>
+      <Show when={picture()}>
+        {(drawing) => (
+          <div data-slot="permission-row">
+            <span data-slot="permission-spacer" aria-hidden="true" />
+            <div data-slot="permission-hint" data-picture-prompt>
+              {drawing().prompt}
+            </div>
+          </div>
+        )}
+      </Show>
+
+      <Show when={!picture() && props.request.patterns.length > 0}>
         <div data-slot="permission-row">
           <span data-slot="permission-spacer" aria-hidden="true" />
           <div data-slot="permission-patterns">

@@ -29,7 +29,12 @@ import { savedTimings } from "@/provider/engine-timings"
 import { toolInputProgress } from "./tool-input-progress"
 
 const DOOM_LOOP_THRESHOLD = 3
-export type Result = "compact" | "stop" | "continue"
+/** `blank`: the answer was cut because it went on with blank characters only. */
+export type Result = "compact" | "stop" | "continue" | "blank"
+
+// A small model sometimes ends a sentence and then writes line breaks until the answer's token limit: minutes in
+// which the user sees nothing happen. No text ends with this many blank characters: the answer is cut there.
+const BLANK_RUN = 200
 
 export interface Handle {
   readonly message: SessionV1.Assistant
@@ -72,6 +77,7 @@ interface ProcessorContext extends Input {
   snapshot: string | undefined
   blocked: boolean
   needsCompaction: boolean
+  blank: boolean
   currentText: SessionV1.TextPart | undefined
   reasoningMap: Record<string, SessionV1.ReasoningPart>
   /** Incoming parameters of the tools still being dictated, for the progress. */
@@ -116,6 +122,7 @@ const layer = Layer.effect(
         snapshot: initialSnapshot,
         blocked: false,
         needsCompaction: false,
+        blank: false,
         currentText: undefined,
         reasoningMap: {},
         toolInput: {},
@@ -284,6 +291,8 @@ const layer = Layer.effect(
       }
 
       const handleEvent = Effect.fnUntraced(function* (value: StreamEvent) {
+        // what arrives after the cut is not part of the answer: its end would close a turn that is asked again
+        if (ctx.blank) return
         switch (value.type) {
           case "reasoning-start":
             if (value.id in ctx.reasoningMap) return
@@ -547,6 +556,10 @@ const layer = Layer.effect(
               field: "text",
               delta: value.text,
             })
+            if (ctx.currentText.text.length - ctx.currentText.text.trimEnd().length >= BLANK_RUN) {
+              ctx.currentText.text = ctx.currentText.text.trimEnd()
+              ctx.blank = true
+            }
             return
 
           case "text-end":
@@ -670,6 +683,7 @@ const layer = Layer.effect(
           messageID: input.assistantMessage.id,
         })
         ctx.needsCompaction = false
+        ctx.blank = false
         ctx.shouldBreak = (yield* config.get()).experimental?.continue_loop_on_deny !== true
 
         return yield* Effect.gen(function* () {
@@ -687,7 +701,7 @@ const layer = Layer.effect(
 
             yield* stream.pipe(
               Stream.tap((event) => handleEvent(event)),
-              Stream.takeUntil(() => ctx.needsCompaction),
+              Stream.takeUntil(() => ctx.needsCompaction || ctx.blank),
               Stream.runDrain,
             )
           }).pipe(
@@ -724,6 +738,7 @@ const layer = Layer.effect(
 
           if (ctx.needsCompaction) return "compact"
           if (ctx.blocked || ctx.assistantMessage.error) return "stop"
+          if (ctx.blank) return "blank"
           return "continue"
         })
       })

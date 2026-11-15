@@ -75,3 +75,50 @@
     animation-range: calc(100% - 1.1px) calc(100% - 1px);
   }
 }
+
+/* The bar's entries are muted; the active one rests on the raised ground. */
+[data-slot="titlebar-v2"] [data-component="button-v2"][data-titlebar-entry] {
+  height: 28px;
+  padding: 0 12px;
+  border-radius: 7px;
+  background: transparent;
+  box-shadow: none;
+  color: var(--mango-text-muted);
+  font-weight: 500;
+}
+
+[data-slot="titlebar-v2"] [data-component="button-v2"][data-titlebar-entry][aria-pressed="true"] {
+  background: var(--mango-raised);
+  color: var(--mango-text);
+  font-weight: 600;
+}
+
+[data-slot="titlebar-v2"] [data-component="button-v2"][data-titlebar-entry]:hover:not([aria-pressed="true"]) {
+  background: var(--v2-overlay-simple-overlay-hover);
+}
+
+[data-slot="titlebar-v2"] [data-action="titlebar-model"] {
+  gap: 8px;
+  font-weight: 500;
+}
+
+/* A state in the bar: its dot is green when ready, amber while in progress, red on error, grey when off. */
+[data-slot="titlebar-v2"] [data-slot="state-dot"] {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--mango-text-faint);
+
+  &[data-tone="ready"] {
+    background: var(--mango-ready);
+  }
+
+  &[data-tone="progress"] {
+    background: var(--mango-action);
+  }
+
+  &[data-tone="error"] {
+    background: var(--mango-error);
+  }
+}

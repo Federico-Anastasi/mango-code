@@ -46,7 +46,7 @@ export function RemoveModelDialog(props: {
         </Show>
       </DialogBody>
       <DialogFooter>
-        <ButtonV2 type="button" variant="neutral" disabled={busy()} onClick={() => dialog.close()}>
+        <ButtonV2 type="button" variant="ghost" disabled={busy()} onClick={() => dialog.close()}>
           {language.t("common.cancel")}
         </ButtonV2>
         <ButtonV2

@@ -2,20 +2,8 @@
 @import "@opencode-ai/session-ui/styles";
 @import "@opencode-ai/ui/v2/styles/tailwind.css";
 @import "tw-animate-css";
-
-@font-face {
-  font-family: "JetBrainsMono Nerd Font Mono";
-  src: url("/assets/JetBrainsMonoNerdFontMono-Regular.woff2") format("woff2");
-  font-weight: normal;
-  font-style: normal;
-}
-
-@font-face {
-  font-family: "Inter";
-  src: url("/assets/Inter.ttf") format("truetype");
-  font-weight: 100 900;
-  font-style: normal;
-}
+@import "../../../suite/tokens.css";
+@import "./mango-theme.css";
 
 /* The screen's safe areas (notch, home indicator): zero in a browser tab, real in an app installed on the home screen. */
 :root {
@@ -173,7 +161,7 @@
     left: 0;
     width: 100%;
     height: 12px;
-    background: var(--v2-background-bg-base);
+    background: var(--v2-background-bg-deep);
   }
 
   .home-session-group-header::after {
@@ -186,21 +174,21 @@
     pointer-events: none;
     background: linear-gradient(
       180deg,
-      var(--v2-background-bg-base) 0%,
-      color-mix(in srgb, var(--v2-background-bg-base) 92.0456%, transparent) 7.93%,
-      color-mix(in srgb, var(--v2-background-bg-base) 84.9947%, transparent) 14.14%,
-      color-mix(in srgb, var(--v2-background-bg-base) 78.6813%, transparent) 19%,
-      color-mix(in srgb, var(--v2-background-bg-base) 72.9394%, transparent) 22.85%,
-      color-mix(in srgb, var(--v2-background-bg-base) 67.6028%, transparent) 26.05%,
-      color-mix(in srgb, var(--v2-background-bg-base) 62.5055%, transparent) 28.95%,
-      color-mix(in srgb, var(--v2-background-bg-base) 57.4815%, transparent) 31.91%,
-      color-mix(in srgb, var(--v2-background-bg-base) 52.3647%, transparent) 35.27%,
-      color-mix(in srgb, var(--v2-background-bg-base) 46.989%, transparent) 39.4%,
-      color-mix(in srgb, var(--v2-background-bg-base) 41.1884%, transparent) 44.65%,
-      color-mix(in srgb, var(--v2-background-bg-base) 34.7969%, transparent) 51.36%,
-      color-mix(in srgb, var(--v2-background-bg-base) 27.6484%, transparent) 59.9%,
-      color-mix(in srgb, var(--v2-background-bg-base) 19.5767%, transparent) 70.62%,
-      color-mix(in srgb, var(--v2-background-bg-base) 10.416%, transparent) 83.87%,
+      var(--v2-background-bg-deep) 0%,
+      color-mix(in srgb, var(--v2-background-bg-deep) 92.0456%, transparent) 7.93%,
+      color-mix(in srgb, var(--v2-background-bg-deep) 84.9947%, transparent) 14.14%,
+      color-mix(in srgb, var(--v2-background-bg-deep) 78.6813%, transparent) 19%,
+      color-mix(in srgb, var(--v2-background-bg-deep) 72.9394%, transparent) 22.85%,
+      color-mix(in srgb, var(--v2-background-bg-deep) 67.6028%, transparent) 26.05%,
+      color-mix(in srgb, var(--v2-background-bg-deep) 62.5055%, transparent) 28.95%,
+      color-mix(in srgb, var(--v2-background-bg-deep) 57.4815%, transparent) 31.91%,
+      color-mix(in srgb, var(--v2-background-bg-deep) 52.3647%, transparent) 35.27%,
+      color-mix(in srgb, var(--v2-background-bg-deep) 46.989%, transparent) 39.4%,
+      color-mix(in srgb, var(--v2-background-bg-deep) 41.1884%, transparent) 44.65%,
+      color-mix(in srgb, var(--v2-background-bg-deep) 34.7969%, transparent) 51.36%,
+      color-mix(in srgb, var(--v2-background-bg-deep) 27.6484%, transparent) 59.9%,
+      color-mix(in srgb, var(--v2-background-bg-deep) 19.5767%, transparent) 70.62%,
+      color-mix(in srgb, var(--v2-background-bg-deep) 10.416%, transparent) 83.87%,
       transparent 100%
     );
   }
@@ -277,7 +265,7 @@
 
   [data-slot="home-projects-scroll"]::before {
     top: 0;
-    background: linear-gradient(to bottom, var(--v2-background-bg-base), transparent);
+    background: linear-gradient(to bottom, var(--v2-background-bg-deep), transparent);
   }
 
   [data-slot="model-selector-scroll"]::before {
@@ -311,7 +299,7 @@
 
   [data-slot="home-projects-scroll"]::after {
     bottom: 0;
-    background: linear-gradient(to top, var(--v2-background-bg-base), transparent);
+    background: linear-gradient(to top, var(--v2-background-bg-deep), transparent);
   }
 
   [data-slot="model-selector-scroll"]::after {
@@ -389,11 +377,11 @@
 
 /* The results of the search in the conversation (pages/session/timeline/conversation-find.ts). */
 ::highlight(conversation-find) {
-  background-color: rgb(from var(--surface-warning-strong) r g b / 0.3);
+  background-color: color-mix(in srgb, var(--mango-action) 30%, transparent);
 }
 
-/* The current result stands out from the others: full yellow with dark letters, in both themes. */
+/* The current result stands out from the others: the full amber with the dark letters of the main button, in both themes. */
 ::highlight(conversation-find-current) {
-  background-color: var(--surface-warning-strong);
-  color: #000;
+  background-color: var(--mango-action);
+  color: var(--mango-on-action);
 }

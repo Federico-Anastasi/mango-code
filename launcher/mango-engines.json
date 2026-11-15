@@ -97,5 +97,32 @@
         }
       }
     }
+  },
+  "sd": {
+    "_note": "stable-diffusion.cpp, the engine of the models that make images: the official builds of the release 'master-1092-5d78740' for Windows x64 (processor, Vulkan, CUDA 12; the project publishes no CUDA 13 build). Its program is 'sd-server.exe' ('exe'; the zip also has 'sd-cli.exe'). Hash and size are of these files, computed after downloading them; 'runtime' is the CUDA 12 libraries of the same release, added only if the PC lacks them. The project has no stable versions and its options change name between builds: changing build = recomputing every line and trying speed and correctness again on each kind of card.",
+    "version": "master-1092-5d78740",
+    "exe": "sd-server.exe",
+    "build": {
+      "cpu": {
+        "url": "https://github.com/leejet/stable-diffusion.cpp/releases/download/master-1092-5d78740/sd-master-5d78740-bin-win-cpu-x64.zip",
+        "size": 18282946,
+        "sha256": "5bba0cd769a8e3f8863fa17dd7726fb2542888d8c63e821620d9c4f2c7db48eb"
+      },
+      "vulkan": {
+        "url": "https://github.com/leejet/stable-diffusion.cpp/releases/download/master-1092-5d78740/sd-master-5d78740-bin-win-vulkan-x64.zip",
+        "size": 30052985,
+        "sha256": "5f9017663dcfc6dd12738e16f880c7d4f502a06b358edc63e074e59f2f60eec5"
+      },
+      "cuda-12": {
+        "url": "https://github.com/leejet/stable-diffusion.cpp/releases/download/master-1092-5d78740/sd-master-5d78740-bin-win-cuda12-x64.zip",
+        "size": 367207580,
+        "sha256": "0c6dc1fa1238edfce2393f00a9a1ea6e733eb033c1c5b55c77c3f32c0231129f",
+        "runtime": {
+          "url": "https://github.com/leejet/stable-diffusion.cpp/releases/download/master-1092-5d78740/cudart-sd-bin-win-cu12-x64.zip",
+          "size": 563452046,
+          "sha256": "fe20366827d357c00797eebb58244dddab7fd9a348d70090c3871004c320f38d"
+        }
+      }
+    }
   }
 }

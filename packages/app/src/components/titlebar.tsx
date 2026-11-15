@@ -46,10 +46,10 @@ import { sessionTitle } from "@/utils/session-title"
 import { useServerSync } from "@/context/server-sync"
 import { phoneBarActions, phoneChanges } from "@/utils/phone-changes"
 import { phonePreview, previewFailed } from "@/utils/phone-preview"
-import { WordmarkV2 } from "@opencode-ai/ui/v2/wordmark-v2"
+import { Logo } from "@opencode-ai/ui/logo"
 
 const legacyTitlebarHeight = 40
-const v2TitlebarHeight = 36
+const v2TitlebarHeight = 40
 const minTitlebarZoom = 0.25
 const windowsControlsBaseWidth = 138 // 3 native Windows caption buttons at 46px each.
 const macTrafficLightsBaseWidth = 84
@@ -183,7 +183,9 @@ export function Titlebar(props: {
       data-slot={useV2Titlebar() ? "titlebar-v2" : undefined}
       classList={{
         "shrink-0 relative flex flex-row": true,
-        "h-9 max-md:h-12 bg-v2-background-bg-deep overflow-visible": useV2Titlebar(),
+        "h-10 max-md:h-12 bg-v2-background-bg-deep overflow-visible border-[var(--mango-line)]": useV2Titlebar(),
+        "border-b": useV2Titlebar() && !bottom(),
+        "border-t": useV2Titlebar() && bottom(),
         "h-10 bg-background-base overflow-hidden": !useV2Titlebar(),
         "order-last": bottom(),
       }}
@@ -381,10 +383,10 @@ export function Titlebar(props: {
                     <Show
                       when={!onHome()}
                       fallback={
-                        <h1 class="ml-3 flex min-w-0 flex-1 items-center">
-                          <WordmarkV2 class="h-6 w-auto text-v2-background-bg-inverse" />
+                        <div class="ml-3 flex min-w-0 flex-1 items-center">
+                          <Logo compact />
                           <span class="sr-only">Mango Code</span>
-                        </h1>
+                        </div>
                       }
                     >
                       <IconButtonV2
@@ -397,7 +399,7 @@ export function Titlebar(props: {
                         aria-label={language.t("common.goBack")}
                         data-action="titlebar-back"
                       />
-                      <h1 class="min-w-0 flex-1 truncate px-1 text-[16px] leading-6 text-v2-text-text-base [font-weight:530]">
+                      <h1 class="min-w-0 flex-1 truncate px-1 text-[16px] leading-6 text-v2-text-text-base [font-weight: 500]">
                         {barTitle()}
                       </h1>
                     </Show>
@@ -469,10 +471,8 @@ export function Titlebar(props: {
                 }
               >
                 <div
-                  class="h-full flex-1 overflow-hidden flex flex-row items-center gap-1.5 px-2 md:pr-3"
+                  class="h-full flex-1 overflow-hidden flex flex-row items-center gap-1 px-2 md:pr-3"
                   classList={{
-                    "pt-2": !bottom(),
-                    "pb-2": bottom(),
                     "md:pl-2": macTrafficLights(),
                     "md:pl-4": !macTrafficLights(),
                   }}
@@ -481,13 +481,20 @@ export function Titlebar(props: {
                   <Show when={windows() || linux()}>
                     <WindowsAppMenu command={command} platform={platform} variant="v2" />
                   </Show>
+                  {/* Under 900 px the tabs need the room: the wordmark is the mango alone. */}
+                  <div
+                    data-component="titlebar-wordmark"
+                    class="mr-3 flex shrink-0 items-center max-[899px]:[&_[data-slot=logo-words]]:hidden"
+                  >
+                    <Logo />
+                  </div>
                   <TooltipV2 placement="bottom" value={language.t("titlebar.history.tooltip")} class="shrink-0">
                     <ButtonV2
                       type="button"
                       variant={layout.route().type === "home" ? "neutral" : "ghost-muted"}
                       size="large"
                       class="shrink-0"
-                      icon="menu"
+                      data-titlebar-entry
                       onClick={toggleHome}
                       aria-pressed={layout.route().type === "home"}
                     >
@@ -732,7 +739,7 @@ function TitlebarUpdateIconButton(props: { state: TitlebarUpdatePillState }) {
         aria-busy={props.state.installing}
         aria-label={props.state.ariaLabel}
       >
-        <span class="shrink-0 ml-[8px] mr-px text-[11px] text-v2-text-text-accent [font-weight:530] opacity-0 translate-x-2 motion-safe:transition-all duration-150 ease-out group-hover:opacity-100 group-hover:translate-x-0 group-focus-within:opacity-100 group-focus-within:translate-x-0 motion-reduce:translate-x-0">
+        <span class="shrink-0 ml-[8px] mr-px text-[11px] text-v2-text-text-accent [font-weight: 500] opacity-0 translate-x-2 motion-safe:transition-all duration-150 ease-out group-hover:opacity-100 group-hover:translate-x-0 group-focus-within:opacity-100 group-focus-within:translate-x-0 motion-reduce:translate-x-0">
           {props.state.label}
         </span>
         <span class="flex size-5 shrink-0 items-center justify-center">
@@ -740,8 +747,19 @@ function TitlebarUpdateIconButton(props: { state: TitlebarUpdatePillState }) {
             when={!props.state.installing}
             fallback={<span data-slot="titlebar-update-loader" aria-hidden="true" />}
           >
-            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
-              <path d="M7 11V3M3.5 7.63128L7 11L10.5 7.63128" stroke="currentColor" />
+            <svg
+              width="14"
+              height="14"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-hidden="true"
+            >
+              <path d="M12 5v14" />
+              <path d="m19 12-7 7-7-7" />
             </svg>
           </Show>
         </span>
@@ -756,7 +774,7 @@ function ChannelIndicator(props: { debugTools?: { visible: boolean; toggle: () =
     return (
       <button
         type="button"
-        class="bg-icon-interactive-base text-[#FFF] font-medium px-2 rounded-sm uppercase font-mono cursor-pointer"
+        class="bg-[var(--mango-action)] text-[var(--mango-on-action)] font-medium px-2 rounded-sm uppercase font-mono cursor-pointer"
         onClick={props.debugTools.toggle}
         aria-label="Toggle debug tools"
         aria-pressed={props.debugTools.visible}
@@ -769,7 +787,7 @@ function ChannelIndicator(props: { debugTools?: { visible: boolean; toggle: () =
   return (
     <>
       {["beta", "dev"].includes(channel) && (
-        <div class="bg-icon-interactive-base text-[#FFF] font-medium px-2 rounded-sm uppercase font-mono">
+        <div class="bg-[var(--mango-action)] text-[var(--mango-on-action)] font-medium px-2 rounded-sm uppercase font-mono">
           {channel.toUpperCase()}
         </div>
       )}

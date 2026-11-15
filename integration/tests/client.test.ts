@@ -134,3 +134,72 @@ test("an event that is not JSON ends the turn with an error", async () => {
   const out = await steps(mc);
   expect(out.map((s) => s.type)).toEqual(["error", "end"]);
 });
+
+// --- pictures: the client against a fake control server, which draws for two requests and then is done.
+
+function fakeControl(ending: "done" | "failed" = "done") {
+  const log: string[] = [];
+  const bodies: unknown[] = [];
+  let asked = 0;
+  const job = (status: string, step: number) => ({ id: "image-7", status, model: "z-image-turbo", prompt: "a cat", width: 512, height: 512, seed: status === "done" ? 9 : null, step, steps: 8, seconds: 1, error: status === "failed" ? "No room on the card." : null, detail: null, file: null, preview: status === "drawing" ? "cHJldmlldw==" : null });
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    async fetch(req) {
+      const path = new URL(req.url).pathname;
+      log.push(`${req.method} ${path}`);
+      const text = await req.text();
+      if (text) bodies.push(JSON.parse(text));
+      if (path === "/control/image") return Response.json({ models: [{ key: "z-image-turbo", label: "Z-Image Turbo", license: "Apache-2.0", bytes: 1, ready: true }], default: "z-image-turbo", loaded: null, jobs: [] });
+      if (path === "/control/image/generate") return Response.json(job("waiting", 0), { status: 202 });
+      if (path === "/control/image/jobs/image-7/picture") return Response.json({ png: "UE5H" });
+      if (path === "/control/image/jobs/image-7/cancel") return Response.json(job("cancelled", 0));
+      if (path === "/control/image/unload") return Response.json({ models: [], default: null, loaded: null, jobs: [] });
+      asked++;
+      return Response.json(asked < 3 ? job("drawing", asked) : job(ending, 8));
+    },
+  });
+  servers.push(server);
+  const control = `http://127.0.0.1:${server.port}`;
+  return { mc: new MangoCode({ version: 1, pid: process.pid, agent: control, engine: control, control, window: false }), log, bodies };
+}
+
+test("a picture is asked, followed step by step and fetched", async () => {
+  const { mc, log, bodies } = fakeControl();
+  expect((await mc.images()).default).toBe("z-image-turbo");
+  const heard: string[] = [];
+  const job = await mc.picture({ prompt: "a cat", width: 512, height: 512, file: "C:\\out\\cat.png" }, (j) => heard.push(`${j.status} ${j.step}${j.preview ? " preview" : ""}`));
+  expect(job).toMatchObject({ id: "image-7", status: "done", seed: 9 });
+  expect(heard).toEqual(["drawing 1 preview", "drawing 2 preview", "done 8"]);
+  expect(bodies[0]).toEqual({ prompt: "a cat", width: 512, height: 512, file: "C:\\out\\cat.png" });
+  expect(new TextDecoder().decode(await mc.pictureBytes(job.id))).toBe("PNG");
+  expect(log).toEqual(["GET /control/image", "POST /control/image/generate", "GET /control/image/jobs/image-7", "GET /control/image/jobs/image-7", "GET /control/image/jobs/image-7", "GET /control/image/jobs/image-7/picture"]);
+});
+
+test("a picture that fails comes back as its job, with the sentence; a picture is cancelled and the image engine stopped", async () => {
+  const { mc, log } = fakeControl("failed");
+  const job = await mc.picture({ prompt: "a cat", width: 512, height: 512 });
+  expect(job).toMatchObject({ status: "failed", error: "No room on the card." });
+  expect((await mc.cancelPicture("image-7")).status).toBe("cancelled");
+  expect((await mc.unloadImages()).loaded).toBeNull();
+  expect(log.slice(-2)).toEqual(["POST /control/image/jobs/image-7/cancel", "POST /control/image/unload"]);
+});
+
+test("a picture as a turn of the session is asked on the session's route, with the folder, and comes back as the message", async () => {
+  const seen: { path: string; directory: string | null; body: unknown }[] = [];
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    async fetch(req) {
+      const url = new URL(req.url);
+      seen.push({ path: url.pathname, directory: url.searchParams.get("directory"), body: await req.json() });
+      return Response.json({ info: { role: "assistant" }, parts: [{ type: "tool", tool: "image_generate", state: { status: "completed" } }] });
+    },
+  });
+  servers.push(server);
+  const agent = `http://127.0.0.1:${server.port}`;
+  const mc = new MangoCode({ version: 1, pid: process.pid, agent, engine: null, control: agent, window: false });
+  const message = await mc.pictureTurn("ses_1", "C:\\Projects\\film", { request: "una vespa rossa", format: "landscape", rewrite: false, seed: 3 });
+  expect(message.parts[0].state.status).toBe("completed");
+  expect(seen).toEqual([{ path: "/session/ses_1/image", directory: "C:\\Projects\\film", body: { request: "una vespa rossa", format: "landscape", rewrite: false, seed: 3 } }]);
+});

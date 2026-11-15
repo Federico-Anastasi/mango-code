@@ -1,0 +1,115 @@
+/*
+ * The colours, the typefaces and the measures of the Mango apps. Every Mango app carries this folder, `suite/`, with the same content.
+ * The theme follows the system; `data-mango-theme="light"` or `"dark"` on the root element fixes it.
+ * The font files are whole, not the Latin part alone: a terminal needs box drawing, arrows and check marks.
+ */
+@font-face {
+  font-family: "Archivo";
+  src: url("fonts/Archivo-Bold.woff2") format("woff2");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Instrument Sans";
+  src: url("fonts/InstrumentSans-Regular.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Instrument Sans";
+  src: url("fonts/InstrumentSans-Italic.woff2") format("woff2");
+  font-weight: 400;
+  font-style: italic;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Instrument Sans";
+  src: url("fonts/InstrumentSans-Medium.woff2") format("woff2");
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Instrument Sans";
+  src: url("fonts/InstrumentSans-SemiBold.woff2") format("woff2");
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "JetBrains Mono";
+  src: url("fonts/JetBrainsMono-Regular.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "JetBrains Mono";
+  src: url("fonts/JetBrainsMono-Medium.woff2") format("woff2");
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+
+:root {
+  color-scheme: light;
+  --mango-ground: #f1f0eb; /* the page */
+  --mango-surface: #faf9f6; /* cards, side columns, the field to write in */
+  --mango-raised: #e4e2d9; /* buttons, the active entry, the bubble of who writes */
+  --mango-line: #cbc8bd; /* borders and separators */
+  --mango-text: #17171b;
+  --mango-text-muted: #5f5d56; /* explanations, labels */
+  --mango-text-faint: #8a877e; /* only text one may skip: placeholders, the version */
+  --mango-action: #f5a524; /* start of the main button, a switch that is on */
+  --mango-action-end: #ef6a3a; /* end of the gradient of the main button and of progress bars */
+  --mango-on-action: #1a1206; /* text over the amber */
+  --mango-action-text: #a85208; /* amber text and outlines over the ground */
+  --mango-ready: #1f6f3f; /* ready, succeeded, added lines */
+  --mango-error: #c2331a; /* error, recording in progress, removed lines */
+  --mango-font-title: "Archivo", sans-serif; /* titles, the wordmark */
+  --mango-font-text: "Instrument Sans", sans-serif; /* text, controls */
+  --mango-font-code: "JetBrains Mono", monospace; /* code, paths, numbers in columns, times; with `font-variant-ligatures: none` */
+  --mango-radius-control: 7px;
+  --mango-radius-card: 10px;
+  --mango-radius-panel: 12px; /* windows and panels */
+  --mango-radius-full: 999px; /* status labels, switches */
+  --mango-motion: 150ms; /* only where something changed: a switch, a bar that advances */
+}
+
+:root[data-mango-theme="dark"] {
+  color-scheme: dark;
+  --mango-ground: #151518;
+  --mango-surface: #1d1d21;
+  --mango-raised: #26262b;
+  --mango-line: #36363c;
+  --mango-text: #eceae3;
+  --mango-text-muted: #a29f96;
+  --mango-text-faint: #7b786f;
+  --mango-action-text: #f5a524;
+  --mango-ready: #62c58c;
+  --mango-error: #ee7a66;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-mango-theme="light"]) {
+    color-scheme: dark;
+    --mango-ground: #151518;
+    --mango-surface: #1d1d21;
+    --mango-raised: #26262b;
+    --mango-line: #36363c;
+    --mango-text: #eceae3;
+    --mango-text-muted: #a29f96;
+    --mango-text-faint: #7b786f;
+    --mango-action-text: #f5a524;
+    --mango-ready: #62c58c;
+    --mango-error: #ee7a66;
+  }
+}

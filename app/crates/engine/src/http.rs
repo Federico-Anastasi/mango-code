@@ -12,7 +12,8 @@
 //! * `POST /engine/resume` → gives the GPUs back and restarts the model; replies when it's ready.
 //! * `POST /engine/model` `{"model": "toq"}` → starts that model; replies when it's ready (422 if the plan refuses it).
 //! * `/control/...` → the app's own routes (`Control`), which the manager only carries: what the app tells and does about
-//!   the models, beyond the engine. Without an app behind (the tools, the tests) they are not there (404).
+//!   the models, beyond the engine, and the pictures (`/control/image`, the `images` crate). Without an app behind (the
+//!   tools, the tests) they are not there (404).
 //!
 //! Forwarding is byte for byte; only a chat request that lacks the defaults of its model (above) gets those fields
 //! written in. The request goes to the engine with `Connection: close` and the reply returns to

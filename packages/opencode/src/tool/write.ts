@@ -13,6 +13,7 @@ import { FSUtil } from "@opencode-ai/core/fs-util"
 import { InstanceState } from "@/effect/instance-state"
 import { trimDiff } from "./edit"
 import { assertExternalDirectoryEffect } from "./external-directory"
+import { ProjectPath } from "./project-path"
 import * as Bom from "@/util/bom"
 
 const MAX_PROJECT_DIAGNOSTICS_FILES = 5
@@ -20,7 +21,7 @@ const MAX_PROJECT_DIAGNOSTICS_FILES = 5
 export const Parameters = Schema.Struct({
   content: Schema.String.annotate({ description: "The content to write to the file" }),
   filePath: Schema.String.annotate({
-    description: "The absolute path to the file to write (must be absolute, not relative)",
+    description: "The path of the file, relative to the project folder (index.html, css/style.css). A full path only for a file outside the project",
   }),
 })
 
@@ -38,10 +39,9 @@ export const WriteTool = Tool.define(
       execute: (params: { content: string; filePath: string }, ctx: Tool.Context) =>
         Effect.gen(function* () {
           const instance = yield* InstanceState.context
-          const filepath = path.isAbsolute(params.filePath)
-            ? params.filePath
-            : path.join(instance.directory, params.filePath)
-          yield* assertExternalDirectoryEffect(ctx, filepath)
+          const located = ProjectPath.locate(params.filePath, instance.directory)
+          const filepath = located.path
+          const outside = yield* assertExternalDirectoryEffect(ctx, filepath)
 
           const exists = yield* fs.existsSafe(filepath)
           const source = exists ? yield* Bom.readFile(fs, filepath) : { bom: false, text: "" }
@@ -71,7 +71,12 @@ export const WriteTool = Tool.define(
             event: exists ? "change" : "add",
           })
 
-          let output = "Wrote file successfully."
+          // mango-code: writing outside the project is allowed; one line tells the model where the file went and which
+          // folder the project is, so that a path given by habit (a Linux path on Windows) is seen at once.
+          let output = outside
+            ? `Wrote file successfully, outside the project folder: ${filepath}. The project folder is ${instance.directory}.`
+            : "Wrote file successfully."
+          if (located.note) output += `\n${located.note}`
           yield* lsp.touchFile(filepath, "document")
           const diagnostics = yield* lsp.diagnostics()
           const normalizedFilepath = FSUtil.normalizePath(filepath)

@@ -1,5 +1,6 @@
-// The app's own page: the logo while the app starts, and the error that stops the startup, with Retry, Report a problem
-// and Open the logs (and the way back to this PC's engine when the one in use is another PC's). It shows the state the
+// The app's own page: the wordmark and what is happening while the app starts, and the error that stops the startup, with
+// Retry and Open the logs (and the way back to this PC's engine when the one in use is another PC's). "Report a problem"
+// is at the bottom in every state. It shows the state the
 // app sends (command `startup_status`, event `mango://status`); when startup ends the app moves the window to the web UI.
 // Everything else (models, downloads, the engine of another PC) is in the settings of the web UI.
 "use strict";
@@ -13,13 +14,14 @@ const { listen } = window.__TAURI__.event;
 
 const TEXTS = {
   it: {
-    errorHint: "Puoi riprovare. Se il problema si ripete, premi «Segnala il problema»: i log e, se lo lasci acceso, una schermata della finestra arrivano a Mango Code, senza i tuoi dati personali.",
+    errorHint: "Puoi riprovare. Se il problema si ripete, premi «Segnala un problema»: i log e, se lo lasci acceso, una schermata della finestra arrivano a Mango Code, senza i tuoi dati personali.",
     technicalDetails: "Dettagli tecnici",
     copyDetails: "Copia i dettagli",
     retry: "Riprova",
     openLogs: "Apri i log",
-    report: "Segnala il problema",
-    reportScreenshot: "Includi una schermata della finestra (aiuta a capire il problema, ma mostra quello che c'è nella finestra)",
+    report: "Segnala un problema",
+    reportScreenshot: "Includi una schermata della finestra",
+    reportScreenshotHint: "Aiuta a capire il problema, ma mostra quello che c'è nella finestra.",
     reportFiles: "Allega file",
     reportFilesHint: "Immagini, documenti o altro. I file partono così come sono: non vengono anonimizzati.",
     reportFilesTooLarge: "«{name}» pesa {size}: gli allegati possono arrivare a {max} in tutto.",
@@ -42,7 +44,8 @@ const TEXTS = {
     retry: "Retry",
     openLogs: "Open the logs",
     report: "Report a problem",
-    reportScreenshot: "Include a screenshot of the window (it helps to understand the problem, but it shows what is in the window)",
+    reportScreenshot: "Include a screenshot of the window",
+    reportScreenshotHint: "It helps to understand the problem, but it shows what is in the window.",
     reportFiles: "Attach files",
     reportFilesHint: "Images, documents or anything else. Files are sent as they are: they are not anonymized.",
     reportFilesTooLarge: "«{name}» is {size}: attachments can add up to {max} in total.",
@@ -76,8 +79,11 @@ const $ = (id) => document.getElementById(id);
 let received = false;    // a state has already arrived (an event always beats the initial read)
 let lastError = null;    // the last error state, to go back to the screen if "Retry" fails
 
-// While the app starts the page shows the logo and nothing else ("starting"); "error" shows the error section.
+// While the app starts the page shows the wordmark, a line and the bar of the stages ("starting"); "error" shows the error section.
 function view(name) {
+  // What the status line said belongs to the screen that said it: it goes when the screen changes, not at every state.
+  if ($("error").hidden === (name === "error")) $("status").textContent = "";
+  $("starting").hidden = name === "error";
   $("error").hidden = name !== "error";
 }
 
@@ -99,8 +105,15 @@ function showError(s) {
 
 function apply(s) {
   received = true;
-  if (s.stage === "error") showError(s);
-  else view("starting");
+  if (s.stage === "error") return showError(s);
+  view("starting");
+  // The app says what it is doing in one line, and which stage of the start it is at: the bar is at `step` of `steps`.
+  $("starting-line").textContent = s.detail;
+  const bar = $("starting-bar");
+  bar.hidden = !s.steps;
+  bar.setAttribute("aria-valuemax", s.steps);
+  bar.setAttribute("aria-valuenow", s.step);
+  bar.firstElementChild.style.width = s.steps ? `${(s.step / s.steps) * 100}%` : "0";
 }
 
 $("retry").addEventListener("click", async () => {
@@ -150,9 +163,11 @@ $("report-files").addEventListener("change", (event) => {
   $("report-files-list").textContent = reportFiles.map((f) => f.name + " (" + megabytes(f.size) + ")").join(", ");
 });
 $("report").addEventListener("click", () => {
-  const details = $("error-title").textContent + "\n\n" + $("error-message").textContent;
+  // The error, the screenshot switch and the files exist only on the error screen: elsewhere the report is the user's alone.
+  const onError = !$("error").hidden;
+  const details = onError ? $("error-title").textContent + "\n\n" + $("error-message").textContent : null;
   window.__MANGO_DESKTOP__
-    .reportProblem({ error: details, screenshot: $("report-screenshot").checked, files: reportFiles })
+    .reportProblem({ error: details, screenshot: onError && $("report-screenshot").checked, files: onError ? reportFiles : [] })
     .then((done) => {
       $("status").textContent = done.sent ? t.reportSent : t.reportSaved + done.file;
       $("report").disabled = done.sent;
@@ -172,6 +187,9 @@ $("copy").addEventListener("click", async () => {
     $("status").textContent = t.copyFailed;
   }
 });
+
+// Only the label at the bottom depends on it: without the version it says just the name.
+window.__TAURI__.app.getVersion().then((v) => { $("version").textContent = "Mango Code " + v; }).catch(() => {});
 
 // First the language and the listening, then the read: the event can arrive before the page is ready.
 invoke("language")

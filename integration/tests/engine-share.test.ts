@@ -1,4 +1,4 @@
-// "Share the engine with my PCs" with the real app and the fake engine, from the side of another PC: it only has a code
+// "Lend the engine to my PCs" with the real app and the fake engine, from the side of another PC: it only has a code
 // (`mango://ip:port/key`) and `fetch`. Off by default: the port is closed; on: the right code gets the models the PC offers and a
 // reply that arrives in pieces; a wrong or missing key gets 401; the GPUs' routes are refused; turned off, the port closes and the
 // old code does not come back. Everything goes through the bridge, as the settings use it; the PC that uses the code is in

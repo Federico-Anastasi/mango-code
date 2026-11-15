@@ -26,6 +26,8 @@ mod http;
 mod qr;
 mod site;
 
+pub use site::serve_computer;
+
 use anyhow::{Context, Result};
 use mango_common::{equal_ct, hex, network, random_hex, tr};
 use serde::{Deserialize, Serialize};

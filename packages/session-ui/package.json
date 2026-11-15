@@ -9,6 +9,7 @@
     "./session-diff": "./src/components/session-diff.ts",
     "./message-file": "./src/components/message-file.ts",
     "./project-file": "./src/components/project-file.ts",
+    "./picture-state": "./src/components/picture-state.ts",
     "./message-part-text": "./src/components/message-part-text.ts",
     "./step-time": "./src/components/step-time.ts",
     "./live-now": "./src/components/live-now.ts",

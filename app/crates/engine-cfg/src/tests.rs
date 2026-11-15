@@ -5,7 +5,7 @@ use crate::split::fixture::*;
 use crate::choices::{Choices, Scope};
 use std::collections::BTreeMap;
 
-/// The real command line captured from the PowerShell launcher on 30/10, with neutral paths (`C:\Test\...`): in the
+/// The command line of a measured, working run of the engine on the three cards, with neutral paths (`C:\Test\...`): in the
 /// app the engine, models, template change, and so do the slots, which live in `paths.data`.
 const PS_COMMAND_LINE: &str = r#""C:\Test\dist\engine\toq\llama-server.exe" -m C:\Test\models\Qwen3.8-27B-TOQ-v1.gguf -c 122880 --jinja --host 127.0.0.1 --port 8080 --slot-save-path C:\Test\dist\runtime\slots -np 1 --no-warmup --metrics --cache-ram 1024 -ngl 999 -fa 1 -wgt 1 -sm layer -ctk q8_0 -ctv q8_0 --chat-template-file C:\Test\dist\chat-templates\qwen3.8-mango.jinja -ub 512"#;
 
@@ -18,9 +18,9 @@ fn env_of(p: &EnginePlan) -> BTreeMap<&str, &str> {
     p.spec.env.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect()
 }
 
-/// A check that must give zero (2): the command line matches the launcher's.
+/// The command line the app builds is that one, argument by argument.
 #[test]
-fn command_line_identical_to_the_powershell_launcher() {
+fn command_line_identical_to_the_measured_run() {
     // Both with the explicit override and with the automatic split.
     for without_env in [false, true] {
         let t = if without_env { Fake::new().without_gpu_env() } else { Fake::new() };
@@ -30,7 +30,7 @@ fn command_line_identical_to_the_powershell_launcher() {
             .replace(r"C:\Test\dist\engine", &paths.engines.display().to_string())
             .replace(r"C:\Test\models", &paths.models.display().to_string())
             .replace(r"C:\Test\dist\chat-templates", &paths.dist.join("chat-templates").display().to_string())
-            // the app keeps each model's on-disk memory, instead of the launcher's RAM cache
+            // the app keeps each model's on-disk memory, instead of that run's RAM cache
             .replace(
                 "--cache-ram 1024",
                 &format!("--cache-disk {} --cache-disk-mib 6144 --cache-disk-hours 24", paths.data.join("memory").join("toq").display()),
@@ -87,7 +87,7 @@ fn disk_memory_for_every_model() {
     }
 }
 
-/// A check that must give zero (1), end to end: without the GPUs' env in the profile the automatic plan rebuilds the
+/// End to end: without the GPUs' env in the profile the automatic plan rebuilds the
 /// same environment as the override.
 #[test]
 fn automatic_environment_equals_the_explicit_one() {
@@ -272,6 +272,247 @@ fn what_downloading_a_model_means_on_this_computer() {
     // on a computer with too little memory the reason is told, and the engine is still named
     let small = catalog::download_of(&t.paths, "a", &pc(vec![], 1024)).unwrap();
     assert!(small.fits.is_err(), "{small:?}");
+}
+
+/// A model that makes images is in the catalog to be downloaded, with the image engine and all its files; it is not
+/// among the models of a conversation, it does not start as one that writes, and the order cannot name it.
+#[test]
+fn a_model_that_makes_images_is_downloaded_and_never_listed() {
+    let mut t = with_user_models(serde_json::json!({}));
+    t.catalog["models"]["img"] = serde_json::json!({ "label": "Img",
+        "image": { "diffusion": "i/d.gguf", "encoder": "e/e.gguf", "vae": "i/v.safetensors", "steps": 8, "cfg_scale": 1.0 },
+        "files": [ { "path": "i/d.gguf", "size": 30 }, { "path": "e/e.gguf", "size": 20 }, { "path": "i/v.safetensors", "size": 10 } ] });
+    let f = t.save();
+    assert_eq!(catalog_on_three_gpus(&t).0.iter().map(|v| v.key.as_str()).collect::<Vec<_>>(), ["b", "a"]);
+
+    let d = catalog::download_of(&t.paths, "img", &three_gpus()).unwrap();
+    assert_eq!((d.label.as_str(), d.engine.as_str(), d.build, d.bytes, d.weights), ("Img", "sd", mango_common::Build::Cuda12, 60, false));
+    assert_eq!(d.fits, Ok(()));
+    assert_eq!(engine_label(&d.engine, d.build), tr!("stable-diffusion.cpp per le schede video", "stable-diffusion.cpp for the graphics cards"));
+    // the image engine has no CUDA 13 build: a PC that would get it for llama.cpp gets CUDA 12
+    let new_driver = pc(vec![nvidia(0, "NVIDIA GeForce RTX 5060", 8192, (12, 0), (13, 4))], 16_384);
+    assert_eq!(choose_build(&new_driver), mango_common::Build::Cuda13);
+    assert_eq!(catalog::download_of(&t.paths, "img", &new_driver).unwrap().build, mango_common::Build::Cuda12);
+    assert_eq!(catalog::download_of(&t.paths, "img", &pc(vec![], 16_384)).unwrap().build, mango_common::Build::Cpu);
+
+    // on disk only when its three files are
+    for (i, file) in ["i/d.gguf", "e/e.gguf", "i/v.safetensors"].into_iter().enumerate() {
+        assert!(!catalog::download_of(&t.paths, "img", &three_gpus()).unwrap().weights, "{i} files of three");
+        let path = t.paths.models.join(file);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, b"").unwrap();
+    }
+    assert!(catalog::download_of(&t.paths, "img", &three_gpus()).unwrap().weights);
+
+    let e = build_plan(&t.paths, &f, Some("img"), 8080, &three_gpus(), &[], |_, _, _| Ok(qwen38_27b())).unwrap_err().to_string();
+    assert!(e.contains(&tr!("fa immagini", "makes images")), "{e}");
+
+    t.catalog["order"] = serde_json::json!(["b", "a", "img"]);
+    std::fs::write(t.paths.dist.join("mango-models.json"), t.catalog.to_string()).unwrap();
+    let e = format!("{:#}", catalog::download_of(&t.paths, "img", &three_gpus()).unwrap_err());
+    assert!(e.contains("the order names «img»"), "{e}");
+}
+
+/// The plan of a model that makes images: the image engine's program with the model's three files and the weights kept
+/// in RAM, on one NVIDIA card (one with tensor cores first, then the one with more memory), or on the processor. Without
+/// the engine, or without a file of the model, it says which is missing.
+#[test]
+fn the_plan_of_a_model_that_makes_images() {
+    let mut t = with_user_models(serde_json::json!({}));
+    t.catalog["models"]["img"] = serde_json::json!({ "label": "Img",
+        "image": { "diffusion": "i/d.gguf", "encoder": "e/e.gguf", "vae": "i/v.safetensors", "steps": 8, "cfg_scale": 1.0 },
+        "files": [ { "path": "i/d.gguf", "size": 30 }, { "path": "e/e.gguf", "size": 20 }, { "path": "i/v.safetensors", "size": 10 } ] });
+    t.save();
+    let plan = |hw: &Hardware| image::image_plan_for(&t.paths, "img", 8090, hw);
+    let listed = || image::image_models(&t.paths, &three_gpus()).unwrap();
+    assert_eq!(listed(), ImageCatalog { models: vec![ImageEntry { key: "img".into(), label: "Img".into(), license: None, bytes: 60, ready: false }], default: None });
+
+    let e = format!("{:#}", plan(&three_gpus()).unwrap_err());
+    assert!(e.contains(&tr!("Il motore delle immagini non è ancora su questo computer.", "The image engine is not on this computer yet.")) && e.contains("cuda-12"), "{e}");
+    std::fs::write(t.paths.dist.join("mango-engines.json"), r#"{ "llamacpp": { "version": "b12110", "build": {} }, "sd": { "version": "v1", "exe": "sd-server.exe", "build": {} } }"#).unwrap();
+    for build in ["cpu", "cuda-12"] {
+        let d = t.paths.engines.join("sd").join(format!("v1-{build}"));
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("sd-server.exe"), b"").unwrap();
+    }
+    let e = format!("{:#}", plan(&three_gpus()).unwrap_err());
+    assert!(e.contains(&tr!("Il modello «Img» non è ancora su questo computer.", "The model «Img» is not on this computer yet.")) && e.contains("d.gguf"), "{e}");
+    for file in ["i/d.gguf", "e/e.gguf", "i/v.safetensors"] {
+        let path = t.paths.models.join(file);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, b"").unwrap();
+    }
+
+    assert!(listed().models[0].ready, "the engine and the three files are there");
+
+    let p = plan(&three_gpus()).unwrap();
+    let engine = t.paths.engines.join("sd").join("v1-cuda-12");
+    assert_eq!((p.key.as_str(), p.label.as_str(), p.steps, p.cfg_scale, p.url.as_str()), ("img", "Img", 8, 1.0, "http://127.0.0.1:8090"));
+    assert_eq!((p.spec.exe.clone(), p.spec.cwd.clone()), (engine.join("sd-server.exe"), Some(engine)));
+    assert_eq!(p.spec.health_url.as_deref(), Some("http://127.0.0.1:8090/sdcpp/v1/models/status"));
+    let models = |rel: &str| t.paths.models.join(rel).display().to_string();
+    let expected = ["--diffusion-model", &models("i/d.gguf"), "--llm", &models("e/e.gguf"), "--vae", &models("i/v.safetensors"), "--offload-to-cpu", "--listen-ip", "127.0.0.1", "--listen-port", "8090"];
+    assert_eq!(p.spec.args, expected);
+    assert_eq!(p.gpus.iter().map(|g| g.name.as_str()).collect::<Vec<_>>(), ["NVIDIA GeForce RTX 3060 Ti"], "the one with tensor cores");
+    let visible = |p: &ImagePlan| p.spec.env.iter().find(|(k, _)| k == "CUDA_VISIBLE_DEVICES").map(|(_, v)| v.clone());
+    assert_eq!(visible(&p).as_deref(), Some("0"));
+    assert!(p.spec.env.contains(&("CUDA_DEVICE_ORDER".to_string(), "PCI_BUS_ID".to_string())));
+
+    // without a card with tensor cores, the one with more memory
+    let two = pc(three_gpus().gpus.into_iter().filter(|g| g.index != 0).collect(), 65_536);
+    let p = plan(&two).unwrap();
+    assert_eq!((p.gpus.iter().map(|g| g.index).collect::<Vec<_>>(), visible(&p).as_deref()), (vec![1], Some("1")));
+
+    let p = plan(&pc(vec![], 16_384)).unwrap();
+    assert!(p.gpus.is_empty() && p.spec.env.is_empty());
+    assert_eq!(p.spec.exe, t.paths.engines.join("sd").join("v1-cpu").join("sd-server.exe"));
+
+    let e = image::image_plan_for(&t.paths, "a", 8090, &three_gpus()).unwrap_err().to_string();
+    assert!(e.contains(&tr!("non fa immagini", "does not make images")), "{e}");
+
+    // the default is a model that makes images, or the list is damaged
+    t.catalog["image_default"] = "a".into();
+    std::fs::write(t.paths.dist.join("mango-models.json"), t.catalog.to_string()).unwrap();
+    let e = format!("{:#}", image::image_models(&t.paths, &three_gpus()).unwrap_err());
+    assert!(e.contains("the default image model «a»"), "{e}");
+}
+
+/// The settings list the models that make images with the line under the name, the license, whether they are on the disk,
+/// what a download brings and where they draw. The default is the user's choice while it is a model that makes images,
+/// the catalog's otherwise; the order does not follow it.
+#[test]
+fn the_settings_list_the_models_that_make_images() {
+    let mut t = with_user_models(serde_json::json!({}));
+    let files = serde_json::json!([ { "path": "i/d.gguf", "size": 30 }, { "path": "e/e.gguf", "size": 20 }, { "path": "i/v.safetensors", "size": 10 } ]);
+    let image = serde_json::json!({ "diffusion": "i/d.gguf", "encoder": "e/e.gguf", "vae": "i/v.safetensors", "steps": 8, "cfg_scale": 1.0 });
+    t.catalog["models"]["img"] = serde_json::json!({ "label": "Img", "license": "MIT", "about": { "it": "Una riga.", "en": "A line." }, "image": image, "files": files });
+    t.catalog["models"]["other"] = serde_json::json!({ "label": "Other", "image": image, "files": files });
+    t.catalog["image_default"] = "img".into();
+    t.save();
+    std::fs::write(t.paths.dist.join("mango-engines.json"), r#"{ "llamacpp": { "version": "b12110", "build": {} }, "sd": { "version": "v1", "exe": "sd-server.exe", "build": {} } }"#).unwrap();
+    let listed = |hw: &Hardware| image::image_views(&t.paths, hw).unwrap();
+
+    let views = listed(&three_gpus());
+    assert_eq!(views.models.iter().map(|m| m.key.as_str()).collect::<Vec<_>>(), ["img", "other"], "the catalog's default first");
+    let img = &views.models[0];
+    assert_eq!((img.label.as_str(), img.license.as_deref(), img.present, img.bytes), ("Img", Some("MIT"), false, 60));
+    assert_eq!(img.about, tr!("Una riga.", "A line."));
+    assert_eq!((views.models[1].license.clone(), views.models[1].about.as_str()), (None, ""));
+    assert_eq!((img.place.placement, img.place.gpus.clone()), (Placement::Gpu, vec!["NVIDIA GeForce RTX 3060 Ti".to_string()]), "the card its plan would use");
+    assert_eq!(listed(&pc(vec![], 16_384)).models[0].place, image::Draws { placement: Placement::Cpu, gpus: vec![] });
+
+    // on the disk only with the engine and the three files
+    for file in ["i/d.gguf", "e/e.gguf", "i/v.safetensors"] {
+        let path = t.paths.models.join(file);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, b"").unwrap();
+    }
+    assert!(!listed(&three_gpus()).models[0].present, "the engine is missing");
+    let engine = t.paths.engines.join("sd").join("v1-cuda-12");
+    std::fs::create_dir_all(&engine).unwrap();
+    std::fs::write(engine.join("sd-server.exe"), b"").unwrap();
+    let views = listed(&three_gpus());
+    assert_eq!(views.models.iter().map(|m| (m.present, m.bytes)).collect::<Vec<_>>(), [(true, 60), (true, 60)]);
+    assert_eq!(views.models[0].present, image::image_models(&t.paths, &three_gpus()).unwrap().models[0].ready);
+
+    // the user's choice, kept in choices.json; the list's order stays
+    assert_eq!(views.default.as_deref(), Some("img"));
+    choices::set_image_default(&t.paths, Some("other")).unwrap();
+    let views = listed(&three_gpus());
+    assert_eq!((views.default.as_deref(), views.models[0].key.as_str()), (Some("other"), "img"));
+    assert_eq!(image::image_models(&t.paths, &three_gpus()).unwrap().default.as_deref(), Some("other"), "a picture asked without a model uses it");
+    let e = choices::set_image_default(&t.paths, Some("a")).unwrap_err().to_string();
+    assert!(e.contains(&tr!("non è un modello che fa immagini", "is not a model that makes images")), "{e}");
+    assert_eq!(choices::read(&t.paths).unwrap().image_default.as_deref(), Some("other"), "a refused choice changes nothing");
+    assert_eq!(choices::read(&t.paths).unwrap().default, None, "the default model that writes is another choice");
+    choices::set_image_default(&t.paths, None).unwrap();
+    assert_eq!(listed(&three_gpus()).default.as_deref(), Some("img"));
+
+    // a choice for a model the catalog no longer has makes the catalog's default stand
+    choices::set_image_default(&t.paths, Some("other")).unwrap();
+    t.catalog["models"].as_object_mut().unwrap().remove("other");
+    t.save();
+    assert_eq!(listed(&three_gpus()).default.as_deref(), Some("img"));
+
+    // a choices file that cannot be read does not take the lists down: the catalog's default stands
+    std::fs::write(t.paths.data.join(choices::FILE), "{ not json").unwrap();
+    assert_eq!(listed(&three_gpus()).default.as_deref(), Some("img"));
+    assert_eq!(image::image_models(&t.paths, &three_gpus()).unwrap().default.as_deref(), Some("img"));
+    assert_eq!(std::fs::read_to_string(t.paths.data.join(choices::FILE)).unwrap(), "{ not json", "the file is left as it was");
+}
+
+/// A picture asked without a model is made with one that is on this computer: the default (the user's choice, otherwise
+/// the catalog's) when it is there, otherwise another that is. With none there the default stays, to say which to get.
+#[test]
+fn the_default_image_model_is_one_that_is_on_the_computer() {
+    let mut t = with_user_models(serde_json::json!({}));
+    for (key, label) in [("img", "Img"), ("other", "Other")] {
+        let files = serde_json::json!([ { "path": format!("{key}/d.gguf"), "size": 30 }, { "path": format!("{key}/e.gguf"), "size": 20 }, { "path": format!("{key}/v.safetensors"), "size": 10 } ]);
+        let image = serde_json::json!({ "diffusion": format!("{key}/d.gguf"), "encoder": format!("{key}/e.gguf"), "vae": format!("{key}/v.safetensors"), "steps": 8, "cfg_scale": 1.0 });
+        t.catalog["models"][key] = serde_json::json!({ "label": label, "image": image, "files": files });
+    }
+    t.catalog["image_default"] = "img".into();
+    t.save();
+    std::fs::write(t.paths.dist.join("mango-engines.json"), r#"{ "llamacpp": { "version": "b12110", "build": {} }, "sd": { "version": "v1", "exe": "sd-server.exe", "build": {} } }"#).unwrap();
+    let engine = t.paths.engines.join("sd").join("v1-cuda-12");
+    std::fs::create_dir_all(&engine).unwrap();
+    std::fs::write(engine.join("sd-server.exe"), b"").unwrap();
+    let download = |key: &str| {
+        for file in ["d.gguf", "e.gguf", "v.safetensors"] {
+            let path = t.paths.models.join(key).join(file);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, b"").unwrap();
+        }
+    };
+    let defaults = || {
+        let asked = image::image_models(&t.paths, &three_gpus()).unwrap().default;
+        assert_eq!(asked, image::image_views(&t.paths, &three_gpus()).unwrap().default, "the settings show the model a picture is made with");
+        asked
+    };
+
+    assert_eq!(defaults().as_deref(), Some("img"), "none is here: the catalog's default, the one to get");
+    download("other");
+    assert_eq!(defaults().as_deref(), Some("other"), "the one that is here, not the catalog's default that is not");
+    choices::set_image_default(&t.paths, Some("img")).unwrap();
+    assert_eq!(defaults().as_deref(), Some("other"), "nor the user's choice that is not here");
+    download("img");
+    assert_eq!(defaults().as_deref(), Some("img"));
+    choices::set_image_default(&t.paths, Some("other")).unwrap();
+    assert_eq!(defaults().as_deref(), Some("other"), "with both here the user's choice");
+}
+
+/// The models that make images of the real catalog: each names its three files among those it downloads, every file
+/// has where it comes from and how to verify it, and the license is told.
+#[test]
+fn the_image_models_of_the_real_catalog_are_complete() {
+    let file = load_models(&real_paths()).unwrap();
+    let images: Vec<&str> = file.models.keys().map(String::as_str).filter(|k| file.is_image(k)).collect();
+    assert_eq!(images, ["flux2-klein-4b", "z-image-turbo"]);
+    let listed = image::image_models(&real_paths(), &three_gpus()).unwrap();
+    assert_eq!(listed.default.as_deref(), Some("z-image-turbo"));
+    assert_eq!(listed.models.iter().map(|m| (m.key.as_str(), m.label.as_str(), m.license.as_deref())).collect::<Vec<_>>(), [("z-image-turbo", "Z-Image Turbo", Some("Apache-2.0")), ("flux2-klein-4b", "FLUX.2 klein 4B", Some("Apache-2.0"))]);
+    // the line under each name in the settings, in the language of the app
+    let views = image::image_views(&real_paths(), &three_gpus()).unwrap();
+    assert_eq!(
+        views.models.iter().map(|m| m.about.as_str()).collect::<Vec<_>>(),
+        [tr!("Di serie. Otto passi.", "Standard. Eight steps."), tr!("Più leggero: usa meno memoria.", "Lighter: uses less memory.")]
+    );
+    for key in images {
+        let cfg = model_cfg(&file, key).unwrap();
+        let image = cfg.image.unwrap();
+        let mut named = [image.diffusion.as_str(), image.encoder.as_str(), image.vae.as_str()];
+        let mut files: Vec<&str> = cfg.files.iter().map(|f| f.path.as_str()).collect();
+        named.sort_unstable();
+        files.sort_unstable();
+        assert_eq!(named.as_slice(), files.as_slice(), "{key}");
+        assert!(cfg.files.iter().all(|f| f.size > 0 && f.sha256.len() == 64 && f.engine.is_none()), "{key}");
+        assert!(image.steps > 0 && image.cfg_scale > 0.0, "{key}");
+        let raw = &file.models[key];
+        assert_eq!(raw["license"], "Apache-2.0", "{key}");
+        for f in raw["files"].as_array().unwrap() {
+            assert!(f.get("repo").or(raw.get("repo")).is_some() && f.get("revision").or(raw.get("revision")).is_some(), "{key}: {f}");
+        }
+    }
 }
 
 /// A model on disk that does not fit this computer is not the one to load when another on disk does; the user's own
@@ -990,10 +1231,10 @@ fn on_three_gpus_every_local_model_has_its_profile() {
 }
 
 /// The behavior on the RTX 3060 Ti + GTX 1080 + GTX 1660 SUPER doesn't change: for every local model of the real catalog and profiles (`launcher/`),
-/// `plan()` gives the same arguments, environment and cards as before moving the tune into the profiles
-/// (`3060ti-1080-1660s-expected.json`, derived from the earlier code).
+/// `plan()` gives the arguments, environment and cards recorded in
+/// `3060ti-1080-1660s-expected.json`.
 #[test]
-fn three_gpus_have_the_same_plan_as_before() {
+fn three_gpus_have_the_recorded_plan() {
     let launcher = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../launcher");
     let expected: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/3060ti-1080-1660s-expected.json")).unwrap()).unwrap();
     let dir = tempfile::tempdir().unwrap();
@@ -1113,7 +1354,7 @@ fn toq_on_three_cards_puts_the_encoder_on_the_third() {
     assert_eq!(p.gpus_used.iter().map(|g| g.index).collect::<Vec<_>>(), [0, 1, 2]);
 }
 
-/// A check that must give zero: on the three GPUs of the profile the automatic split with images rebuilds the profile's measured
+/// On the three GPUs of the profile the automatic split with images rebuilds the profile's measured
 /// environment for TOQ (model on the 3060 Ti and the 1660 SUPER, encoder on the 1080).
 #[test]
 fn on_the_three_gpus_the_automatic_encoder_is_the_profiles() {
@@ -1336,7 +1577,7 @@ mod real {
     }
 }
 
-/// Issue 2's PC: Core Ultra 5 245K, 16 GB, a GT 710 read from DXGI (1 or 2 GiB). The card hosts nothing, the engine
+/// Issue #2's PC: Core Ultra 5 245K, 16 GB, a GT 710 read from DXGI (1 or 2 GiB). The card hosts nothing, the engine
 /// is the processor's, and the real catalog still has a model that writes faster than one reads: Ling.
 #[test]
 fn a_pc_with_only_an_old_small_card_gets_a_quick_model_on_the_processor() {

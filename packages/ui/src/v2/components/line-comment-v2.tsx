@@ -12,14 +12,18 @@ export function LineCommentV2OverflowIcon(props: ComponentProps<"svg">) {
       {...props}
       width={props.width ?? 16}
       height={props.height ?? 16}
-      viewBox="0 0 16 16"
+      viewBox="0 0 24 24"
       fill="none"
+      stroke="currentColor"
+      stroke-width="2"
+      stroke-linecap="round"
+      stroke-linejoin="round"
       xmlns="http://www.w3.org/2000/svg"
       aria-hidden={props["aria-hidden"] ?? "true"}
     >
-      <path d="M2.5 7.5H3.5V8.5H2.5V7.5Z" stroke="currentColor" />
-      <path d="M7.5 7.5H8.5V8.5H7.5V7.5Z" stroke="currentColor" />
-      <path d="M12.5 7.5H13.5V8.5H12.5V7.5Z" stroke="currentColor" />
+      <circle cx="12" cy="12" r="1" />
+      <circle cx="19" cy="12" r="1" />
+      <circle cx="5" cy="12" r="1" />
     </svg>
   )
 }
@@ -291,10 +295,10 @@ export function LineCommentEditorV2(props: LineCommentEditorV2Props) {
         <div data-slot="line-comment-v2-footer">
           <div data-slot="line-comment-v2-footer-meta">{local.selection}</div>
           <div data-slot="line-comment-v2-footer-actions">
-            <ButtonV2 type="button" size="normal" variant="neutral" onClick={() => local.onCancel()}>
+            <ButtonV2 type="button" size="normal" variant="ghost" onClick={() => local.onCancel()}>
               {local.cancelLabel ?? i18n.t("ui.lineComment.cancel")}
             </ButtonV2>
-            <ButtonV2 type="button" size="normal" variant="contrast" disabled={!canSubmit()} onClick={submit}>
+            <ButtonV2 type="button" size="normal" variant="primary" disabled={!canSubmit()} onClick={submit}>
               {local.submitLabel ?? i18n.t("ui.lineComment.submit")}
             </ButtonV2>
           </div>

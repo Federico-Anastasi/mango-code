@@ -1548,6 +1548,28 @@ const scenarios: Scenario[] = [
       "status",
     ),
   http.protected
+    .post("/session/{sessionID}/image", "session.image")
+    .preserveDatabase()
+    .mutating()
+    .seeded((ctx) => ctx.session({ title: "Picture session" }))
+    .at((ctx) => ({
+      path: route("/session/{sessionID}/image", { sessionID: ctx.state.id }),
+      headers: ctx.headers(),
+      body: { request: "a cat on a sofa", rewrite: false },
+    }))
+    .json(
+      200,
+      (body) => {
+        object(body)
+        check(isRecord(body.info) && body.info.role === "assistant", "image should return assistant message")
+        check(
+          Array.isArray(body.parts) && body.parts.some((part) => isRecord(part) && part.type === "tool"),
+          "image should return a tool part",
+        )
+      },
+      "status",
+    ),
+  http.protected
     .post("/session/{sessionID}/summarize", "session.summarize")
     .preserveDatabase()
     .withLlm()

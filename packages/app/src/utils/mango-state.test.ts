@@ -15,6 +15,7 @@ import {
   offered,
   parseCatalog,
   parseComputer,
+  parseImageModels,
   parseState,
   pollDelay,
   recommended,
@@ -118,6 +119,61 @@ describe("the app's state, as the agent tells it", () => {
   test("a download says whether it brings only the engine", () => {
     expect(state({ phase: "none" }, [{ ...download("active"), engine_only: true }]).downloads[0].engine_only).toBe(true)
     expect(state({ phase: "none" }, [download("active")]).downloads[0].engine_only).toBe(false)
+  })
+
+  test("the model of the image engine that is on comes with the state; none while it is off", () => {
+    const base = { revision: 3, catalog_revision: 1, model: { phase: "none" }, default_model: null, downloads: [] }
+    expect(parseState({ ...base, image_loaded: "z-image-turbo" })?.image_loaded).toBe("z-image-turbo")
+    expect(parseState({ ...base, image_loaded: null })?.image_loaded).toBeNull()
+    expect(parseState(base)?.image_loaded).toBeNull()
+  })
+
+  test("the models that make pictures read with their line, license, weight and where they draw; one that does not read is left out", () => {
+    const picture = (key: string, extra: Record<string, unknown> = {}) => ({
+      key,
+      label: key.toUpperCase(),
+      about: "Una riga.",
+      license: "Apache-2.0",
+      present: false,
+      bytes: 6_700_000_000,
+      where: { placement: "gpu", gpus: ["RTX 3060 Ti"] },
+      ...extra,
+    })
+    const read = parseImageModels({
+      models: [],
+      image_models: [
+        picture("z"),
+        picture("f", { license: null, about: undefined, present: true, where: { placement: "cpu", gpus: [] } }),
+        picture("broken", { present: "yes" }),
+        { label: "no key" },
+      ],
+      image_default: "z",
+    })
+    expect(read?.default).toBe("z")
+    expect(read?.models).toEqual([
+      {
+        key: "z",
+        label: "Z",
+        about: "Una riga.",
+        license: "Apache-2.0",
+        present: false,
+        bytes: 6_700_000_000,
+        draws: { placement: "gpu", gpus: ["RTX 3060 Ti"] },
+      },
+      {
+        key: "f",
+        label: "F",
+        about: "",
+        license: null,
+        present: true,
+        bytes: 6_700_000_000,
+        draws: { placement: "cpu", gpus: [] },
+      },
+    ])
+    // an app without pictures says nothing of them: there is no group, which is not an empty one
+    expect(parseImageModels({ models: [] })).toBeUndefined()
+    expect(parseImageModels({ image_models: [] })).toEqual({ models: [], default: null })
+    expect(parseImageModels(undefined)).toBeUndefined()
   })
 
   test("a failed start carries the model that fits now, or none", () => {

@@ -8,7 +8,9 @@ import { EventV2Bridge } from "@/event-v2-bridge"
 import { EventV2 } from "@opencode-ai/core/event"
 import { VcsEvent } from "@opencode-ai/schema/vcs-event"
 
-const PATCH_CONTEXT_LINES = 2_147_483_647
+// The whole file around its changes. Not the largest number git takes: with it some versions of git (2.39) overflow
+// and give a file with two separate changes two hunks that both start at line 1, a patch nothing can read.
+const PATCH_CONTEXT_LINES = 1_000_000_000
 const MAX_PATCH_BYTES = 10_000_000
 const MAX_TOTAL_PATCH_BYTES = 10_000_000
 type DiffOptions = {

@@ -1,0 +1,50 @@
+/*
+ * The controls of the picture side of the box are the settings' segmented control, as wide as its words: in a box of
+ * the width of a conversation they take a second line when they do not fit beside the others.
+ */
+[data-slot="prompt-input-bar"] [data-slot="segmented-control-v2"] {
+  width: auto;
+  height: 28px;
+  flex: none;
+}
+
+[data-slot="prompt-input-bar"] [data-slot="segmented-control-v2-item"] {
+  flex: none;
+  height: 22px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
+/* A finger needs 44 px: the choices and the buttons of the box are that tall on a narrow window. */
+@media (max-width: 767px) {
+  [data-slot="prompt-input-bar"][data-picture] {
+    row-gap: 4px;
+  }
+
+  [data-slot="prompt-input-bar"][data-picture] [data-slot="segmented-control-v2"] {
+    height: 44px;
+    border-radius: 10px;
+  }
+
+  [data-slot="prompt-input-bar"][data-picture] [data-slot="segmented-control-v2-item"] {
+    height: 38px;
+    padding: 0 12px;
+    font-size: 13px;
+  }
+
+  /* The short choices share a line (model and size); the long one, the format, has its own. */
+  [data-slot="prompt-input-bar"][data-picture] [data-action="prompt-picture-format"] {
+    order: 2;
+  }
+
+  [data-slot="prompt-input-bar"][data-picture] [data-action="prompt-picture-model"],
+  [data-slot="prompt-input-bar"][data-picture] [data-action="prompt-submit"],
+  [data-slot="prompt-input-bar"][data-picture] [data-component="prompt-voice"] {
+    min-height: 44px;
+    min-width: 44px;
+  }
+
+  [data-component="picture-notice"] [data-action="picture-choose-model"] {
+    min-height: 44px;
+  }
+}

@@ -82,7 +82,7 @@ const DrawerTitle = <T extends ValidComponent = "div">(props: DynamicProps<T, Dr
   return (
     <DrawerPrimitive.Label
       class={props.class}
-      classList={{ "text-base font-[530] leading-none tracking-[-0.04px] text-v2-text-text-base": true }}
+      classList={{ "text-base font-medium leading-none tracking-[-0.04px] text-v2-text-text-base": true }}
       {...rest}
     />
   )
@@ -98,7 +98,7 @@ const DrawerDescription = <T extends ValidComponent = "div">(props: DynamicProps
     <DrawerPrimitive.Description
       class={props.class}
       classList={{
-        "text-[13px] font-[440] leading-[140%] tracking-[-0.04px] text-v2-text-text-muted": true,
+        "text-[13px] font-normal leading-[140%] tracking-[-0.04px] text-v2-text-text-muted": true,
       }}
       {...rest}
     />

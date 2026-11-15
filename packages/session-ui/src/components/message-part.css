@@ -444,10 +444,32 @@
   [data-slot="bash-pre"] code {
     font-family: var(--font-family-mono);
     font-feature-settings: var(--font-family-mono--font-feature-settings);
-    font-size: 13px;
-    line-height: var(--line-height-large);
+    font-size: 12.5px;
+    line-height: 1.6;
+    font-variant-ligatures: none;
     white-space: pre-wrap;
     overflow-wrap: anywhere;
+  }
+}
+
+/* Inside a tool's row the output, the file header and the diff sit flush: the row's border is the only frame. */
+.tool-collapsible [data-component="bash-output"] {
+  border: 0;
+  border-radius: 0;
+}
+
+/* The doubled class gives these rules the weight they need over the accordion's own, whatever the load order. */
+.tool-collapsible.tool-collapsible [data-component="accordion"][data-scope="apply-patch"] [data-slot="accordion-item"] {
+  [data-slot="accordion-header"] [data-slot="accordion-trigger"] {
+    border: 0;
+    border-bottom: 1px solid var(--mango-line);
+    border-radius: 0;
+  }
+
+  [data-slot="accordion-content"] {
+    border: 0;
+    border-radius: 0;
+    background: transparent;
   }
 }
 
@@ -468,13 +490,13 @@
   }
 
   [data-slot="message-part-title"] {
-    flex: 1 1 auto;
+    flex: 0 1 auto;
     display: flex;
     align-items: center;
     gap: 8px;
     min-width: 0;
     font-family: var(--font-family-sans);
-    font-size: 14px;
+    font-size: var(--font-size-small);
     font-style: normal;
     font-weight: var(--font-weight-medium);
     line-height: var(--line-height-large);
@@ -548,7 +570,6 @@
 
 [data-component="edit-content"] {
   border-radius: inherit;
-  border-top: 0.5px solid var(--v2-border-border-muted);
   overflow-x: hidden;
   overflow-y: visible;
 
@@ -567,7 +588,6 @@
 
 [data-component="write-content"] {
   border-radius: inherit;
-  border-top: 0.5px solid var(--v2-border-border-muted);
   overflow-x: hidden;
   overflow-y: visible;
 
@@ -662,16 +682,32 @@
 
 [data-component="context-tool-group-trigger"] {
   width: 100%;
-  min-height: 24px;
+  min-height: 36px;
   display: flex;
   align-items: center;
   justify-content: flex-start;
-  gap: 0px;
+  gap: 8px;
   cursor: default;
 
+  /* Set like the title of every other tool row. */
   [data-slot="context-tool-group-title"] {
-    flex-shrink: 1;
+    flex: 1 1 auto;
     min-width: 0;
+    font-family: var(--font-family-sans);
+    font-size: var(--font-size-small);
+    font-style: normal;
+    font-weight: var(--font-weight-medium);
+    line-height: var(--line-height-large);
+    letter-spacing: var(--letter-spacing-normal);
+    color: var(--v2-text-text-base);
+  }
+
+  [data-slot="context-tool-group-time"] {
+    flex-shrink: 0;
+    font-family: var(--mango-font-code);
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+    color: var(--mango-text-muted);
   }
 
   [data-slot="collapsible-arrow"] {
@@ -681,10 +717,7 @@
 }
 
 [data-component="context-tool-group-list"] {
-  padding-top: 0;
-  padding-right: 0;
-  padding-bottom: 0;
-  padding-left: 12px;
+  padding: 4px 11px 8px;
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -793,7 +826,7 @@
   }
 
   [data-slot="permission-icon"] [data-component="icon"] {
-    color: var(--icon-warning-base);
+    color: var(--mango-action-text);
   }
 
   [data-slot="permission-header-title"] {
@@ -820,6 +853,14 @@
     line-height: var(--line-height-large);
     color: var(--v2-text-text-muted);
     padding: 0;
+  }
+
+  /* What a picture will show is the last row and can be a whole description: it keeps the room under it that the
+     patterns have, and scrolls instead of pushing the buttons out. */
+  [data-slot="permission-hint"][data-picture-prompt] {
+    max-height: 30dvh;
+    margin-bottom: 16px;
+    overflow-y: auto;
   }
 
   [data-slot="permission-patterns"] {
@@ -1019,7 +1060,7 @@
     }
 
     &[data-picked="true"] {
-      background-color: var(--v2-state-bg-info);
+      background-color: var(--v2-background-bg-layer-01);
       border-color: transparent;
       box-shadow: var(--shadow-xs-border-hover);
     }
@@ -1072,11 +1113,12 @@
 
       [data-component="icon"] {
         opacity: 1;
-        color: var(--icon-invert-base);
+        color: var(--mango-on-action);
       }
 
       &[data-type="checkbox"] {
-        background-color: var(--icon-interactive-base);
+        border-color: var(--mango-action);
+        background-color: var(--mango-action);
       }
 
       &[data-type="radio"] {
@@ -1249,15 +1291,14 @@
     position: sticky;
     top: var(--sticky-accordion-top, 0px);
     z-index: 20;
-    height: calc(32px + var(--tool-content-gap));
     padding-bottom: var(--tool-content-gap);
-    background-color: var(--v2-background-bg-base);
+    background-color: var(--mango-ground);
   }
 }
 
 [data-component="accordion"][data-scope="apply-patch"] {
   [data-slot="accordion-trigger"] {
-    background-color: var(--v2-background-bg-base) !important;
+    background-color: var(--mango-ground) !important;
   }
 
   [data-slot="apply-patch-trigger-content"] {
@@ -1364,7 +1405,8 @@
 }
 
 body[data-new-layout] [data-component="user-message"] {
-  font-weight: 440;
+  font-weight: 400;
+  font-size: var(--font-size-small);
 
   [data-slot="user-message-text"] {
     background: var(--v2-background-bg-layer-01);
@@ -1390,10 +1432,7 @@ body[data-new-layout] [data-component="user-message"] {
 
     [data-component="button-v2"] {
       font-family: var(--v2-font-family-sans, "Inter", sans-serif);
-      font-weight: 530;
-      font-variation-settings:
-        "wght" 530,
-        "slnt" 0;
+      font-weight: 500;
     }
   }
 
@@ -1406,10 +1445,6 @@ body[data-new-layout] [data-component="user-message"] {
     width: 342px;
     padding-bottom: 12px;
   }
-}
-
-[data-color-scheme="light"] body[data-new-layout] [data-component="user-message"] [data-slot="user-message-text"] {
-  background: var(--v2-background-bg-layer-02);
 }
 
 body:not([data-new-layout]) {
@@ -1593,7 +1628,7 @@ body:not([data-new-layout]) {
     > [data-component="collapsible"]
     > [data-slot="collapsible-trigger"][aria-expanded="true"],
   [data-component="accordion"][data-scope="apply-patch"] [data-slot="accordion-trigger"] {
-    background-color: var(--background-stronger) !important;
+    background-color: var(--mango-ground) !important;
   }
 
   [data-component="accordion"][data-scope="apply-patch"] {

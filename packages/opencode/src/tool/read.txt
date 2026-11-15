@@ -1,6 +1,6 @@
 Reads a file or directory (an error if the path does not exist).
 
-- `filePath` is an absolute path.
+- `filePath` is relative to the project folder; a full path reaches a file outside it.
 - Returns up to 2000 lines from the start of the file; `offset` (1-indexed line) reads later sections. Lines over 2000 characters are truncated: use grep for specific content in large files or files with long lines.
 - Lines come as `<line>: <content>`; directories list one entry per line, with a trailing `/` for subdirectories.
 - If unsure of the path, use glob.

@@ -1,7 +1,6 @@
 import { createEffect, createMemo, For, Show, type Accessor, type JSX } from "solid-js"
 import { FileIcon } from "@opencode-ai/ui/file-icon"
 import { Icon } from "@opencode-ai/ui/icon"
-import { IconButton } from "@opencode-ai/ui/icon-button"
 import { ProviderIcon } from "@opencode-ai/ui/provider-icon"
 import { useI18n } from "@opencode-ai/ui/context/i18n"
 import { ButtonV2 } from "@opencode-ai/ui/v2/button-v2"
@@ -42,6 +41,10 @@ export type PromptInputV2Props = {
   modelControl?: JSX.Element
   // Controls next to the send button (mango-code: dictation).
   trailingControl?: JSX.Element
+  /** mango-code: the choice between a text and a picture, first of the controls. */
+  modeControl?: JSX.Element
+  /** mango-code: what a picture asks besides the words (format, size); they wrap to a second line when they do not fit. */
+  pictureControls?: JSX.Element
   variantControlVisible?: boolean
 }
 
@@ -56,6 +59,7 @@ export function PromptInputV2(props: PromptInputV2Props) {
     props.controller.onCursor(promptInputV2Cursor(editor))
   }
   const mode = createMemo(() => state.mode)
+  const picture = () => view.picture?.() === true
   const buttons = createMemo(() => ({
     opacity: mode() === "normal" ? 1 : 0,
     "pointer-events": mode() === "normal" ? ("auto" as const) : ("none" as const),
@@ -109,10 +113,10 @@ export function PromptInputV2(props: PromptInputV2Props) {
       <form
         data-component="prompt-input-v2"
         data-dock-border-underlay={props.borderUnderlay ? "v2" : undefined}
-        class="group/prompt-input relative min-h-[96px] w-full overflow-clip rounded-xl bg-v2-background-bg-base"
+        class="group/prompt-input relative min-h-[96px] w-full overflow-clip rounded-[10px] bg-v2-background-bg-base"
         classList={{
           "shadow-[var(--v2-elevation-raised)]": !props.borderUnderlay,
-          "border border-v2-icon-icon-info border-dashed": state.drag === "active",
+          "border border-[var(--mango-action-text)] border-dashed": state.drag === "active",
         }}
         onSubmit={(event) => {
           event.preventDefault()
@@ -124,12 +128,12 @@ export function PromptInputV2(props: PromptInputV2Props) {
         onDrop={props.controller.onDrop}
       >
         <Show when={state.drag === "active"}>
-          <div class="pointer-events-none absolute inset-0 z-20 grid place-items-center rounded-xl bg-v2-background-bg-base/90 text-v2-text-text-base">
+          <div class="pointer-events-none absolute inset-0 z-20 grid place-items-center rounded-[10px] bg-v2-background-bg-base/90 text-v2-text-text-base">
             {i18n.t("ui.promptInput.dropFiles")}
           </div>
         </Show>
 
-        <Show when={state.mode === "normal"}>
+        <Show when={state.mode === "normal" && !picture()}>
           <PromptInputV2Attachments
             attachments={props.controller.attachments()}
             comments={props.controller.comments()}
@@ -160,7 +164,7 @@ export function PromptInputV2(props: PromptInputV2Props) {
             spellcheck={state.mode === "normal"}
             // @ts-expect-error
             autocomplete="off"
-            class="relative z-10 block min-h-[60px] max-h-[180px] w-full overflow-y-auto whitespace-pre-wrap bg-transparent px-4 pt-4 pb-2 text-[13px] font-[440] leading-5 text-v2-text-text-base focus:outline-none empty:before:content-['\200B'] [&_[data-mention=file]]:text-syntax-property [&_[data-mention=agent]]:text-syntax-type [&_[data-mention=reference]]:text-syntax-keyword"
+            class="relative z-10 block min-h-[60px] max-h-[180px] w-full overflow-y-auto whitespace-pre-wrap bg-transparent px-4 pt-4 pb-2 text-[13px] font-normal leading-5 text-v2-text-text-base focus:outline-none empty:before:content-['\200B'] [&_[data-mention=file]]:text-syntax-property [&_[data-mention=agent]]:text-syntax-type [&_[data-mention=reference]]:text-syntax-keyword"
             classList={{ "font-mono!": state.mode === "shell", "opacity-50": props.disabled }}
             onInput={(event) => {
               const cursor = promptInputV2Cursor(event.currentTarget)
@@ -184,7 +188,7 @@ export function PromptInputV2(props: PromptInputV2Props) {
           />
           <Show when={!props.controller.value()}>
             <div
-              class="pointer-events-none absolute inset-x-0 top-0 px-4 pt-4 text-[13px] max-md:text-[16px] font-[440] leading-5 text-v2-text-text-faint"
+              class="pointer-events-none absolute inset-x-0 top-0 px-4 pt-4 text-[13px] max-md:text-[16px] font-normal leading-5 text-v2-text-text-faint"
               classList={{ "font-mono!": state.mode === "shell" }}
             >
               {view.placeholder?.() ??
@@ -195,26 +199,36 @@ export function PromptInputV2(props: PromptInputV2Props) {
           </Show>
         </div>
 
-        <div class="flex h-11 items-center px-2">
+        <div
+          data-slot="prompt-input-bar"
+          data-picture={picture() ? "" : undefined}
+          class="flex px-2"
+          classList={{ "h-11 items-center": !picture(), "min-h-11 items-start gap-x-1 py-[6px]": picture() }}
+        >
           <div
+            data-slot="prompt-input-controls"
             class="flex min-w-0 flex-1 items-center gap-1"
+            classList={{ "flex-wrap": picture() }}
             aria-hidden={state.mode === "shell"}
             inert={state.mode === "shell" ? true : undefined}
             style={buttons()}
           >
-            <PromptInputV2AddMenu
-              disabled={state.mode === "shell"}
-              title={i18n.t("ui.promptInput.add")}
-              attachLabel={i18n.t("ui.promptInput.attachments")}
-              commandsLabel={i18n.t("ui.promptInput.commands")}
-              contextLabel={i18n.t("ui.promptInput.context")}
-              shellLabel={i18n.t("ui.promptInput.shell")}
-              onAttach={props.controller.attach}
-              onCommands={props.controller.openCommands}
-              onContext={props.controller.openContext}
-              onShell={props.controller.openShell}
-            />
-            <Show when={view.agent} keyed>
+            <Show when={!picture()}>
+              <PromptInputV2AddMenu
+                disabled={state.mode === "shell"}
+                title={i18n.t("ui.promptInput.add")}
+                attachLabel={i18n.t("ui.promptInput.attachments")}
+                commandsLabel={i18n.t("ui.promptInput.commands")}
+                contextLabel={i18n.t("ui.promptInput.context")}
+                shellLabel={i18n.t("ui.promptInput.shell")}
+                onAttach={props.controller.attach}
+                onCommands={props.controller.openCommands}
+                onContext={props.controller.openContext}
+                onShell={props.controller.openShell}
+              />
+            </Show>
+            {props.modeControl}
+            <Show when={!picture() && view.agent} keyed>
               {(control) => (
                 <PromptInputV2ConfiguredSelect title={i18n.t("ui.promptInput.chooseAgent")} control={control} />
               )}
@@ -235,13 +249,14 @@ export function PromptInputV2(props: PromptInputV2Props) {
             >
               {props.modelControl}
             </Show>
-            <Show when={(props.variantControlVisible ?? true) && view.variant} keyed>
+            <Show when={(props.variantControlVisible ?? true) && !picture() && view.variant} keyed>
               {(control) => (
                 <Show when={control.options().length > 1}>
                   <PromptInputV2ConfiguredSelect title={i18n.t("ui.promptInput.chooseVariant")} control={control} />
                 </Show>
               )}
             </Show>
+            {props.pictureControls}
           </div>
           <Show when={props.trailingControl}>
             <div
@@ -552,7 +567,7 @@ export function PromptInputV2Select(props: {
           as={ButtonV2}
           variant="ghost-muted"
           size="normal"
-          class={`max-w-[220px] justify-start ![font-weight:440] ${props.class ?? ""}`}
+          class={`max-w-[220px] justify-start ![font-weight: 400] ${props.class ?? ""}`}
           aria-label={props.title}
         >
           {props.currentIcon}
@@ -660,18 +675,15 @@ export function PromptInputV2SubmitButton(props: {
       inactive={!props.stopping && props.disabled}
       value={props.stopping ? props.stopLabel : props.sendLabel}
     >
-      <IconButton
+      <IconButtonV2
         data-action="prompt-submit"
         type="button"
         disabled={!props.stopping && props.disabled}
         tabIndex={props.mode === "normal" ? undefined : -1}
-        icon={props.stopping ? "stop" : props.mode === "shell" ? "arrow-undo-down" : "arrow-up"}
+        icon={<IconV2 name={props.stopping ? "stop-square" : props.mode === "shell" ? "arrow-undo-down" : "arrow-up"} />}
         variant="primary"
-        class="size-7 rounded-md p-[6px] text-v2-icon-icon-muted shadow-[var(--v2-elevation-button-contrast)] disabled:opacity-50"
-        style={{
-          "background-image":
-            "linear-gradient(180deg,var(--v2-alpha-light-20) 0%,var(--v2-alpha-light-0) 100%),linear-gradient(90deg,var(--v2-background-bg-contrast) 0%,var(--v2-background-bg-contrast) 100%)",
-        }}
+        size="large"
+        class="rounded-[7px]"
         aria-label={props.stopping ? props.stopLabel : props.sendLabel}
         onClick={(event) => {
           event.preventDefault()
@@ -688,7 +700,7 @@ export function PromptInputV2SubmitButton(props: {
 }
 
 function PromptInputV2SuggestionIcon(props: { item: PromptInputV2Suggestion }) {
-  if (props.item.kind === "agent") return <Icon name="brain" size="small" class="shrink-0 text-icon-info-active" />
+  if (props.item.kind === "agent") return <Icon name="brain" size="small" class="shrink-0 text-v2-icon-icon-base" />
   if (props.item.kind === "command") return null
   return (
     <FileIcon

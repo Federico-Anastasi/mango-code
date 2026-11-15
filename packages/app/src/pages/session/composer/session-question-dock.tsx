@@ -1,7 +1,7 @@
 import { For, Show, createEffect, createMemo, onCleanup, onMount, type Component } from "solid-js"
 import { createStore } from "solid-js/store"
 import { useMutation } from "@tanstack/solid-query"
-import { Button } from "@opencode-ai/ui/button"
+import { ButtonV2 } from "@opencode-ai/ui/v2/button-v2"
 import { DockPrompt } from "@opencode-ai/session-ui/dock-prompt"
 import { Icon } from "@opencode-ai/ui/icon"
 import { useSpring } from "@opencode-ai/ui/motion-spring"
@@ -97,6 +97,7 @@ export const SessionQuestionDock: Component<{ request: QuestionRequest; onSubmit
   const count = createMemo(() => options().length + 1)
 
   const summary = createMemo(() => {
+    if (total() === 1) return `1 ${language.t("ui.common.question.one")}`
     const n = Math.min(store.tab + 1, total())
     return language.t("session.question.progress", { current: n, total: total() })
   })
@@ -488,24 +489,24 @@ export const SessionQuestionDock: Component<{ request: QuestionRequest; onSubmit
         }
         footer={
           <>
-            <Button variant="ghost" size="large" disabled={sending()} onClick={reject} aria-keyshortcuts="Escape">
+            <ButtonV2 variant="ghost" size="large" disabled={sending()} onClick={reject} aria-keyshortcuts="Escape">
               {language.t("ui.common.dismiss")}
-            </Button>
+            </ButtonV2>
             <div data-slot="question-footer-actions">
               <Show when={store.tab > 0}>
-                <Button variant="secondary" size="large" disabled={sending()} onClick={back}>
+                <ButtonV2 variant="neutral" size="large" disabled={sending()} onClick={back}>
                   {language.t("ui.common.back")}
-                </Button>
+                </ButtonV2>
               </Show>
-              <Button
-                variant={last() ? "primary" : "secondary"}
+              <ButtonV2
+                variant={last() ? "primary" : "neutral"}
                 size="large"
                 disabled={sending()}
                 onClick={next}
                 aria-keyshortcuts="Meta+Enter Control+Enter"
               >
                 {last() ? language.t("ui.common.submit") : language.t("ui.common.next")}
-              </Button>
+              </ButtonV2>
             </div>
           </>
         }

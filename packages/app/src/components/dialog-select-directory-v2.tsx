@@ -374,10 +374,10 @@ export function DialogSelectDirectoryV2(props: DialogSelectDirectoryV2Props) {
         <div class="directory-picker-v2-selection">{policy.result(root(), selected(), rootValid())}</div>
       </DialogBody>
       <DialogFooter>
-        <ButtonV2 variant="neutral" onClick={() => dialog.close()}>
+        <ButtonV2 variant="ghost" onClick={() => dialog.close()}>
           {language.t("common.cancel")}
         </ButtonV2>
-        <ButtonV2 variant="contrast" disabled={!policy.result(root(), selected(), rootValid())} onClick={resolve}>
+        <ButtonV2 variant="primary" disabled={!policy.result(root(), selected(), rootValid())} onClick={resolve}>
           {action[policy.action]}
         </ButtonV2>
       </DialogFooter>

@@ -1,0 +1,5 @@
+Makes a picture with the image model of this computer and saves it as a PNG in the project's pictures folder. Use it when the user asks for a picture: a photo, an illustration, a logo, a background, a cover.
+
+The description decides the result. Write it in English, concrete and complete: the subject, where it is, the style, the light, the framing. Words that must be written in the picture go between quotes, and only a few of them. Describe what is in the picture, not what it is for.
+
+A picture takes from ten seconds to a few minutes. One call makes one picture. When several pictures are needed, send all the calls together in the same answer, one for each picture: they are drawn one after the other without a pause, much quicker than asked one at a time. To change a picture, call again with a better description.

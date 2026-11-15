@@ -127,7 +127,7 @@ export function SessionTodoDock(props: {
           <span
             classList={{
               "cursor-default inline-flex items-baseline shrink-0 overflow-visible": true,
-              "font-[440] text-[13px] leading-5 tracking-[-0.04px] text-v2-text-text-muted":
+              "font-normal text-[13px] leading-5 tracking-[-0.04px] text-v2-text-text-muted":
                 settings.general.newLayoutDesigns(),
               "text-14-regular text-text-strong": !settings.general.newLayoutDesigns(),
             }}
@@ -164,7 +164,7 @@ export function SessionTodoDock(props: {
             <TextReveal
               class={
                 settings.general.newLayoutDesigns()
-                  ? "cursor-default text-[13px] font-[440] leading-5 tracking-[-0.04px] text-v2-text-text-faint"
+                  ? "cursor-default text-[13px] font-normal leading-5 tracking-[-0.04px] text-v2-text-text-faint"
                   : "text-14-regular text-text-base cursor-default"
               }
               text={props.collapsed ? preview() : undefined}

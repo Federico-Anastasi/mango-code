@@ -243,6 +243,8 @@ pub struct Requester {
 }
 
 struct Loan {
+    /// Its number, for whoever gives back this loan alone (`give_back`).
+    id: u64,
     gpus: Option<Vec<u32>>,
     process: Option<loan::Process>,
     who: String,
@@ -272,6 +274,8 @@ struct State {
     wanted_by_choice: bool,
     running: Option<Running>,
     loans: Vec<Loan>,
+    /// How many loans there have been: the next one's number.
+    loans_made: u64,
     /// The GPUs of the loans (`all`: a loan has taken all of them).
     excluded: Vec<u32>,
     all: bool,
@@ -916,6 +920,12 @@ impl EngineManager {
     /// A model that splits itself restarts on the remaining GPUs at the first request.
     /// The loan is `who`'s: if its process closes before `resume`, the loan ends by itself.
     pub fn release(&self, gpus: Option<&[u32]>, who: Requester) -> Result<PublicState> {
+        self.lend(gpus, who)?;
+        Ok(self.state())
+    }
+
+    /// `release` for whoever gives the GPUs back by itself with `give_back`: the answer is the loan's number.
+    pub fn lend(&self, gpus: Option<&[u32]>, who: Requester) -> Result<u64> {
         let mut s = self.lock();
         while matches!(s.phase, Phase::Starting | Phase::Releasing) {
             s = self.wait(s, Duration::from_secs(1));
@@ -926,7 +936,10 @@ impl EngineManager {
                 tr!("il processo {pid} a cui legare il prestito non c'è", "the process {pid} to tie the loan to doesn't exist")
             })?),
         };
+        s.loans_made += 1;
+        let id = s.loans_made;
         s.loans.push(Loan {
+            id,
             gpus: gpus.map(<[u32]>::to_vec),
             process,
             who: who.who,
@@ -966,7 +979,29 @@ impl EngineManager {
             }
             drop(s);
         }
-        Ok(self.state())
+        Ok(id)
+    }
+
+    /// Ends the loan `loan` alone (`lend`), leaving those of others where they are. If it was the last one the GPUs
+    /// go back to the engine and the wanted model restarts, as with `resume`: it returns when the model is ready. A
+    /// loan that has already ended (its process closed, or someone called `resume`) changes nothing.
+    pub fn give_back(&self, loan: u64, tick: &mut dyn FnMut(u64)) -> Result<PublicState> {
+        {
+            let mut s = self.lock();
+            while matches!(s.phase, Phase::Starting | Phase::Releasing) {
+                s = self.wait(s, Duration::from_secs(1));
+            }
+            let before = s.loans.len();
+            s.loans.retain(|l| l.id != loan);
+            if s.loans.len() == before || !s.loans.is_empty() {
+                recompute_excluded(&mut s);
+                drop(s);
+                self.0.cv.notify_all();
+                return Ok(self.state());
+            }
+        }
+        // A loan born between the two is not this one's: the resume leaves it.
+        self.resume_with(true, tick)
     }
 
     /// Gives all the GPUs back to the engine and restarts the wanted model. Returns when it's ready.
@@ -1465,6 +1500,31 @@ mod tests {
 
         assert!(std::fs::metadata(dir.path().join("manager.1.log")).unwrap().len() > LOG_MAX);
         assert!(std::fs::metadata(dir.path().join("manager.log")).unwrap().len() < 1000);
+    }
+
+    /// A loan given back by its number leaves the others; the last one given back gives the GPUs back to the engine.
+    /// Giving back twice, or after a `resume`, changes nothing.
+    #[test]
+    fn a_loan_given_back_alone_leaves_the_others() {
+        let dir = tempfile::tempdir().unwrap();
+        let m = manager_without_models(dir.path());
+        let one = m.lend(Some(&[1]), Requester { pid: None, who: "one".into() }).unwrap();
+        let two = m.lend(Some(&[2]), Requester { pid: None, who: "two".into() }).unwrap();
+        assert_eq!(m.state().released, [1, 2]);
+
+        let s = m.give_back(one, &mut |_| {}).unwrap();
+        assert_eq!((s.phase, s.loans.len(), s.released.as_slice(), s.loans[0].who.as_str()), (Phase::Released, 1, &[2][..], "two"), "{s:?}");
+        let s = m.give_back(one, &mut |_| {}).unwrap();
+        assert_eq!((s.phase, s.loans.len()), (Phase::Released, 1), "{s:?}");
+
+        let s = m.give_back(two, &mut |_| {}).unwrap();
+        assert_eq!((s.phase, s.loans.len(), s.released.is_empty()), (Phase::Stopped, 0, true), "{s:?}");
+
+        let three = m.lend(None, Requester { pid: None, who: "three".into() }).unwrap();
+        m.resume(&mut |_| {}).unwrap();
+        m.release(Some(&[0]), Requester { pid: None, who: "four".into() }).unwrap();
+        let s = m.give_back(three, &mut |_| {}).unwrap();
+        assert_eq!((s.phase, s.loans.len(), s.all_released), (Phase::Released, 1, false), "{s:?}");
     }
 
     #[test]

@@ -91,6 +91,21 @@ pub(crate) fn serve(c: &TcpStream, d: &Inner, head: &Head, rest: Vec<u8>, length
     }
 }
 
+/// A request of the computer's own browser for a page of `root`, a folder Mango Code serves as a site so that the agent
+/// has no server to start: the same read-only folder the phone sees, answered only when the address asked is this
+/// computer's (a page of the internet cannot reach it under a name of its own).
+pub fn serve_computer(c: &TcpStream, root: &std::path::Path) {
+    let _ = c.set_write_timeout(Some(crate::http::REQUEST_TIMEOUT));
+    let head = match crate::http::read_head(c) {
+        Ok((head, _)) => head,
+        Err(e) => return respond(c, 400, "application/json", &error(&format!("{e:#}")), &[]),
+    };
+    if !head.header("host").is_some_and(mango_common::loopback_host) {
+        return respond(c, 403, "application/json", &error(&tr!("questo sito si apre solo da questo computer", "this site opens only from this computer")), &[]);
+    }
+    folder(c, &head, root, "index.html")
+}
+
 /// A local file's folder, read-only.
 fn folder(c: &TcpStream, head: &Head, root: &std::path::Path, entry: &str) {
     if !matches!(head.method.as_str(), "GET" | "HEAD") {

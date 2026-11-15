@@ -10,7 +10,7 @@ use crate::profiles::{self, Profile};
 use crate::split::{Layer, LayerKind, ModelShape};
 use crate::user;
 use anyhow::{bail, Result};
-use mango_common::catalog::{file_for_engine, About, Sampling, USER_FILE};
+use mango_common::catalog::{file_for_engine, About, ImageModel, Sampling, USER_FILE};
 use mango_common::download::installed_engine;
 use mango_common::{tr, Build, Paths};
 use serde::Deserialize;
@@ -22,11 +22,13 @@ pub(crate) struct ModelsFile {
     pub default: String,
     /// Target context of all models: it lives here so that it isn't lowered out of laziness.
     pub ctx: u32,
-    /// The recommended local models, in the order they are listed everywhere: each local model of the catalog
-    /// appears only once. Cloud ones aren't there.
+    /// The recommended local models that write, in the order they are listed everywhere: each of them appears only
+    /// once. Cloud ones and the ones that make images aren't there.
     pub order: Vec<String>,
     /// Recommended and the user's together.
     pub models: BTreeMap<String, serde_json::Value>,
+    /// The model used for a picture when none is named.
+    pub image_default: Option<String>,
     /// The keys of `models` that come from the user's file.
     #[serde(skip)]
     pub user: Vec<String>,
@@ -44,9 +46,15 @@ impl ModelsFile {
         self.models.get(key).is_some_and(|v| v.get("cloud").is_some())
     }
 
+    /// A model that makes images: it is downloaded like the others, and never listed among the models of a
+    /// conversation.
+    pub fn is_image(&self, key: &str) -> bool {
+        self.models.get(key).is_some_and(|v| v.get("image").is_some())
+    }
+
     /// The local models, in the order they are listed: the recommended ones as `order` says, then the user's by key.
     pub fn local(&self) -> impl Iterator<Item = &str> {
-        self.order.iter().chain(&self.user).map(String::as_str).filter(|k| !self.is_cloud(k))
+        self.order.iter().chain(&self.user).map(String::as_str).filter(|k| !self.is_cloud(k) && !self.is_image(k))
     }
 
     pub fn origin(&self, key: &str) -> Origin {
@@ -57,7 +65,8 @@ impl ModelsFile {
         }
     }
 
-    /// The user's entries are read like the others; `order` names each recommended local model once and nothing else.
+    /// The user's entries are read like the others; `order` names each recommended local model that writes once and
+    /// nothing else.
     fn validate(&self) -> Result<()> {
         for key in &self.user {
             if let Err(e) = serde_json::from_value::<ModelCfg>(self.models[key].clone()) {
@@ -75,13 +84,16 @@ impl ModelsFile {
             if seen.contains(&key.as_str()) {
                 bail!("{}", user(&damaged_list(), format!("«{key}» is in the order twice")));
             }
-            if !self.models.contains_key(key) || self.user.contains(key) || self.is_cloud(key) {
-                bail!("{}", user(&damaged_list(), format!("the order names «{key}», which isn't a local model of the catalog")));
+            if !self.models.contains_key(key) || self.user.contains(key) || self.is_cloud(key) || self.is_image(key) {
+                bail!("{}", user(&damaged_list(), format!("the order names «{key}», which isn't a local model of the catalog that writes")));
             }
             seen.push(key);
         }
-        if let Some(key) = self.models.keys().find(|k| !self.is_cloud(k) && !self.user.contains(k) && !seen.contains(&k.as_str())) {
+        if let Some(key) = self.models.keys().find(|k| !self.is_cloud(k) && !self.is_image(k) && !self.user.contains(k) && !seen.contains(&k.as_str())) {
             bail!("{}", user(&damaged_list(), format!("the model «{key}» is not in the order")));
+        }
+        if let Some(key) = self.image_default.as_ref().filter(|k| !self.is_image(k)) {
+            bail!("{}", user(&damaged_list(), format!("the default image model «{key}» is not a model that makes images")));
         }
         Ok(())
     }
@@ -93,6 +105,9 @@ fn damaged_list() -> String {
 
 /// The engine of the official llama.cpp builds, the general plan's one.
 pub(crate) const GENERAL_ENGINE: &str = "llamacpp";
+
+/// The engine of the models that make images: stable-diffusion.cpp.
+pub(crate) const IMAGE_ENGINE: &str = "sd";
 
 /// A model file in the Hugging Face repo, and how much it weighs.
 #[derive(Deserialize)]
@@ -137,6 +152,10 @@ pub(crate) struct ModelMemory {
 pub(crate) struct ModelCfg {
     pub label: String,
     pub cloud: Option<serde_json::Value>,
+    /// The model makes images: what it is made of.
+    pub image: Option<ImageModel>,
+    /// The license of its weights, as its catalog entry names it.
+    pub license: Option<String>,
     pub gguf: Option<String>,
     pub mmproj: Option<String>,
     pub chat_template: Option<String>,
@@ -429,6 +448,17 @@ pub fn download_of(paths: &Paths, key: &str, hw: &Hardware) -> Result<DownloadPl
     if cfg.cloud.is_some() {
         bail!("{}", tr!("«{}» è un modello online, non si scarica.", "«{}» is an online model, it is not downloaded.", cfg.label));
     }
+    if cfg.image.is_some() {
+        // Whether it fits is not told: what these models ask of a card and of the processor is not measured yet.
+        return Ok(DownloadPlan {
+            engine: IMAGE_ENGINE.to_string(),
+            build: image_build(hw),
+            bytes: cfg.files.iter().map(|f| f.size).sum(),
+            weights: cfg.files.iter().all(|f| paths.models.join(&f.path).is_file()),
+            fits: Ok(()),
+            label: cfg.label,
+        });
+    }
     let assessed = crate::view::assess(paths, &file, key, &cfg, hw, &choices::read(paths)?, &[]);
     let setup = assessed.setup?;
     let weights = cfg.weights_on_disk(paths, setup.engine());
@@ -440,6 +470,15 @@ pub fn download_of(paths: &Paths, key: &str, hw: &Hardware) -> Result<DownloadPl
         fits: assessed.located.fit.map(|_| ()).ok_or(assessed.located.reason),
         label: cfg.label,
     })
+}
+
+/// The build of the image engine for this hardware: the one llama.cpp would get, except that stable-diffusion.cpp
+/// publishes no CUDA 13 build. A driver that runs CUDA 13 runs CUDA 12 too.
+pub(crate) fn image_build(hw: &Hardware) -> Build {
+    match choose_build(hw) {
+        Build::Cuda13 => Build::Cuda12,
+        build => build,
+    }
 }
 
 /// The model the app loads when it opens: the one the user made the default (`choices.json`) if it is on disk with its

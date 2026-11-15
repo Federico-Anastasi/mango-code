@@ -316,7 +316,7 @@ export function PromptProjectSelector(props: {
         <DropdownMenu.Content
           ref={contentRef}
           id="prompt-project-menu"
-          class="w-[243px] overflow-hidden rounded-md border-0 bg-v2-background-bg-layer-01 p-0 shadow-[var(--v2-elevation-floating)] focus:outline-none [&[data-closed]]:!animate-none"
+          class="w-[243px] overflow-hidden !p-0 focus:outline-none [&[data-closed]]:!animate-none"
           onOpenAutoFocus={(event) => event.preventDefault()}
           onPointerDownOutside={dismiss.preventTriggerRestore}
           onFocusOutside={dismiss.preventTriggerRestore}
@@ -332,7 +332,7 @@ export function PromptProjectSelector(props: {
                 aria-autocomplete="list"
                 aria-controls="prompt-project-menu"
                 aria-activedescendant={props.controller.active() || undefined}
-                class="h-7 min-w-0 flex-1 border-0 bg-transparent text-[13px] font-[440] leading-5 tracking-[-0.04px] text-v2-text-text-base outline-none placeholder:text-v2-text-text-faint"
+                class="h-7 min-w-0 flex-1 border-0 bg-transparent text-[13px] font-normal leading-5 tracking-[-0.04px] text-v2-text-text-base outline-none placeholder:text-v2-text-text-faint"
                 onInput={(event) => props.controller.setSearch(event.currentTarget.value)}
                 onKeyDown={(event) => {
                   if (event.key === "Tab") {
@@ -402,7 +402,7 @@ export function PromptProjectSelector(props: {
                 >
                   {(server) => (
                     <div>
-                      <div class="flex h-7 select-none items-center pl-1.5 pr-3 text-[11px] font-[530] leading-none tracking-[0.05px] text-v2-text-text-faint">
+                      <div class="flex h-7 select-none items-center pl-1.5 pr-3 text-[11px] font-medium leading-none tracking-[0.05px] text-v2-text-text-faint">
                         {server!.name}
                       </div>
                       <DropdownMenu.RadioGroup value={selectedValue()}>
@@ -454,7 +454,7 @@ export function PromptProjectSelector(props: {
                   <Icon name="chevron-right" size="small" class="shrink-0 text-v2-icon-icon-muted" />
                 </DropdownMenu.SubTrigger>
                 <DropdownMenu.Portal>
-                  <DropdownMenu.SubContent class="min-w-[180px] overflow-hidden rounded-md border-0 bg-v2-background-bg-layer-01 p-0.5 shadow-[var(--v2-elevation-floating)] focus:outline-none">
+                  <DropdownMenu.SubContent class="min-w-[180px] overflow-hidden !p-0.5 focus:outline-none">
                     <For each={props.controller.servers()}>
                       {(server) => <ServerAction server={server!} onSelect={selectAction} />}
                     </For>
@@ -470,7 +470,7 @@ export function PromptProjectSelector(props: {
 }
 
 const projectButtonClass =
-  "flex h-7 min-w-0 max-w-[160px] items-center gap-1.5 rounded-sm px-2 text-[13px] font-[440] leading-5 tracking-[-0.04px] text-v2-text-text-faint transition-colors hover:bg-v2-overlay-simple-overlay-hover focus-visible:bg-v2-overlay-simple-overlay-hover focus-visible:outline-none"
+  "flex h-7 min-w-0 max-w-[160px] items-center gap-1.5 rounded-sm px-2 text-[13px] font-normal leading-5 tracking-[-0.04px] text-v2-text-text-faint transition-colors hover:bg-v2-overlay-simple-overlay-hover focus-visible:bg-v2-overlay-simple-overlay-hover focus-visible:outline-none"
 
 export function PromptProjectAddButton(props: { controller: PromptProjectController }) {
   return (
@@ -551,7 +551,7 @@ function ProjectItem(props: {
       id={key()}
       value={key()}
       data-option-key={key()}
-      class="h-7 gap-2 rounded-sm px-3 text-[13px] font-[440] leading-5 tracking-[-0.04px] text-v2-text-text-base data-[highlighted]:!bg-v2-overlay-simple-overlay-hover"
+      class="h-7 gap-2 rounded-sm px-3 text-[13px] font-normal leading-5 tracking-[-0.04px] text-v2-text-text-base data-[highlighted]:!bg-v2-overlay-simple-overlay-hover"
       classList={{ "!bg-v2-overlay-simple-overlay-hover": props.controller.active() === key() }}
       style={{
         "font-family": "var(--v2-font-family-sans)",
@@ -583,7 +583,7 @@ function ProjectItem(props: {
 }
 
 const projectActionClass =
-  "h-7 gap-2 rounded-sm px-3 text-[13px] font-[440] leading-5 tracking-[-0.04px] text-v2-text-text-base [font-family:var(--v2-font-family-sans)] data-[highlighted]:!bg-v2-overlay-simple-overlay-hover"
+  "h-7 gap-2 rounded-sm px-3 text-[13px] font-normal leading-5 tracking-[-0.04px] text-v2-text-text-base [font-family:var(--v2-font-family-sans)] data-[highlighted]:!bg-v2-overlay-simple-overlay-hover"
 
 function ProjectAction(props: {
   server?: string
@@ -595,7 +595,7 @@ function ProjectAction(props: {
     <DropdownMenu.Item
       id={key()}
       data-option-key={key()}
-      class="h-7 gap-2 rounded-sm px-3 text-[13px] font-[440] leading-5 tracking-[-0.04px] text-v2-text-text-base data-[highlighted]:!bg-v2-overlay-simple-overlay-hover"
+      class="h-7 gap-2 rounded-sm px-3 text-[13px] font-normal leading-5 tracking-[-0.04px] text-v2-text-text-base data-[highlighted]:!bg-v2-overlay-simple-overlay-hover"
       classList={{ "!bg-v2-overlay-simple-overlay-hover": props.controller.active() === key() }}
       style={{
         "font-family": "var(--v2-font-family-sans)",

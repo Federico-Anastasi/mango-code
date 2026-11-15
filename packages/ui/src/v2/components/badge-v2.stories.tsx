@@ -12,11 +12,11 @@ Use alongside headings or lists for quick metadata.
 - Optional: \`data-high-contrast\` attribute for stronger border contrast.
 
 ### Variants and states
-- Neutral and accent variants.
+- Neutral, accent, ready and error variants (outline only, never filled).
 - Optional high-contrast border style.
 
 ### Behavior
-- Inline element with fixed 16px height and tabular numeric text.
+- Inline element with fixed 20px height and tabular numeric text.
 
 ### Accessibility
 - Ensure text conveys meaning; avoid color-only distinction.
@@ -56,4 +56,15 @@ export const HighContrast = {
 
 export const Accent = {
   render: () => <Tag variant="accent">New</Tag>,
+}
+
+export const States = {
+  render: () => (
+    <div style={{ display: "flex", gap: "8px", "align-items": "center" }}>
+      <Tag>Off</Tag>
+      <Tag variant="accent">Default</Tag>
+      <Tag variant="ready">In use</Tag>
+      <Tag variant="error">Does not fit</Tag>
+    </div>
+  ),
 }

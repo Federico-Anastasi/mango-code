@@ -38,6 +38,17 @@ pub async fn models_set_default(app: AppHandle, key: Option<String>) -> Result<(
     .await
 }
 
+/// The model that makes a picture when a request names none; none = the catalog's.
+#[tauri::command]
+pub async fn models_set_image_default(app: AppHandle, key: Option<String>) -> Result<(), BridgeError> {
+    blocking(app, move |app| {
+        choices::set_image_default(&paths(app)?, key.as_deref())?;
+        crate::choices_changed(app);
+        Ok(())
+    })
+    .await
+}
+
 /// Where a model runs, with what context, how it writes and whether it reasons.
 #[tauri::command]
 pub async fn models_set_choices(app: AppHandle, key: String, choices: Choices) -> Result<(), BridgeError> {
@@ -72,7 +83,9 @@ pub async fn computer_set_small_models(app: AppHandle, small_models: SmallModels
 }
 
 /// Takes a model off the computer: its download, if one is in progress, is cancelled and stopped; if the engine has it,
-/// the engine stops; the files Mango Code downloaded are deleted; if it was the default, there is no default any more.
+/// the engine stops (the image engine too, after the pictures of the model that are being made or waiting have been
+/// stopped, and with no new one accepted meanwhile); the files Mango Code downloaded are deleted; if it was the default,
+/// there is no default any more, also when a file could not be deleted.
 /// A model of the user's also leaves the user's list, with its choices: the files the user chose stay where they are
 /// (the window said so before asking). Nothing is loaded in its place. The interface is told also when the removal
 /// stops halfway: some files may be gone already.
@@ -88,15 +101,25 @@ pub async fn models_remove(app: AppHandle, key: String) -> Result<(), BridgeErro
 
 fn remove(app: &AppHandle, key: &str) -> Result<()> {
     let st = app.state::<AppState>();
-    take_off(&paths(app)?, &hardware()?, st.downloads.get(), st.engine.get(), key)
+    take_off(&paths(app)?, &hardware()?, st.downloads.get(), st.engine.get(), st.images.get(), key)
 }
 
-/// `remove` with what it works on: the queue of the downloads and the engine manager, when they are there.
-pub(crate) fn take_off(paths: &Paths, hw: &Hardware, downloads: Option<&Downloads>, engine: Option<&EngineManager>, key: &str) -> Result<()> {
+/// `remove` with what it works on: the queue of the downloads, the engine manager and the pictures, when they are there.
+pub(crate) fn take_off(
+    paths: &Paths,
+    hw: &Hardware,
+    downloads: Option<&Downloads>,
+    engine: Option<&EngineManager>,
+    pictures: Option<&images::routes::Routes>,
+    key: &str,
+) -> Result<()> {
     let model = engine_cfg::download_of(paths, key, hw)?;
     // From here until the end nobody starts the model (`_starts`): `unload` alone would let a request that names it load
-    // it again before its files are deleted. Nor can it be downloaded or resumed (`_removal`).
+    // it again before its files are deleted. Nor can it be downloaded or resumed (`_removal`). The same for a picture:
+    // the image engine holds the files of its model open, also while it draws and is not «kept», and Windows does not
+    // delete a file that is open (`_retired`).
     let _starts = engine.map(|e| e.block_starts(key));
+    let _retired = pictures.map(|p| p.retire(key)).transpose()?;
     let (_removal, queued) = match downloads {
         Some(downloads) => (Some(downloads.stop_for_removal(key)?), downloads.list().into_iter().map(|d| d.model).collect()),
         None => (None, Vec::new()),
@@ -107,17 +130,40 @@ pub(crate) fn take_off(paths: &Paths, hw: &Hardware, downloads: Option<&Download
             engine.unload();
         }
     }
-    let kept = mango_common::download::remove_model(paths, key, &model.engine, &queued)?;
-    if mango_common::catalog::read(paths)?.user.iter().any(|k| k == key) {
+    let removed = mango_common::download::remove_model(paths, key, &model.engine, &queued);
+    // Whatever happened to the files, a model that may be missing some of them is the default of nothing: it would be
+    // started or asked for pictures, and fail.
+    let forgotten = forget_defaults(paths, key);
+    let kept = removed?;
+    forgotten?;
+    let catalog = mango_common::catalog::read(paths)?;
+    if catalog.user.iter().any(|k| k == key) {
         mango_common::catalog::remove_user(paths, key)?;
         choices::forget_model(paths, key)?;
         crate::startup_log(paths, &format!("models: {key} taken off the user's list"));
-    } else if choices::read(paths)?.default.as_deref() == Some(key) {
-        choices::set_default(paths, None)?;
+    }
+    // A model of Mango Code's that ran from a file of the user's: the file stays, the entry that named it goes, and the
+    // model can be downloaded like any other.
+    if let Some((own, _)) = catalog.same.iter().find(|(_, model)| model.as_str() == key) {
+        mango_common::catalog::remove_user(paths, own)?;
+        choices::forget_model(paths, key)?;
+        crate::startup_log(paths, &format!("models: {key} no longer runs from the user's file ({own} taken off the user's list)"));
     }
     if !kept.is_empty() {
         let files: Vec<String> = kept.iter().map(|p| p.display().to_string()).collect();
         crate::startup_log(paths, &format!("models: {key} removed, its own files stay: {}", files.join(", ")));
+    }
+    Ok(())
+}
+
+/// `key` is no longer the model that starts with the app, nor the one that makes the pictures asked without a model.
+fn forget_defaults(paths: &Paths, key: &str) -> Result<()> {
+    let saved = choices::read(paths)?;
+    if saved.default.as_deref() == Some(key) {
+        choices::set_default(paths, None)?;
+    }
+    if saved.image_default.as_deref() == Some(key) {
+        choices::set_image_default(paths, None)?;
     }
     Ok(())
 }

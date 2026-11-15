@@ -27,7 +27,7 @@ use std::time::{Duration, Instant};
 const COOKIE: &str = "mango_phone";
 const MAX_HEAD: usize = 64 * 1024;
 /// The time to send the head and the body: a connection that sends nothing doesn't hold a thread forever.
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+pub(crate) const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 /// The time to send the head in all, however slowly it comes.
 const HEAD_TIMEOUT: Duration = if cfg!(test) { Duration::from_secs(2) } else { Duration::from_secs(10) };
 /// Connections open at once, both ports: past this a new one is closed unanswered. A phone needs a handful.
@@ -37,7 +37,8 @@ const REPORT: &str = "/phone/report";
 const METHODS: &[&str] = &["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"];
 /// Agent routes the web UI doesn't use: the app calls them (`reload`, after it rewrote the agent's configuration) and the
 /// attached apps (`extra-folders`). The model, the models and the computer (`/mango/state`, `/mango/models`,
-/// `/mango/computer`, `/mango/model/*`) pass: from the phone too the model is chosen. The programs the agent left running
+/// `/mango/computer`, `/mango/model/*`) pass: from the phone too the model is chosen. So do the pictures
+/// (`/mango/image/*`). The programs the agent left running
 /// (`processes`, with their "Stop") are shown and stopped on the PC only.
 const PC_ONLY: &[&str] = &["/mango/reload", "/mango/extra-folders", "/mango/processes"];
 /// Static files of the web UI that need no session: the app's manifest and icons are read by the system (the home screen, the
@@ -164,7 +165,7 @@ impl Head {
 }
 
 /// Reads the request head; also returns the body bytes that have already arrived.
-fn read_head(mut c: &TcpStream) -> Result<(Head, Vec<u8>)> {
+pub(crate) fn read_head(mut c: &TcpStream) -> Result<(Head, Vec<u8>)> {
     let mut buf = Vec::new();
     let mut chunk = [0u8; 4096];
     let deadline = Instant::now() + HEAD_TIMEOUT;

@@ -18,7 +18,7 @@ import {
 type Language = Pick<ReturnType<typeof useLanguage>, "t" | "intl">
 
 /** «2 schede», «1 scheda», «Processore». */
-export function cardsText(where: Where, language: Language) {
+export function cardsText(where: Pick<Where, "placement" | "gpus"> & { context?: number }, language: Language) {
   if (where.placement === "cpu" || where.gpus.length === 0) return language.t("mango.where.cpu")
   return where.gpus.length === 1
     ? language.t("mango.where.cards.one")

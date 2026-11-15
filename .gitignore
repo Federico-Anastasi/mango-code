@@ -46,3 +46,4 @@ logs/
 *.bun-build
 tsconfig.tsbuildinfo
 /artifacts/
+app/ui/suite/

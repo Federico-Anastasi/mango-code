@@ -1,25 +1,16 @@
-// mango-code: Settings › General. Language, theme (system, light, dark), size, dictation, what the chat shows, the alerts (a notification and a sound
-// for each of the three events) and, closed, the technical items: the fonts and the tool parts of the chat.
-import { ButtonV2 } from "@opencode-ai/ui/v2/button-v2"
+// mango-code: Settings › General. The four rows every Mango app has, in this order: language, theme (system, light, dark),
+// size and dictation. Then what only Mango Code has: what the chat shows, the alerts (a notification and a sound for each
+// of the three events) and, closed, the technical items: the tool parts of the chat.
 import { Icon as IconV2 } from "@opencode-ai/ui/v2/icon"
 import { SegmentedControlItemV2, SegmentedControlV2 } from "@opencode-ai/ui/v2/segmented-control-v2"
-import { SelectV2 } from "@opencode-ai/ui/v2/select-v2"
+import { StepperV2 } from "@opencode-ai/ui/v2/stepper-v2"
 import { Switch } from "@opencode-ai/ui/v2/switch-v2"
-import { TextInputV2 } from "@opencode-ai/ui/v2/text-input-v2"
 import { useTheme, type ColorScheme } from "@opencode-ai/ui/theme/context"
 import { makeEventListener } from "@solid-primitives/event-listener"
 import { createMediaQuery } from "@solid-primitives/media"
 import { type Component, createEffect, createMemo, createSignal, For, on, onMount, Show } from "solid-js"
-import { useLanguage } from "@/context/language"
-import {
-  monoDefault,
-  monoFontFamily,
-  monoInput,
-  sansDefault,
-  sansFontFamily,
-  sansInput,
-  useSettings,
-} from "@/context/settings"
+import { type LanguageChoice, useLanguage } from "@/context/language"
+import { useSettings } from "@/context/settings"
 import { mangoDesktopError, nextZoom } from "@/utils/mango-desktop"
 import { SettingsListV2 } from "../settings-v2/parts/list"
 import { SettingsRowV2 } from "../settings-v2/parts/row"
@@ -38,7 +29,12 @@ export const SettingsGeneral: Component<{ focus?: string }> = (props) => {
   const settings = useSettings()
   const theme = useTheme()
   const mobile = createMediaQuery("(max-width: 767px)")
-  const languages = createMemo(() => language.choices.map((value) => ({ value, label: language.label(value) })))
+  // the system's language first, as the theme has it
+  const languages = createMemo(() =>
+    language.choices
+      .toSorted((a, b) => Number(b === "system") - Number(a === "system"))
+      .map((value) => ({ value, label: language.label(value) })),
+  )
 
   const alerts = [
     {
@@ -76,17 +72,16 @@ export const SettingsGeneral: Component<{ focus?: string }> = (props) => {
           title={language.t("settings.general.row.language.title")}
           description={language.t("settings.general.row.language.description")}
         >
-          <SelectV2
-            appearance="inline"
+          <SegmentedControlV2
+            value={language.choice()}
+            onChange={(value) => value && language.setChoice(value as LanguageChoice)}
             data-action="settings-language"
-            options={languages()}
-            placement="bottom-end"
-            gutter={6}
-            current={languages().find((option) => option.value === language.choice())}
-            value={(option) => option.value}
-            label={(option) => option.label}
-            onSelect={(option) => option && language.setChoice(option.value)}
-          />
+            aria-label={language.t("settings.general.row.language.title")}
+          >
+            <For each={languages()}>
+              {(option) => <SegmentedControlItemV2 value={option.value}>{option.label}</SegmentedControlItemV2>}
+            </For>
+          </SegmentedControlV2>
         </SettingsRowV2>
 
         <SettingsRowV2 title={language.t("settings.general.theme.title")} description="">
@@ -94,6 +89,7 @@ export const SettingsGeneral: Component<{ focus?: string }> = (props) => {
             value={theme.colorScheme()}
             onChange={(value) => value && theme.setColorScheme(value as ColorScheme)}
             data-action="settings-color-scheme"
+            aria-label={language.t("settings.general.theme.title")}
           >
             <For each={SCHEMES}>
               {(scheme) => (
@@ -106,7 +102,10 @@ export const SettingsGeneral: Component<{ focus?: string }> = (props) => {
         <ZoomRow />
 
         <DictationRow />
+      </SettingsListV2>
 
+      <h3 class="settings-v2-section-title">{language.t("settings.general.section.own")}</h3>
+      <SettingsListV2>
         <SettingsRowV2 title={language.t("settings.general.reasoning.title")} description="">
           <div data-action="settings-feed-reasoning-summaries">
             <Switch
@@ -182,26 +181,17 @@ const ZoomRow: Component = () => {
       title={language.t("settings.general.row.zoom.title")}
       description={error() ?? (zoom() ? "" : language.t("settings.pcOnly"))}
     >
-      <div class="settings-page-inline" data-action="settings-zoom">
-        <ButtonV2
-          variant="neutral"
-          size="small"
-          disabled={value() === undefined || value()! <= nextZoom(value()!, -1)}
-          onClick={() => step(-1)}
-          aria-label={language.t("desktop.menu.zoomOut")}
-        >
-          −
-        </ButtonV2>
-        <span data-slot="settings-zoom-value">{value() === undefined ? "—" : `${Math.round(value()! * 100)}%`}</span>
-        <ButtonV2
-          variant="neutral"
-          size="small"
-          disabled={value() === undefined || value()! >= nextZoom(value()!, 1)}
-          onClick={() => step(1)}
-          aria-label={language.t("desktop.menu.zoomIn")}
-        >
-          +
-        </ButtonV2>
+      <div data-action="settings-zoom">
+        <StepperV2
+          label={language.t("settings.general.row.zoom.title")}
+          value={value() === undefined ? "—" : `${Math.round(value()! * 100)}%`}
+          decreaseLabel={language.t("desktop.menu.zoomOut")}
+          increaseLabel={language.t("desktop.menu.zoomIn")}
+          canDecrease={value() !== undefined && value()! > nextZoom(value()!, -1)}
+          canIncrease={value() !== undefined && value()! < nextZoom(value()!, 1)}
+          onDecrease={() => step(-1)}
+          onIncrease={() => step(1)}
+        />
       </div>
     </SettingsRowV2>
   )
@@ -209,8 +199,6 @@ const ZoomRow: Component = () => {
 
 /** The titles of the rows of the closed part: a search that leads to one of them opens it. */
 const ADVANCED_TITLES = [
-  "settings.general.row.uiFont.title",
-  "settings.general.row.font.title",
   "settings.general.row.shellToolPartsExpanded.title",
   "settings.general.row.editToolPartsExpanded.title",
 ] as const
@@ -243,32 +231,6 @@ const Advanced: Component<{ focus?: string }> = (props) => {
       <Show when={open()}>
         <SettingsListV2>
           <SettingsRowV2
-            title={language.t("settings.general.row.uiFont.title")}
-            description={language.t("settings.general.row.uiFont.description")}
-          >
-            <FontInput
-              action="settings-ui-font"
-              label={language.t("settings.general.row.uiFont.title")}
-              value={sansInput(settings.appearance.uiFont())}
-              placeholder={sansDefault}
-              family={sansFontFamily(settings.appearance.uiFont())}
-              onInput={(value) => settings.appearance.setUIFont(value)}
-            />
-          </SettingsRowV2>
-          <SettingsRowV2
-            title={language.t("settings.general.row.font.title")}
-            description={language.t("settings.general.row.font.description")}
-          >
-            <FontInput
-              action="settings-code-font"
-              label={language.t("settings.general.row.font.title")}
-              value={monoInput(settings.appearance.font())}
-              placeholder={monoDefault}
-              family={monoFontFamily(settings.appearance.font())}
-              onInput={(value) => settings.appearance.setFont(value)}
-            />
-          </SettingsRowV2>
-          <SettingsRowV2
             title={language.t("settings.general.row.shellToolPartsExpanded.title")}
             description={language.t("settings.general.row.shellToolPartsExpanded.description")}
           >
@@ -295,29 +257,3 @@ const Advanced: Component<{ focus?: string }> = (props) => {
     </div>
   )
 }
-
-const FontInput: Component<{
-  action: string
-  label: string
-  value: string
-  placeholder: string
-  family: string
-  onInput: (value: string) => void
-}> = (props) => (
-  <div class="w-full sm:w-[220px]">
-    <TextInputV2
-      data-action={props.action}
-      type="text"
-      appearance="base"
-      value={props.value}
-      onInput={(event) => props.onInput(event.currentTarget.value)}
-      placeholder={props.placeholder}
-      spellcheck={false}
-      autocorrect="off"
-      autocomplete="off"
-      autocapitalize="off"
-      aria-label={props.label}
-      style={{ "font-family": props.family }}
-    />
-  </div>
-)

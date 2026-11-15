@@ -209,7 +209,7 @@ describe("WSL server settings presentation", () => {
 
     expect(model.distroStatuses.Debian).toEqual({
       label: { key: "wsl.onboarding.installOpencode" },
-      tone: "warning",
+      tone: "muted",
     })
     expect(model.primaryButton.action).toBe("install-opencode")
   })

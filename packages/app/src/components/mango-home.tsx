@@ -7,6 +7,7 @@
 import { createEffect, createMemo, createSignal, For, type JSX, Match, Show, Switch } from "solid-js"
 import { formatFileSize } from "@opencode-ai/session-ui/project-file"
 import { ButtonV2 } from "@opencode-ai/ui/v2/button-v2"
+import { ProgressBarV2 } from "@opencode-ai/ui/v2/progress-bar-v2"
 import { SelectV2 } from "@opencode-ai/ui/v2/select-v2"
 import { TextInputV2 } from "@opencode-ai/ui/v2/text-input-v2"
 import { useTheme } from "@opencode-ai/ui/theme/context"
@@ -101,11 +102,12 @@ export function MangoHomePanel(props: Actions & { children: JSX.Element }) {
 // Home's scroll view): without that it grew with its list, never scrolled, and the buttons went below the window.
 const panel =
   "flex min-w-0 flex-1 flex-col gap-6 pb-16 pt-6 max-md:overflow-y-auto max-md:px-4 lg:max-h-[100cqh] lg:overflow-y-auto lg:pt-12"
-const card = "flex flex-col gap-3 rounded-[10px] bg-v2-background-bg-layer-01 p-4"
-const title = "text-[20px] leading-7 text-v2-text-text-base [font-weight:530]"
+const card = "flex flex-col gap-3 rounded-[10px] border border-v2-border-border-base bg-v2-background-bg-base p-4"
+const title =
+  "text-[23px] leading-8 tracking-[-0.01em] text-v2-text-text-base [font-family:var(--mango-font-title)] [font-weight: 700]"
 const note = "text-[13px] leading-5 text-v2-text-text-muted"
 const danger = "text-[13px] leading-5 text-text-danger"
-const row = "flex flex-col items-start rounded-md px-3 py-2 text-left hover:bg-v2-overlay-simple-overlay-hover"
+const row = "flex flex-col items-start rounded-[7px] px-3 py-2 text-left hover:bg-v2-overlay-simple-overlay-hover"
 /** A card above the Home as usual: a failed start, the engine arriving, the models that cannot be read. */
 const above = "mt-6 lg:mt-12"
 
@@ -137,11 +139,11 @@ export function LanguagePicker() {
 }
 
 /** A button that the bridge makes work; without it, the sentence that says it is done from the computer. */
-function BridgeButton(props: { action: string; label: string; disabled?: boolean; onClick: () => void }) {
+function BridgeButton(props: { action: string; label: string; disabled?: boolean; main?: boolean; onClick: () => void }) {
   const mango = useMango()
   return (
     <Show when={mango.bridge()?.models} fallback={<PcOnly />}>
-      <ButtonV2 data-action={props.action} disabled={props.disabled} onClick={props.onClick}>
+      <ButtonV2 variant={props.main ? "primary" : undefined} data-action={props.action} disabled={props.disabled} onClick={props.onClick}>
         {props.label}
       </ButtonV2>
     </Show>
@@ -221,13 +223,14 @@ function Welcome() {
                     {language.t("mango.home.recommended")}
                   </span>
                   <div class="flex flex-col gap-1">
-                    <span class="text-[16px] leading-6 text-v2-text-text-base [font-weight:530]">{model().label}</span>
+                    <span class="text-[14px] leading-5 text-v2-text-text-base [font-weight: 600]">{model().label}</span>
                     <Show when={model().about}>{(about) => <span class={note}>{about()}</span>}</Show>
                   </div>
                   <ModelFacts model={model()} />
                   <div class="flex flex-col items-start gap-1">
                     <BridgeButton
                       action="mango-start"
+                      main
                       label={language.t("mango.home.start", { size: formatFileSize(model().bytes, language.intl()) })}
                       disabled={busy()}
                       onClick={() => void download([model().key])}
@@ -283,7 +286,7 @@ function Welcome() {
                 <Show when={mango.bridge()?.models}>
                   <input
                     type="checkbox"
-                    class="mt-1"
+                    class="mt-1 accent-[var(--mango-action)]"
                     disabled={!model.verdict.fits}
                     checked={chosen().includes(model.key)}
                     onChange={(event) =>
@@ -331,7 +334,7 @@ function Welcome() {
             in the flow above, a list longer than the window would hide it */}
         <div
           data-slot="mango-choose-actions"
-          class="sticky bottom-0 z-10 -mb-16 flex flex-col gap-2 bg-v2-background-bg-base pt-3 pb-6"
+          class="sticky bottom-0 z-10 -mb-16 flex flex-col gap-2 bg-v2-background-bg-deep pt-3 pb-6"
         >
           <Show when={error()}>{(message) => <p class={danger}>{message()}</p>}</Show>
           <div class="flex items-center gap-2">
@@ -341,6 +344,7 @@ function Welcome() {
             <Show when={mango.bridge()?.models}>
               <ButtonV2
                 data-action="mango-start-chosen"
+                variant="primary"
                 disabled={busy() || chosen().length === 0}
                 onClick={() => void download(chosen())}
               >
@@ -523,7 +527,7 @@ function Downloading(props: Actions) {
       </div>
       <div class={card}>
         <div class="flex flex-col gap-1">
-          <span class="text-[14px] leading-5 text-v2-text-text-base [font-weight:530]">
+          <span class="text-[14px] leading-5 text-v2-text-text-base [font-weight: 500]">
             {language.t("mango.home.firstProject")}
           </span>
           <span class={note}>{language.t("mango.home.firstProject.note")}</span>
@@ -531,7 +535,7 @@ function Downloading(props: Actions) {
         <div class="flex flex-wrap gap-2">
           <Show when={props.onNewProject}>
             {(create) => (
-              <ButtonV2 data-action="mango-new-project" onClick={create()}>
+              <ButtonV2 variant="primary" data-action="mango-new-project" onClick={create()}>
                 {language.t("project.create.action")}
               </ButtonV2>
             )}
@@ -581,25 +585,13 @@ function DownloadCard(props: { download: Download }) {
       data-state={props.download.state}
       data-engine={props.download.engine_only ? "" : undefined}
     >
-      <h2 class="text-[16px] leading-6 text-v2-text-text-base [font-weight:530]">
+      <h2 class="text-[14px] leading-5 text-v2-text-text-base [font-weight: 600]">
         <Switch fallback={downloadTitle(props.download, language)}>
           <Match when={props.download.state === "paused"}>{downloadPausedText(props.download, language)}</Match>
           <Match when={props.download.state === "failed"}>{downloadFailedText(props.download, language)}</Match>
         </Switch>
       </h2>
-      <div
-        role="progressbar"
-        aria-label={downloadTitle(props.download, language)}
-        aria-valuemin={0}
-        aria-valuemax={100}
-        aria-valuenow={downloadPercent(props.download)}
-        class="h-1.5 overflow-hidden rounded-full bg-v2-background-bg-base"
-      >
-        <div
-          class="h-full rounded-full bg-v2-text-text-base transition-[width]"
-          style={{ width: `${downloadPercent(props.download)}%` }}
-        />
-      </div>
+      <ProgressBarV2 label={downloadTitle(props.download, language)} value={downloadPercent(props.download)} />
       <p class={note}>
         {progress()}. {language.t("mango.home.downloading.resume")}
       </p>
@@ -663,7 +655,7 @@ function FailedStart() {
       {(model) => (
         <div data-component="mango-failed" class={`${card} ${above}`}>
           <div class="flex flex-col gap-1">
-            <h2 class="text-[16px] leading-6 text-v2-text-text-base [font-weight:530]">
+            <h2 class="text-[14px] leading-5 text-v2-text-text-base [font-weight: 600]">
               {language.t("mango.failed.title", { model: model().label })}
             </h2>
             <Show when={model().taken ?? model().reason}>{(text) => <p class={note}>{text()}</p>}</Show>
@@ -681,6 +673,7 @@ function FailedStart() {
                 </div>
                 <ButtonV2
                   data-action="mango-failed-proposal"
+                  variant="primary"
                   onClick={() => act(() => mango.use(proposal().model, true))}
                 >
                   {language.t("mango.failed.start")}
@@ -765,13 +758,13 @@ function RemoteDown() {
   return (
     <div data-component="mango-remote-down" class={panel}>
       <div class={card}>
-        <h2 class="text-[16px] leading-6 text-v2-text-text-base [font-weight:530]">
+        <h2 class="text-[14px] leading-5 text-v2-text-text-base [font-weight: 600]">
           {language.t("mango.remote.title")}
         </h2>
         <p class={note}>{language.t("mango.remote.body")}</p>
         <div>
           <Show when={mango.bridge()?.engineRemote} fallback={<PcOnly />}>
-            <ButtonV2 data-action="mango-remote-back" disabled={busy()} onClick={() => void back()}>
+            <ButtonV2 variant="primary" data-action="mango-remote-back" disabled={busy()} onClick={() => void back()}>
               {language.t("mango.remote.back")}
             </ButtonV2>
           </Show>

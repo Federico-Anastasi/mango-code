@@ -1,4 +1,4 @@
-//! The engine shared with the user's other PCs ("Share the engine with my PCs", in the settings' Connections).
+//! The engine shared with the user's other PCs ("Lend the engine to my PCs", in the settings' Connections).
 //!
 //! **Off by default.** When on, a thread opens a port (`<port>`) on each address the page shows (the home network's and
 //! Tailscale's, never all the networks), re-reading the addresses every few seconds because the Wi-Fi changes them. The

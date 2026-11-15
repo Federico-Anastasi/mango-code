@@ -16,6 +16,8 @@ import { SessionStatus } from "@/session/status"
 import { SessionSummary } from "@/session/summary"
 import { Todo } from "@/session/todo"
 import { MessageID, PartID, SessionID } from "@/session/schema"
+import { MAX_SEED } from "@/tool/image"
+import { MAX_BODY } from "@/server/shared/mango-image-rewrite"
 import { NamedError } from "@opencode-ai/core/util/error"
 import { Cause, Effect, Option, Schema, Scope } from "effect"
 import * as Stream from "effect/Stream"
@@ -34,6 +36,7 @@ import {
   PromptPayload,
   RevertPayload,
   ShellPayload,
+  ImagePayload,
   SummarizePayload,
   UpdatePayload,
 } from "../groups/session"
@@ -45,6 +48,19 @@ const tryParseJson = (text: string) =>
     try: () => JSON.parse(text) as unknown,
     catch: () => new HttpApiError.BadRequest({}),
   })
+
+/**
+ * Whether the words of a picture can be drawn: not empty, not longer than a request for the rewriter may be, and a
+ * seed that is a whole number the app takes. Asked before anything is written, so a refused request leaves no turn.
+ */
+function isPicture(payload: typeof ImagePayload.Type) {
+  const words = (text: string) => text.trim() !== "" && text.length <= MAX_BODY
+  return (
+    words(payload.request) &&
+    (payload.prompt === undefined || words(payload.prompt)) &&
+    (payload.seed === undefined || (Number.isInteger(payload.seed) && payload.seed >= 0 && payload.seed <= MAX_SEED))
+  )
+}
 
 export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", (handlers) =>
   Effect.gen(function* () {
@@ -349,6 +365,15 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       return yield* SessionError.mapBusy(promptSvc.shell({ ...ctx.payload, sessionID: ctx.params.sessionID }))
     })
 
+    const image = Effect.fn("SessionHttpApi.image")(function* (ctx: {
+      params: { sessionID: SessionID }
+      payload: typeof ImagePayload.Type
+    }) {
+      yield* requireSession(ctx.params.sessionID)
+      if (!isPicture(ctx.payload)) return yield* new HttpApiError.BadRequest({})
+      return yield* SessionError.mapBusy(promptSvc.image({ ...ctx.payload, sessionID: ctx.params.sessionID }))
+    })
+
     const revert = Effect.fn("SessionHttpApi.revert")(function* (ctx: {
       params: { sessionID: SessionID }
       payload: typeof RevertPayload.Type
@@ -435,6 +460,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       .handle("promptAsync", promptAsync)
       .handle("command", command)
       .handle("shell", shell)
+      .handle("image", image)
       .handle("revert", revert)
       .handle("unrevert", unrevert)
       .handle("permissionRespond", permissionRespond)

@@ -59,7 +59,7 @@
     align-items: center;
     flex-shrink: 0;
     font-size: 13px;
-    font-weight: 440;
+    font-weight: 400;
     line-height: 1;
     letter-spacing: -0.04px;
     color: var(--bt-title);
@@ -73,7 +73,7 @@
     justify-content: center;
     flex-shrink: 0;
     font-size: 11px;
-    font-weight: 530;
+    font-weight: 500;
     line-height: 12px;
     letter-spacing: 0.05px;
     color: var(--bt-sep);
@@ -90,7 +90,7 @@
     text-overflow: ellipsis;
     white-space: nowrap;
     font-size: 13px;
-    font-weight: 440;
+    font-weight: 400;
     line-height: 1;
     letter-spacing: -0.04px;
     color: var(--bt-subtitle);
@@ -103,7 +103,7 @@
     align-items: center;
     flex-shrink: 0;
     font-size: 13px;
-    font-weight: 440;
+    font-weight: 400;
     line-height: 1;
     letter-spacing: -0.04px;
     color: var(--bt-args);
@@ -154,7 +154,7 @@
 
   [data-slot="basic-tool-v2-content-inner"] {
     font-size: 15px;
-    font-weight: 440;
+    font-weight: 400;
     line-height: 24px;
     letter-spacing: 0;
     color: var(--bt-content);

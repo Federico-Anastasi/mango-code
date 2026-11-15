@@ -103,10 +103,10 @@ export function DialogNewProject(props: {
           </Show>
         </DialogBody>
         <DialogFooter>
-          <ButtonV2 type="button" variant="neutral" disabled={busy()} onClick={() => dialog.close()}>
+          <ButtonV2 type="button" variant="ghost" disabled={busy()} onClick={() => dialog.close()}>
             {language.t("common.cancel")}
           </ButtonV2>
-          <ButtonV2 type="submit" variant="contrast" disabled={busy() || !name().trim() || !folder()}>
+          <ButtonV2 type="submit" variant="primary" disabled={busy() || !name().trim() || !folder()}>
             {language.t("project.create.submit")}
           </ButtonV2>
         </DialogFooter>

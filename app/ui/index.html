@@ -5,65 +5,86 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light dark">
   <title>Mango Code</title>
+  <!-- suite/ is copied here from the repo root by src-tauri/build.rs -->
+  <link rel="stylesheet" href="suite/tokens.css">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <main>
-    <!-- Logo: the same as the icon (app/src-tauri/icons/mango.svg) -->
-    <svg class="logo" viewBox="16 32 170 170" aria-hidden="true">
-      <defs>
-        <linearGradient id="peel" gradientUnits="userSpaceOnUse" x1="47" y1="59" x2="155" y2="178">
-          <stop offset="0" stop-color="#FFD84A"/>
-          <stop offset="0.5" stop-color="#FFA61F"/>
-          <stop offset="1" stop-color="#F0532B"/>
-        </linearGradient>
-        <clipPath id="shape">
-          <path d="M 96 52 C 142 40 182 78 176 126 C 171 166 134 190 94 184 C 66 180 44 172 24 150 C 34 150 42 144 44 132 C 46 92 62 60 96 52 Z"/>
-        </clipPath>
-      </defs>
-      <g clip-path="url(#shape)" fill="url(#peel)">
-        <rect x="0" y="44" width="150" height="9" rx="4.5"/>
-        <rect x="0" y="57" width="182" height="9" rx="4.5"/>
-        <rect x="0" y="70" width="128" height="9" rx="4.5"/>
-        <rect x="0" y="83" width="170" height="9" rx="4.5"/>
-        <rect x="0" y="96" width="182" height="9" rx="4.5"/>
-        <rect x="0" y="109" width="112" height="9" rx="4.5"/>
-        <rect x="0" y="122" width="160" height="9" rx="4.5"/>
-        <rect x="0" y="135" width="182" height="9" rx="4.5"/>
-        <rect x="0" y="148" width="140" height="9" rx="4.5"/>
-        <rect x="0" y="161" width="120" height="9" rx="4.5"/>
-        <rect x="0" y="174" width="182" height="9" rx="4.5"/>
-        <rect x="0" y="187" width="150" height="9" rx="4.5"/>
-      </g>
-    </svg>
+  <!-- The mango, drawn once and used by both lockups. The same as the icon (app/src-tauri/icons/mango.svg) -->
+  <svg class="defs" aria-hidden="true" focusable="false">
+    <defs>
+      <linearGradient id="peel" gradientUnits="userSpaceOnUse" x1="47" y1="59" x2="155" y2="178">
+        <stop offset="0" stop-color="#FFD84A"/>
+        <stop offset="0.5" stop-color="#FFA61F"/>
+        <stop offset="1" stop-color="#F0532B"/>
+      </linearGradient>
+      <clipPath id="shape">
+        <path d="M 96 52 C 142 40 182 78 176 126 C 171 166 134 190 94 184 C 66 180 44 172 24 150 C 34 150 42 144 44 132 C 46 92 62 60 96 52 Z"/>
+      </clipPath>
+      <symbol id="mango" viewBox="16 32 170 170">
+        <g clip-path="url(#shape)" fill="url(#peel)">
+          <rect x="0" y="44" width="150" height="9" rx="4.5"/>
+          <rect x="0" y="57" width="182" height="9" rx="4.5"/>
+          <rect x="0" y="70" width="128" height="9" rx="4.5"/>
+          <rect x="0" y="83" width="170" height="9" rx="4.5"/>
+          <rect x="0" y="96" width="182" height="9" rx="4.5"/>
+          <rect x="0" y="109" width="112" height="9" rx="4.5"/>
+          <rect x="0" y="122" width="160" height="9" rx="4.5"/>
+          <rect x="0" y="135" width="182" height="9" rx="4.5"/>
+          <rect x="0" y="148" width="140" height="9" rx="4.5"/>
+          <rect x="0" y="161" width="120" height="9" rx="4.5"/>
+          <rect x="0" y="174" width="182" height="9" rx="4.5"/>
+          <rect x="0" y="187" width="150" height="9" rx="4.5"/>
+        </g>
+      </symbol>
+    </defs>
+  </svg>
 
-    <h1>Mango Code</h1>
+  <main>
+    <!-- Starting: the mango with the wordmark, a line saying what happens, and the bar that advances at each stage -->
+    <div id="starting" class="starting">
+      <h1 class="lockup large"><svg viewBox="0 0 170 170" aria-hidden="true"><use href="#mango"/></svg><span>mango <i>code</i></span></h1>
+      <p id="starting-line" class="line" aria-live="polite"></p>
+      <div id="starting-bar" class="bar" role="progressbar" aria-labelledby="starting-line" aria-valuemin="0" hidden><span></span></div>
+    </div>
 
     <!-- Error -->
     <section id="error" hidden role="alert">
-      <p class="subtitle" id="error-title"></p>
-      <p class="explanation" id="error-sentence"></p>
-      <p class="explanation" data-text="errorHint"></p>
-      <details>
-        <summary data-text="technicalDetails"></summary>
-        <pre id="error-message"></pre>
-        <button type="button" class="link" id="copy" data-text="copyDetails"></button>
-      </details>
+      <p class="lockup"><svg viewBox="0 0 170 170" aria-hidden="true"><use href="#mango"/></svg><span>mango <i>code</i></span></p>
+      <h1 id="error-title"></h1>
+      <p class="sentence" id="error-sentence"></p>
+      <p class="hint" data-text="errorHint"></p>
+
+      <div class="card">
+        <details>
+          <summary data-text="technicalDetails"></summary>
+          <pre id="error-message"></pre>
+          <button type="button" class="text" id="copy" data-text="copyDetails"></button>
+        </details>
+        <label class="row" id="report-screenshot-row">
+          <span class="name"><b data-text="reportScreenshot"></b><small data-text="reportScreenshotHint"></small></span>
+          <input type="checkbox" role="switch" id="report-screenshot" checked>
+        </label>
+        <div class="row" id="report-files-row" hidden>
+          <span class="name"><small data-text="reportFilesHint"></small><small id="report-files-list"></small></span>
+          <label class="button"><input type="file" id="report-files" multiple><span data-text="reportFiles"></span></label>
+        </div>
+      </div>
+
       <div class="actions">
         <button type="button" class="primary" id="retry" data-text="retry"></button>
-        <button type="button" class="secondary" id="local-engine" data-text="remoteBack" hidden></button>
-        <button type="button" class="secondary" id="report" data-text="report"></button>
-        <button type="button" class="secondary" id="logs" data-text="openLogs"></button>
+        <button type="button" id="local-engine" data-text="remoteBack" hidden></button>
+        <button type="button" id="logs" data-text="openLogs"></button>
       </div>
-      <label class="screenshot" id="report-screenshot-row"><input type="checkbox" id="report-screenshot" checked> <span data-text="reportScreenshot"></span></label>
-      <div class="screenshot" id="report-files-row" hidden>
-        <label class="link"><input type="file" id="report-files" multiple hidden><span data-text="reportFiles"></span></label>
-        <div id="report-files-list"></div>
-        <div data-text="reportFilesHint"></div>
-      </div>
-      <p class="status" id="status" aria-live="polite"></p>
     </section>
+
+    <p class="status" id="status" aria-live="polite"></p>
   </main>
+
+  <footer>
+    <span id="version">Mango Code</span>
+    <button type="button" class="text" id="report" data-text="report"></button>
+  </footer>
   <script src="startup.js"></script>
 </body>
 </html>

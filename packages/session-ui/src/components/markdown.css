@@ -13,7 +13,7 @@
   overflow-wrap: break-word;
   color: var(--v2-text-text-base);
   font-family: var(--font-family-sans);
-  font-size: var(--font-size-base); /* 14px */
+  font-size: var(--font-size-small); /* 13px: dense text; the variable steps up on a phone */
   line-height: 160%;
 
   /* Spacing for flow */
@@ -41,7 +41,7 @@
   }
 
   h2 {
-    font-size: 15px;
+    font-size: 14px;
     color: var(--v2-text-text-base);
     font-weight: 600;
     margin-top: 24px;
@@ -175,10 +175,12 @@
   .shiki {
     background: var(--color-background-stronger);
     color: var(--text-base);
-    font-size: 13px;
+    font-size: 12.5px;
+    line-height: 1.6;
+    font-variant-ligatures: none;
     padding: 12px;
-    border-radius: 6px;
-    border: 0.5px solid var(--v2-border-border-base);
+    border-radius: 8px;
+    border: 1px solid var(--mango-line);
   }
 
   [data-component="markdown-code"] {
@@ -272,7 +274,7 @@
     width: 100%;
     border-collapse: collapse;
     margin: 16px 0;
-    font-size: var(--font-size-base);
+    font-size: var(--font-size-small);
     display: block;
     overflow-x: auto;
   }
@@ -321,7 +323,7 @@ body[data-new-layout] [data-component="markdown"] {
     color: var(--v2-text-text-base);
     user-select: none;
     font-size: 11px;
-    font-weight: 530;
+    font-weight: 500;
     line-height: 12px;
     letter-spacing: 0.05px;
     font-variant-numeric: tabular-nums;
@@ -403,7 +405,6 @@ body:not([data-new-layout]) [data-component="markdown"] {
       font-size: 16px;
     }
 
-    .shiki,
     table {
       font-size: 14px;
     }

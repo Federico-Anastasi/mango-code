@@ -476,6 +476,57 @@ test("a file path with no folder before it is inside the project, not where the 
   server.close();
 }, 90_000);
 
+test("a page of the project is opened by its file: the app serves its folder, and a Unix path names the same file", async () => {
+  const project = path.join(root, "bike-shop");
+  fs.mkdirSync(project, { recursive: true });
+  const index = path.join(project, "index.html");
+  fs.writeFileSync(index, "<title>the page on disk</title>");
+  // the app's control server: for a file it answers with the address of its folder's site
+  const asked: string[] = [];
+  const control = Bun.serve({
+    port: 0,
+    hostname: "127.0.0.1",
+    async fetch(req) {
+      asked.push(`${new URL(req.url).pathname} ${((await req.json()) as { path: string }).path}`);
+      return Response.json({ url: `http://127.0.0.1:${SITE}/served-by-the-app` });
+    },
+  });
+  const server = await new Server("site", false, { project, env: { MANGO_CONTROL_URL: `http://127.0.0.1:${control.port}` } }).start();
+
+  for (const written of ["index.html", "/home/user/bike-shop/index.html", "/tmp/index.html", pathToFileURL(index).href]) {
+    const opened = await server.call("new_page", { url: written });
+    expect(opened.isError, `${written}: ${text(opened)}`).toBeFalsy();
+    expect(text(opened), written).toContain(`http://127.0.0.1:${SITE}/served-by-the-app`);
+  }
+  expect(asked).toEqual(Array(4).fill(`/control/site ${index}`));
+
+  // an address of the web is not a file, and a file that is not there is said, with the folder to start from
+  expect(text(await server.call("new_page", { url: `http://127.0.0.1:${SITE}/a-web-address` }))).toContain("/a-web-address");
+  const missing = await server.call("new_page", { url: "/home/user/bike-shop/missing.html" });
+  expect(missing.isError).toBe(true);
+  expect(text(missing)).toContain(`There is no file ${path.join(project, "missing.html")}`);
+  expect(asked).toHaveLength(4);
+
+  // an expression where a function is wanted is run as its body
+  expect(text(await server.call("evaluate_script", { pageId: 1, function: "1 + 1" }))).toContain("2");
+  // a page number that is not there can only mean the one page that is open (a model counts them from 0)
+  expect(text(await server.call("navigate_page", { pageId: 0, type: "reload" }))).toContain("Successfully reloaded the page");
+
+  control.stop(true);
+  server.close();
+}, 90_000);
+
+test("without the app a page of the project opens by the address of its file", async () => {
+  const project = path.join(root, "no-app");
+  fs.mkdirSync(project, { recursive: true });
+  fs.writeFileSync(path.join(project, "index.html"), "<title>the page on disk</title>");
+  const server = await new Server("no-app", false, { project, env: { MANGO_CONTROL_URL: "" } }).start();
+  const opened = await server.call("new_page", { url: "index.html" });
+  expect(opened.isError, text(opened)).toBeFalsy();
+  expect(text(opened)).toContain(pathToFileURL(path.join(project, "index.html")).href);
+  server.close();
+}, 60_000);
+
 test("a client that stops reading does not freeze the server: its loop keeps working while the writer thread waits on the full pipe", async () => {
   const server = new Server("flood", false, { reading: false });
   // nothing reads the server's stdout from the start: the first big answer fills the pipe, the next ones queue behind it

@@ -266,7 +266,7 @@ const startedOwn = current === OWN_BROWSER;
 const START = current;
 let mode = current.mode;
 const flags = [...flagsOf(current), ...CUT, ...VISION];
-// Never on stdout: the MCP protocol goes there and one extra byte breaks it. And since 2026-08-26
+// Never on stdout: the MCP protocol goes there and one extra byte breaks it. And
 // not on the stderr pipe either - see the redirection at the top: it ends up in mcp-chrome.err.log.
 process.stderr.write("mango-chrome-mcp | " + mode + "\n");
 
@@ -398,6 +398,91 @@ trace("browser: " + mode);
   }
 }
 
+// --- A PAGE OF THE PROJECT IS OPENED BY ITS FILE ---------------------------------------------------------
+// A small model asked to show the site it wrote starts a server by habit, on a port that is taken or with a command
+// this computer does not have, and then opens whatever answers there. It gives the page's file instead (`index.html`):
+// the app serves the folder of that file on a port of its own for as long as it runs (`POST /control/site`), so the
+// page works as on the web and there is no server to start. Without the app the file opens by its own address.
+
+// The folders a Unix path starts with that are not part of what the model is naming, and the ones at the root of a
+// Windows drive that a path without a drive may really mean.
+const UNIX_ROOTS = new Set(["home", "root", "tmp", "workspace", "workspaces", "app", "mnt", "var", "usr", "opt", "srv", "etc"]);
+const WINDOWS_ROOTS = new Set(["users", "windows", "program files", "program files (x86)", "programdata"]);
+
+// Where a path the model wrote is on this computer. A relative one is in the project; so is a Unix one on Windows
+// (`/home/user/site/index.html`), which names nothing here: the agent's file tools follow the same rule, so a file
+// written there is found here.
+function inProject(written, project) {
+  if (process.platform !== "win32" || !/^[\\/](?![\\/])/.test(written)) return path.resolve(project, written);
+  const parts = written.split(/[\\/]+/).filter(Boolean);
+  if (/^[A-Za-z]$/.test(parts[0] ?? "") && parts.length > 1) return path.join(parts[0].toUpperCase() + ":\\", ...parts.slice(1));
+  const plain = path.resolve(project, written);
+  const relative = path.relative(project, plain);
+  const inside = relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+  const root = (parts[0] ?? "").toLowerCase();
+  if (inside || WINDOWS_ROOTS.has(root)) return plain;
+  const named = parts.map((part) => part.toLowerCase()).lastIndexOf(path.basename(project).toLowerCase());
+  const skipped = named >= 0 ? named + 1 : root === "home" ? 2 : UNIX_ROOTS.has(root) ? 1 : 0;
+  return path.join(project, ...parts.slice(skipped));
+}
+
+// The project folder: the first of the folders the agent declares (the last is always the temp folder, alone when the
+// client declares none).
+function projectOf(context) {
+  const roots = context.roots();
+  return roots.length > 1 ? fileURLToPath(roots[0].uri) : null;
+}
+
+// What `new_page` and `navigate_page` open for what the model wrote, when it is not an address of the web: { url }, or
+// { refusal } with a sentence for it. A `file:` address and a full path name a file; anything else is a file when it is
+// there in the project (`index.html` is also a valid host name).
+const isWebAddress = (written) => !/^file:/i.test(written) && /^(?:[a-z][a-z0-9+.-]*:\/\/|about:|data:|blob:|chrome:|view-source:)/i.test(written);
+
+async function pageAddress(written, context) {
+  const isFileUrl = /^file:/i.test(written);
+  const project = projectOf(context);
+  if (!project) return { url: written };
+  let asked = written;
+  if (isFileUrl) {
+    try {
+      const name = decodeURIComponent(new URL(written).pathname);
+      asked = /^\/[A-Za-z]:/.test(name) ? name.slice(1) : name;
+    } catch {
+      return { url: written };
+    }
+  }
+  const file = inProject(asked, project);
+  const there = await fs.promises.stat(file).then(() => true, () => false);
+  if (!there) {
+    if (!isFileUrl && !path.isAbsolute(asked)) return { url: written };
+    return { refusal: "There is no file " + file + ". Give the page's path relative to the project folder (" + project + "), for example index.html." };
+  }
+  const control = process.env.MANGO_CONTROL_URL;
+  if (control) {
+    try {
+      const res = await fetch(control + "/control/site", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ path: file }),
+        signal: AbortSignal.timeout(5000),
+      });
+      const body = await res.json();
+      if (res.ok && typeof body.url === "string") return { url: body.url };
+      trace("site: the app answered " + res.status + " for " + file);
+    } catch (e) {
+      trace("site: the app did not answer for " + file + ": " + e.message);
+    }
+  }
+  return { url: pathToFileURL(file).href };
+}
+
+// `evaluate_script` wants a function. A model often sends the expression alone (`document.title`): it is the body.
+function asFunction(code) {
+  const text = code.trim();
+  if (/^(?:async\s+)?(?:function\b|\([^)]*\)\s*=>|[\w$]+\s*=>)/.test(text)) return code;
+  return /\breturn\b/.test(text) ? "() => { " + text + " }" : "() => (" + text.replace(/;\s*$/, "") + ")";
+}
+
 // --- THE USER'S CHROME ONLY ON REQUEST -----------------------------------------------------------------
 // The server holds a single browser connection. Every `new_page` says where its page goes: the panel (or the browser of its
 // own), or, with `userChrome: true`, a new tab in the user's Chrome. Switching closes the connection (the user's Chrome is
@@ -432,8 +517,13 @@ trace("browser: " + mode);
     if (name !== "new_page") return registerTool.call(this, name, config, callback);
     const withUserChrome = {
       ...config,
-      description: config.description + " The page opens in " + AGENTS_BROWSER + ".",
+      description:
+        config.description +
+        " The page opens in " +
+        AGENTS_BROWSER +
+        ". For a page of the project give its file (index.html): Mango Code serves its folder, there is no server to start.",
       inputSchema: config.inputSchema.extend({
+        url: zod.string().describe("The file of a page of the project (index.html, pages/about.html), or a web address."),
         userChrome: zod
           .boolean()
           .optional()
@@ -474,6 +564,14 @@ trace("browser: " + mode);
         delete params.userChrome;
         const refusal = await route(wantsUserChrome, params.url);
         if (refusal) return refuse(refusal);
+      }
+      if (this.tool.name === "evaluate_script" && typeof params.function === "string") params.function = asFunction(params.function);
+      if ((this.tool.name === "new_page" || this.tool.name === "navigate_page") && typeof params.url === "string" && !isWebAddress(params.url)) {
+        // without a browser the call below fails by itself and says why
+        const context = await this.getContext().catch(() => null);
+        const page = context ? await pageAddress(params.url, context) : { url: params.url };
+        if (page.refusal) return refuse(page.refusal);
+        params.url = page.url;
       }
       connectFailed = false;
       const result = await handle.call(this, params);
@@ -548,15 +646,28 @@ trace("browser: " + mode);
 // --- A PATH WITH NO FOLDER BEFORE IT IS INSIDE THE PROJECT -----------------------------------------
 // The server runs in Mango Code's own folder, so a relative path (`mail\last-run.json`) would point there and be refused
 // as outside the project. A small model writes the path its instructions show and does not know the project's full
-// path: the relative one is taken from the project folder, the first of the folders the agent declares (`roots`; the
-// last is always the temp folder, alone when the client declares none). The check that the path stays inside comes after.
+// path: the relative one is taken from the project folder, and so is a Unix one on Windows (`inProject`). The check
+// that the path stays inside comes after.
 {
   const { McpContext } = await import(pathToFileURL(path.join(SELF, "node_modules", "chrome-devtools-mcp", "build", "src", "McpContext.js")).href);
   const validatePath = McpContext.prototype.validatePath;
   McpContext.prototype.validatePath = function (filePath) {
-    const roots = this.roots();
-    const relative = typeof filePath === "string" && !path.isAbsolute(filePath) && roots.length > 1;
-    return validatePath.call(this, relative ? path.join(fileURLToPath(roots[0].uri), filePath) : filePath);
+    const project = projectOf(this);
+    return validatePath.call(this, typeof filePath === "string" && project ? inProject(filePath, project) : filePath);
+  };
+
+  // A page number that is not there: with one page open it can only be that one (a model numbers them from 0, the
+  // server from 1); with more, the answer names the pages instead of "No page found".
+  const getPageById = McpContext.prototype.getPageById;
+  McpContext.prototype.getPageById = function (pageId) {
+    const pages = this.getPages();
+    if (pages.some((page) => page.id === pageId)) return getPageById.call(this, pageId);
+    if (pages.length === 1) return pages[0];
+    throw new Error(
+      pages.length === 0
+        ? "No page is open: open one with new_page."
+        : "There is no page " + pageId + ". The open pages are " + pages.map((page) => page.id + " (" + page.pptrPage.url() + ")").join(", ") + ".",
+    );
   };
 }
 

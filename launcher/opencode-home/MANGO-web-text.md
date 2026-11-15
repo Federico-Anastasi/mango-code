@@ -11,13 +11,12 @@ page), don't try to describe it.
 - `chrome-devtools_evaluate_script` -> checks what the snapshot doesn't tell: a value, a class, whether an element
   is hidden, a function's result.
 
-You open a page you wrote with `chrome-devtools_new_page` on `file:///` followed by the file's full path.
+You open a page you wrote with `chrome-devtools_new_page` on its file (`index.html`).
 
 To click or fill in: `click` and `fill` with the uid. The uid exists ONLY inside a snapshot of THAT page: you can't
 invent it. After a navigation or a page change the uids expire: take the snapshot again.
 
-The `pageId` changes: before acting on a page you haven't just opened, `list_pages`. `No page found` means you are
-using an old id.
+The `pageId` changes: before acting on a page you haven't just opened, `list_pages`.
 
 The screenshot (`chrome-devtools_take_screenshot`) is seen by the user in the chat, not by you: you only get a note.
 Use it when the user asks to see the page, not to understand it: to understand it you need the snapshot.

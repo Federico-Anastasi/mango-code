@@ -2,7 +2,11 @@
 // already on the computer. Before adding it the app says how it would run here: each quantization with its weight, where
 // it runs and its context, the one it proposes chosen, and «memoria stimata» for a kind of model it does not know yet.
 // Added, it is in the models list, to download or ready.
+import { Tag } from "@opencode-ai/ui/v2/badge-v2"
 import { ButtonV2 } from "@opencode-ai/ui/v2/button-v2"
+import { SegmentedControlItemV2, SegmentedControlV2 } from "@opencode-ai/ui/v2/segmented-control-v2"
+import { SelectV2 } from "@opencode-ai/ui/v2/select-v2"
+import { Switch } from "@opencode-ai/ui/v2/switch-v2"
 import { TextInputV2 } from "@opencode-ai/ui/v2/text-input-v2"
 import { formatFileSize } from "@opencode-ai/session-ui/project-file"
 import { type Component, createSignal, For, Show } from "solid-js"
@@ -102,6 +106,11 @@ export const OtherModel: Component<{
       props.onAdded()
     })
 
+  /** A quantization by its size name when the sizes tell them apart, else by its own name; «consigliato» marks the proposed one. */
+  const variantLabel = (variant: MangoAnalysis["variants"][number], index: number) => {
+    const name = tiers() ? language.t(SIZE_LABELS[tiers()![index]]) : variant.name
+    return variant.recommended ? `${name} · ${language.t("settings.models.recommended")}` : name
+  }
   const tiers = () => sizeTiers(found.analysis?.variants.map((variant) => variant.bytes) ?? [])
   const imagesExtra = () =>
     Math.max(0, ...(found.analysis?.variants.map((v) => (v.with_images ? v.with_images.bytes - v.bytes : 0)) ?? [0]))
@@ -211,7 +220,7 @@ export const OtherModel: Component<{
                     </span>
                   </span>
                   <Show when={result.gated}>
-                    <span class="settings-page-pill">{language.t("settings.models.other.gated")}</span>
+                    <Tag>{language.t("settings.models.other.gated")}</Tag>
                   </Show>
                 </button>
               )}
@@ -223,14 +232,12 @@ export const OtherModel: Component<{
       <Show when={found.analysis}>
         {(analysis) => (
           <div class="settings-page-detail" data-slot="settings-other-analysis">
-            <div class="settings-page-field settings-page-field--wide">
+            <div class="settings-page-field">
               <b>
                 {analysis().name}
                 <Show when={analysis().estimated}>
                   {" "}
-                  <span class="settings-page-pill" data-slot="settings-other-estimated">
-                    {language.t("settings.models.estimated")}
-                  </span>
+                  <Tag data-slot="settings-other-estimated">{language.t("settings.models.estimated")}</Tag>
                 </Show>
               </b>
               <Show when={analysis().gated}>
@@ -242,48 +249,65 @@ export const OtherModel: Component<{
                 {(warning) => <small data-tone={warning.severe ? "danger" : undefined}>{warning.text}</small>}
               </For>
             </div>
-            <div class="settings-page-field settings-page-field--wide" role="radiogroup" aria-label={analysis().name}>
-              <For each={analysis().variants}>
-                {(variant, index) => {
-                  const chosen = () => variantFit(variant, found.images)
-                  return (
-                    <label class="settings-page-inline" data-fits={chosen().placement ? "" : undefined}>
-                      <input
-                        type="radio"
-                        name="settings-other-variant"
-                        checked={found.picked === index()}
-                        disabled={!chosen().placement}
-                        onChange={() => setFound("picked", index())}
-                      />
-                      <span>
-                        {tiers() ? language.t(SIZE_LABELS[tiers()![index()]]) : variant.name}
-                        <Show when={variant.recommended}> · {language.t("settings.models.recommended")}</Show>
-                      </span>
-                      <span class="settings-page-row-line">
-                        {variantLine(variant, found.images, !!tiers(), language, language.locale())}
-                      </span>
-                    </label>
-                  )
-                }}
-              </For>
-              <Show when={imagesExtra() > 0}>
-                <label class="settings-page-inline">
-                  <input
-                    type="checkbox"
-                    checked={found.images}
-                    onChange={(event) => setFound("images", event.currentTarget.checked)}
+            <div class="settings-page-field" data-slot="settings-other-variants">
+              <Show
+                when={analysis().variants.length <= 4}
+                fallback={
+                  <SelectV2
+                    appearance="inline"
+                    options={analysis().variants.map((variant, index) => ({
+                      index,
+                      label: variantLabel(variant, index),
+                    }))}
+                    current={{
+                      index: found.picked ?? 0,
+                      label: variantLabel(analysis().variants[found.picked ?? 0], found.picked ?? 0),
+                    }}
+                    value={(option) => String(option.index)}
+                    label={(option) => option.label}
+                    onSelect={(option) => option && setFound("picked", option.index)}
+                    aria-label={analysis().name}
                   />
-                  <span>
-                    {language.t("settings.models.other.images", {
-                      size: formatFileSize(imagesExtra(), language.locale()),
-                    })}
-                  </span>
-                </label>
+                }
+              >
+                <SegmentedControlV2
+                  value={String(found.picked ?? "")}
+                  onChange={(value) => value && setFound("picked", Number(value))}
+                  aria-label={analysis().name}
+                >
+                  <For each={analysis().variants}>
+                    {(variant, index) => (
+                      <SegmentedControlItemV2
+                        value={String(index())}
+                        disabled={!variantFit(variant, found.images).placement}
+                      >
+                        {variantLabel(variant, index())}
+                      </SegmentedControlItemV2>
+                    )}
+                  </For>
+                </SegmentedControlV2>
               </Show>
+              <For each={analysis().variants}>
+                {(variant, index) => (
+                  <small data-picked={found.picked === index() ? "" : undefined}>
+                    {variantLabel(variant, index())}:{" "}
+                    {variantLine(variant, found.images, !!tiers(), language, language.locale())}
+                  </small>
+                )}
+              </For>
             </div>
+            <Show when={imagesExtra() > 0}>
+              <div class="settings-page-field">
+                <Switch checked={found.images} onChange={(checked) => setFound("images", checked)}>
+                  {language.t("settings.models.other.images", {
+                    size: formatFileSize(imagesExtra(), language.locale()),
+                  })}
+                </Switch>
+              </div>
+            </Show>
             <div class="settings-page-actions">
               <ButtonV2
-                variant="contrast"
+                variant="neutral"
                 disabled={
                   !!found.busy ||
                   !analysis().variants[found.picked ?? -1] ||

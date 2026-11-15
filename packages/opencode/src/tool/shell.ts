@@ -23,6 +23,7 @@ import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
 import { ShellPrompt, type Parameters } from "./shell/prompt"
 import { BashHabits } from "./shell/bash-habits"
+import { ProjectPath } from "./project-path"
 import { LeftRunning } from "./shell/left-running"
 import { Session } from "@/session/session"
 import type { SessionID } from "@/session/schema"
@@ -693,15 +694,25 @@ export const ShellTool = Tool.define(
           execute: (params: Parameters, ctx: Tool.Context) =>
             Effect.gen(function* () {
               const instanceCtx = yield* InstanceState.context
+              const ps = Shell.ps(shell)
+              const windows = ps && process.platform === "win32"
               const cwd = params.workdir
-                ? yield* resolvePath(params.workdir, instanceCtx.directory, shell)
+                ? yield* resolvePath(
+                    windows ? ProjectPath.locate(params.workdir, instanceCtx.directory).path : params.workdir,
+                    instanceCtx.directory,
+                    shell,
+                  )
                 : instanceCtx.directory
               if (params.timeout !== undefined && params.timeout < 0) {
                 throw new Error(`Invalid timeout value: ${params.timeout}. Timeout must be a positive number.`)
               }
               const timeout = params.timeout ?? defaultTimeoutMs
-              const ps = Shell.ps(shell)
-              const command = name === "powershell" ? BashHabits.chain(params.command) : params.command
+              const env = yield* shellEnv(ctx, cwd)
+              const missing = (program: string) => !which(program, env)
+              const habits = windows
+                ? BashHabits.adapt({ command: params.command, directory: instanceCtx.directory, missing })
+                : { command: params.command, notes: [] }
+              const command = name === "powershell" ? BashHabits.chain(habits.command) : habits.command
               if (process.platform === "win32" && name === "cmd" && command.length > CMD_MAX) {
                 throw new Error(
                   `The command is ${command.length} characters long and cmd runs at most ${CMD_MAX}: write the long part to a file and pass the file, or split the command.`,
@@ -718,7 +729,6 @@ export const ShellTool = Tool.define(
                 }),
               )
 
-              const env = yield* shellEnv(ctx, cwd)
               return yield* run(
                 {
                   shell,
@@ -726,7 +736,7 @@ export const ShellTool = Tool.define(
                   cwd,
                   env,
                   timeout,
-                  notes: ps ? BashHabits.notes({ command, shell: name, missing: (program) => !which(program, env) }) : [],
+                  notes: ps ? [...habits.notes, ...BashHabits.notes({ command, shell: name, missing })] : [],
                 },
                 ctx,
               )

@@ -47,7 +47,7 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    font-weight: 530;
+    font-weight: 500;
     color: var(--v2-text-text-base);
   }
 
@@ -58,7 +58,7 @@
     min-width: 0;
     overflow: hidden;
     white-space: nowrap;
-    font-weight: 440;
+    font-weight: 400;
     color: var(--v2-text-text-muted);
 
     [data-component="file-icon"] {

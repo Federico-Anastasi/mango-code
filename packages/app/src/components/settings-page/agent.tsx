@@ -2,6 +2,7 @@
 // of the whole in a bar, then a row for tools, MCP servers, skills and instructions that opens on its items. Each item
 // has its weight in tokens and one switch; the choice at the top says whether a change applies to all the projects or
 // only to the open one. At the end, where the agent browses.
+import { Tag } from "@opencode-ai/ui/v2/badge-v2"
 import { Icon as IconV2 } from "@opencode-ai/ui/v2/icon"
 import { SegmentedControlItemV2, SegmentedControlV2 } from "@opencode-ai/ui/v2/segmented-control-v2"
 import { SelectV2 } from "@opencode-ai/ui/v2/select-v2"
@@ -9,10 +10,7 @@ import { Switch } from "@opencode-ai/ui/v2/switch-v2"
 import { type Component, createEffect, createMemo, createResource, createSignal, For, on, Show } from "solid-js"
 import { createStore } from "solid-js/store"
 import { useLanguage } from "@/context/language"
-import { useLayout } from "@/context/layout"
 import { useServerSDK } from "@/context/server-sdk"
-import { useServerSync } from "@/context/server-sync"
-import { useTabs } from "@/context/tabs"
 import { mangoDesktopError } from "@/utils/mango-desktop"
 import {
   groupCount,
@@ -30,6 +28,7 @@ import {
 import { authHeaders } from "@/utils/server"
 import { SettingsListV2 } from "../settings-v2/parts/list"
 import { SettingsRowV2 } from "../settings-v2/parts/row"
+import { useSettingsProject } from "./directory"
 import { PaneHeader } from "./header"
 
 type Scope = "all" | "folder"
@@ -53,28 +52,17 @@ const SHARE_TITLES = {
 export const SettingsAgent: Component<{ focus?: string }> = (props) => {
   const language = useLanguage()
   const serverSDK = useServerSDK()
-  const layout = useLayout()
-  const tabs = useTabs()
-  const serverSync = useServerSync()
   const [ui, setUi] = createStore<{ scope: Scope; open?: PromptGroup["id"]; error?: string }>({ scope: "all" })
 
-  // The project the settings are about: the one picked in the page, else the one of the tab seen last, else the one
-  // selected in the home, else the first project.
+  // The project the settings are about: the one picked in the page, else the default one (`directory.ts`).
   const [picked, setPicked] = createSignal<string>()
+  const project = useSettingsProject()
   const projects = createMemo(() =>
-    layout.projects
-      .list()
+    project
+      .projects()
       .map((project) => ({ worktree: project.worktree, name: project.name || folderName(project.worktree) })),
   )
-  const lastTab = () => tabs.store.findLast((tab) => tab.type !== "settings")
-  const tabDirectory = () => {
-    const tab = lastTab()
-    if (tab?.type === "draft") return tab.directory
-    if (tab?.type === "session") return serverSync().session.get(tab.sessionId)?.directory
-  }
-  const directory = createMemo(
-    () => picked() ?? tabDirectory() ?? layout.home.selection().directory ?? projects()[0]?.worktree,
-  )
+  const directory = createMemo(() => picked() ?? project.directory())
 
   /** A call to the settings route; a server error is reported, not ignored. */
   async function call(folder: string, init?: RequestInit) {
@@ -283,9 +271,7 @@ const GroupCount: Component<{ group: PromptGroup["id"]; on: number; all: number 
     <Show
       when={props.group !== "mcp"}
       fallback={
-        <span class="settings-page-pill" data-tone={props.on > 0 ? "ok" : undefined}>
-          {language.plural("settings.agent.count.mcp", props.on)}
-        </span>
+        <Tag variant={props.on > 0 ? "ready" : "neutral"}>{language.plural("settings.agent.count.mcp", props.on)}</Tag>
       }
     >
       <span>

@@ -14,6 +14,7 @@ import { engineUpdate, type Computer } from "@/utils/mango-state"
 import { SettingsListV2 } from "../settings-v2/parts/list"
 import { SettingsRowV2 } from "../settings-v2/parts/row"
 import { createCommands, useControl } from "./control"
+import { PaneHeader } from "./header"
 
 const MIB = 1024 * 1024
 
@@ -53,7 +54,7 @@ export const SettingsComputer: Component = () => {
 
   return (
     <div class="settings-v2-tab-body" data-component="settings-computer">
-      <p class="settings-page-note">{language.t("settings.computer.lead")}</p>
+      <PaneHeader title={language.t("settings.section.computer")} lead={language.t("settings.computer.lead")} />
       <Show when={!computer()}>
         <p class="settings-page-note" data-slot="settings-pc-only">
           {language.t("settings.pcOnly")}

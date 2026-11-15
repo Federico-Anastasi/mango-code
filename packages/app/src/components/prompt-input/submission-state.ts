@@ -1,4 +1,5 @@
 import { type ContextItem, type Prompt, type usePrompt } from "@/context/prompt"
+import { DEFAULT_PROMPT } from "@/context/prompt-state"
 
 type PromptTarget = ReturnType<ReturnType<typeof usePrompt>["capture"]>
 
@@ -15,9 +16,11 @@ export function createPromptSubmissionState(input: {
     prompt: input.prompt,
     context: input.context,
     target: () => target,
-    clear() {
+    /** Empties the box; `kept` are the parts that were not sent and stay in it. */
+    clear(kept: Prompt = []) {
       if (initial !== target) initial.reset()
       target.reset()
+      if (kept.length > 0) target.set([...DEFAULT_PROMPT, ...kept], 0)
       cleared = target.current()
     },
     retarget(next: PromptTarget) {

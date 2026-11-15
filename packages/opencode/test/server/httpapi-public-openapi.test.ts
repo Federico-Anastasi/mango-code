@@ -265,6 +265,7 @@ describe("PublicApi OpenAPI v2 errors", () => {
 
     for (const route of [
       ["post", "/session/{sessionID}/shell"],
+      ["post", "/session/{sessionID}/image"],
       ["post", "/session/{sessionID}/revert"],
       ["post", "/session/{sessionID}/unrevert"],
       ["delete", "/session/{sessionID}/message/{messageID}"],

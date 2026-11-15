@@ -2,7 +2,7 @@ import { type ComponentProps, splitProps } from "solid-js"
 import "./badge-v2.css"
 
 export interface TagProps extends ComponentProps<"span"> {
-  variant?: "neutral" | "accent"
+  variant?: "neutral" | "accent" | "ready" | "error"
 }
 
 export function Tag(props: TagProps) {

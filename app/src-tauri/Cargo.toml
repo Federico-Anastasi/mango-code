@@ -16,6 +16,7 @@ mango-common.workspace = true
 engine-cfg.workspace = true
 agent-cfg.workspace = true
 engine.workspace = true
+images.workspace = true
 phone.workspace = true
 voice.workspace = true
 anyhow.workspace = true

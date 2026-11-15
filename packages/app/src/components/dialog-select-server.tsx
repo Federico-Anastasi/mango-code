@@ -1,4 +1,5 @@
 import { Button } from "@opencode-ai/ui/button"
+import { ButtonV2 } from "@opencode-ai/ui/v2/button-v2"
 import { useDialog } from "@opencode-ai/ui/context/dialog"
 import { Dialog } from "@opencode-ai/ui/dialog"
 import { DropdownMenu } from "@opencode-ai/ui/dropdown-menu"
@@ -703,7 +704,7 @@ export function ServerConnectionForm(props: { controller: ReturnType<typeof useS
         onBack={props.controller.resetForm}
       />
       <div class="shrink-0 pb-5">
-        <Button
+        <ButtonV2
           variant="primary"
           size="large"
           onClick={props.controller.submitForm}
@@ -715,7 +716,7 @@ export function ServerConnectionForm(props: { controller: ReturnType<typeof useS
             : props.controller.isAddMode()
               ? language.t("dialog.server.add.button")
               : language.t("common.save")}
-        </Button>
+        </ButtonV2>
       </div>
     </div>
   )

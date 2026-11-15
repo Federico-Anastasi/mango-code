@@ -48,10 +48,10 @@ pub struct AgentModel {
 
 #[derive(Debug, Clone)]
 pub struct AgentInputs {
-    /// The engine's URL: the app's engine manager, e.g. "http://127.0.0.1:8080", or another PC's engine.
+    /// The engine's URL: the app's engine manager, e.g. "http://127.0.0.1:47080", or another PC's engine.
     pub engine_url: String,
     /// The app's control server (`/control/*`), always on this PC, also when the engine is another PC's: the agent
-    /// forwards its `/mango/state`, `/mango/models`, `/mango/computer` and `/mango/model/*` there.
+    /// forwards its `/mango/state`, `/mango/models`, `/mango/computer`, `/mango/model/*` and `/mango/image/*` there.
     pub control_url: String,
     /// The key of the engine, when it is another PC's (`engine::remote`). It goes to the agent in the environment only.
     pub engine_key: Option<String>,

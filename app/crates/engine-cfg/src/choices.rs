@@ -93,6 +93,8 @@ impl Default for UpdateChoices {
 pub struct ChoicesFile {
     /// The model started when the app opens.
     pub default: Option<String>,
+    /// The model that makes a picture when a request names none; none = the catalog's (`image_default`).
+    pub image_default: Option<String>,
     /// Only the models whose choices differ from the standard ones.
     pub models: BTreeMap<String, Choices>,
     pub computer: ComputerChoices,
@@ -132,7 +134,22 @@ pub fn read(paths: &Paths) -> Result<ChoicesFile> {
     for (key, choices) in &file.models {
         choices.check(key).map_err(|e| user_error(&not_valid(), format!("{}: {e:#}", f.display())))?;
     }
-    Ok(file)
+    // a model list that cannot be read is told by whoever lists the models
+    Ok(under_the_models_key(file, &mango_common::catalog::read(paths).map(|c| c.same).unwrap_or_default()))
+}
+
+/// What was chosen for an entry of the user's that is a Mango Code model's own file (`ModelCatalog::same`) is chosen
+/// for that model: the entry is not a model any more.
+fn under_the_models_key(mut file: ChoicesFile, same: &BTreeMap<String, String>) -> ChoicesFile {
+    for (own, model) in same {
+        if file.default.as_ref() == Some(own) {
+            file.default = Some(model.clone());
+        }
+        if let Some(choices) = file.models.remove(own) {
+            file.models.entry(model.clone()).or_insert(choices);
+        }
+    }
+    file
 }
 
 /// Saves the choices of a model. A model that must run with its own engine only accepts `Auto`.
@@ -154,6 +171,17 @@ pub fn set_model(paths: &Paths, key: &str, mut choices: Choices) -> Result<()> {
 /// The model started when the app opens; `None` = the first one on the disk.
 pub fn set_default(paths: &Paths, key: Option<&str>) -> Result<()> {
     change(paths, |c| c.default = key.map(str::to_string))
+}
+
+/// The model that makes pictures when a request names none; `None` = the catalog's. It must be a model that makes images.
+pub fn set_image_default(paths: &Paths, key: Option<&str>) -> Result<()> {
+    if let Some(key) = key {
+        let file = load_models(paths)?;
+        if !file.is_image(key) {
+            anyhow::bail!("{}", tr!("«{key}» non è un modello che fa immagini.", "«{key}» is not a model that makes images."));
+        }
+    }
+    change(paths, |c| c.image_default = key.map(str::to_string))
 }
 
 /// `key` becomes the default only if the user has none: one chosen meanwhile is not replaced.

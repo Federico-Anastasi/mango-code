@@ -79,8 +79,7 @@ export function NewHome() {
   return (
     <div
       class={`
-        relative m-2 min-h-0 flex-1 self-stretch overflow-hidden rounded-[10px] max-md:m-0 max-md:rounded-none
-        bg-v2-background-bg-base shadow-[var(--v2-elevation-raised)] max-md:shadow-none
+        relative min-h-0 flex-1 self-stretch overflow-hidden bg-v2-background-bg-deep
       `}
     >
       <Show

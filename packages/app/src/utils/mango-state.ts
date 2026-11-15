@@ -33,6 +33,8 @@ export type MangoState = {
   model: ModelState
   default_model: string | null
   downloads: Download[]
+  /** The model of the image engine that stayed on after a picture; none while the engine is off. */
+  image_loaded: string | null
 }
 
 export type Verdict = {
@@ -68,6 +70,27 @@ export type CatalogEntry = {
   /** The choices possible here: places, contexts offered with the current choice, whether it can reason. */
   limits: { where: MangoModelChoices["where"][]; context: number[]; reasoning: boolean }
   sampling: Sampling | null
+}
+
+/** A model that makes pictures, as the settings list it (`image_models` of `/mango/models`). */
+export type ImageModelEntry = {
+  key: string
+  label: string
+  /** The catalog's line under its name; empty if it has none. */
+  about: string
+  license: string | null
+  /** Its files and the image engine are on the computer. */
+  present: boolean
+  /** What a download brings; for a model that is there, what its files weigh. */
+  bytes: number
+  /** Where it draws: the cards, or the processor. Whether it fits is not told: it is not measured. */
+  draws: { placement: "gpu" | "cpu"; gpus: string[] }
+}
+
+export type ImageModels = {
+  models: ImageModelEntry[]
+  /** The model that makes a picture when a request names none. */
+  default: string | null
 }
 
 export type Computer = {
@@ -167,6 +190,7 @@ export function parseState(value: unknown): MangoState | undefined {
     model: parseModelState(raw.model),
     default_model: text(raw.default_model) ?? null,
     downloads,
+    image_loaded: text(raw.image_loaded) ?? null,
   }
 }
 
@@ -220,6 +244,40 @@ export function parseCatalog(value: unknown): CatalogEntry[] | undefined {
     console.error(`/mango/models: ${items.length - read.length} of the models could not be read and were left out`)
   if (items.length > 0 && read.length === 0) return
   return read
+}
+
+/**
+ * The models that make pictures, from the same answer as the catalog. `undefined` when the answer has none (an app older
+ * than the pictures): the settings then show no group, rather than an empty one. One that does not read is left out, and
+ * the log says how many.
+ */
+export function parseImageModels(value: unknown): ImageModels | undefined {
+  const raw = record(value)
+  const items = raw?.image_models
+  if (!Array.isArray(items)) return
+  const models = items.flatMap((item): ImageModelEntry[] => {
+    const m = record(item)
+    const key = text(m?.key)
+    const draws = record(m?.where)
+    if (!m || !key || typeof m.present !== "boolean" || (draws?.placement !== "gpu" && draws?.placement !== "cpu"))
+      return []
+    return [
+      {
+        key,
+        label: text(m.label) ?? key,
+        about: text(m.about) ?? "",
+        license: text(m.license) ?? null,
+        present: m.present,
+        bytes: count(m.bytes) ?? 0,
+        draws: { placement: draws.placement, gpus: strings(draws.gpus) },
+      },
+    ]
+  })
+  if (models.length < items.length)
+    console.error(
+      `/mango/models: ${items.length - models.length} of the picture models could not be read and were left out`,
+    )
+  return { models, default: text(raw?.image_default) ?? null }
 }
 
 function parseChoices(value: unknown): MangoModelChoices | undefined {

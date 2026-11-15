@@ -84,7 +84,7 @@ const Updates: Component = () => {
             </ButtonV2>
           }
         >
-          <ButtonV2 variant="neutral" data-action="settings-install-update" onClick={() => void updater()?.install()}>
+          <ButtonV2 variant="primary" data-action="settings-install-update" onClick={() => void updater()?.install()}>
             {language.t("toast.update.action.installRestart")}
           </ButtonV2>
         </Show>
@@ -254,7 +254,7 @@ const Logs: Component = () => {
         </>
       }
     >
-      <ButtonV2 variant="neutral" data-action="settings-open-logs" disabled={!window.__MANGO_DESKTOP__} onClick={open}>
+      <ButtonV2 variant="ghost" data-action="settings-open-logs" disabled={!window.__MANGO_DESKTOP__} onClick={open}>
         {language.t("settings.help.logs.button")}
       </ButtonV2>
     </SettingsRowV2>

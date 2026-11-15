@@ -28,14 +28,15 @@ the download and the service with a pretence of the same duration (tests and pic
 
 | where | what |
 |---|---|
-| `src-tauri/` | window, startup (`lib.rs`), process supervisor, native bridge for the web UI (`bridge.rs`), Preview panel (`preview.rs`), "Use my Chrome" (`chrome.rs`), dictation (`dictation.rs`), the control server's routes (`control.rs`), the downloads in the background (`downloads.rs`), the user's choices about the models and the computer and taking a model off it (`model_choices.rs`), the models the agent knows, told again when they change (`agent_models.rs`), the engine of another PC (`engine_remote.rs`), "Other models" (`other_models.rs`), the Team (`team.rs`), automatic updates (`updater.rs`), zoom of the window (`zoom.rs`), problem reports (`report.rs`), tray (`tray.rs`: "Open", "Settings…", "Quit") |
-| `crates/engine` | the engine manager on 8080: starts the model the request asks for, adds to the chat requests that do not say them the style and the reasoning the user chose, loads the running model again when the user's choices change its plan, saves the conversation before stopping, releases and resumes the GPUs (`/engine/*`), rejects web pages; `share.rs` shares it with the user's other PCs (below, "The engine for your other PCs") and `remote.rs` is the other side, the code of another PC checked and kept ("Using the engine of another PC"). Also `fake-engine` (the tests), `mango-bench` (the speeds of the catalog models), `mango-tune` (tuning: measures a tune, keeps the log, writes the profile; the `optimize/` skill uses it) and `mango-launch` (`-p "request"`: one request from a script to the running app, `docs/INTEGRATION.md`) |
-| `crates/mango-common` | paths (`Paths::discover`), data folder, service file, `Build` (the build of an engine: `cpu`, `vulkan`, `cuda-12`, `cuda-13`, and `cuda-12-gtx16` of our forks for the GTX 16 family), the app's language (`i18n`); `network` (the addresses of the home network and of Tailscale, for the phone and for the shared engine) and the key helpers (`random_hex`, `equal_ct`); `download`: download of engines (`mango-engines.json`) and models (`mango-models.json`) with resume and sha256, plus Hugging Face (`download/hugging_face.rs`: search, links, GGUF files with hash); `credentials`: the keys in the Windows Credential Manager |
-| `crates/engine-cfg` | the PC's hardware (`hardware.rs`: GPUs of any vendor, CPU, RAM, build to use), the optimized profile if it applies (`profiles.rs`, `launcher/profiles/`) or the general plan with the official llama.cpp (`general.rs`), the recommended models (`recommended`), the split of layers across GPUs (`split.rs`) |
+| `src-tauri/` | window, startup (`lib.rs`), process supervisor, native bridge for the web UI (`bridge.rs`), Preview panel (`preview.rs`), the folders served to it as sites (`sites.rs`), "Use my Chrome" (`chrome.rs`), dictation (`dictation.rs`), the control server's routes (`control.rs`), the downloads in the background (`downloads.rs`), the user's choices about the models and the computer and taking a model off it (`model_choices.rs`), the models the agent knows, told again when they change (`agent_models.rs`), the engine of another PC (`engine_remote.rs`), "Other models" (`other_models.rs`), the Team (`team.rs`), automatic updates (`updater.rs`), zoom of the window (`zoom.rs`), problem reports (`report.rs`), tray (`tray.rs`: "Open", "Settings…", "Quit") |
+| `crates/engine` | the engine manager on 47080: starts the model the request asks for, adds to the chat requests that do not say them the style and the reasoning the user chose, loads the running model again when the user's choices change its plan, saves the conversation before stopping, releases and resumes the GPUs (`/engine/*`), rejects web pages; `share.rs` shares it with the user's other PCs (below, "The engine for your other PCs") and `remote.rs` is the other side, the code of another PC checked and kept ("Using the engine of another PC"). Also `fake-engine` (the tests), `mango-bench` (the speeds of the catalog models), `mango-tune` (tuning: measures a tune, keeps the log, writes the profile; the `optimize/` skill uses it), `mango-launch` (`-p "request"`: one request from a script to the running app, `docs/INTEGRATION.md`) and `off-screen` (a command on a Windows desktop nobody sees: the integration tests without their windows on the screen) |
+| `crates/images` | the image manager: one picture at a time, drawn by a server of the image engine (`sd-server`, stable-diffusion.cpp) that stays on between the pictures of a conversation about images and is started and stopped for a single picture; it takes the card from the engine manager while it draws (a model that writes there is put aside and comes back), tells how far the picture is step by step with a small preview, and stops a picture on request. `jobs.rs` gives each picture a number to follow it by; `routes.rs` is the routes under `/control/image` on the engine manager's port (`docs/INTEGRATION.md`, "Pictures") |
+| `crates/mango-common` | paths (`Paths::discover`), data folder, service file, `Build` (the build of an engine: `cpu`, `vulkan`, `cuda-12`, `cuda-13`, and `cuda-12-gtx16` of our forks for the GTX 16 family), the app's language (`i18n`); `network` (the addresses of the home network and of Tailscale, for the phone and for the shared engine) and the key helpers (`random_hex`, `equal_ct`); `download`: download of engines (`mango-engines.json`: llama.cpp, our forks, and `sd` for the models that make images) and models (`mango-models.json`) with resume and sha256, plus Hugging Face (`download/hugging_face.rs`: search, links, GGUF files with hash); `credentials`: the keys in the Windows Credential Manager |
+| `crates/engine-cfg` | the PC's hardware (`hardware.rs`: GPUs of any vendor, CPU, RAM, build to use), the optimized profile if it applies (`profiles.rs`, `launcher/profiles/`) or the general plan with the official llama.cpp (`general.rs`), the recommended models (`recommended`), the split of layers across GPUs (`split.rs`), the plan of a model that makes images (`image.rs`: the image engine, the model's files, the card it draws on) |
 | `crates/agent-cfg` | the agent's config, generated from `launcher/opencode-home/opencode.template.json` (the test checks the generated config against a fixed file); `team.rs`: the Team |
 | `crates/voice` | dictation: whisper in Rust, on the CPU |
 | `crates/phone` | the web UI on the phone: the network port, the key, the sessions, the forwarding to the agent, the links with the QR (below, "From your phone") |
-| `ui/` | the app's own page: the logo while the app starts, and the error that stops a start, with Retry, Report a problem, Open the logs and, when the engine in use is another PC's, the way back to this one; its texts are in `startup.js` (Italian and English) |
+| `ui/` | the app's own page: while the app starts, the wordmark with the mango moving slightly, a line saying what happens and a bar that advances one piece at each stage of the start (the app sends `step` and `steps` with the state); and the error that stops a start, with Retry, Open the logs and, when the engine in use is another PC's, the way back to this one; "Report a problem" is at the bottom in every state; its texts are in `startup.js` (Italian and English); colours and typefaces come from `suite/` at the repo root, which `src-tauri/build.rs` copies into `ui/suite/` (not committed) before Tauri packs the page |
 | `scripts/` | staging and installer; `test/` to drive the app from scripts |
 
 ## Where it takes the files from
@@ -106,6 +107,47 @@ the facts from its control server (`/control/models`, `/control/state`), which t
 `GET /mango/models` and `GET /mango/state` (the agent forwards them to `MANGO_CONTROL_URL`).
 Models without a catalog verdict about their quality (the `fallback` 2B among them) have no warning. A model marked `fallback` in the catalog (Qwen3.5-2B, for 4 GB cards) is proposed,
 and called the fastest, only when no other model fits on the graphics cards.
+
+The models that make pictures (`image` in the catalog; `about` is the line under the name, in both languages, like the
+models that write) come in the same answer of `/control/models` as `image_models` (`key`, `label`, `about`, `license`,
+`present`, `bytes`, `where`: the cards its plan draws on, or the processor) and `image_default`; the engine that is on
+after a picture is `image_loaded` in `/control/state`. Whether one fits this computer is not told: what they ask of a card
+and of the processor is not measured. In the settings, Models has the group «Fanno immagini» (`settings-page/images.tsx`)
+with the words and the actions of the other models: the same background downloads, «Togli dal computer», and «Usa come
+predefinito» (`models.setImageDefault`, saved as `image_default` in `choices.json`; a picture asked without a model is
+made by it, and taking that model off the computer gives the choice back to the catalog's default). Under the models, two
+choices of the web UI itself, kept with its other settings (`images.rewrite`, `images.rewriter`): whether a model that
+writes rewrites the request before the picture (on by default), and which one (automatic: Ling if it is on the computer,
+otherwise the default model).
+
+**Pictures in the conversation** (`packages/app/src/components/prompt-picture.tsx`, `packages/session-ui/src/components/picture-tool.tsx`).
+The box a conversation is written in has a choice «Testo / Immagine» (`Text / Picture`), first of its controls, in a
+conversation and in a new one. On «Immagine» what is written is the description of the picture: the model menu lists the
+models that make pictures and are on the computer (the conversation's choice holds; without one, the default), the format
+(Quadrata, Verticale 9:16, Orizzontale 16:9) and the size (Piccola, Grande) are two segmented controls that take a second
+line of the box when they do not fit, and attachments, commands, mentions and the shell are not offered; dictation is.
+What was attached on «Testo» is not sent with a picture and stays in the box.
+Sending asks the agent for a turn of the conversation (`POST /session/<id>/image`, `docs/INTEGRATION.md`, "Pictures"); a new
+conversation is created as for a message, and in a new worktree the picture is asked once the worktree is ready. With no model that makes pictures on the computer the side says so in one line
+and leads to its group in Models, and sending is off; a model that writes is not needed with rewriting off. Rewriting
+follows the settings: off, the words go as they are; on, the model chosen there writes the description, if the agent still
+offers it, otherwise the agent chooses. The choice is the conversation's, kept in its prompt (`PicturePick`); without one a
+conversation whose last turn was a picture opens on «Immagine». The row of the tool `image_generate` is the same for the
+picture the user asked for and for the one the model makes by itself: it says what is going on («Scrivo la descrizione»,
+«Aspetto il mio turno», «Preparo la scheda», «Passo 5 di 8», «Finisco»), shows the picture as it forms in a frame of its
+final proportions, then the picture (a click opens its file in the panel that shows PDFs and pages), how long it took and how
+big it is, the file with «Apri» and «Mostra nella cartella» among the files of the turn, and a collapsed «Descrizione»
+with the description in English to correct: «Rifai con questa descrizione» draws it again with the corrected text and
+«Rifai» with the same one (a new seed); neither while the conversation is busy. A question of the model that rewrites is
+shown by the conversation's question dock, which closes by itself if the turn is stopped; «Ignora» leaves the choice to
+the model, and the picture is made. The first picture the model makes
+by itself asks the permission `image`, in plain words with what it will draw. The engine that draws stays on while pictures
+are on view; when the box goes back to «Testo», or the conversation is closed or left for another one or for the Home, it is
+put away a moment later (`utils/mango-picture-engine.ts`): the app is asked once (`POST /mango/image/unload`), and an
+engine that is drawing then stops when its picture is made. An engine another program left on is not touched: only leaving
+pictures in this window asks.
+`integration/tests/pictures.test.ts` drives all of this in the real window with the fake image engine; `FAKE_SD_PNG=1` makes
+the fake engine draw real PNGs.
 
 **Downloads in the background** (`src-tauri/src/downloads.rs`, the bridge's `models.download/pause/resume/cancel`): the
 models asked from the app's window download one at a time while the app is in use, the engine of a model included if
@@ -192,7 +234,7 @@ A PC with graphics cards can lend its models to the user's other PCs, at home or
 from the settings of the web UI, section Connections (`engine_share_*` bridge commands in `src-tauri/src/engine_share.rs`). The
 other half lives there too, "Use the engine of another PC" (below). The service is `engine::share` (`crates/engine/src/share.rs`)
 and the requests are served by the engine manager itself (`engine/src/http.rs`, `handle_network`): the manager stays on
-`127.0.0.1:8080` as before, without a key, for the apps of this PC. The contract for a client is in `docs/INTEGRATION.md`
+`127.0.0.1:47080`, without a key, for the apps of this PC. The contract for a client is in `docs/INTEGRATION.md`
 ("The engine of another PC").
 
 - **Its own port**, `47098` (`MANGO_SHARE_PORT`), open only while on, and **only on the addresses the settings show**: the home
@@ -256,7 +298,7 @@ address in `100.64.0.0/10`). The phone does not see the bridge: no phone setting
   network's and Tailscale's, never `0.0.0.0`; `mango_common::network::reconcile`, the same as the shared engine's). A thread reads
   the addresses again every 3 s. On an address where one does not open the other is closed too, and the settings say which. In
   development builds `MANGO_PHONE_PC_ONLY` keeps them on `127.0.0.1`. If Windows calls the home network public
-  (`network::is_public`, the network list of Windows), the settings show a warning under its link. Agent and engine stay on `127.0.0.1` as before; the engine cannot be reached from the phone.
+  (`network::is_public`, the network list of Windows), the settings show a warning under its link. Agent and engine stay on `127.0.0.1`; the engine cannot be reached from the phone.
 - **Entry**: `GET /phone?key=…` (24 random bytes, compared in constant time) → `303` to `/` with the cookie
   `mango_phone` (a random value of a session, never the key; `HttpOnly; SameSite=Strict; Path=/`, 90 days, not
   renewed); wrong or missing key `401` with a page made for the phone (`crates/phone/src/key.html`: the app's dark look, the icon, how
@@ -350,11 +392,18 @@ the card's; all four on a device). The phone and the tablet formats draw a devic
 
 **PDF, pictures and web pages in the panel.** The card of a PDF, a picture (png, jpg, gif, webp, bmp, ico, svg) or a web page (html,
 htm) opens it in the panel with a click (`preview_file` in `preview.rs`, the bridge's `preview.openFile`): the same checks as
-`open_path` (only a file inside a project or in `Documents\Mango Code`), at most 50 MB, readable. A PDF, a raster picture or a
-web page is opened by its own `file://` address (the page runs, like the ones the agent opens); an SVG goes through
+`open_path` (an existing file, wherever the agent wrote it), at most 50 MB, readable. A PDF, a raster picture or a
+web page is opened by its own `file://` address (the page runs); an SVG goes through
 `<data>\preview-view\image.html`, a page with no script that draws it in an `<img>`, because as a page of its own an SVG
 runs its scripts. The refusals carry a code the card turns into a sentence: `too_large`,
 `unreadable`, `blocked_type`, `not_found`, `forbidden`. Word, Excel and PowerPoint keep opening in their Windows program.
+
+**A page the agent opens by its file.** The agent shows a page it wrote with `new_page` and the page's file (`index.html`),
+and starts no server: the browser server (`launcher/mango-chrome-mcp.mjs`) asks the control server for the page's address
+(`POST /control/site` `{ "path" }` → `{ "url" }`) and opens that. `sites.rs` serves the folder of the file, read-only, on a
+port of its own on `127.0.0.1`, opened the first time the folder is asked for and kept until the app quits; a request whose
+`Host` is not this computer is refused. A site with several pages, modules or `fetch` works as on the web, and a path the
+model wrote the Unix way (`/home/user/site/index.html`) names the file in the project, as it does for the agent's file tools.
 
 **While a page loads.** The native panel stays hidden until the page it navigates to is the one it shows; the web UI puts its own message
 ("Loading the preview…") in the placeholder, so no blank rectangle appears. The WebView2 events (`on_navigation` at the start,
@@ -419,8 +468,8 @@ a running exe: rename the old one, copy the new one, and what is already open st
 
 What it brings compared to opencode:
 
-- **Embedded, offline web UI**: the server never forwards it from `app.opencode.ai`; Mango Code brand, dark theme,
-  accent `#FFA61F`; `?project=<folder>` opens that folder as a project.
+- **Embedded, offline web UI**: the server never forwards it from `app.opencode.ai`; Mango Code brand, light or dark as Windows is until the user picks one,
+  the colours of `suite/tokens.css`; `?project=<folder>` opens that folder as a project.
 - **Server without a password but closed to web pages** (`middleware/origin-guard.ts`): a request with `Origin` passes
   only from the same server's web UI or from the app. CORS is not enough: a "simple" request starts from any
   page, and the agent has the shell.
@@ -455,9 +504,11 @@ cd opencode-home;           npm ci
 cd ..\..\app
 node scripts\prepare-installer.mjs   # staging: also needed by cargo test (tauri-build wants the folder)
 cargo test --workspace
-cargo build -p mango-code -p engine  # the app and the fake engine: the integration tests start them
+cargo build -p mango-code -p engine -p images  # the app and the fake engines: the integration tests start them
 cd ..
 bun test --cwd integration              # from the repo root; app windows open with the fake engine
+app\target\debug\off-screen bun test --cwd integration   # the same on a desktop nobody sees: no window reaches the screen
+bun test --cwd integration tests/zoom.test.ts            # the one test that needs the screen (it turns Windows' own wheel)
 powershell -File app\scripts\build.ps1   # staging + cargo tauri build -> app\target\release\bundle\nsis\*.exe
 ```
 

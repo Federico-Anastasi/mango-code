@@ -79,6 +79,44 @@ describe("the routes of the control server", () => {
     }
   })
 
+  test("a picture is asked, followed, fetched and cancelled by the number of its job", async () => {
+    const fake = control((path) => (path === "/control/image/generate" ? { status: 202, body: { id: "image-3" } } : { status: 200, body: { answered: path } }))
+    const json = { method: "POST", headers: { "content-type": "application/json" } }
+    try {
+      expect(await (await request("/mango/image")).json()).toEqual({ answered: "/control/image" })
+      const asked = await request("/mango/image/generate", { ...json, body: JSON.stringify({ prompt: "a cat", width: 512, height: 512 }) })
+      expect(asked.status).toBe(202)
+      expect(await asked.json()).toEqual({ id: "image-3" })
+      expect(await (await request("/mango/image/jobs/image-3")).json()).toEqual({ answered: "/control/image/jobs/image-3" })
+      expect((await request("/mango/image/jobs/image-3/picture")).status).toBe(200)
+      expect((await request("/mango/image/jobs/image-3/cancel", json)).status).toBe(200)
+      expect((await request("/mango/image/unload", json)).status).toBe(200)
+
+      expect(fake.seen.map((r) => `${r.method} ${r.path}`)).toEqual([
+        "GET /control/image",
+        "POST /control/image/generate",
+        "GET /control/image/jobs/image-3",
+        "GET /control/image/jobs/image-3/picture",
+        "POST /control/image/jobs/image-3/cancel",
+        "POST /control/image/unload",
+      ])
+      expect(JSON.parse(fake.seen[1].body)).toEqual({ prompt: "a cat", width: 512, height: 512 })
+    } finally {
+      fake.server.stop(true)
+    }
+  })
+
+  test("the number of a job cannot lead to another route of the control server", async () => {
+    const fake = control(() => ({ status: 200, body: {} }))
+    try {
+      for (const id of ["..%2F..%2Fmodel", "%2e%2e", "image-3.png", "a%20b"])
+        expect((await request(`/mango/image/jobs/${id}/cancel`, { method: "POST", headers: { "content-type": "application/json" } })).status).toBe(404)
+      expect(fake.seen).toHaveLength(0)
+    } finally {
+      fake.server.stop(true)
+    }
+  })
+
   test("the type of the answer is the control server's, and a body over 16 KB is refused", async () => {
     const seen: string[] = []
     const server = Bun.serve({

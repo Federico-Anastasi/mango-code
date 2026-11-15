@@ -47,6 +47,19 @@ export const SETTINGS_INDEX: IndexEntry[] = [
     description: "settings.models.other.description",
     words: "settings.words.other",
   },
+  { section: "models", title: "settings.models.section.images", words: "settings.words.images" },
+  {
+    section: "models",
+    title: "settings.images.rewrite.title",
+    description: "settings.images.rewrite.description",
+    words: "settings.words.rewrite",
+  },
+  {
+    section: "models",
+    title: "settings.images.rewriter.title",
+    description: "settings.images.rewriter.description",
+    words: "settings.words.rewriter",
+  },
   { section: "models", title: "settings.models.folder.open", words: "settings.words.folder" },
   {
     section: "computer",
@@ -144,18 +157,6 @@ export const SETTINGS_INDEX: IndexEntry[] = [
     title: "settings.general.alerts.errors",
     description: "settings.general.alerts.line",
     words: "settings.words.alerts",
-  },
-  {
-    section: "general",
-    title: "settings.general.row.uiFont.title",
-    description: "settings.general.row.uiFont.description",
-    words: "settings.words.font",
-  },
-  {
-    section: "general",
-    title: "settings.general.row.font.title",
-    description: "settings.general.row.font.description",
-    words: "settings.words.font",
   },
   {
     section: "general",

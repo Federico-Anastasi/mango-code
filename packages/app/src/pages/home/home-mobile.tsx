@@ -60,7 +60,7 @@ export function HomeMobile(props: { projects: HomeProjectsController; sessions: 
           <Show when={props.sessions.session.canCreate() || props.sessions.data.projectsRead()}>
             <ButtonV2
               data-action="home-new-session"
-              variant="contrast"
+              variant="primary"
               size="large"
               icon="edit"
               class="!h-12 w-full justify-center text-[16px]"
@@ -87,7 +87,7 @@ export function HomeMobile(props: { projects: HomeProjectsController; sessions: 
                     type="button"
                     data-component="home-project-chip"
                     data-selected={selection().directory === project.worktree ? "" : undefined}
-                    class="flex h-11 shrink-0 items-center gap-2 rounded-full border border-v2-border-border-base bg-v2-background-bg-layer-01 pl-3 pr-4 text-[15px] text-v2-text-text-muted data-[selected]:bg-v2-background-bg-layer-03 data-[selected]:text-v2-text-text-base"
+                    class="flex h-11 shrink-0 items-center gap-2 rounded-full border border-v2-border-border-base bg-transparent pl-3 pr-4 text-[15px] text-v2-text-text-muted data-[selected]:bg-[var(--mango-raised)] data-[selected]:font-semibold data-[selected]:text-v2-text-text-base"
                     aria-pressed={selection().directory === project.worktree}
                     onClick={() => {
                       const conn = server()
@@ -106,7 +106,7 @@ export function HomeMobile(props: { projects: HomeProjectsController; sessions: 
             </div>
           </Show>
           <div class="flex items-center gap-2">
-            <label class="flex h-12 min-w-0 flex-1 items-center gap-2 rounded-[10px] bg-v2-background-bg-layer-02/60 pl-3 pr-3 text-v2-icon-icon-muted focus-within:bg-v2-background-bg-layer-02">
+            <label class="flex h-12 min-w-0 flex-1 items-center gap-2 rounded-[7px] border border-v2-border-border-base bg-v2-background-bg-deep pl-3 pr-3 text-v2-icon-icon-muted focus-within:border-v2-border-border-strong">
               <IconV2 name="magnifying-glass" />
               <input
                 class="min-w-0 flex-1 border-0 bg-transparent text-[16px] text-v2-text-text-base outline-0 placeholder:text-v2-text-text-faint"
@@ -146,7 +146,7 @@ export function HomeMobile(props: { projects: HomeProjectsController; sessions: 
             <For each={groups()}>
               {(group) => (
                 <section class="pb-2">
-                  <h2 class="px-3 pb-1 pt-3 text-[14px] text-v2-text-text-muted [font-weight:440]">{group.title}</h2>
+                  <h2 class="px-3 pb-1 pt-3 text-[14px] text-v2-text-text-muted [font-weight: 400]">{group.title}</h2>
                   <For each={group.sessions}>
                     {(record) => <HomeMobileRow record={record} sessions={props.sessions} />}
                   </For>
@@ -196,8 +196,8 @@ function HomeMobileRow(props: { record: HomeSessionRecord; sessions: HomeSession
           )}
         />
         <span class="min-w-0 flex-1">
-          <span class="block truncate text-[16px] leading-6 text-v2-text-text-base [font-weight:530]">{title()}</span>
-          <span class="block truncate text-[14px] leading-5 text-v2-text-text-muted [font-weight:440]">
+          <span class="block truncate text-[16px] leading-6 text-v2-text-text-base [font-weight: 500]">{title()}</span>
+          <span class="block truncate text-[14px] leading-5 text-v2-text-text-muted [font-weight: 400]">
             {props.record.projectName} · {when()}
           </span>
         </span>

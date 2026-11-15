@@ -67,10 +67,10 @@ function DialogBroadFolder(props: { folder: string; create: (name: string) => Pr
           </Show>
         </DialogBody>
         <DialogFooter>
-          <ButtonV2 type="button" variant="neutral" disabled={busy()} onClick={() => dialog.close()}>
+          <ButtonV2 type="button" variant="ghost" disabled={busy()} onClick={() => dialog.close()}>
             {language.t("common.cancel")}
           </ButtonV2>
-          <ButtonV2 type="submit" variant="contrast" disabled={busy() || !name().trim()}>
+          <ButtonV2 type="submit" variant="primary" disabled={busy() || !name().trim()}>
             {language.t("project.broad.create")}
           </ButtonV2>
         </DialogFooter>

@@ -188,7 +188,7 @@ test("every kind of content ends the loading", async () => {
 
 test("a data: page arrives and is not given up, however its text is written in the address", async () => {
   // WebView2 reports no end of loading for a data: address and its own address for the page is not one the app can read
-  // (`Webview::url` fails): the panel used to wait the limit and then say the address does not answer
+  // (`Webview::url` fails): waiting for either, the panel would reach the limit and say the address does not answer
   const written = [
     `data:text/html,<title>Data page</title><h1 style="color:#c40">Hello, panel</h1> two words & more`,
     "data:text/html,%3Ctitle%3EData%20page%3C/title%3E%3Ch1%3EHello%3C/h1%3E",

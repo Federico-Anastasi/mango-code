@@ -52,7 +52,7 @@ function DialogCloseNotice() {
         <p class="text-[13px] leading-5">{language.t("app.closeNotice.programs")}</p>
       </DialogBody>
       <DialogFooter>
-        <ButtonV2 type="button" variant="contrast" autofocus data-action="close-notice-ok" onClick={understood}>
+        <ButtonV2 type="button" variant="primary" autofocus data-action="close-notice-ok" onClick={understood}>
           {language.t("app.closeNotice.ok")}
         </ButtonV2>
       </DialogFooter>

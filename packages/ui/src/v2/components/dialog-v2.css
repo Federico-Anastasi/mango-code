@@ -22,9 +22,9 @@
     align-items: flex-start;
     width: 480px;
     height: 368px;
-    background: var(--v2-background-bg-layer-01);
-    box-shadow: var(--v2-elevation-overlay);
-    border-radius: 6px;
+    background: var(--mango-surface);
+    border: 1px solid var(--mango-line);
+    border-radius: var(--mango-radius-panel);
     overflow: hidden;
     pointer-events: auto;
 
@@ -60,9 +60,9 @@
           flex: 1;
           min-width: 0;
           user-select: none;
-          font-weight: 530;
-          font-size: 13px;
-          line-height: 16px;
+          font-weight: 600;
+          font-size: 14px;
+          line-height: 20px;
           letter-spacing: -0.04px;
           color: var(--v2-text-text-base);
           font-variation-settings: "slnt" 0;
@@ -82,7 +82,7 @@
           flex: none;
           flex-grow: 0;
           user-select: none;
-          font-weight: 530;
+          font-weight: 600;
           font-size: 15px;
           line-height: 20px;
           letter-spacing: -0.13px;
@@ -94,7 +94,7 @@
           flex: none;
           flex-grow: 0;
           user-select: none;
-          font-weight: 440;
+          font-weight: 400;
           font-size: 13px;
           line-height: 20px;
           letter-spacing: -0.04px;

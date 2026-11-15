@@ -56,7 +56,7 @@ export const ProjectIcon = (props: {
         <div
           classList={{
             "absolute top-px right-px size-1.5 rounded-full z-10": true,
-            "bg-surface-warning-strong": hasPermissions(),
+            "bg-[var(--mango-action)]": hasPermissions(),
             "bg-icon-critical-base": !hasPermissions() && hasError(),
             "bg-text-interactive-base": !hasPermissions() && !hasError(),
           }}
@@ -126,7 +126,7 @@ const SessionRow = (props: {
               <Spinner class="size-[15px]" />
             </Match>
             <Match when={props.hasPermissions()}>
-              <div class="size-1.5 rounded-full bg-surface-warning-strong" />
+              <div class="size-1.5 rounded-full bg-[var(--mango-action)]" />
             </Match>
             <Match when={props.hasError()}>
               <div class="size-1.5 rounded-full bg-text-diff-delete-base" />

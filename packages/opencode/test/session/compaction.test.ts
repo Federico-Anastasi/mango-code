@@ -1556,6 +1556,22 @@ describe("session.compaction.process", () => {
           },
         })
 
+        yield* ssn.updatePart({
+          id: PartID.ascending(),
+          messageID: kept.id,
+          sessionID: session.id,
+          type: "tool",
+          callID: "write-call",
+          tool: "write",
+          state: {
+            status: "completed",
+            input: { filePath: "style.css", content: `${"a".repeat(5000)}END-OF-FILE` },
+            output: "Wrote file successfully.",
+            title: "style.css",
+            metadata: {},
+            time: { start: Date.now(), end: Date.now() },
+          },
+        })
         const previous = yield* ssn.updateMessage({
           id: MessageID.ascending(),
           role: "user",
@@ -1584,6 +1600,8 @@ describe("session.compaction.process", () => {
         expect(captured[0]?.role).toBe("user")
         expect(JSON.stringify(captured)).toContain('[Assistant tool call]: read({\\"filePath\\":\\"src/index.ts\\"})')
         expect(JSON.stringify(captured)).toContain("[Tool result]: file contents")
+        expect(JSON.stringify(captured)).toContain('[Assistant tool call]: write({\\"filePath\\":\\"style.css\\"')
+        expect(JSON.stringify(captured)).not.toContain("END-OF-FILE")
         expect(JSON.stringify(captured)).not.toContain('\\"role\\":\\"assistant\\"')
       }).pipe(withCompaction({ llm: stub.llmLayer, config: cfg({ tail_turns: 0 }) }))
     },

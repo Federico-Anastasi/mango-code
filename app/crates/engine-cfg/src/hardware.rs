@@ -482,7 +482,7 @@ mod tests {
         assert_eq!(choose_build(&pc(v, 16_384)), Build::Vulkan);
     }
 
-    /// Issue 2: a GT 710 has a legacy driver whose NVML lacks functions, so it comes from DXGI. It is sold with 1 or
+    /// Issue #2: a GT 710 has a legacy driver whose NVML lacks functions, so it comes from DXGI. It is sold with 1 or
     /// 2 GiB: either way no model fits on it and it doesn't count, like the processor's integrated graphics next to
     /// it. The build is the processor's.
     #[test]

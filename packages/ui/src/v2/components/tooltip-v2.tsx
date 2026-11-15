@@ -121,10 +121,6 @@ export function TooltipV2(props: TooltipV2Props) {
           </KobalteTooltip.Trigger>
           <KobalteTooltip.Portal>
             <KobalteTooltip.Content
-              ref={(el) => {
-                const theme = ref?.closest("[data-theme]")?.getAttribute("data-theme")
-                if (theme) el.setAttribute("data-theme", theme)
-              }}
               data-component="tooltip-v2"
               data-placement={props.placement}
               data-force-open={local.forceOpen}

@@ -2,3 +2,32 @@
   width: 16px;
   aspect-ratio: 1;
 }
+
+[data-component="logo"] {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.47em;
+  font-family: var(--mango-font-title);
+  font-size: 17px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1;
+  white-space: nowrap;
+  color: var(--mango-text);
+
+  [data-slot="logo-shape"] {
+    flex: none;
+    width: 1.45em;
+    height: 1.45em;
+  }
+
+  [data-slot="logo-product"] {
+    color: var(--mango-action-text);
+  }
+}
+
+@media (max-width: 639px) {
+  [data-component="logo"][data-compact] [data-slot="logo-words"] {
+    display: none;
+  }
+}

@@ -8,21 +8,31 @@
 }
 
 [data-titlebar-tab] {
-  --tab-base: var(--v2-background-bg-deep);
+  --tab-base: var(--mango-ground);
   --tab-overlay: transparent;
   background: linear-gradient(var(--tab-overlay), var(--tab-overlay)), var(--tab-base);
+  border-radius: 7px;
 }
 
 [data-titlebar-tab]:is(:hover, :has(> [data-slot="tab-link"]:focus-visible)):not([data-state="pressed"]):not(
     [data-dragging="true"]
   ):not([data-editing="true"]) {
-  --tab-base: var(--v2-background-bg-layer-02);
   --tab-overlay: var(--v2-overlay-simple-overlay-hover);
 }
 
+/* The open conversation rests on the raised ground, with the text colour and a heavier weight; the others are muted. */
 [data-titlebar-tab]:is([data-state="pressed"], [data-dragging="true"], [data-editing="true"]) {
-  --tab-base: var(--v2-background-bg-layer-02);
-  --tab-overlay: var(--v2-overlay-simple-overlay-pressed);
+  --tab-base: var(--mango-raised);
+}
+
+[data-titlebar-tab] [data-titlebar-tab-link] {
+  color: var(--mango-text-muted);
+  font-weight: 500;
+}
+
+[data-titlebar-tab]:is([data-active="true"], [data-editing="true"]) [data-titlebar-tab-link] {
+  color: var(--mango-text);
+  font-weight: 600;
 }
 
 [data-titlebar-tab]:is(:hover, [data-state="pressed"]) [data-slot="tab-close"] {
@@ -34,36 +44,11 @@
 }
 
 [data-titlebar-tab-list] {
-  gap: 6px;
+  gap: 4px;
 }
 
 [data-titlebar-tab-slot] {
-  --tab-separator: var(--v2-background-bg-layer-03);
   position: relative;
-}
-
-[data-color-scheme="dark"] [data-titlebar-tab-slot] {
-  --tab-separator: var(--v2-background-bg-layer-02);
-}
-
-[data-titlebar-tab-slot]:not(:first-child):not([data-active="true"])::before {
-  content: "";
-  position: absolute;
-  top: 8px;
-  inset-inline-start: -3.75px;
-  width: 1.5px;
-  height: 12px;
-  border-radius: 9999px;
-  background: var(--tab-separator);
-}
-
-[data-titlebar-tab-slot][data-active="true"] + [data-titlebar-tab-slot]::before {
-  display: none;
-}
-
-[data-titlebar-tab-slot]:not([data-active="true"]):has([data-titlebar-tab]:hover)::before,
-[data-titlebar-tab-slot]:not([data-active="true"]):has([data-titlebar-tab]:hover) + [data-titlebar-tab-slot]::before {
-  display: none;
 }
 
 [data-titlebar-tab] [data-slot="tab-title"] {

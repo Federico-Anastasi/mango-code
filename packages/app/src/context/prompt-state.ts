@@ -1,5 +1,6 @@
 import { checksum } from "@opencode-ai/core/util/encode"
 import type { FilePartSource } from "@opencode-ai/sdk/v2/client"
+import type { PictureFormat, PictureSize } from "@opencode-ai/session-ui/picture-state"
 import { batch, createMemo, type Accessor } from "solid-js"
 import { createStore, type SetStoreFunction } from "solid-js/store"
 import type { FileSelection } from "@/context/file"
@@ -51,6 +52,18 @@ export type PromptModel = {
   variant?: string | null
 }
 
+/**
+ * What a conversation's box asks of a picture. `mode` is what the user chose in the box: without it the conversation's
+ * history decides. The others are the choices beside the words; without them the defaults hold.
+ */
+export type PicturePick = {
+  mode?: "text" | "picture"
+  /** Key of the image model. */
+  model?: string
+  format?: PictureFormat
+  size?: PictureSize
+}
+
 export type FileContextItem = {
   type: "file"
   path: string
@@ -70,6 +83,7 @@ export type PromptStore = {
   prompt: Prompt
   cursor?: number
   model?: PromptModel
+  picture?: PicturePick
   context: {
     items: (ContextItem & { key: string })[]
   }
@@ -198,6 +212,10 @@ function createPromptStateValue(store: PromptStore, setStore: SetStoreFunction<P
     model: {
       current: () => store.model,
       set: (model: PromptModel | undefined) => setStore("model", model),
+    },
+    picture: {
+      current: () => store.picture,
+      set: (pick: PicturePick) => setStore("picture", (current) => ({ ...current, ...pick })),
     },
     context: {
       items: createMemo(() => store.context.items),

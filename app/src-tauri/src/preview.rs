@@ -460,10 +460,10 @@ fn file_address(real: &Path) -> Result<Url, BridgeError> {
     to_url(&page)
 }
 
-/// Opens a PDF, a picture or a web page of a project (or of `Documents\Mango Code`) in the panel: the card of the file in the chat.
+/// Opens a PDF, a picture or a web page in the panel: the card of the file in the chat, wherever the agent wrote it.
 #[tauri::command]
 pub async fn preview_file(app: AppHandle, path: String) -> Result<(), BridgeError> {
-    let real = crate::bridge::allowed_path(&app, path).await?;
+    let real = crate::bridge::existing_path(path).await?;
     let url = tauri::async_runtime::spawn_blocking(move || file_address(&crate::bridge::plain(&real))).await.map_err(io)??;
     panel(&app)?.navigate(url).map_err(io)
 }

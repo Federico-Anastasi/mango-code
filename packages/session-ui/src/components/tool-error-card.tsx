@@ -91,7 +91,7 @@ export function ToolErrorCard(props: ToolErrorCardProps) {
   const elapsed = createElapsed(() => split.time ?? {})
   const timeLabel = () => {
     const ms = elapsed()
-    return ms !== undefined && ms >= 1000 ? `· ${formatDuration(ms, i18n.t)}` : undefined
+    return ms !== undefined && ms >= 1000 ? formatDuration(ms, i18n.t) : undefined
   }
 
   const body = createMemo(() => {
@@ -113,10 +113,10 @@ export function ToolErrorCard(props: ToolErrorCardProps) {
     <Card {...rest} data-kind="tool-error-card" data-open={open() ? "true" : "false"} variant="error">
       <Collapsible class="tool-collapsible" data-open={open() ? "true" : "false"} open={open()} onOpenChange={setOpen}>
         <Collapsible.Trigger>
-          <div data-component="tool-trigger">
+          <div data-component="tool-trigger" data-status="error">
             <div data-slot="basic-tool-tool-trigger-content">
               <span data-slot="basic-tool-tool-indicator" data-component="tool-error-card-icon">
-                <Icon name="circle-ban-sign" size="small" style={{ "stroke-width": 1.5 }} />
+                <Icon name="circle-ban-sign" size="small" />
               </span>
               <div data-slot="basic-tool-tool-info">
                 <div data-slot="basic-tool-tool-info-structured">
@@ -141,6 +141,7 @@ export function ToolErrorCard(props: ToolErrorCardProps) {
                   </div>
                 </div>
               </div>
+              <span data-slot="basic-tool-tool-outcome" aria-hidden="true" />
               <Show when={timeLabel()}>
                 <span data-slot="basic-tool-tool-time">{timeLabel()}</span>
               </Show>

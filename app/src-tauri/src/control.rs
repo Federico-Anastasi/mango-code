@@ -75,6 +75,8 @@ pub struct State {
     pub default_model: Option<String>,
     /// The models being downloaded, in the order they were asked.
     pub downloads: Vec<Download>,
+    /// The model of the image engine that stayed on after a picture; none while the engine is off.
+    pub image_loaded: Option<String>,
 }
 
 /// What the routes remember between one call and the next.
@@ -230,6 +232,9 @@ impl engine::http::Control for Routes {
         let Some(engine) = st.engine.get() else {
             return (503, error(&tr!("Mango Code si sta ancora avviando.", "Mango Code is still starting.")));
         };
+        if let Some(reply) = st.images.get().and_then(|images| images.handle(method, path, body)) {
+            return reply;
+        }
         match (method, path) {
             ("GET", "/control/state") => {}
             ("GET", "/control/models" | "/control/computer") => {
@@ -254,6 +259,15 @@ impl engine::http::Control for Routes {
                 st.control.attempts.fetch_add(1, Ordering::SeqCst);
                 engine.choose(&model);
             }
+            ("POST", "/control/site") => {
+                let Some(file) = serde_json::from_slice::<Value>(body).ok().and_then(|v| v.get("path").and_then(Value::as_str).map(std::path::PathBuf::from)) else {
+                    return (400, error(&tr!("manca «path»", "«path» is missing")));
+                };
+                return match st.sites.address(&file) {
+                    Ok(url) => (200, serde_json::json!({ "url": url })),
+                    Err(e) => (404, error(&e)),
+                };
+            }
             ("POST", "/control/model/retry") => {
                 st.control.attempts.fetch_add(1, Ordering::SeqCst);
                 let state = engine.state();
@@ -270,14 +284,17 @@ impl engine::http::Control for Routes {
     }
 }
 
-/// The catalog's local models with their verdict here and the user's choices (`/control/models`), or the computer
-/// (`/control/computer`): read when asked, the hardware included.
+/// The catalog's local models with their verdict here and the user's choices, and the models that make images
+/// (`/control/models`), or the computer (`/control/computer`): read when asked, the hardware included.
 fn about_this_computer(st: &AppState, path: &str) -> anyhow::Result<Value> {
     use anyhow::Context;
     let paths = st.paths.get().with_context(|| tr!("percorsi non ancora noti", "paths not known yet"))?;
     let hw = engine_cfg::detect().with_context(|| tr!("Non riesco a guardare l'hardware di questo computer", "Cannot look at the hardware of this computer"))?;
     Ok(match path {
-        "/control/models" => serde_json::json!({ "models": engine_cfg::models_view(paths, &hw)? }),
+        "/control/models" => {
+            let images = engine_cfg::image_views(paths, &hw)?;
+            serde_json::json!({ "models": engine_cfg::models_view(paths, &hw)?, "image_models": images.models, "image_default": images.default })
+        }
         _ => serde_json::to_value(engine_cfg::computer_view(paths, &hw)?)?,
     })
 }
@@ -343,6 +360,7 @@ fn state(app: &AppHandle, st: &AppState, engine: &PublicState) -> State {
         model: model_state(engine, remote.as_ref(), &label, &after),
         default_model: known.default_model.clone(),
         downloads: st.downloads.get().map(|d| d.list()).unwrap_or_default(),
+        image_loaded: st.images.get().and_then(|images| images.manager().loaded()),
     };
     let now = serde_json::to_string(&state).unwrap_or_default();
     let mut served = st.control.served.lock().unwrap();

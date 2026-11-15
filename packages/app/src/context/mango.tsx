@@ -19,16 +19,19 @@ import { showToast } from "@/utils/toast"
 import { MANGO_PROVIDER } from "@/utils/model-info"
 import { batches, combine, joinPrompts, RUN, split, withTimeout, type PendingItem } from "@/utils/mango-pending"
 import { Identifier } from "@/utils/id"
+import { createPictureEngine } from "@/utils/mango-picture-engine"
 import {
   becameReady,
   canSend,
   newer,
   parseCatalog,
   parseComputer,
+  parseImageModels,
   parseState,
   pollDelay,
   type CatalogEntry,
   type Computer,
+  type ImageModels,
   type MangoState,
 } from "@/utils/mango-state"
 import { onWhere } from "@/components/mango-text"
@@ -42,6 +45,10 @@ const SEND_TIMEOUT_MS = 60_000
 
 let pending: ReturnType<typeof createPending> | undefined
 let reader: ReturnType<typeof createReader> | undefined
+let pictures: ReturnType<typeof createPictureEngine> | undefined
+
+/** After the last view of pictures goes the engine is left alone this long, so that a move to another conversation of pictures keeps it. */
+const PICTURES_GRACE_MS = 1500
 
 /** A sentence of the app for the user: what it answered when it refused. */
 export class MangoRefusal extends Error {}
@@ -76,6 +83,8 @@ export function createReader(agent: () => Agent) {
   const [state, setState] = createSignal<MangoState>()
   const [catalog, setCatalog] = createSignal<CatalogEntry[]>()
   const [computer, setComputer] = createSignal<Computer>()
+  // The models that make pictures come in the answer of the catalog; undefined for an app that does not have them yet.
+  const [imageModels, setImageModels] = createSignal<ImageModels>()
   // The computer did not read the last time it was asked: it is asked again at every read.
   const [computerFailed, setComputerFailed] = createSignal(false)
   // The catalog answered, but none of its models read: the interface says it cannot read them, and asks again.
@@ -131,6 +140,7 @@ export function createReader(agent: () => Agent) {
       call(agent(), "/mango/models").then(
         (body) => {
           if (asked !== catalogAsked) return
+          setImageModels(parseImageModels(body))
           const next = parseCatalog(body)
           if (!next && !catalogFailed()) console.error("/mango/models: none of the models could be read")
           setCatalogFailed(!next)
@@ -200,6 +210,7 @@ export function createReader(agent: () => Agent) {
   return {
     state,
     catalog,
+    imageModels,
     computer,
     computerFailed,
     catalogFailed,
@@ -230,6 +241,10 @@ export function createReader(agent: () => Agent) {
     async retry() {
       const next = parseState(await call(agent(), "/mango/model/retry", { method: "POST" }))
       if (next) apply(next)
+    },
+    /** Stops the engine that draws and frees its memory; one that is drawing stops when its picture is made. */
+    async unloadImages() {
+      await call(agent(), "/mango/image/unload", { method: "POST" })
     },
   }
 }
@@ -394,10 +409,20 @@ export function useMango() {
   reader ??= createRoot(() => createReader(() => ({ url: serverSDK().url, http: serverSDK().server.http })))
   pending ??= createPending(platform)
   const read = reader
+  pictures ??= createPictureEngine({
+    unload: () => read.unloadImages(),
+    later: (ms, run) => {
+      const timer = setTimeout(run, ms)
+      return () => clearTimeout(timer)
+    },
+    grace: PICTURES_GRACE_MS,
+  })
   const waiting = pending
   return {
     state: read.state,
     catalog: read.catalog,
+    /** The models that make pictures and the one used by default; none for an app that does not have them. */
+    imageModels: read.imageModels,
     computer: read.computer,
     computerFailed: read.computerFailed,
     catalogFailed: read.catalogFailed,
@@ -408,6 +433,8 @@ export function useMango() {
     /** The model asked with «use» while the app answers. */
     asked: read.asked,
     pending: waiting,
+    /** Keeps the engine that draws on while pictures are on view, and puts it away when the user has left them. */
+    pictures,
     /** The app is behind the agent: its routes answer. */
     available: () => read.state() !== undefined,
     /** The bridge of the app's window: what changes the computer goes through it. */

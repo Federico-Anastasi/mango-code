@@ -5,6 +5,7 @@
 import { createMediaQuery } from "@solid-primitives/media"
 import { createMemo, createSignal, Show } from "solid-js"
 import { ButtonV2 } from "@opencode-ai/ui/v2/button-v2"
+import { ProgressBarV2 } from "@opencode-ai/ui/v2/progress-bar-v2"
 import { useLanguage } from "@/context/language"
 import { failureText, useMango } from "@/context/mango"
 import { useSync } from "@/context/sync"
@@ -101,19 +102,7 @@ export function MangoStatusLine(props: { sessionID?: string }) {
         >
           <span>{current().text}</span>
           <Show when={progress() !== undefined}>
-            <div
-              role="progressbar"
-              aria-label={current().text}
-              aria-valuemin={0}
-              aria-valuemax={100}
-              aria-valuenow={progress()}
-              class="h-1 w-24 overflow-hidden rounded-full bg-v2-background-bg-layer-01"
-            >
-              <div
-                class="h-full rounded-full bg-v2-text-text-muted transition-[width]"
-                style={{ width: `${progress()}%` }}
-              />
-            </div>
+            <ProgressBarV2 class="w-24" label={current().text} value={progress()!} />
           </Show>
           <Show when={current().kind === "failed"}>
             <Show when={proposal()}>

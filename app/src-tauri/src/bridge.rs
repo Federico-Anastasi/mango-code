@@ -118,8 +118,8 @@ pub const INIT_SCRIPT: &str = r#"
       get: () => call("zoom_get"),
       set: (zoom) => call("zoom_set", { zoom }),
     }),
-    // project files (absolute path): { size, isDir }, opening with the default program, selecting in File Explorer;
-    // they reject with { code, message } (not_found, forbidden, blocked_type, ...)
+    // files the agent wrote (absolute path): { size, isDir }, opening with the default program, selecting in File Explorer;
+    // they reject with { code, message } (not_found, blocked_type, ...)
     fileInfo: (path) => call("file_info", { path }),
     openPath: (path) => call("open_path", { path }),
     revealPath: (path) => call("reveal_path", { path }),
@@ -131,7 +131,7 @@ pub const INIT_SCRIPT: &str = r#"
       nav: (action) => call("preview_nav", { action }),
       state: () => call("preview_state"),
       openExternal: () => call("preview_external"),
-      // a PDF, a picture or a web page of a project (absolute path); rejects with { code, message } (not_found, forbidden, blocked_type, too_large, ...)
+      // a PDF, a picture or a web page the agent wrote (absolute path); rejects with { code, message } (not_found, blocked_type, too_large, ...)
       openFile: (path) => call("preview_file", { path }),
     }),
     // "Use my Chrome": { installed, debugging, enabled }; setEnabled rejects with chrome_missing / chrome_debug_off
@@ -162,7 +162,8 @@ pub const INIT_SCRIPT: &str = r#"
     // The models to download (the state of the downloads is the control server's): download(keys) queues them, one runs
     // at a time; pause(key) keeps what has arrived, resume(key) goes on from there, cancel(key) deletes it. They reject
     // with { code: "refused", message } where message is the sentence for the user.
-    // setDefault(key | null): the model loaded when the app opens. setChoices(key, { where, gpus, context, style,
+    // setDefault(key | null): the model loaded when the app opens; setImageDefault(key | null): the model that makes the
+    // pictures when a request names none (null = the catalog's). setChoices(key, { where, gpus, context, style,
     // reasoning }): where the model runs and how. remove(key): takes it off the computer, its download included; it answers
     // null, or the sentence to show when some files stay (those of a model the user added). openFolder(): the models' folder.
     models: Object.freeze({
@@ -171,6 +172,7 @@ pub const INIT_SCRIPT: &str = r#"
       resume: (key) => call("models_resume", { key }),
       cancel: (key) => call("models_cancel", { key }),
       setDefault: (key) => call("models_set_default", { key: key ?? null }),
+      setImageDefault: (key) => call("models_set_image_default", { key: key ?? null }),
       setChoices: (key, choices) => call("models_set_choices", { key, choices }),
       remove: (key) => call("models_remove", { key }),
       openFolder: () => call("models_open_folder"),
@@ -205,7 +207,7 @@ pub const INIT_SCRIPT: &str = r#"
       // the sentence to show
       updateEngine: () => call("computer_update_engine"),
     }),
-    // "Share the engine with my PCs": { enabled, listening, port, error, home, away } (home and away: { address, code } or null)
+    // "Lend the engine to my PCs": { enabled, listening, port, error, home, away } (home and away: { address, code } or null)
     engineShare: Object.freeze({
       state: () => call("engine_share_state"),
       setEnabled: (enabled) => call("engine_share_set_enabled", { enabled }),
@@ -530,11 +532,6 @@ mod project_dirs_tests {
     }
 }
 
-/// Is `real` (already resolved, without `..` or links) inside one of the allowed folders?
-fn inside_any(real: &Path, areas: &[PathBuf]) -> bool {
-    areas.iter().filter_map(|a| std::fs::canonicalize(a).ok()).any(|a| real.starts_with(a))
-}
-
 /// Windows path without the `\\?\` prefix that `canonicalize` adds: Windows programs do not like it.
 pub(crate) fn plain(p: &Path) -> PathBuf {
     let s = p.to_string_lossy();
@@ -544,27 +541,20 @@ pub(crate) fn plain(p: &Path) -> PathBuf {
     }
 }
 
-/// An existing file or folder inside a project or in `Documents\Mango Code`; nothing else.
-/// The web UI passes paths that come from the agent: here we decide what it is lawful to touch.
-pub(crate) async fn allowed_path(app: &AppHandle, raw: String) -> Result<PathBuf, BridgeError> {
+/// An existing file or folder, by its whole path. The paths are those of the cards in the chat: the files the agent
+/// wrote, and it writes where the user or the model says, also outside a project, so a card opens its file wherever it
+/// is. What opens with its Windows program is decided by the type of the file (`OPENABLE`), not by its folder.
+pub(crate) async fn existing_path(raw: String) -> Result<PathBuf, BridgeError> {
     let path = PathBuf::from(&raw);
     if !path.is_absolute() {
         return Err(err("invalid", tr!("percorso non assoluto: {raw}", "path is not absolute: {raw}")));
     }
-    let docs = projects_root(app)?;
     tauri::async_runtime::spawn_blocking(move || {
-        let real = std::fs::canonicalize(&path).map_err(|e| match e.kind() {
+        std::fs::canonicalize(&path).map_err(|e| match e.kind() {
             std::io::ErrorKind::NotFound => err("not_found", path.display().to_string()),
             std::io::ErrorKind::PermissionDenied => err("unreadable", format!("{}: {e}", path.display())),
             _ => err("io", format!("{}: {e}", path.display())),
-        })?;
-        let mut areas = vec![docs];
-        areas.extend(agent_projects()?);
-        if inside_any(&real, &areas) {
-            Ok(real)
-        } else {
-            Err(err("forbidden", tr!("{} non è in un progetto", "{} is not in a project", real.display())))
-        }
+        })
     })
     .await
     .map_err(|e| err("io", e.to_string()))?
@@ -577,18 +567,18 @@ struct FileInfo {
     is_dir: bool,
 }
 
-/// Size of a project file (for the card in the chat). `not_found` if it was deleted.
+/// Size of a file the agent wrote (for the card in the chat). `not_found` if it was deleted.
 #[tauri::command]
-async fn file_info(app: AppHandle, path: String) -> Result<FileInfo, BridgeError> {
-    let real = allowed_path(&app, path).await?;
+async fn file_info(path: String) -> Result<FileInfo, BridgeError> {
+    let real = existing_path(path).await?;
     let meta = std::fs::metadata(&real).map_err(|e| err("io", format!("{}: {e}", real.display())))?;
     Ok(FileInfo { size: if meta.is_dir() { 0 } else { meta.len() }, is_dir: meta.is_dir() })
 }
 
 /// Opens the file with the default Windows program (folders in File Explorer); a type outside `OPENABLE` is refused.
 #[tauri::command]
-async fn open_path(app: AppHandle, path: String) -> Result<(), BridgeError> {
-    let real = allowed_path(&app, path).await?;
+async fn open_path(path: String) -> Result<(), BridgeError> {
+    let real = existing_path(path).await?;
     if real.is_file() && !can_open(&real) {
         return Err(err("blocked_type", real.display().to_string()));
     }
@@ -598,7 +588,7 @@ async fn open_path(app: AppHandle, path: String) -> Result<(), BridgeError> {
 /// Shows the file in File Explorer, already selected.
 #[tauri::command]
 async fn reveal_path(app: AppHandle, path: String) -> Result<(), BridgeError> {
-    let real = allowed_path(&app, path).await?;
+    let real = existing_path(path).await?;
     app.opener()
         .reveal_item_in_dir(plain(&real))
         .map_err(|e| err("io", format!("{}: {e}", real.display())))
@@ -661,6 +651,7 @@ pub fn install(app: &App) -> tauri::Result<()> {
                 crate::downloads::models_resume,
                 crate::downloads::models_cancel,
                 crate::model_choices::models_set_default,
+                crate::model_choices::models_set_image_default,
                 crate::model_choices::models_set_choices,
                 crate::model_choices::models_remove,
                 crate::model_choices::models_open_folder,
@@ -827,29 +818,20 @@ mod tests {
     }
 
     #[test]
-    fn project_files() {
+    fn a_file_is_found_wherever_it_is() {
         let base = std::env::temp_dir().join(format!("mango-bridge-files-{}", std::process::id()));
-        let project = base.join("project");
-        let elsewhere = base.join("elsewhere");
-        std::fs::create_dir_all(project.join("sub")).unwrap();
-        std::fs::create_dir_all(&elsewhere).unwrap();
-        std::fs::write(project.join("sub").join("a.docx"), b"x").unwrap();
-        std::fs::write(elsewhere.join("b.docx"), b"x").unwrap();
-        let areas = vec![project.clone()];
+        std::fs::create_dir_all(base.join("elsewhere")).unwrap();
+        let file = base.join("elsewhere").join("b.docx");
+        std::fs::write(&file, b"x").unwrap();
+        let find = |raw: &Path| tauri::async_runtime::block_on(existing_path(raw.display().to_string()));
 
-        let inside = std::fs::canonicalize(project.join("sub").join("a.docx")).unwrap();
-        assert!(inside_any(&inside, &areas));
-        let outside = std::fs::canonicalize(elsewhere.join("b.docx")).unwrap();
-        assert!(!inside_any(&outside, &areas));
-        // with `..` the resolved path leaves the project
-        let escaped = std::fs::canonicalize(project.join("sub").join("..").join("..").join("elsewhere").join("b.docx")).unwrap();
-        assert!(!inside_any(&escaped, &areas));
-        // a folder with the same prefix in the name is not the same folder
-        std::fs::create_dir_all(base.join("project-bis")).unwrap();
-        let neighbor = std::fs::canonicalize(base.join("project-bis")).unwrap();
-        assert!(!inside_any(&neighbor, &areas));
-        // an area that does not exist admits nothing
-        assert!(!inside_any(&inside, &[base.join("does-not-exist")]));
+        // no project holds it: it is found all the same, by its real path
+        assert_eq!(find(&file).unwrap(), std::fs::canonicalize(&file).unwrap());
+        assert_eq!(find(&base.join("elsewhere").join("..").join("elsewhere").join("b.docx")).unwrap(), std::fs::canonicalize(&file).unwrap());
+        assert_eq!(find(&base.join("gone.docx")).unwrap_err().code, "not_found");
+        // a path without its drive is not a place on this computer
+        assert_eq!(find(Path::new("b.docx")).unwrap_err().code, "invalid");
+        assert_eq!(find(Path::new("/elsewhere/b.docx")).unwrap_err().code, "invalid");
         std::fs::remove_dir_all(&base).unwrap();
     }
 

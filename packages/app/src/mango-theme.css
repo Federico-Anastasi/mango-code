@@ -1,0 +1,376 @@
+/*
+ * Every colour name of the interface is one of the suite's names (suite/tokens.css), or a mix of them: a colour
+ * changes there and nowhere else. The names of the components stay as they are; new code uses --mango-* directly.
+ * The same definitions hold for the light and the dark theme, because the suite's names change with the theme.
+ * Only the colours of the content (code highlighting, avatars, agents) are written here, one per theme.
+ * No shadows: a thing stands out from the ground by the colour of its surface and by its border.
+ * The typefaces are the suite's three; the code is read as it is written, without ligatures.
+ */
+:root {
+  --font-family-sans: var(--mango-font-text);
+  --font-family-text: var(--mango-font-text);
+  --v2-font-family-sans: var(--mango-font-text);
+  --font-family-mono: var(--mango-font-code);
+  --font-family-mono--font-feature-settings: "liga" 0, "calt" 0;
+
+  /* Grounds */
+  --background-base: var(--mango-ground);
+  --background-weak: var(--mango-ground);
+  --background-strong: var(--mango-ground);
+  --background-stronger: var(--mango-surface);
+
+  /* Surfaces */
+  --surface-base: var(--mango-surface);
+  --surface-base-hover: color-mix(in srgb, var(--mango-text) 6%, transparent);
+  --surface-base-active: var(--mango-raised);
+  --surface-base-interactive-active: color-mix(in srgb, var(--mango-action) 16%, transparent);
+  --surface-inset-base: var(--mango-ground);
+  --surface-inset-base-hover: var(--mango-raised);
+  --surface-inset-strong: var(--mango-ground);
+  --surface-inset-strong-hover: var(--mango-ground);
+  --surface-raised-base: var(--mango-raised);
+  --surface-float-base: light-dark(var(--mango-text), var(--mango-raised));
+  --surface-float-base-hover: light-dark(var(--mango-text-muted), color-mix(in srgb, var(--mango-raised) 60%, var(--mango-line)));
+  --surface-raised-base-hover: color-mix(in srgb, var(--mango-raised) 60%, var(--mango-line));
+  --surface-raised-base-active: var(--mango-line);
+  --surface-raised-strong: var(--mango-raised);
+  --surface-raised-strong-hover: color-mix(in srgb, var(--mango-raised) 60%, var(--mango-line));
+  --surface-raised-stronger: var(--mango-raised);
+  --surface-raised-stronger-hover: color-mix(in srgb, var(--mango-raised) 60%, var(--mango-line));
+  --surface-weak: var(--mango-raised);
+  --surface-weaker: var(--mango-line);
+  --surface-strong: var(--mango-raised);
+  --surface-raised-stronger-non-alpha: var(--mango-surface);
+  --surface-brand-base: var(--mango-action);
+  --surface-brand-hover: var(--mango-action);
+  --surface-interactive-base: color-mix(in srgb, var(--mango-action) 24%, transparent);
+  --surface-interactive-hover: color-mix(in srgb, var(--mango-action) 32%, transparent);
+  --surface-interactive-weak: color-mix(in srgb, var(--mango-action) 10%, transparent);
+  --surface-interactive-weak-hover: color-mix(in srgb, var(--mango-action) 16%, transparent);
+  --surface-success-base: color-mix(in srgb, var(--mango-ready) 12%, transparent);
+  --surface-success-weak: color-mix(in srgb, var(--mango-ready) 18%, transparent);
+  --surface-success-strong: var(--mango-ready);
+  --surface-warning-base: color-mix(in srgb, var(--mango-action) 14%, transparent);
+  --surface-warning-weak: color-mix(in srgb, var(--mango-action) 20%, transparent);
+  --surface-warning-strong: var(--mango-action-text);
+  --surface-critical-base: color-mix(in srgb, var(--mango-error) 12%, transparent);
+  --surface-critical-weak: color-mix(in srgb, var(--mango-error) 18%, transparent);
+  --surface-critical-strong: var(--mango-error);
+  --surface-info-base: var(--mango-raised);
+  --surface-info-weak: var(--mango-raised);
+  --surface-info-strong: var(--mango-text-muted);
+  --surface-diff-unchanged-base: color-mix(in srgb, var(--mango-ground) 0%, transparent);
+  --surface-diff-skip-base: var(--mango-surface);
+  --surface-diff-hidden-base: var(--mango-raised);
+  --surface-diff-hidden-weak: var(--mango-surface);
+  --surface-diff-hidden-weaker: var(--mango-raised);
+  --surface-diff-hidden-strong: var(--mango-line);
+  --surface-diff-hidden-stronger: var(--mango-text-faint);
+  --surface-diff-add-base: color-mix(in srgb, var(--mango-ready) 12%, transparent);
+  --surface-diff-add-weak: color-mix(in srgb, var(--mango-ready) 8%, transparent);
+  --surface-diff-add-weaker: color-mix(in srgb, var(--mango-ready) 5%, transparent);
+  --surface-diff-add-strong: color-mix(in srgb, var(--mango-ready) 22%, transparent);
+  --surface-diff-add-stronger: var(--mango-ready);
+  --surface-diff-delete-base: color-mix(in srgb, var(--mango-error) 12%, transparent);
+  --surface-diff-delete-weak: color-mix(in srgb, var(--mango-error) 8%, transparent);
+  --surface-diff-delete-weaker: color-mix(in srgb, var(--mango-error) 5%, transparent);
+  --surface-diff-delete-strong: color-mix(in srgb, var(--mango-error) 22%, transparent);
+  --surface-diff-delete-stronger: var(--mango-error);
+  --base: var(--mango-surface);
+  --base2: var(--mango-surface);
+  --base3: var(--mango-surface);
+
+  /* Fields */
+  --input-base: var(--mango-ground);
+  --input-hover: var(--mango-ground);
+  --input-active: var(--mango-ground);
+  --input-selected: color-mix(in srgb, var(--mango-action) 24%, transparent);
+  --input-focus: var(--mango-ground);
+  --input-disabled: var(--mango-raised);
+
+  /* Text */
+  --text-base: var(--mango-text-muted);
+  --text-weak: var(--mango-text-muted);
+  --text-weaker: var(--mango-text-faint);
+  --text-strong: var(--mango-text);
+  --text-invert-base: light-dark(var(--mango-ground), var(--mango-text));
+  --text-invert-weak: light-dark(var(--mango-raised), var(--mango-text-muted));
+  --text-invert-weaker: light-dark(var(--mango-line), var(--mango-text-faint));
+  --text-invert-strong: light-dark(var(--mango-ground), var(--mango-text));
+  --text-interactive-base: var(--mango-action-text);
+  --text-on-brand-base: var(--mango-on-action);
+  --text-on-interactive-base: var(--mango-text);
+  --text-on-interactive-weak: var(--mango-text);
+  --text-on-success-base: var(--mango-text);
+  --text-on-critical-base: var(--mango-text);
+  --text-on-critical-weak: var(--mango-text);
+  --text-on-critical-strong: var(--mango-ground);
+  --text-on-warning-base: var(--mango-text);
+  --text-on-info-base: var(--mango-text);
+  --text-diff-add-base: var(--mango-ready);
+  --text-diff-delete-base: var(--mango-error);
+  --text-diff-delete-strong: var(--mango-error);
+  --text-diff-add-strong: var(--mango-ready);
+  --text-on-info-weak: var(--mango-text);
+  --text-on-info-strong: var(--mango-ground);
+  --text-on-warning-weak: var(--mango-text);
+  --text-on-warning-strong: var(--mango-ground);
+  --text-on-success-weak: var(--mango-text);
+  --text-on-success-strong: var(--mango-ground);
+  --text-on-brand-weak: var(--mango-on-action);
+  --text-on-brand-weaker: var(--mango-on-action);
+  --text-on-brand-strong: var(--mango-on-action);
+  --text-stronger: var(--mango-text);
+
+  /* Buttons */
+  --button-primary-base: var(--mango-text);
+  --button-secondary-base: var(--mango-raised);
+  --button-secondary-hover: color-mix(in srgb, var(--mango-raised) 60%, var(--mango-line));
+  --button-ghost-hover: color-mix(in srgb, var(--mango-text) 6%, transparent);
+  --button-ghost-hover2: color-mix(in srgb, var(--mango-text) 10%, transparent);
+
+  /* Borders */
+  --border-base: var(--mango-line);
+  --border-hover: var(--mango-text-faint);
+  --border-active: var(--mango-text-faint);
+  --border-selected: var(--mango-action-text);
+  --border-disabled: var(--mango-line);
+  --border-focus: var(--mango-action-text);
+  --border-weak-base: var(--mango-line);
+  --border-strong-base: var(--mango-text-faint);
+  --border-strong-hover: var(--mango-text-muted);
+  --border-strong-active: var(--mango-text-muted);
+  --border-strong-selected: color-mix(in srgb, var(--mango-action-text) 60%, transparent);
+  --border-strong-disabled: var(--mango-line);
+  --border-strong-focus: var(--mango-action-text);
+  --border-weak-hover: var(--mango-line);
+  --border-weak-active: var(--mango-text-faint);
+  --border-weak-selected: color-mix(in srgb, var(--mango-action-text) 50%, transparent);
+  --border-weak-disabled: color-mix(in srgb, var(--mango-line) 60%, transparent);
+  --border-weak-focus: var(--mango-action-text);
+  --border-weaker-base: color-mix(in srgb, var(--mango-line) 60%, transparent);
+  --border-interactive-base: color-mix(in srgb, var(--mango-action-text) 50%, transparent);
+  --border-interactive-hover: color-mix(in srgb, var(--mango-action-text) 70%, transparent);
+  --border-interactive-active: var(--mango-action-text);
+  --border-interactive-selected: var(--mango-action-text);
+  --border-interactive-disabled: var(--mango-line);
+  --border-interactive-focus: var(--mango-action-text);
+  --border-success-base: color-mix(in srgb, var(--mango-ready) 40%, transparent);
+  --border-success-hover: color-mix(in srgb, var(--mango-ready) 60%, transparent);
+  --border-success-selected: var(--mango-ready);
+  --border-warning-base: color-mix(in srgb, var(--mango-action-text) 40%, transparent);
+  --border-warning-hover: color-mix(in srgb, var(--mango-action-text) 60%, transparent);
+  --border-warning-selected: var(--mango-action-text);
+  --border-critical-base: color-mix(in srgb, var(--mango-error) 40%, transparent);
+  --border-critical-hover: color-mix(in srgb, var(--mango-error) 60%, transparent);
+  --border-critical-selected: var(--mango-error);
+  --border-info-base: var(--mango-line);
+  --border-info-hover: var(--mango-text-faint);
+  --border-info-selected: var(--mango-text-muted);
+  --border-color: var(--mango-line);
+
+  /* Icons */
+  --icon-base: var(--mango-text-muted);
+  --icon-hover: var(--mango-text);
+  --icon-active: var(--mango-text);
+  --icon-selected: var(--mango-text);
+  --icon-disabled: var(--mango-text-faint);
+  --icon-focus: var(--mango-text);
+  --icon-invert-base: var(--mango-ground);
+  --icon-weak-base: var(--mango-text-faint);
+  --icon-weak-hover: var(--mango-text-muted);
+  --icon-weak-active: var(--mango-text-muted);
+  --icon-weak-selected: var(--mango-text-muted);
+  --icon-weak-disabled: color-mix(in srgb, var(--mango-text-faint) 50%, transparent);
+  --icon-weak-focus: var(--mango-text-muted);
+  --icon-strong-base: var(--mango-text);
+  --icon-strong-hover: var(--mango-text);
+  --icon-strong-active: var(--mango-text);
+  --icon-strong-selected: var(--mango-text);
+  --icon-strong-disabled: var(--mango-text-faint);
+  --icon-strong-focus: var(--mango-text);
+  --icon-brand-base: var(--mango-text);
+  --icon-interactive-base: var(--mango-action-text);
+  --icon-success-base: var(--mango-ready);
+  --icon-success-hover: var(--mango-ready);
+  --icon-success-active: var(--mango-ready);
+  --icon-warning-base: var(--mango-action-text);
+  --icon-warning-hover: var(--mango-action-text);
+  --icon-warning-active: var(--mango-action-text);
+  --icon-critical-base: var(--mango-error);
+  --icon-critical-hover: var(--mango-error);
+  --icon-critical-active: var(--mango-error);
+  --icon-info-base: var(--mango-text-muted);
+  --icon-info-hover: var(--mango-text-muted);
+  --icon-info-active: var(--mango-text);
+  --icon-on-brand-base: var(--mango-on-action);
+  --icon-on-brand-hover: var(--mango-on-action);
+  --icon-on-brand-selected: var(--mango-on-action);
+  --icon-on-interactive-base: var(--mango-text);
+  --icon-agent-plan-base: light-dark(#b045b9, #6a83f5);
+  --icon-agent-docs-base: light-dark(#fbb23c, #cc6c1d);
+  --icon-agent-ask-base: light-dark(#2390f4, #c39571);
+  --icon-agent-build-base: var(--mango-action-text);
+  --icon-on-success-base: var(--mango-text);
+  --icon-on-success-hover: var(--mango-ground);
+  --icon-on-success-selected: var(--mango-ground);
+  --icon-on-warning-base: var(--mango-text);
+  --icon-on-warning-hover: var(--mango-ground);
+  --icon-on-warning-selected: var(--mango-ground);
+  --icon-on-critical-base: var(--mango-text);
+  --icon-on-critical-hover: var(--mango-ground);
+  --icon-on-critical-selected: var(--mango-ground);
+  --icon-on-info-base: var(--mango-text);
+  --icon-on-info-hover: var(--mango-ground);
+  --icon-on-info-selected: var(--mango-ground);
+  --icon-diff-add-base: var(--mango-ready);
+  --icon-diff-add-hover: var(--mango-ready);
+  --icon-diff-add-active: var(--mango-ready);
+  --icon-diff-delete-base: var(--mango-error);
+  --icon-diff-delete-hover: var(--mango-error);
+  --icon-diff-modified-base: var(--mango-action-text);
+
+  /* Formatted text */
+  --markdown-heading: var(--mango-text);
+  --markdown-text: var(--mango-text);
+  --markdown-link: var(--mango-action-text);
+  --markdown-link-text: var(--mango-action-text);
+  --markdown-code: var(--mango-text);
+  --markdown-block-quote: var(--mango-text-muted);
+  --markdown-emph: var(--mango-text);
+  --markdown-strong: var(--mango-text);
+  --markdown-horizontal-rule: var(--mango-line);
+  --markdown-list-item: var(--mango-text-muted);
+  --markdown-list-enumeration: var(--mango-text-muted);
+  --markdown-image: var(--mango-action-text);
+  --markdown-image-text: var(--mango-text-muted);
+  --markdown-code-block: var(--mango-text);
+
+  /* Code highlighting (content) */
+  --syntax-comment: var(--mango-text-muted);
+  --syntax-regexp: var(--text-base);
+  --syntax-string: light-dark(var(--v2-green-800), var(--v2-green-400));
+  --syntax-keyword: light-dark(var(--v2-pink-800), var(--v2-pink-400));
+  --syntax-primitive: light-dark(var(--v2-pink-800), var(--v2-pink-400));
+  --syntax-operator: light-dark(var(--text-base), var(--text-weak));
+  --syntax-variable: var(--text-strong);
+  --syntax-property: light-dark(var(--v2-orange-800), var(--v2-orange-400));
+  --syntax-type: light-dark(var(--v2-purple-800), var(--v2-purple-400));
+  --syntax-constant: light-dark(#007b80, #93e9f6);
+  --syntax-punctuation: light-dark(var(--text-base), var(--text-weak));
+  --syntax-object: var(--text-strong);
+  --syntax-success: light-dark(#197414, #40f98d);
+  --syntax-warning: light-dark(#805711, #ffc6a1);
+  --syntax-critical: light-dark(var(--v2-red-800), var(--v2-red-400));
+  --syntax-info: light-dark(#8c1896, #d3deff);
+  --syntax-diff-add: var(--mango-ready);
+  --syntax-diff-delete: var(--mango-error);
+  --syntax-diff-unknown: light-dark(#a753ae, #edb2f1);
+
+  /* Avatars (content) */
+  --avatar-background-pink: light-dark(#feeef8, #501b3f);
+  --avatar-background-mint: light-dark(#e1fbf4, #033a34);
+  --avatar-background-orange: light-dark(#fff1e7, #5f2a06);
+  --avatar-background-purple: light-dark(#f9f1fe, #432155);
+  --avatar-background-cyan: light-dark(#e7f9fb, #0f3058);
+  --avatar-background-lime: light-dark(#eefadc, #2b3711);
+  --avatar-text-pink: light-dark(#cd1d8d, #e34ba9);
+  --avatar-text-mint: light-dark(#147d6f, #95f3d9);
+  --avatar-text-orange: light-dark(#ed5f00, #ff802b);
+  --avatar-text-purple: light-dark(#8445bc, #9d5bd2);
+  --avatar-text-cyan: light-dark(#0894b3, #369eff);
+  --avatar-text-lime: light-dark(#5d770d, #c4f042);
+
+  /* Background, v2 names */
+  --v2-background-bg-base: var(--mango-surface);
+  --v2-background-bg-deep: var(--mango-ground);
+  --v2-background-bg-layer-01: var(--mango-raised);
+  --v2-background-bg-layer-02: var(--mango-line);
+  --v2-background-bg-layer-03: color-mix(in srgb, var(--mango-line) 60%, var(--mango-text-faint));
+  --v2-background-bg-layer-04: var(--mango-text-faint);
+  --v2-background-bg-inverse: var(--mango-text);
+  --v2-background-bg-contrast: var(--mango-raised);
+  --v2-background-bg-button-neutral: var(--mango-raised);
+  --v2-background-bg-accent: var(--mango-action);
+
+  /* Text, v2 names */
+  --v2-text-text-base: var(--mango-text);
+  --v2-text-text-muted: var(--mango-text-muted);
+  --v2-text-text-faint: var(--mango-text-faint);
+  --v2-text-text-inverse: var(--mango-ground);
+  --v2-text-text-contrast: var(--mango-text);
+  --v2-text-text-accent: var(--mango-action-text);
+  --v2-text-text-accent-hover: var(--mango-action-text);
+  --v2-text-text-code-accent: var(--mango-action-text);
+
+  /* Icon, v2 names */
+  --v2-icon-icon-base: var(--mango-text);
+  --v2-icon-icon-muted: var(--mango-text-muted);
+  --v2-icon-icon-inverse: var(--mango-ground);
+  --v2-icon-icon-contrast: var(--mango-text);
+  --v2-icon-icon-accent: var(--mango-action-text);
+  --v2-icon-icon-accent-hover: var(--mango-action-text);
+
+  /* Border, v2 names */
+  --v2-border-border-muted: color-mix(in srgb, var(--mango-line) 60%, transparent);
+  --v2-border-border-base: var(--mango-line);
+  --v2-border-border-strong: var(--mango-text-faint);
+  --v2-border-border-inverse: var(--mango-text);
+  --v2-border-border-focus: var(--mango-action-text);
+
+  /* Overlay, v2 names */
+  --v2-overlay-simple-overlay-hover: color-mix(in srgb, var(--mango-text) 6%, transparent);
+  --v2-overlay-simple-overlay-pressed: color-mix(in srgb, var(--mango-text) 10%, transparent);
+  --v2-overlay-simple-overlay-contrast-hover: color-mix(in srgb, var(--mango-text) 6%, transparent);
+  --v2-overlay-simple-overlay-contrast-pressed: color-mix(in srgb, var(--mango-text) 10%, transparent);
+  --v2-overlay-simple-overlay-scrim: light-dark(color-mix(in srgb, var(--mango-text) 40%, transparent), color-mix(in srgb, var(--mango-ground) 70%, transparent));
+  --v2-overlay-gradient-depth-overlay-depth-top: var(--mango-surface);
+  --v2-overlay-gradient-depth-overlay-depth-bot: color-mix(in srgb, var(--mango-surface) 0%, transparent);
+  --v2-overlay-simple-tab-active-scrim: color-mix(in srgb, var(--mango-raised) 0%, transparent);
+  --v2-overlay-simple-tab-hover-scrim: color-mix(in srgb, var(--mango-line) 0%, transparent);
+  --v2-overlay-simple-tab-scrim: color-mix(in srgb, var(--mango-ground) 0%, transparent);
+
+  /* State, v2 names */
+  --v2-state-bg-success: color-mix(in srgb, var(--mango-ready) 12%, transparent);
+  --v2-state-fg-success: var(--mango-ready);
+  --v2-state-border-success: color-mix(in srgb, var(--mango-ready) 40%, transparent);
+  --v2-state-bg-warning: color-mix(in srgb, var(--mango-action) 14%, transparent);
+  --v2-state-fg-warning: var(--mango-action-text);
+  --v2-state-border-warning: color-mix(in srgb, var(--mango-action-text) 40%, transparent);
+  --v2-state-bg-danger: color-mix(in srgb, var(--mango-error) 12%, transparent);
+  --v2-state-fg-danger: var(--mango-error);
+  --v2-state-border-danger: color-mix(in srgb, var(--mango-error) 40%, transparent);
+  --v2-state-bg-info: var(--mango-raised);
+  --v2-state-fg-info: var(--mango-text-muted);
+  --v2-state-border-info: var(--mango-line);
+  --v2-agent-build-solid: var(--mango-action-text);
+  --v2-agent-build-border: color-mix(in srgb, var(--mango-action-text) 20%, transparent);
+  --v2-agent-build-background: color-mix(in srgb, var(--mango-action) 8%, transparent);
+
+  /* Illustration, v2 names */
+  --v2-illustration-illustration-layer-01: var(--mango-raised);
+  --v2-illustration-illustration-layer-02: var(--mango-line);
+  --v2-illustration-illustration-layer-03: var(--mango-text-faint);
+
+  /* Edges in place of shadows */
+  --v2-elevation-raised: 0 0 0 1px var(--mango-line);
+  --v2-elevation-floating: 0 0 0 1px var(--mango-line);
+  --v2-elevation-overlay: 0 0 0 1px var(--mango-line);
+  --v2-elevation-button-neutral: 0 0 0 1px var(--mango-line);
+  --v2-elevation-button-contrast: 0 0 0 1px var(--mango-line);
+  --v2-elevation-elements: 0 0 0 0 transparent;
+  --v2-elevation-switch-off: 0 0 0 0 transparent;
+  --v2-elevation-switch-on: 0 0 0 0 transparent;
+  --shadow-xs: 0 0 0 0 transparent;
+  --shadow-md: 0 0 0 1px var(--mango-line);
+  --shadow-lg: 0 0 0 1px var(--mango-line);
+  --shadow-xxs-border: 0 0 0 1px var(--mango-line);
+  --shadow-xs-border: 0 0 0 1px var(--mango-line);
+  --shadow-xs-border-base: 0 0 0 1px var(--mango-line);
+  --shadow-lg-border-base: 0 0 0 1px var(--mango-line);
+  --shadow-xs-border-hover: 0 0 0 1px var(--mango-text-faint);
+  --shadow-xs-border-select: 0 0 0 1px var(--mango-action-text);
+  --shadow-xs-border-focus: 0 0 0 2px var(--mango-action-text);
+  --shadow-xs-border-critical-base: 0 0 0 1px var(--mango-error);
+  --shadow-xs-border-critical-focus: 0 0 0 2px var(--mango-error);
+}

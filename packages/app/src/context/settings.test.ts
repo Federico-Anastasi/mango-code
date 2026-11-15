@@ -1,11 +1,13 @@
 import { describe, expect, test } from "bun:test"
 import {
+  defaultImageSettings,
   hasExistingWebState,
   isAppUpgrade,
   layoutTransitionState,
   maximumSunsetTimeout,
   newLayoutDesignsDefault,
   nextSunsetCheckDelay,
+  readRewriter,
   resolveNewLayoutDesigns,
   shouldDisplayTabsToast,
   shouldEnableNewLayout,
@@ -75,5 +77,25 @@ describe("layout transition", () => {
     expect(shouldEnableNewLayout("1.17.20", "1.17.21")).toBe(false)
     expect(shouldEnableNewLayout(undefined, "1.17.19")).toBe(false)
     expect(shouldEnableNewLayout("dev", "1.17.20")).toBe(false)
+  })
+})
+
+describe("the settings of the pictures", () => {
+  test("a request is rewritten by default, by the automatic choice", () => {
+    expect(defaultImageSettings).toEqual({ rewrite: true, rewriter: null })
+  })
+
+  test("a saved rewriter is a provider and a model; anything else reads as the automatic choice", () => {
+    expect(readRewriter({ providerID: "mango", modelID: "ling" })).toEqual({ providerID: "mango", modelID: "ling" })
+    expect(readRewriter({ providerID: "mango", modelID: "ling", extra: 1 })).toEqual({
+      providerID: "mango",
+      modelID: "ling",
+    })
+    expect(readRewriter(null)).toBeNull()
+    expect(readRewriter(undefined)).toBeNull()
+    expect(readRewriter("ling")).toBeNull()
+    expect(readRewriter({ providerID: "mango" })).toBeNull()
+    expect(readRewriter({ providerID: "", modelID: "ling" })).toBeNull()
+    expect(readRewriter({ providerID: "mango", modelID: 3 })).toBeNull()
   })
 })

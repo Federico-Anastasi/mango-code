@@ -39,7 +39,6 @@ import { Icon as IconV2 } from "@opencode-ai/ui/v2/icon"
 import { IconButtonV2 } from "@opencode-ai/ui/v2/icon-button-v2"
 import { MenuV2 } from "@opencode-ai/ui/v2/menu-v2"
 import { TooltipV2 } from "@opencode-ai/ui/v2/tooltip-v2"
-import { IconButton } from "@opencode-ai/ui/icon-button"
 import { Select } from "@opencode-ai/ui/select"
 import { useDialog } from "@opencode-ai/ui/context/dialog"
 import { ModelSelectorPopover, ModelSelectorPopoverV2 } from "@/components/dialog-select-model"
@@ -1387,7 +1386,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
         onSubmit={handleSubmit}
         classList={{
           "group/prompt-input": true,
-          "border-icon-info-active border-dashed": store.draggingType !== null,
+          "border-[var(--mango-action-text)] border-dashed": store.draggingType !== null,
           [props.class ?? ""]: !!props.class,
         }}
       >
@@ -1503,14 +1502,17 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                 <PromptVoiceButton onText={dictation.final} onPartial={dictation.partial} onClear={dictation.clear} />
               </Show>
               <Tooltip placement="top" inactive={!working() && blank()} value={tip()}>
-                <IconButton
+                <IconButtonV2
                   data-action="prompt-submit"
                   type="submit"
                   disabled={!working() && blank()}
                   tabIndex={store.mode === "normal" ? undefined : -1}
-                  icon={stopping() ? "stop" : store.mode === "shell" ? "arrow-undo-down" : "arrow-up"}
+                  icon={
+                    <IconV2 name={stopping() ? "stop-square" : store.mode === "shell" ? "arrow-undo-down" : "arrow-up"} />
+                  }
                   variant="primary"
-                  class="size-8"
+                  size="large"
+                  class="rounded-[7px]"
                   aria-label={stopping() ? language.t("prompt.action.stop") : language.t("prompt.action.send")}
                 />
               </Tooltip>

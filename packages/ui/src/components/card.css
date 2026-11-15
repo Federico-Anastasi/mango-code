@@ -75,12 +75,6 @@
     color: var(--v2-text-text-faint);
   }
 
-  :where([data-slot="card-title-icon"])
-    [data-slot="icon-svg"]
-    :is(path, line, polyline, polygon, rect, circle, ellipse)[stroke] {
-    stroke-width: 1.5px !important;
-  }
-
   :where([data-card="description"], [data-slot="card-description"]) {
     color: var(--v2-text-text-muted);
     white-space: pre-wrap;

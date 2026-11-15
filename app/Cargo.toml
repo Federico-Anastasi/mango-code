@@ -7,11 +7,12 @@ members = [
     "crates/agent-cfg",
     "crates/voice",
     "crates/engine",
+    "crates/images",
     "crates/phone",
 ]
 
 [workspace.package]
-version = "0.1.4"
+version = "0.1.5"
 edition = "2021"
 license = "AGPL-3.0-or-later"
 
@@ -21,6 +22,7 @@ engine-cfg = { path = "crates/engine-cfg" }
 agent-cfg = { path = "crates/agent-cfg" }
 voice = { path = "crates/voice" }
 engine = { path = "crates/engine" }
+images = { path = "crates/images" }
 phone = { path = "crates/phone" }
 anyhow = "1"
 serde = { version = "1", features = ["derive"] }

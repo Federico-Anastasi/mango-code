@@ -1,9 +1,9 @@
 // mango-code: the settings, a whole page in a tab of the app (the chat goes on in its own tab): six sections and a search
 // that finds every setting (`settings-index.ts`). Every way in opens it on its section through `useOpenSettings`; the
 // gear opens it on the last section seen. On a phone it is two screens: the sections, then the one chosen.
-import { Icon } from "@opencode-ai/ui/icon"
+import { Tag } from "@opencode-ai/ui/v2/badge-v2"
+import { ButtonV2 } from "@opencode-ai/ui/v2/button-v2"
 import { Icon as IconV2 } from "@opencode-ai/ui/v2/icon"
-import { IconButtonV2 } from "@opencode-ai/ui/v2/icon-button-v2"
 import { TextInputV2 } from "@opencode-ai/ui/v2/text-input-v2"
 import { createMediaQuery } from "@solid-primitives/media"
 import { useNavigate, useSearchParams } from "@solidjs/router"
@@ -31,6 +31,7 @@ import { useAnswering } from "./answering"
 import { SettingsComputer } from "./computer"
 import { ControlProvider } from "./control"
 import { SettingsGeneral } from "./general"
+import { PaneHeader } from "./header"
 import { SettingsHelp } from "./help"
 import { SettingsLinks } from "./links"
 import { SettingsModels } from "./models"
@@ -39,14 +40,9 @@ import { isSection, searchSettings, SECTIONS, SETTINGS_INDEX, type Found, type S
 import "../settings-v2/settings-v2.css"
 import "./settings-page.css"
 
-const ICONS = {
-  models: "models",
-  computer: "server",
-  agent: "brain",
-  links: "link",
-  general: "sliders",
-  help: "help",
-} as const
+/** The sections of Mango Code come first; General and Help, the same in every Mango app, follow after a line. */
+const COMMON = ["general", "help"] as const satisfies readonly SettingsSection[]
+const OWN = SECTIONS.filter((value) => !(COMMON as readonly SettingsSection[]).includes(value))
 
 /** The titles a search result brings into view, and the rows they mark. */
 const FOUND_TITLES =
@@ -76,7 +72,8 @@ export const SettingsPage: Component = () => {
   const navigate = useNavigate()
   const [search] = useSearchParams<{ section?: string; focus?: string }>()
   const [memory, setMemory] = persisted(Persist.global("settings.page"), createStore({ section: "models" as string }))
-  const phone = createMediaQuery("(max-width: 767px)")
+  // below 640 px the first screen is the list of sections and a section opens on its own
+  const phone = createMediaQuery("(max-width: 639px)")
   const [query, setQuery] = createSignal("")
   // on a phone: the list of sections until one is chosen
   const [chosen, setChosen] = createSignal(!!search.section)
@@ -158,10 +155,10 @@ export const SettingsPage: Component = () => {
       <div class="settings-page" data-component="settings-page" data-phone-page={phone() && chosen() ? "" : undefined}>
         <nav class="settings-page-nav" aria-label={language.t("sidebar.settings")}>
           <div class="settings-page-search" data-action="settings-search">
-            <IconV2 name="magnifying-glass" />
             <TextInputV2
               type="search"
               appearance="base"
+              leadingIcon={<IconV2 name="magnifying-glass" />}
               value={query()}
               onInput={(event) => {
                 setQuery(event.currentTarget.value)
@@ -174,42 +171,50 @@ export const SettingsPage: Component = () => {
             />
           </div>
           <div class="settings-page-sections">
-            <For each={SECTIONS}>
-              {(value) => (
-                <button
-                  type="button"
-                  class="settings-page-section-button"
-                  aria-current={!query() && section() === value ? "page" : undefined}
-                  data-section={value}
-                  onClick={() => go(value)}
-                >
-                  <Icon name={ICONS[value]} />
-                  {language.t(TITLES[value])}
-                </button>
+            <For each={[OWN, COMMON]}>
+              {(group, index) => (
+                <>
+                  <Show when={index() > 0}>
+                    <hr />
+                  </Show>
+                  <For each={group}>
+                    {(value) => (
+                      <button
+                        type="button"
+                        class="settings-page-section-button"
+                        aria-current={!query() && section() === value ? "page" : undefined}
+                        data-section={value}
+                        onClick={() => go(value)}
+                      >
+                        {language.t(TITLES[value])}
+                      </button>
+                    )}
+                  </For>
+                </>
               )}
             </For>
           </div>
           <div class="settings-v2-nav-footer">
-            <span>{language.t("app.name.desktop")}</span>
-            <span>v{mangoVersion}</span>
+            {language.t("app.name.desktop")} {mangoVersion}
           </div>
         </nav>
 
         <main class="settings-page-main" ref={main}>
           <Show when={phone()}>
             <div class="settings-v2-phone-bar">
-              <IconButtonV2
+              <ButtonV2
                 type="button"
-                variant="ghost-muted"
+                variant="ghost"
                 size="large"
-                class="!size-11 shrink-0"
-                icon={<IconV2 name="chevron-left" />}
-                aria-label={language.t("common.goBack")}
+                icon="chevron-left"
+                data-action="settings-back"
                 onClick={() => {
                   setQuery("")
                   setChosen(false)
                 }}
-              />
+              >
+                {language.t("settings.back")}
+              </ButtonV2>
               <h2>{query() ? language.t("settings.search.results") : language.t(TITLES[section()])}</h2>
             </div>
           </Show>
@@ -233,6 +238,7 @@ const Results: Component<{ found: Found[]; onPick: (item: Found) => void }> = (p
   const language = useLanguage()
   return (
     <div class="settings-page-pane" data-slot="settings-search-results">
+      <PaneHeader title={language.t("settings.search.results")} />
       <Show when={props.found.length} fallback={<p class="settings-page-note">{language.t("settings.search.none")}</p>}>
         <div class="settings-page-box">
           <For each={props.found}>
@@ -249,7 +255,7 @@ const Results: Component<{ found: Found[]; onPick: (item: Found) => void }> = (p
                     <span class="settings-page-row-line">{item.description}</span>
                   </Show>
                 </span>
-                <span class="settings-page-pill">{language.t(TITLES[item.section])}</span>
+                <Tag>{language.t(TITLES[item.section])}</Tag>
               </button>
             )}
           </For>
@@ -261,12 +267,6 @@ const Results: Component<{ found: Found[]; onPick: (item: Found) => void }> = (p
 
 /** One section of the page. */
 const Pane: Component<{ section: SettingsSection; focus?: string }> = (props) => {
-  const language = useLanguage()
-  const header = (
-    <div class="settings-page-pane-header">
-      <h2 class="settings-page-pane-title">{language.t(TITLES[props.section])}</h2>
-    </div>
-  )
   return (
     <div class="settings-page-pane settings-v2-panel" data-pane={props.section}>
       <Switch>
@@ -274,14 +274,12 @@ const Pane: Component<{ section: SettingsSection; focus?: string }> = (props) =>
           <SettingsModels focus={props.focus} />
         </Match>
         <Match when={props.section === "computer"}>
-          {header}
           <SettingsComputer />
         </Match>
         <Match when={props.section === "agent"}>
           <SettingsAgent focus={props.focus} />
         </Match>
         <Match when={props.section === "links"}>
-          {header}
           <SettingsLinks />
         </Match>
         <Match when={props.section === "general"}>

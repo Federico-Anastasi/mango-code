@@ -50,6 +50,7 @@ import { DiffChanges } from "@opencode-ai/ui/diff-changes"
 import { Markdown } from "./markdown"
 import { ImagePreview } from "@opencode-ai/ui/image-preview"
 import { ToolImages } from "./tool-images"
+import { PictureTool } from "./picture-tool"
 import { getDirectory as _getDirectory, getFilename } from "@opencode-ai/core/util/path"
 import { AttachmentCardV2 } from "../v2/components/attachment-card-v2"
 import { CommentCardV2 } from "../v2/components/comment-card-v2"
@@ -1131,7 +1132,7 @@ export function ContextToolGroup(props: {
   const elapsed = createElapsed(range)
   const elapsedLabel = () => {
     const ms = elapsed()
-    return ms !== undefined && ms >= 1000 ? `· ${formatDuration(ms, i18n.t)}` : undefined
+    return ms !== undefined && ms >= 1000 ? formatDuration(ms, i18n.t) : undefined
   }
   const summary = createMemo(() => contextToolSummary(props.parts))
   const handleOpenChange = (value: boolean) => {
@@ -1149,10 +1150,10 @@ export function ContextToolGroup(props: {
       data-timeline-part-ids={props.parts.map((part) => part.id).join(",")}
     >
       <Collapsible.Trigger>
-        <div data-component="context-tool-group-trigger">
+        <div data-component="context-tool-group-trigger" data-status={pending() ? "running" : "completed"}>
           <span
             data-slot="context-tool-group-title"
-            class="min-w-0 flex items-center gap-2 text-14-medium text-text-strong"
+            class="min-w-0 flex items-center gap-2"
           >
             <span data-slot="context-tool-group-label" class="shrink-0">
               <ToolStatusTitle
@@ -1184,12 +1185,11 @@ export function ContextToolGroup(props: {
                 fallback=""
               />
             </span>
-            <Show when={elapsedLabel()}>
-              <span data-slot="context-tool-group-time" class="shrink-0 font-normal text-text-weak tabular-nums">
-                {elapsedLabel()}
-              </span>
-            </Show>
           </span>
+          <span data-slot="basic-tool-tool-outcome" aria-hidden="true" />
+          <Show when={elapsedLabel()}>
+            <span data-slot="context-tool-group-time">{elapsedLabel()}</span>
+          </Show>
           <Collapsible.Arrow />
         </div>
       </Collapsible.Trigger>
@@ -1564,6 +1564,8 @@ export interface ToolProps {
   onContentRendered?: () => void
   forceOpen?: boolean
   locked?: boolean
+  /** What the tool attached to its result (the picture of `image_generate`). */
+  attachments?: FilePart[]
 }
 
 export type ToolComponent = Component<ToolProps>
@@ -1597,7 +1599,7 @@ function ToolFileAccordion(props: { path: string; actions?: JSX.Element; childre
     <Accordion
       multiple
       data-scope="apply-patch"
-      style={{ "--sticky-accordion-offset": "calc(32px + var(--tool-content-gap))" }}
+      style={{ "--sticky-accordion-offset": "calc(var(--tool-row-height) + var(--tool-content-gap))" }}
       defaultValue={[value()]}
     >
       <Accordion.Item value={value()}>
@@ -1625,6 +1627,8 @@ function ToolFileAccordion(props: { path: string; actions?: JSX.Element; childre
     </Accordion>
   )
 }
+
+ToolRegistry.register({ name: "image_generate", render: PictureTool })
 
 PART_MAPPING["tool"] = function ToolPartDisplay(props) {
   const data = useData()
@@ -1671,6 +1675,10 @@ PART_MAPPING["tool"] = function ToolPartDisplay(props) {
     ),
   )
   const render = createMemo(() => ToolRegistry.render(part().tool) ?? GenericTool)
+  // A picture that was stopped is not a failure: its row says so, like the one of a picture that goes on.
+  const stoppedPicture = () => part().tool === "image_generate" && partMetadata().stopped === true
+  // Nor is one that could not be made for want of a model that draws: its row says so and offers to get one.
+  const missingPicture = () => part().tool === "image_generate" && partMetadata().missing === true
   const completedAttachments = () => {
     const state = part().state
     return state.status === "completed" ? state.attachments : undefined
@@ -1682,7 +1690,9 @@ PART_MAPPING["tool"] = function ToolPartDisplay(props) {
     <Show when={!hideQuestion()}>
       <div data-component="tool-part-wrapper" data-timeline-part-id={part().id}>
         <Switch>
-          <Match when={part().state.status === "error" && (part().state as any).error}>
+          <Match
+            when={part().state.status === "error" && !stoppedPicture() && !missingPicture() && (part().state as any).error}
+          >
             {(error) => {
               const cleaned = error().replace("Error: ", "")
               if (part().tool === "question" && cleaned.includes("dismissed this question")) {
@@ -1704,7 +1714,9 @@ PART_MAPPING["tool"] = function ToolPartDisplay(props) {
                   defaultOpen={props.defaultOpen}
                   open={controlledOpen()}
                   onOpenChange={props.onToolOpenChange ? handleToolOpenChange : undefined}
-                  subtitle={taskSubtitle() ?? toolErrorMessage(part().tool, cleaned, i18n.t)}
+                  subtitle={
+                    taskSubtitle() ?? (part().tool === "image_generate" ? cleaned : toolErrorMessage(part().tool, cleaned, i18n.t))
+                  }
                   href={taskHref()}
                   onSubtitleClick={(event) => {
                     if (!data.navigateToSession) return
@@ -1737,8 +1749,11 @@ PART_MAPPING["tool"] = function ToolPartDisplay(props) {
               deferContent={props.deferToolContent}
               virtualizeDiff={props.virtualizeDiff}
               onContentRendered={props.onContentRendered}
+              attachments={completedAttachments()}
             />
-            <ToolImages attachments={completedAttachments()} />
+            <Show when={part().tool !== "image_generate"}>
+              <ToolImages attachments={completedAttachments()} />
+            </Show>
           </Match>
         </Switch>
       </div>
@@ -1918,7 +1933,7 @@ PART_MAPPING["reasoning"] = function ReasoningPartDisplay(props) {
   return (
     <Show when={text()}>
       <div data-component="reasoning-part" data-timeline-part-id={part().id}>
-        <Collapsible open={open()} onOpenChange={setOpen} variant="ghost" class="tool-collapsible">
+        <Collapsible open={open()} onOpenChange={setOpen} variant="ghost" class="reasoning-collapsible">
           <Collapsible.Trigger>
             <div data-slot="reasoning-part-trigger">
               <span data-slot="reasoning-part-label" class="text-14-medium text-text-weak">
@@ -2214,7 +2229,7 @@ ToolRegistry.register({
                 <span data-component="task-tool-spinner" style={{ color: tone() ?? "var(--icon-interactive-base)" }}>
                   <Show when={newLayout()} fallback={<Spinner />}>
                     <SessionProgressIndicatorV2
-                      style={{ color: v2Tone() ?? "light-dark(var(--v2-text-text-base), #ffffff)" }}
+                      style={{ color: v2Tone() ?? "var(--v2-text-text-base)" }}
                     />
                   </Show>
                 </span>
@@ -2536,7 +2551,7 @@ ToolRegistry.register({
                 <Accordion
                   multiple
                   data-scope="apply-patch"
-                  style={{ "--sticky-accordion-offset": "calc(32px + var(--tool-content-gap))" }}
+                  style={{ "--sticky-accordion-offset": "calc(var(--tool-row-height) + var(--tool-content-gap))" }}
                   value={expanded()}
                   onChange={(value) => setExpanded(Array.isArray(value) ? value : value ? [value] : [])}
                 >
@@ -2755,7 +2770,7 @@ ToolRegistry.register({
     const subtitle = createMemo(() => {
       const count = questions().length
       if (count === 0) return ""
-      if (completed()) return i18n.t("ui.question.subtitle.answered", { count })
+      if (completed()) return i18n.plural("ui.question.subtitle.answered", count)
       return `${count} ${i18n.t(count > 1 ? "ui.common.question.other" : "ui.common.question.one")}`
     })
 

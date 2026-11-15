@@ -1,4 +1,4 @@
-//! "Share the engine with my PCs", in the settings: turns the sharing of the engine on and off (`engine::share`),
+//! "Lend the engine to my PCs", in the settings: turns the sharing of the engine on and off (`engine::share`),
 //! gives the codes to copy and renews the key. The commands go through the bridge: only the app window sees them.
 
 use crate::bridge::{err, shown, BridgeError};

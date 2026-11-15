@@ -365,7 +365,7 @@ fn the_contexts_offered_end_with_the_largest_that_fits() {
 
 // --- the PC of issue 2 ----------------------------------------------------------------------------------------
 
-/// Issue 2: a GeForce GT 710 of 2 GB (read from DXGI, without CUDA), Core Ultra 5 245K with 14 cores and 16 GB of RAM:
+/// Issue #2: a GeForce GT 710 of 2 GB (read from DXGI, without CUDA), Core Ultra 5 245K with 14 cores and 16 GB of RAM:
 /// the models that fit go on the processor and the card doesn't count, also for the list of cards.
 #[test]
 fn the_pc_of_issue_2_runs_its_models_on_the_processor() {

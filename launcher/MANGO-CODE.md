@@ -79,7 +79,7 @@ agent `team` of the app's server, dev and agents are hidden `opencode serve` pro
 
 | Port | Process | Note |
 |---|---|---|
-| 8080 | the app's engine manager (and under it llama-server) | the active model |
+| 47080 | the app's engine manager (and under it llama-server) | the active model |
 | 4096 | the agent's server: the web interface | |
 | 4097 | the dictation service | |
 | 4090-4095 | the Team: dev, agents | |
@@ -101,11 +101,11 @@ connection to your Chrome fails (Chrome closed, its "Allow remote debugging?" de
 "Use my Chrome" off, the agent drops it and goes back to the panel.
 
 A file path given to a browser tool with no folder before it (`filePath`: `mail\last-run.json`) is taken from the project
-folder; one that leaves the project is refused, as before.
+folder; one that leaves the project is refused.
 
 Your Chrome shows "Allow remote debugging?" at every connection: it does so on purpose on the default profile, and since
-Chrome 136 no program can turn that debugging on for you. When the agent finishes a site it opens it in the panel, with a
-local server or the project's own dev server; in your own browser only if you ask.
+Chrome 136 no program can turn that debugging on for you. When the agent finishes a site it opens it in the panel, by the
+page's file (the app serves its folder) or with the project's own dev server; in your own browser only if you ask.
 
 ## The models (`mango-models.json`)
 
@@ -197,8 +197,8 @@ measured on its hardware. The agent's config uses the **effective** ctx of the l
 | `mango-websearch-mcp.js` | our own web search MCP: direct scrapers + Readability |
 | `mango-chrome-mcp.mjs`, `mango-mcp-stdout.cjs`, `mango-mcp-watchdog.cjs` | the browser MCP wrapper, its output thread and its freeze guard |
 | `mango-plugin/skills/` | the skills |
-| `mango-models.json` | **the models**: paths, HF repos with sha256, maximum context, memory. Single source |
-| `mango-engines.json` | the engines to download: official llama.cpp and our two forks, with url, size and sha256 of every build |
+| `mango-models.json` | **the models**: paths, HF repos with sha256, maximum context, memory; the ones that make images are marked `image` and stay out of `order`. Single source |
+| `mango-engines.json` | the engines to download: official llama.cpp, our two forks, and stable-diffusion.cpp (`sd`) for the models that make images, with url, size and sha256 of every build |
 | `profiles/3060ti-1080-1660s/` | **the profiles for the RTX 3060 Ti + GTX 1080 + GTX 1660 SUPER**: for each model engine, arguments, env, context and measured notes. The app reads them (`engine-cfg`) |
 | `chat-templates/` | the Jinja chat templates passed to llama-server, one per model |
 | `opencode/` | the agent built from the repo, `web/mango-code.exe` (`app/scripts/build-agent.ps1`). Generated, gitignored |

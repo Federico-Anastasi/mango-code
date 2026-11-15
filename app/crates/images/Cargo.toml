@@ -1,0 +1,25 @@
+[package]
+name = "images"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+mango-common.workspace = true
+engine-cfg.workspace = true
+engine.workspace = true
+anyhow.workspace = true
+base64 = "0.23"
+serde.workspace = true
+serde_json.workspace = true
+tiny_http = "0.12"
+ureq.workspace = true
+
+# A fake sd-server (status, jobs with steps and preview): used by the manager tests, without GPUs.
+[[bin]]
+name = "fake-sd"
+path = "src/bin/fake-sd.rs"
+test = false
+
+[dev-dependencies]
+tempfile = "3.27.0"

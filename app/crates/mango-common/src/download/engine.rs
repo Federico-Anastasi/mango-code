@@ -1,5 +1,6 @@
-//! Installing engines (llama.cpp and our forks) from the `mango-engines.json` catalog:
-//! `<engines>/<engine>/<version>-<build>/llama-server.exe`.
+//! Installing engines (llama.cpp, our forks, and the one that makes images) from the `mango-engines.json` catalog:
+//! `<engines>/<engine>/<version>-<build>/<program>`, where the program is `llama-server.exe` unless the catalog names
+//! another (`exe`).
 
 use super::{download_stoppable, with_suffix, RemoteFile};
 use crate::{tr, user_text, Build, Paths};
@@ -13,12 +14,16 @@ use std::process::{Command, Stdio};
 use std::sync::atomic::AtomicBool;
 use std::time::{Duration, Instant};
 
-const EXE: &str = "llama-server.exe";
+const LLAMA_SERVER: &str = "llama-server.exe";
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Deserialize)]
 struct Engine {
     version: String,
+    /// The program the engine is started with, in its folder: the one whose presence says the engine is installed, and
+    /// the one asked for `--version` and `--list-devices`.
+    #[serde(default = "llama_server")]
+    exe: String,
     /// `false` for the engine that can't list GPUs (`--list-devices`): for CUDA it's enough that it starts.
     #[serde(default = "default_true")]
     gpu_check: bool,
@@ -27,6 +32,10 @@ struct Engine {
 
 fn default_true() -> bool {
     true
+}
+
+fn llama_server() -> String {
+    LLAMA_SERVER.to_string()
 }
 
 #[derive(Deserialize)]
@@ -72,18 +81,27 @@ pub fn has_build(paths: &Paths, engine: &str, build: Build) -> bool {
     catalog(paths).is_ok_and(|c| c.get(engine).is_some_and(|m| m.build.contains_key(build.as_str())))
 }
 
-/// The folder with `llama-server.exe` for this engine and build, if it's already there: the downloaded one of the
+/// The folder with the engine's program for this engine and build, if it's already there: the downloaded one of the
 /// catalog's version, or (only for CUDA 12, as `build-engines.ps1` builds them, for the PC's cards) the old
 /// `<engines>\<engine>` of development from source.
 pub fn installed_engine(paths: &Paths, engine: &str, build: Build) -> Option<PathBuf> {
-    if let Some(m) = catalog(paths).ok().and_then(|mut c| c.remove(engine)) {
-        let d = engine_dir(paths, engine, &m, build);
-        if d.join(EXE).is_file() {
-            return Some(d);
+    installed_program(paths, engine, build).and_then(|exe| exe.parent().map(Path::to_path_buf))
+}
+
+/// The program of an installed engine (`installed_engine`), to start it.
+pub fn installed_program(paths: &Paths, engine: &str, build: Build) -> Option<PathBuf> {
+    let exe = match catalog(paths).ok().and_then(|mut c| c.remove(engine)) {
+        Some(m) => {
+            let program = engine_dir(paths, engine, &m, build).join(&m.exe);
+            if program.is_file() {
+                return Some(program);
+            }
+            m.exe
         }
-    }
-    let old = paths.engines.join(engine);
-    (build.cuda_major() == Some(12) && old.join(EXE).is_file()).then_some(old)
+        None => llama_server(),
+    };
+    let old = paths.engines.join(engine).join(exe);
+    (build.cuda_major() == Some(12) && old.is_file()).then_some(old)
 }
 
 /// An engine of the catalog has a version other than the catalog's on the disk for `build`: the app came with a new
@@ -92,7 +110,7 @@ pub fn installed_engine(paths: &Paths, engine: &str, build: Build) -> Option<Pat
 pub fn older_engine(paths: &Paths, engine: &str, build: Build) -> bool {
     let Some(m) = catalog(paths).ok().and_then(|mut c| c.remove(engine)) else { return false };
     let replaces = |b: Build| b == build || (b.cuda_major() == Some(12) && build.cuda_major() == Some(12));
-    other_versions(paths, engine, &m.version).iter().any(|(dir, b)| replaces(*b) && dir.join(EXE).is_file())
+    other_versions(paths, engine, &m.version).iter().any(|(dir, b)| replaces(*b) && dir.join(&m.exe).is_file())
 }
 
 /// After an update of an engine: once the catalog's version is on the disk for a build, its other versions go, every
@@ -103,12 +121,12 @@ pub fn remove_old_engines(paths: &Paths) -> Vec<PathBuf> {
     let Ok(cat) = catalog(paths) else { return Vec::new() };
     let mut removed = Vec::new();
     for (engine, m) in &cat {
-        if !Build::ALL.iter().any(|&b| engine_dir(paths, engine, m, b).join(EXE).is_file()) {
+        if !Build::ALL.iter().any(|&b| engine_dir(paths, engine, m, b).join(&m.exe).is_file()) {
             continue;
         }
         for (dir, _) in other_versions(paths, engine, &m.version) {
             // The program first: if it runs, it can't be deleted and the folder stays whole.
-            let gone = match fs::remove_file(dir.join(EXE)) {
+            let gone = match fs::remove_file(dir.join(&m.exe)) {
                 Err(e) if e.kind() != io::ErrorKind::NotFound => Err(e),
                 _ => fs::remove_dir_all(&dir),
             };
@@ -139,7 +157,7 @@ fn other_versions(paths: &Paths, engine: &str, version: &str) -> Vec<(PathBuf, B
 }
 
 /// Downloads the build from the catalog, extracts it into `<engines>/<engine>/<version>-<build>/` and checks that
-/// `llama-server.exe --version` starts (and, for CUDA, that it sees a GPU); only then does the folder appear. For
+/// the engine's program starts with `--version` (and, for CUDA, that it sees a GPU); only then does the folder appear. For
 /// CUDA it adds the runtime libraries if the PC lacks them. Already installed = no download.
 /// `progress(downloaded, total)` counts the bytes of all files. When `stop` becomes true the download ends with
 /// `Stopped`, and what has arrived stays for the next call.
@@ -189,7 +207,7 @@ fn install_with(
     engine: &str,
     build: Build,
     path: &std::ffi::OsStr,
-    check: fn(&Path, Build, bool) -> Result<()>,
+    check: fn(&Path, &Engine, Build) -> Result<()>,
     stop: &AtomicBool,
     progress: &mut dyn FnMut(u64, u64),
 ) -> Result<PathBuf> {
@@ -216,7 +234,7 @@ fn install_with(
         for (f, _) in &zips {
             extract(&work.join(file_name(&f.url)?), &temp)?;
         }
-        check(&temp, build, m.gpu_check).context(EngineUnusable { engine: engine.to_string(), build })?;
+        check(&temp, &m, build).context(EngineUnusable { engine: engine.to_string(), build })?;
         fs::rename(&temp, &dest).with_context(|| user_text(&tr!("Non riesco a mettere il motore nella sua cartella.", "I can't put the engine in its folder."), dest.display()))
     })();
     // The zips have done their job, either way; the half-built folder hasn't. A zip that cannot be deleted (an antivirus
@@ -278,10 +296,10 @@ fn extract(zip: &Path, dest: &Path) -> Result<()> {
 /// The engine must start (`--version`); a CUDA build must also see a GPU (`--list-devices`): with a driver too old
 /// for that CUDA the engine starts anyway and then runs on the CPU, silently. `gpu_check` is the engine's in the
 /// catalog: ik_llama.cpp (`toq`) has no `--list-devices` and would exit with an error.
-fn check_engine(dir: &Path, build: Build, gpu_check: bool) -> Result<()> {
-    run(dir, "--version")?;
-    if gpu_check && build.cuda_major().is_some() {
-        let (gpus, messages) = run(dir, "--list-devices")?;
+fn check_engine(dir: &Path, m: &Engine, build: Build) -> Result<()> {
+    run(dir, &m.exe, "--version")?;
+    if m.gpu_check && build.cuda_major().is_some() {
+        let (gpus, messages) = run(dir, &m.exe, "--list-devices")?;
         if !lists_gpus(&gpus) {
             bail!(
                 "{}",
@@ -296,22 +314,20 @@ fn check_engine(dir: &Path, build: Build, gpu_check: bool) -> Result<()> {
     Ok(())
 }
 
-/// `true` if the output of `--list-devices` lists at least one device (after `Available devices:`, one line per
-/// device, or `(none)`).
+/// `true` if the output of `--list-devices` lists at least one graphics card. llama.cpp writes `Available devices:`
+/// and then one line per device, or `(none)`; stable-diffusion.cpp writes one `name<TAB>description` line per
+/// device, the processor among them as `CPU`.
 fn lists_gpus(output: &str) -> bool {
-    output
-        .lines()
-        .skip_while(|l| !l.starts_with("Available devices:"))
-        .skip(1)
-        .any(|l| !l.trim().is_empty() && l.trim() != "(none)")
+    let after_the_title = output.lines().skip_while(|l| !l.starts_with("Available devices:")).skip(1).any(|l| !l.trim().is_empty() && l.trim() != "(none)");
+    after_the_title || output.lines().filter_map(|l| l.split_once('\t')).any(|(name, _)| name.trim() != "CPU")
 }
 
-/// Launches `llama-server.exe <arg>` in the folder and wants exit 0 within the time; returns what it wrote on
-/// stdout and on stderr. If it fails, the error reports what it wrote.
-fn run(dir: &Path, arg: &str) -> Result<(String, String)> {
-    let exe = dir.join(EXE);
+/// Launches `<name> <arg>` in the folder and wants exit 0 within the time; returns what it wrote on stdout and on
+/// stderr. If it fails, the error reports what it wrote.
+fn run(dir: &Path, name: &str, arg: &str) -> Result<(String, String)> {
+    let exe = dir.join(name);
     if !exe.is_file() {
-        bail!("{}", tr!("nello zip non c'è {EXE}", "{EXE} is not in the zip"));
+        bail!("{}", tr!("nello zip non c'è {name}", "{name} is not in the zip"));
     }
     let (f_out, f_err) = (dir.join(".stdout.txt"), dir.join(".stderr.txt"));
     let mut cmd = Command::new(&exe);
@@ -328,7 +344,7 @@ fn run(dir: &Path, arg: &str) -> Result<(String, String)> {
         if start.elapsed() > COMMAND_TIMEOUT {
             let _ = child.kill();
             let _ = child.wait();
-            bail!("{}", tr!("{EXE} {arg} non risponde entro {} s", "{EXE} {arg} does not answer within {} s", COMMAND_TIMEOUT.as_secs()));
+            bail!("{}", tr!("{name} {arg} non risponde entro {} s", "{name} {arg} does not answer within {} s", COMMAND_TIMEOUT.as_secs()));
         }
         std::thread::sleep(Duration::from_millis(50));
     };
@@ -339,7 +355,7 @@ fn run(dir: &Path, arg: &str) -> Result<(String, String)> {
     };
     let (out, err) = (read(&f_out)?, read(&f_err)?);
     if !status.success() {
-        bail!("{}", tr!("{EXE} {arg} è uscito con {status}: {}{}", "{EXE} {arg} exited with {status}: {}{}", out.trim(), err.trim()));
+        bail!("{}", tr!("{name} {arg} è uscito con {status}: {}{}", "{name} {arg} exited with {status}: {}{}", out.trim(), err.trim()));
     }
     Ok((out, err))
 }
@@ -427,7 +443,7 @@ mod tests {
         let engine = |name: &str, folder: &str| {
             let dir = f.paths.engines.join(name).join(folder);
             fs::create_dir_all(dir.join("sub")).unwrap();
-            fs::write(dir.join(EXE), b"exe").unwrap();
+            fs::write(dir.join(LLAMA_SERVER), b"exe").unwrap();
             fs::write(dir.join("sub").join("x.dll"), b"dll").unwrap();
             dir
         };
@@ -440,14 +456,14 @@ mod tests {
 
         // the new version arrived for one build, while the old CUDA one still runs
         let new = engine("llamacpp", "new-cpu");
-        fs::write(old_cuda.join(EXE), system_exe("PING.EXE")).unwrap();
-        let mut running = Command::new(old_cuda.join(EXE)).args(["-n", "60", "127.0.0.1"]).stdout(Stdio::null()).spawn().unwrap();
+        fs::write(old_cuda.join(LLAMA_SERVER), system_exe("PING.EXE")).unwrap();
+        let mut running = Command::new(old_cuda.join(LLAMA_SERVER)).args(["-n", "60", "127.0.0.1"]).stdout(Stdio::null()).spawn().unwrap();
         let removed = remove_old_engines(&f.paths);
         let _ = running.kill();
         let _ = running.wait();
         assert_eq!(removed, [old_cpu.clone()]);
-        assert!(!old_cpu.exists() && old_cuda.join(EXE).is_file() && old_cuda.join("sub").join("x.dll").is_file(), "the one that runs stays whole");
-        assert!(new.join(EXE).is_file() && prism_old.join(EXE).is_file() && work.iter().all(|w| w.is_dir()));
+        assert!(!old_cpu.exists() && old_cuda.join(LLAMA_SERVER).is_file() && old_cuda.join("sub").join("x.dll").is_file(), "the one that runs stays whole");
+        assert!(new.join(LLAMA_SERVER).is_file() && prism_old.join(LLAMA_SERVER).is_file() && work.iter().all(|w| w.is_dir()));
         assert!(!older_engine(&f.paths, "llamacpp", Build::Cpu));
         let log = fs::read_to_string(f.paths.logs().join("startup.log")).unwrap();
         assert!(log.contains("old-cuda-12 stays for now"), "{log}");
@@ -467,7 +483,7 @@ mod tests {
         assert!(has_build(&p.paths, "prism", Build::Cuda12Gtx16) && !has_build(&p.paths, "toq", Build::Cuda12Gtx16) && !has_build(&p.paths, "llamacpp", Build::Cuda12));
         let before = p.paths.engines.join("prism").join("v1.2.2-cuda-12");
         fs::create_dir_all(&before).unwrap();
-        fs::write(before.join(EXE), b"exe").unwrap();
+        fs::write(before.join(LLAMA_SERVER), b"exe").unwrap();
         assert!(older_engine(&p.paths, "prism", Build::Cuda12Gtx16) && older_engine(&p.paths, "prism", Build::Cuda12));
         assert!(!older_engine(&p.paths, "prism", Build::Cuda13) && !older_engine(&p.paths, "prism", Build::Vulkan));
 
@@ -479,8 +495,8 @@ mod tests {
     }
 
     /// In tests the check is only `--version`: the system executable standing in for the engine lists no GPUs.
-    fn version_only(dir: &Path, _: Build, _: bool) -> Result<()> {
-        run(dir, "--version").map(|_| ())
+    fn version_only(dir: &Path, m: &Engine, _: Build) -> Result<()> {
+        run(dir, &m.exe, "--version").map(|_| ())
     }
 
     fn install(paths: &Paths, engine: &str, build: Build, path: &std::ffi::OsStr, progress: &mut dyn FnMut(u64, u64)) -> Result<PathBuf> {
@@ -585,6 +601,41 @@ mod tests {
         assert!(!lists_gpus(""));
         assert!(lists_gpus("Available devices:\n  CUDA0: NVIDIA GeForce RTX 3060 Ti (8191 MiB, 7000 MiB free)\n"));
         assert!(lists_gpus("noise\nAvailable devices:\n  Vulkan0: AMD Radeon (8176 MiB, 8000 MiB free)\n  CUDA0: x\n"));
+        // stable-diffusion.cpp's output, with a card and with none
+        assert!(lists_gpus("CUDA0\tNVIDIA GeForce GTX 1080\r\nCPU\tTest CPU\r\n"));
+        assert!(!lists_gpus("CPU\tTest CPU\r\n"));
+    }
+
+    /// An engine whose program is not `llama-server.exe` (the catalog names it) is checked, found on the disk and
+    /// replaced by that program: a folder with only `llama-server.exe` is not that engine, nor is a zip.
+    #[test]
+    fn an_engine_with_a_program_of_its_own_is_installed_and_found_by_it() {
+        let z = zip(&[("sd-server.exe", &system_exe("curl.exe")), ("sd-cli.exe", b"x")]);
+        let p = fixture(&[("/cpu.zip", &z)], &[("sd", "cpu", "/cpu.zip", None)]);
+        let f = p.paths.dist.join("mango-engines.json");
+        let cat = fs::read_to_string(&f).unwrap().replace(r#""version":"v1.2.3""#, r#""version":"v1.2.3","exe":"sd-server.exe""#);
+        fs::write(&f, cat).unwrap();
+        let before = p.paths.engines.join("sd").join("v1.2.2-cpu");
+        fs::create_dir_all(&before).unwrap();
+        fs::write(before.join("sd-server.exe"), b"exe").unwrap();
+        assert!(older_engine(&p.paths, "sd", Build::Cpu));
+
+        let dir = install(&p.paths, "sd", Build::Cpu, &no_cuda(), &mut |_, _| {}).unwrap();
+
+        assert_eq!(dir, p.paths.engines.join("sd").join("v1.2.3-cpu"));
+        assert!(dir.join("sd-server.exe").is_file() && dir.join("sd-cli.exe").is_file() && !before.exists());
+        assert_eq!(installed_engine(&p.paths, "sd", Build::Cpu), Some(dir.clone()));
+        assert_eq!(installed_program(&p.paths, "sd", Build::Cpu), Some(dir.join("sd-server.exe")));
+        fs::rename(dir.join("sd-server.exe"), dir.join(LLAMA_SERVER)).unwrap();
+        assert_eq!(installed_engine(&p.paths, "sd", Build::Cpu), None);
+
+        let other = zip(&[("llama-server.exe", &system_exe("curl.exe"))]);
+        let p = fixture(&[("/cpu.zip", &other)], &[("sd", "cpu", "/cpu.zip", None)]);
+        let f = p.paths.dist.join("mango-engines.json");
+        let cat = fs::read_to_string(&f).unwrap().replace(r#""version":"v1.2.3""#, r#""version":"v1.2.3","exe":"sd-server.exe""#);
+        fs::write(&f, cat).unwrap();
+        let err = format!("{:#}", install(&p.paths, "sd", Build::Cpu, &no_cuda(), &mut |_, _| {}).unwrap_err());
+        assert!(err.contains(&tr!("nello zip non c'è sd-server.exe", "sd-server.exe is not in the zip")), "{err}");
     }
 
     #[test]
@@ -605,7 +656,7 @@ mod tests {
     fn a_zip_that_cannot_be_deleted_does_not_hide_the_real_error() {
         use std::os::windows::fs::OpenOptionsExt;
         thread_local!(static HELD: std::cell::RefCell<Vec<fs::File>> = const { std::cell::RefCell::new(Vec::new()) });
-        fn lock_the_zips_and_fail(temp: &Path, _: Build, _: bool) -> Result<()> {
+        fn lock_the_zips_and_fail(temp: &Path, _: &Engine, _: Build) -> Result<()> {
             for zip in fs::read_dir(temp.parent().unwrap().join(".download")).unwrap().flatten() {
                 let held = fs::OpenOptions::new().read(true).share_mode(1).open(zip.path()).unwrap();
                 HELD.with(|h| h.borrow_mut().push(held));
@@ -666,17 +717,18 @@ mod tests {
         assert_eq!(installed_engine(&p.paths, "llamacpp", Build::Cpu), None);
     }
 
-    /// The catalog that ships with the app: the `prism` and `toq` engines are there, and each entry is either empty
-    /// (zip still to be published) or complete; a half-filled one would download a file that can't be verified.
+    /// The catalog that ships with the app: the engines are all there, each with its program, and each entry is either
+    /// empty (zip still to be published) or complete; a half-filled one would download a file that can't be verified.
     #[test]
     fn the_real_catalog_has_empty_or_complete_entries() {
         let dist = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../launcher");
         let paths = Paths { dist, engines: PathBuf::new(), models: PathBuf::new(), opencode: PathBuf::new(), data: PathBuf::new() };
         let cat = catalog(&paths).unwrap();
-        for engine in ["llamacpp", "prism", "toq"] {
-            let m = &cat[engine];
+        assert_eq!(cat.keys().map(String::as_str).collect::<Vec<_>>(), ["llamacpp", "prism", "sd", "toq"]);
+        for (engine, m) in &cat {
             assert!(!m.version.is_empty() && !m.build.is_empty(), "{engine}");
             assert_eq!(m.gpu_check, engine != "toq", "{engine}");
+            assert_eq!(m.exe, if engine == "sd" { "sd-server.exe" } else { LLAMA_SERVER }, "{engine}");
             for (name, b) in &m.build {
                 for f in std::iter::once(&b.file).chain(&b.runtime) {
                     let empty = f.size == 0 && f.sha256.is_empty();
@@ -692,8 +744,8 @@ mod tests {
     #[test]
     fn the_gpu_check_follows_the_catalog() {
         static RECEIVED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
-        fn record(_: &Path, _: Build, gpu_check: bool) -> Result<()> {
-            RECEIVED.store(gpu_check, std::sync::atomic::Ordering::SeqCst);
+        fn record(_: &Path, m: &Engine, _: Build) -> Result<()> {
+            RECEIVED.store(m.gpu_check, std::sync::atomic::Ordering::SeqCst);
             Ok(())
         }
         let z = zip(&[("llama-server.exe", b"x")]);

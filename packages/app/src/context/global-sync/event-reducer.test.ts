@@ -555,6 +555,31 @@ describe("applyDirectoryEvent", () => {
     expect(store.question[sessionID]?.map((x) => x.id)).toEqual(["q_1", "q_3"])
   })
 
+  test("a session that goes idle has no question left open: a stopped turn sends no rejection", () => {
+    const [store, setStore] = createStore(
+      baseState({
+        session_status: { ses_1: { type: "busy" } },
+        question: { ses_1: [questionRequest("q_1", "ses_1")], ses_2: [questionRequest("q_2", "ses_2")] },
+      }),
+    )
+    const apply = (status: { type: "busy" } | { type: "idle" }, sessionID = "ses_1") =>
+      applyDirectoryEvent({
+        event: { type: "session.status", properties: { sessionID, status } },
+        store,
+        setStore,
+        push() {},
+        directory: "/tmp",
+        loadLsp() {},
+      })
+
+    apply({ type: "busy" })
+    expect(store.question.ses_1?.map((x) => x.id)).toEqual(["q_1"])
+    apply({ type: "idle" })
+    expect(store.question.ses_1).toEqual([])
+    // another session's question is its own
+    expect(store.question.ses_2?.map((x) => x.id)).toEqual(["q_2"])
+  })
+
   test("updates vcs branch in store and cache", () => {
     const [store, setStore] = createStore(baseState({ vcs: { branch: "main", default_branch: "main" } }))
     const [cacheStore, setCacheStore] = createStore({

@@ -2,6 +2,8 @@
   "_note": "Mango Code's model catalog, read by the app (engine-cfg). Adding a model = adding an entry here and its place in 'order'. The gguf/mmproj paths are relative to the models folder (mango-paths.json). 'repo', 'revision' and 'files' (path, size, sha256) say where to download a model from and how to verify it; 'ctx' and 'memory' (K+V cache per token at f16 and fixed state, from the GGUF header) estimate whether it fits in the PC's memory. How it runs on specific hardware is in profiles/.",
   "_engine": "'requires_engine': the weights are in a format the official llama.cpp cannot read (toq): the model runs only where a profile says how. A 'files' entry with 'engine' is for that engine only: each PC downloads the files of the engine the model runs with, and that engine opens its file instead of 'gguf'.",
   "_active_permille": "In MoE models, the thousandths of the weights the engine reads for each token: the rest of the model plus the chosen experts (expert_used_count over expert_count), from the GGUF header. They tell which model is probably the fastest; in dense models it is missing (they read everything).",
+  "_image": "'image': the model makes images instead of writing. It is not in 'order' and is not among the models of a conversation; its engine is stable-diffusion.cpp ('sd' in mango-engines.json). 'diffusion' is the weights that draw, 'encoder' the model that reads the request, 'vae' the one that turns the result into pixels: paths relative to the models folder, each among 'files'. 'steps' and 'cfg_scale' are the values whoever made the model gives for it. 'license' is the license of the weights that draw. 'about' is the line under its name in the settings, in both languages, as for the models that write. 'image_default' is the model used for a picture when none is named.",
+  "image_default": "z-image-turbo",
   "_about": "'about' is the one line the app shows under a model's name, in Italian and English; a model without it has no line. The line must be true on every computer: what depends on the PC (which model is the fastest here) is not written here.",
   "_reasoning": "'reasoning': the model can think before it answers, and its chat template turns that on and off (enable_thinking): the app then offers the switch. A model of the user's has none: nobody knows its template.",
   "_sampling": "'sampling': the values recommended by whoever made the model (temperature, top_p, top_k, min_p, presence_penalty, repeat_penalty), those of the mode the model starts in with its chat template here (reasoning on for 3.6, 3.8, bonsai2, lfm, ling, toq; off for 3.5-4b and 3.5-2b, whose template turns it on only on request); a value the card does not give is missing. toq has no card of its own for this: it takes the base model's (Qwen3.8-27B).",
@@ -249,6 +251,48 @@
         "kv_kib_token": 12,
         "state_mib": 21
       }
+    },
+    "z-image-turbo": {
+      "label": "Z-Image Turbo",
+      "quant": "Q4_K",
+      "kind": "6B / 8 steps",
+      "license": "Apache-2.0",
+      "about": { "it": "Di serie. Otto passi.", "en": "Standard. Eight steps." },
+      "image": {
+        "diffusion": "Z-Image-Turbo-GGUF/z_image_turbo-Q4_K.gguf",
+        "encoder": "Qwen3-4B-Instruct-2507-GGUF/Qwen3-4B-Instruct-2507-Q4_K_M.gguf",
+        "vae": "Z-Image-Turbo-GGUF/ae.safetensors",
+        "steps": 8,
+        "cfg_scale": 1.0
+      },
+      "repo": "leejet/Z-Image-Turbo-GGUF",
+      "revision": "c61c0e422dc8b541b7548cf33a4ef8302b0f8085",
+      "files": [
+        { "path": "Z-Image-Turbo-GGUF/z_image_turbo-Q4_K.gguf", "size": 3864250304, "sha256": "14b375ab4f226bc5378f68f37e899ef3c2242b8541e61e2bc1aff40976086fbd" },
+        { "path": "Qwen3-4B-Instruct-2507-GGUF/Qwen3-4B-Instruct-2507-Q4_K_M.gguf", "size": 2497281120, "sha256": "3605803b982cb64aead44f6c1b2ae36e3acdb41d8e46c8a94c6533bc4c67e597", "repo": "unsloth/Qwen3-4B-Instruct-2507-GGUF", "revision": "a06e946bb6b655725eafa393f4a9745d460374c9" },
+        { "path": "Z-Image-Turbo-GGUF/ae.safetensors", "name": "split_files/vae/ae.safetensors", "size": 335304388, "sha256": "afc8e28272cd15db3919bacdb6918ce9c1ed22e96cb12c4d5ed0fba823529e38", "repo": "Comfy-Org/Z-Image-Turbo", "revision": "6fc90a3b1b653e935a0d175e260736de25b84df5" }
+      ]
+    },
+    "flux2-klein-4b": {
+      "label": "FLUX.2 klein 4B",
+      "quant": "Q4_0",
+      "kind": "4B / 4 steps",
+      "license": "Apache-2.0",
+      "about": { "it": "Più leggero: usa meno memoria.", "en": "Lighter: uses less memory." },
+      "image": {
+        "diffusion": "FLUX.2-klein-4B-GGUF/flux-2-klein-4b-Q4_0.gguf",
+        "encoder": "Qwen3-4B-GGUF/Qwen3-4B-Q4_K_M.gguf",
+        "vae": "FLUX.2-klein-4B-GGUF/flux2-vae.safetensors",
+        "steps": 4,
+        "cfg_scale": 1.0
+      },
+      "repo": "leejet/FLUX.2-klein-4B-GGUF",
+      "revision": "3b1f5a9dc3abb32238b053aeb3d823c30afdacbd",
+      "files": [
+        { "path": "FLUX.2-klein-4B-GGUF/flux-2-klein-4b-Q4_0.gguf", "size": 2460378560, "sha256": "d1023499ef3f2f82ff7c50e6778495195c1b6cc34835741778868428111f9ff4" },
+        { "path": "Qwen3-4B-GGUF/Qwen3-4B-Q4_K_M.gguf", "size": 2497281312, "sha256": "f6f851777709861056efcdad3af01da38b31223a3ba26e61a4f8bf3a2195813a", "repo": "unsloth/Qwen3-4B-GGUF", "revision": "22c9fc8a8c7700b76a1789366280a6a5a1ad1120" },
+        { "path": "FLUX.2-klein-4B-GGUF/flux2-vae.safetensors", "name": "split_files/vae/flux2-vae.safetensors", "size": 336211292, "sha256": "868fe7b343cc8f3a19dbcfcafbc3d5f888802be3f89bd81b65b3621a066ce8f3", "repo": "Comfy-Org/Flux-2-Klein-4B", "revision": "5b3abca5c0dc1ecd4eaf3340868d09063fc1c965" }
+      ]
     }
   }
 }

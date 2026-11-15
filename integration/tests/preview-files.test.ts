@@ -2,7 +2,8 @@
 // (WebView2 CDP for the web UI, the bridge's `preview.state()` for what the native panel shows):
 //  - a PDF and a picture open in the panel; an SVG goes through a page that draws it as a picture, so its script never runs;
 //  - an html page opens in the panel too, by its own address, and runs, also from "Open" next to its name in the chat;
-//  - a file that is too big, unreadable, outside the project or of another type is refused with a reason that the card shows;
+//  - a file that is too big, unreadable or of another type is refused with a reason that the card shows;
+//  - a file outside every project opens like the others: the agent writes where it is told to;
 //  - the click on the card does it all, the panel opens in the conversation.
 // Fake engine, no GPU. Own ports (47690-47692). With `MC_PHOTOS=<folder>` it saves a photo of the window (860 px and
 // 390 px wide) there. `bun test --cwd integration`, after `cargo build -p mango-code -p engine` in app/.
@@ -180,15 +181,12 @@ test("an SVG is drawn as a picture: its script never runs", async () => {
   expect(page).not.toContain("<script");
 }, 60_000);
 
-test("what is not a PDF, a picture or a web page, is too big, is not readable or is out of the project is refused with its reason", async () => {
+test("what is not a PDF, a picture or a web page, is too big or is not readable is refused with its reason", async () => {
   expect(await open("notes.docx")).toBe("blocked_type");
   expect(await open("script.js")).toBe("blocked_type");
   expect(await open("big.png")).toBe("too_large");
   expect(await open("locked.pdf")).toBe("unreadable");
   expect(await open("gone.pdf")).toBe("not_found");
-  const outside = path.join(env.root, "outside.pdf");
-  fs.writeFileSync(outside, PDF);
-  expect(await p.evaluate(`window.__MANGO_DESKTOP__.preview.openFile(${JSON.stringify(outside)}).then(() => "ok", (e) => e.code)`)).toBe("forbidden");
   // a refusal does not change what the panel shows
   expect((await shown()).url).toContain("/preview-view/image.html");
 }, 60_000);
@@ -228,4 +226,11 @@ test("when the window moves to another page of the app the panel does not stay o
   await Bun.sleep(3000);
   expect(await p.evaluate(`window.__MANGO_DESKTOP__.preview.state()`)).toMatchObject({ visible: false });
   windowPhoto("home-senza-pannello", ratio);
+}, 60_000);
+
+test("a file outside every project opens in the panel too", async () => {
+  const outside = path.join(env.root, "outside.pdf");
+  fs.writeFileSync(outside, PDF);
+  expect(await p.evaluate(`window.__MANGO_DESKTOP__.preview.openFile(${JSON.stringify(outside)}).then(() => "ok", (e) => e.code)`)).toBe("ok");
+  expect((await shown()).url).toContain("outside.pdf");
 }, 60_000);

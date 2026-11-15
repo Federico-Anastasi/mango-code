@@ -7,6 +7,7 @@ import { LSP } from "@/lsp/lsp"
 import DESCRIPTION from "./read.txt"
 import { InstanceState } from "@/effect/instance-state"
 import { assertExternalDirectoryEffect } from "./external-directory"
+import { ProjectPath } from "./project-path"
 import { Instruction } from "../session/instruction"
 import { isPdfAttachment, sniffAttachmentMime } from "@/util/media"
 import { documentKind, documentToText, type DocumentKind } from "@/util/document-text"
@@ -28,7 +29,7 @@ class ReadStop extends Schema.TaggedErrorClass<ReadStop>()("ReadStop", {}) {}
 // Schema output is identical (`type: "number"`), so the LLM view is
 // unchanged; purely CLI-facing uses must now send numbers rather than strings.
 export const Parameters = Schema.Struct({
-  filePath: Schema.String.annotate({ description: "The absolute path to the file or directory to read" }),
+  filePath: Schema.String.annotate({ description: "The path of the file or directory, relative to the project folder (index.html, css). A full path only outside the project" }),
   offset: Schema.optional(NonNegativeInt).annotate({
     description: "The line number to start reading from (1-indexed)",
   }),
@@ -277,10 +278,8 @@ export const ReadTool = Tool.define<
       ctx: Tool.Context<Metadata>,
     ) {
       const instance = yield* InstanceState.context
-      let filepath = params.filePath
-      if (!path.isAbsolute(filepath)) {
-        filepath = path.resolve(instance.directory, filepath)
-      }
+      const located = ProjectPath.locate(params.filePath, instance.directory)
+      let filepath = located.path
       if (process.platform === "win32") {
         filepath = FSUtil.normalizePath(filepath)
       }
@@ -400,6 +399,7 @@ export const ReadTool = Tool.define<
         output += `\n\n(End of file - total ${file.count} lines)`
       }
       output += "\n</content>"
+      if (located.note) output += `\n\n${located.note}`
 
       if (!document) yield* warm(filepath)
 

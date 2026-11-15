@@ -41,7 +41,7 @@ export function DialogEditProjectV2(props: { project: LocalProject; server: Serv
           </Field>
 
           <div class="flex w-full flex-col gap-2">
-            <div class="select-none text-[13px] font-[530] leading-none tracking-[-0.04px] text-v2-text-text-base">
+            <div class="select-none text-[13px] font-medium leading-none tracking-[-0.04px] text-v2-text-text-base">
               {language.t("dialog.project.edit.icon")}
             </div>
             <div class="flex items-center gap-3">
@@ -88,7 +88,7 @@ export function DialogEditProjectV2(props: { project: LocalProject; server: Serv
                 class="hidden"
                 onChange={model.inputChange}
               />
-              <div class="flex select-none flex-col gap-[6px] text-[11px] font-[440] leading-none tracking-[0.05px] text-v2-text-text-muted">
+              <div class="flex select-none flex-col gap-[6px] text-[11px] font-normal leading-none tracking-[0.05px] text-v2-text-text-muted">
                 <span>{language.t("dialog.project.edit.icon.hint")}</span>
                 <span>{language.t("dialog.project.edit.icon.recommended")}</span>
               </div>
@@ -98,13 +98,13 @@ export function DialogEditProjectV2(props: { project: LocalProject; server: Serv
           <Show when={!model.store.iconOverride}>
             <div class="flex w-full flex-col gap-2">
               <div class="flex items-center justify-between gap-3">
-                <div class="select-none text-[13px] font-[530] leading-none tracking-[-0.04px] text-v2-text-text-base">
+                <div class="select-none text-[13px] font-medium leading-none tracking-[-0.04px] text-v2-text-text-base">
                   {language.t("dialog.project.edit.fruit")}
                 </div>
                 <Show when={storedFruit(model.store.color)}>
                   <button
                     type="button"
-                    class="cursor-pointer rounded-sm px-1 text-[12px] font-[440] leading-none text-v2-text-text-muted hover:text-v2-text-text-base focus-visible:outline focus-visible:outline-1 focus-visible:outline-v2-border-border-focus"
+                    class="cursor-pointer rounded-sm px-1 text-[12px] font-normal leading-none text-v2-text-text-muted hover:text-v2-text-text-base focus-visible:outline focus-visible:outline-1 focus-visible:outline-v2-border-border-focus"
                     onClick={() => model.setStore("color", undefined)}
                   >
                     {language.t("dialog.project.edit.fruit.auto")}
@@ -154,10 +154,10 @@ export function DialogEditProjectV2(props: { project: LocalProject; server: Serv
           </Field>
         </DialogBody>
         <DialogFooter>
-          <ButtonV2 type="button" variant="neutral" disabled={model.save.isPending} onClick={model.close}>
+          <ButtonV2 type="button" variant="ghost" disabled={model.save.isPending} onClick={model.close}>
             {language.t("common.cancel")}
           </ButtonV2>
-          <ButtonV2 type="submit" variant="contrast" disabled={model.save.isPending}>
+          <ButtonV2 type="submit" variant="primary" disabled={model.save.isPending}>
             {model.save.isPending ? language.t("common.saving") : language.t("common.save")}
           </ButtonV2>
         </DialogFooter>

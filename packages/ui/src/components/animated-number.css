@@ -26,15 +26,15 @@
     -webkit-mask-image: linear-gradient(
       to bottom,
       transparent 0%,
-      #000 var(--tool-motion-mask, 18%),
-      #000 calc(100% - var(--tool-motion-mask, 18%)),
+      var(--mango-ground) var(--tool-motion-mask, 18%),
+      var(--mango-ground) calc(100% - var(--tool-motion-mask, 18%)),
       transparent 100%
     );
     mask-image: linear-gradient(
       to bottom,
       transparent 0%,
-      #000 var(--tool-motion-mask, 18%),
-      #000 calc(100% - var(--tool-motion-mask, 18%)),
+      var(--mango-ground) var(--tool-motion-mask, 18%),
+      var(--mango-ground) calc(100% - var(--tool-motion-mask, 18%)),
       transparent 100%
     );
     -webkit-mask-repeat: no-repeat;

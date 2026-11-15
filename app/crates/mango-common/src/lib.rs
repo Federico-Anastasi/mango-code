@@ -255,7 +255,7 @@ pub fn loopback_host(host: &str) -> bool {
 }
 
 /// The engine manager's port: the agent and the apps that integrate talk to it.
-pub const ENGINE_PORT: u16 = 8080;
+pub const ENGINE_PORT: u16 = 47080;
 /// `CreateProcess` flag: the program starts without a console window.
 pub const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
