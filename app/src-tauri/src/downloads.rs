@@ -1004,6 +1004,12 @@ mod tests {
         fn arrived(&self) -> Vec<String> {
             self.arrived.lock().unwrap().clone()
         }
+
+        /// Waits for the models told whole to be these. The queue changes first and tells afterwards, outside its
+        /// lock: read right after the queue changed, what was told may not be there yet.
+        fn arrives(&self, models: &[&str]) {
+            until(&format!("told whole: {models:?}"), || self.arrived() == models);
+        }
     }
 
     fn until(what: &str, done: impl Fn() -> bool) {
@@ -1027,7 +1033,7 @@ mod tests {
         assert_eq!(f.saved(), r#"[{"model":"a","paused":false},{"model":"b","paused":false},{"model":"c","paused":false}]"#);
         f.go();
         until("all arrived", || f.states().is_empty());
-        assert_eq!(f.arrived(), ["a", "b", "c"]);
+        f.arrives(&["a", "b", "c"]);
         assert_eq!(f.saved(), "[]");
     }
 
@@ -1058,7 +1064,7 @@ mod tests {
         assert_eq!(f.downloads.list()[0].total, 200, "what arrives is the engine only");
         f.fake.hold_engine.store(false, Ordering::SeqCst);
         until("«a» arrived", || f.states().is_empty());
-        assert_eq!(f.arrived(), ["a"]);
+        f.arrives(&["a"]);
         assert!(f.engines.lock().unwrap().is_empty(), "the engine alone: the arrival of the model says it all");
     }
 
@@ -1089,7 +1095,7 @@ mod tests {
         f.fake.arrived.lock().unwrap().insert("b".into(), SIZE);
         f.go();
         until("the queue empty", || f.states().is_empty());
-        assert_eq!(f.arrived(), ["a", "b"]);
+        f.arrives(&["a", "b"]);
     }
 
     #[test]
@@ -1103,11 +1109,11 @@ mod tests {
         let kept = f.fake.arrived.lock().unwrap()["a"];
         assert!((300..SIZE).contains(&kept), "{kept}");
         assert_eq!(f.saved(), r#"[{"model":"a","paused":true}]"#);
-        assert_eq!(f.arrived(), ["b"]);
+        f.arrives(&["b"]);
 
         f.downloads.resume("a").unwrap();
         until("«a» arrived", || f.states().is_empty());
-        assert_eq!(f.arrived(), ["b", "a"]);
+        f.arrives(&["b", "a"]);
         assert!(f.fake.discarded.lock().unwrap().is_empty(), "a pause deletes nothing");
     }
 
@@ -1181,7 +1187,7 @@ mod tests {
         until("some of «a» arrived", || f.downloads.list()[0].model == "a" && f.downloads.list()[0].done >= 300);
         f.downloads.cancel("a").unwrap();
         until("«c» arrived", || f.states().is_empty());
-        assert_eq!(f.arrived(), ["c"]);
+        f.arrives(&["c"]);
         assert_eq!(*f.fake.discarded.lock().unwrap(), ["b", "a"]);
         assert_eq!(*f.fake.queued_at_discard.lock().unwrap(), [vec!["a".to_string(), "c".to_string()], vec!["c".to_string()]], "their shared files stay");
         assert!(!f.fake.arrived.lock().unwrap().contains_key("a"));
@@ -1197,8 +1203,9 @@ mod tests {
         until("«a» active", || f.states() == states(&[("a", Status::Active)]));
         f.downloads.cancel("a").unwrap();
         f.go();
-        until("its partial files gone", || f.fake.discarded.lock().unwrap().len() == 1);
-        assert_eq!((f.arrived(), f.changed.lock().unwrap().clone()), (vec![], vec!["a".to_string()]));
+        until("the interface told", || *f.changed.lock().unwrap() == ["a"]);
+        assert_eq!(*f.fake.discarded.lock().unwrap(), ["a"]);
+        assert!(f.arrived().is_empty());
     }
 
     /// A running download that does not see the cancel at once is no longer shown, nor saved.
@@ -1469,7 +1476,7 @@ mod tests {
         f.fake.broken.lock().unwrap().clear();
         f.downloads.resume("a").unwrap();
         until("«a» arrived", || f.states().is_empty());
-        assert_eq!(f.arrived(), ["b", "a"]);
+        f.arrives(&["b", "a"]);
     }
 
     #[test]
@@ -1557,7 +1564,7 @@ mod tests {
         assert!(f.log.lock().unwrap().iter().any(|l| l.contains("the hardware does not answer")));
         f.go();
         until("«b» arrived", || f.states() == states(&failed));
-        assert_eq!(f.arrived(), ["b"]);
+        f.arrives(&["b"]);
         assert_eq!(f.saved(), r#"[{"model":"a","paused":true},{"model":"huge","paused":false},{"model":"blind","paused":false}]"#);
     }
 

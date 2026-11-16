@@ -20,11 +20,17 @@ fn fixture(tag: &str) -> Fixture {
     for f in voice::FILES {
         std::fs::write(dir.join(f.name), b"placeholder").unwrap();
     }
-    let port = {
-        let l = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
-        l.local_addr().unwrap().port()
+    // A port is free when it is picked and may be taken before the service binds it, by a test that picks its own at
+    // the same moment: then another port is picked.
+    let mut tries = 0;
+    let (server, port) = loop {
+        let port = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap().local_addr().unwrap().port();
+        match voice::start(&dir.join(voice::FILES[0].name), port) {
+            Ok(server) => break (server, port),
+            Err(_) if tries < 10 => tries += 1,
+            Err(e) => panic!("the dictation service did not start: {e:?}"),
+        }
     };
-    let server = voice::start(&dir.join(voice::FILES[0].name), port).unwrap();
     Fixture { dir, server: Some(server), port }
 }
 
