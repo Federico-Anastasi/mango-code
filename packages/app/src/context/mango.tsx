@@ -23,6 +23,7 @@ import { createPictureEngine } from "@/utils/mango-picture-engine"
 import {
   becameReady,
   canSend,
+  conversationModel,
   newer,
   parseCatalog,
   parseComputer,
@@ -49,6 +50,24 @@ let pictures: ReturnType<typeof createPictureEngine> | undefined
 
 /** After the last view of pictures goes the engine is left alone this long, so that a move to another conversation of pictures keeps it. */
 const PICTURES_GRACE_MS = 1500
+const PICTURES_OWED_KEY = "mango.pictures.owed"
+
+/** The page keeps, across a reload, that the engine that draws was turned on here and not put away yet. */
+const picturesOwed = {
+  read: () => {
+    try {
+      return sessionStorage.getItem(PICTURES_OWED_KEY) === "1"
+    } catch {
+      return false
+    }
+  },
+  write: (owed: boolean) => {
+    try {
+      if (owed) sessionStorage.setItem(PICTURES_OWED_KEY, "1")
+      else sessionStorage.removeItem(PICTURES_OWED_KEY)
+    } catch {}
+  },
+}
 
 /** A sentence of the app for the user: what it answered when it refused. */
 export class MangoRefusal extends Error {}
@@ -328,7 +347,8 @@ export function createPending(platform: Platform) {
       },
       /**
        * Sends what can leave now: each conversation's waiting messages in order, those written one after the other as one
-       * message and a «/» command by itself. They go to the model ready here or to the other PC's engine that answers;
+       * message and a «/» command by itself. They go to the model the conversations follow once the engine is ready, or to the
+       * other PC's engine that answers;
        * those moved to a model of another provider go at once. What does not go is tried again at a later read of the
        * state (`current` another object), `MAX_TRIES` times; the tries of the messages for this PC's models start again
        * when its model stops being ready. A send that does not end in `SEND_TIMEOUT_MS` counts as failed. Run in an
@@ -343,7 +363,8 @@ export function createPending(platform: Platform) {
         const left = couldSend && !now
         couldSend = now
         const model = current?.model
-        const ready = model?.phase === "ready" ? { providerID: MANGO_PROVIDER, modelID: model.model } : undefined
+        const followed = conversationModel(current)
+        const ready = model?.phase === "ready" && followed ? { providerID: MANGO_PROVIDER, modelID: followed } : undefined
         for (const sessionID of sessions()) {
           const elsewhere = !local(sessionID)
           const was = info(sessionID)
@@ -409,13 +430,20 @@ export function useMango() {
   reader ??= createRoot(() => createReader(() => ({ url: serverSDK().url, http: serverSDK().server.http })))
   pending ??= createPending(platform)
   const read = reader
-  pictures ??= createPictureEngine({
-    unload: () => read.unloadImages(),
-    later: (ms, run) => {
-      const timer = setTimeout(run, ms)
-      return () => clearTimeout(timer)
-    },
-    grace: PICTURES_GRACE_MS,
+  pictures ??= createRoot(() => {
+    const engine = createPictureEngine({
+      unload: () => read.unloadImages(),
+      later: (ms, run) => {
+        const timer = setTimeout(run, ms)
+        return () => clearTimeout(timer)
+      },
+      grace: PICTURES_GRACE_MS,
+      owed: picturesOwed,
+    })
+    createEffect(() => {
+      if (read.state() !== undefined && read.imageModels() !== undefined) engine.firstRead()
+    })
+    return engine
   })
   const waiting = pending
   return {

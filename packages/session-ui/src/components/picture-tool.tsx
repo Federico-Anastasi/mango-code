@@ -28,7 +28,8 @@ export function PictureTool(props: ToolProps) {
   const data = useData()
   const i18n = useI18n()
   const dialog = useDialog()
-  const stopped = () => props.status === "error" && props.metadata.stopped === true
+  const stopped = () =>
+    props.status === "error" && (props.metadata.stopped === true || props.metadata.interrupted === true)
   const missing = () => props.status === "error" && props.metadata.missing === true
   const running = () => props.status === "pending" || props.status === "running"
   const done = () => props.status === "completed"

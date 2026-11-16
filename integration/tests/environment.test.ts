@@ -5,7 +5,7 @@ import { afterAll, beforeAll, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { start } from "./environment";
+import { installedChrome, start } from "./environment";
 
 let scratch: string;
 /** What the environments left in the temporary folder (the app and its engine have temporary files of their own). */
@@ -39,3 +39,18 @@ test("closing the environment removes its folder", async () => {
   expect(fs.existsSync(env.root)).toBe(false);
   expect(leftovers()).toEqual([]);
 }, 240_000);
+
+test("Chrome is found in whichever of its places Windows installed it, and missing from all the error names them", () => {
+  const places = { ProgramFiles: path.join(scratch, "for-everyone"), "ProgramFiles(x86)": path.join(scratch, "32-bit"), LOCALAPPDATA: path.join(scratch, "for-the-user") };
+  const before = Object.fromEntries(Object.keys(places).map((name) => [name, process.env[name]]));
+  Object.assign(process.env, places);
+  try {
+    expect(() => installedChrome()).toThrow(places.LOCALAPPDATA);
+    const exe = path.join(places["ProgramFiles(x86)"], "Google", "Chrome", "Application", "chrome.exe");
+    fs.mkdirSync(path.dirname(exe), { recursive: true });
+    fs.writeFileSync(exe, "");
+    expect(installedChrome()).toBe(exe);
+  } finally {
+    Object.assign(process.env, before);
+  }
+});

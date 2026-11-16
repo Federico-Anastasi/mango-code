@@ -109,7 +109,7 @@
         },
         "image": true
       },
-      "_cloud": "A cloud model like deepseek, which the Team can use for its agents (-Agent qwen).",
+      "_cloud": "A cloud model like deepseek, which the Team can use for its agents.",
       "ctx": 262144,
       "_ctx": "262144 is the maximum declared by the provider that serves the model (top_provider.context_length): declaring more would make opencode compact later than the provider really accepts."
     },

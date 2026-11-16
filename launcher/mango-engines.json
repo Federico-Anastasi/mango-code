@@ -38,6 +38,7 @@
   "prism": {
     "_note": "Our fork mango-prism (PrismML's llama.cpp plus the mango branch), built by the fork's workflow with mango-ci/build.ps1: the release of tag 'prism-<version>' carries the zips 'prism-<version>-win-<build>.zip' (cpu, vulkan, cuda-12, cuda-12-gtx16), with size and sha256 in its notes. 'cuda-12-gtx16' is cuda-12 built without the tensor-core kernels for compute capability 7.5: for the PCs whose Turing cards are of the GTX 16 family, which declare that capability without having them (the app picks it, engine-cfg profiles.rs). The version is the upstream build and commit the branch starts from; '-r3' is our third release from the same upstream commit. The CUDA runtime is llama.cpp's. app/scripts/build-engines.ps1 prism builds the same tag from source.",
     "version": "b10709-9a9394a-r3",
+    "avx2": true,
     "build": {
       "cpu": {
         "url": "https://github.com/Federico-Anastasi/mango-prism/releases/download/prism-b10709-9a9394a-r3/prism-b10709-9a9394a-r3-win-cpu.zip",
@@ -74,6 +75,7 @@
   "toq": {
     "_note": "Our fork mango-toq (ik_llama.cpp plus the mango branch), built like prism: the release of tag 'toq-<version>' carries 'toq-<version>-win-<build>.zip' with size and sha256 in its notes. The engine has no --list-devices (it exits with an error): 'gpu_check' false, for CUDA the app only checks that it starts.",
     "version": "35e7256",
+    "avx2": true,
     "gpu_check": false,
     "build": {
       "cpu": {

@@ -1,13 +1,12 @@
 import path from "path"
+import { mkdir } from "fs/promises"
+import { systemTar } from "@opencode-ai/core/util/system-tar"
 import * as Process from "./process"
 
 export async function extractZip(zipPath: string, destDir: string) {
   if (process.platform === "win32") {
-    const winZipPath = path.resolve(zipPath)
-    const winDestDir = path.resolve(destDir)
-    // $global:ProgressPreference suppresses PowerShell's blue progress bar popup
-    const cmd = `$global:ProgressPreference = 'SilentlyContinue'; Expand-Archive -Path '${winZipPath}' -DestinationPath '${winDestDir}' -Force`
-    await Process.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", cmd])
+    await mkdir(destDir, { recursive: true })
+    await Process.run([systemTar(), "-xf", path.resolve(zipPath), "-C", path.resolve(destDir)])
     return
   }
 

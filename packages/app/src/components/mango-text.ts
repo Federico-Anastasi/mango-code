@@ -1,7 +1,6 @@
 // mango-code: the sentences the bar, the Home and the status line share about the model and the downloads.
 import { formatFileSize } from "@opencode-ai/session-ui/project-file"
 import type { useLanguage } from "@/context/language"
-import type { Reading } from "@/utils/engine-speed"
 import {
   contextLabel,
   contextWords,
@@ -116,13 +115,6 @@ export const downloadPausedText = (download: Download, language: Language) =>
     ? language.t("mango.engine.paused")
     : language.t("mango.status.downloadPaused", { model: download.label })
 
-/**
- * The engine works on the conversation before it answers: «Preparo la conversazione · 12 s», the same words whether it
- * reads it again or takes it back from the saved memory, in the status line and in the conversation.
- */
-export const readingText = (read: Reading, language: Language) =>
-  language.t("mango.status.reading", { seconds: Math.max(1, Math.round(read.ms / 1000)) })
-
 export type StatusLine =
   | { kind: "failed"; text: string; proposal: Proposal | null }
   | { kind: "text"; text: string; progress?: number }
@@ -134,10 +126,10 @@ export type StatusLine =
  * The line above the composer, from the most urgent: a start that failed (with the proposed model), a load with its
  * seconds («Scaricato.» if the model has just arrived), the cards lent, the other PC's engine that does not answer, the
  * first model's download or the engine the app came with, no model on the computer (`empty`: with a download that
- * stopped, its sentence), the engine preparing the conversation, a model just ready. Nothing when all is quiet.
+ * stopped, its sentence), a model just ready. Nothing when all is quiet.
  */
 export function statusLine(
-  input: { state: MangoState; downloaded: ReadonlySet<string>; justReady: boolean; reading?: Reading; empty?: boolean },
+  input: { state: MangoState; downloaded: ReadonlySet<string>; justReady: boolean; empty?: boolean },
   language: Language,
 ): StatusLine | undefined {
   const model = input.state.model
@@ -180,8 +172,6 @@ export function statusLine(
       progress: downloadPercent(download),
     }
   }
-  const read = input.reading
-  if (read && read.totalTokens > 0) return { kind: "text", text: readingText(read, language) }
   if (model.phase !== "ready" || !input.justReady) return
   const words = contextWords(model.where.context)
   if (model.where.placement === "cpu" || model.where.gpus.length === 0)

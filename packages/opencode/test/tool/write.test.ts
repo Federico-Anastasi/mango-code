@@ -191,6 +191,67 @@ describe("tool.write", () => {
       },
     )
 
+    it.instance("keeps the CRLF line endings of the file it replaces", () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const filepath = path.join(test.directory, "windows.txt")
+        yield* Effect.promise(() => fs.writeFile(filepath, "one\r\ntwo\r\nthree\r\n", "utf-8"))
+
+        const asked: string[] = []
+        yield* run(
+          { filePath: filepath, content: "one\nTWO\nthree\n" },
+          { ...ctx, ask: (input) => Effect.sync(() => void asked.push(String(input.metadata?.diff))) },
+        )
+
+        expect(yield* Effect.promise(() => fs.readFile(filepath, "utf-8"))).toBe("one\r\nTWO\r\nthree\r\n")
+        expect(asked[0]).toContain("-two")
+        expect(asked[0]).toContain("+TWO")
+        expect(asked[0]).not.toContain("-one")
+      }),
+    )
+
+    it.instance("keeps the LF line endings of the file it replaces", () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const filepath = path.join(test.directory, "unix.txt")
+        yield* Effect.promise(() => fs.writeFile(filepath, "one\ntwo\n", "utf-8"))
+
+        yield* run({ filePath: filepath, content: "one\r\nTWO\r\n" })
+
+        expect(yield* Effect.promise(() => fs.readFile(filepath, "utf-8"))).toBe("one\nTWO\n")
+      }),
+    )
+
+    it.instance("leaves the lines it does not touch as they are in a file with mixed line endings", () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const filepath = path.join(test.directory, "mixed.txt")
+        yield* Effect.promise(() => fs.writeFile(filepath, "one\ntwo\r\nthree\nfour\n", "utf-8"))
+
+        const asked: string[] = []
+        yield* run(
+          { filePath: filepath, content: "one\ntwo\nTHREE\nextra\nfour\n" },
+          { ...ctx, ask: (input) => Effect.sync(() => void asked.push(String(input.metadata?.diff))) },
+        )
+
+        expect(yield* Effect.promise(() => fs.readFile(filepath, "utf-8"))).toBe("one\ntwo\r\nTHREE\nextra\nfour\n")
+        expect(asked[0]).toContain("+THREE")
+        expect(asked[0]).not.toContain("-two")
+      }),
+    )
+
+    it.instance("writes as given over a file with no line break", () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const filepath = path.join(test.directory, "single.txt")
+        yield* Effect.promise(() => fs.writeFile(filepath, "one", "utf-8"))
+
+        yield* run({ filePath: filepath, content: "one\r\ntwo\r\n" })
+
+        expect(yield* Effect.promise(() => fs.readFile(filepath, "utf-8"))).toBe("one\r\ntwo\r\n")
+      }),
+    )
+
     it.instance("returns diff in metadata for existing files", () =>
       Effect.gen(function* () {
         const test = yield* TestInstance

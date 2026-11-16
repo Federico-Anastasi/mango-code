@@ -29,6 +29,9 @@ use tauri_plugin_updater::{Update, UpdaterExt};
 /// After the start: the agent and the model come first.
 const AFTER_START: Duration = Duration::from_secs(60);
 
+/// The start of the name of the folder in the temporary folder where an installer waits to run.
+const INSTALLER_DIR: &str = "mango-code-update-";
+
 /// What the web UI reads: the state, whether the check of each start is on, and when the last check that got an answer
 /// ended (milliseconds since 1970; none yet in this run of the app).
 #[derive(Clone, Serialize)]
@@ -70,6 +73,10 @@ pub fn install(app: &tauri::App) -> tauri::Result<()> {
         let app = app.handle().clone();
         std::thread::spawn(move || {
             std::thread::sleep(AFTER_START);
+            let failed = remove_leftover_installers(&std::env::temp_dir());
+            if let (false, Some(paths)) = (failed.is_empty(), app.state::<crate::AppState>().paths.get()) {
+                crate::startup_log(paths, &format!("updates: old installers not removed: {}", failed.join("; ")));
+            }
             // Read when the check is due: a choice made in the first minute counts.
             if automatic(&app) {
                 tauri::async_runtime::block_on(check(&app));
@@ -77,6 +84,18 @@ pub fn install(app: &tauri::App) -> tauri::Result<()> {
         });
     }
     Ok(())
+}
+
+/// Removes the folders `update_install` leaves in `temp` (`mango-code-update-<version>`), those of earlier updates
+/// too: the installer cannot delete itself while it runs, so the next start does it. The ones that could not be removed
+/// (an installer still running) are returned with the reason and tried again at the next start.
+fn remove_leftover_installers(temp: &std::path::Path) -> Vec<String> {
+    let Ok(entries) = std::fs::read_dir(temp) else { return Vec::new() };
+    entries
+        .flatten()
+        .filter(|e| e.file_name().to_string_lossy().starts_with(INSTALLER_DIR) && e.file_type().is_ok_and(|t| t.is_dir()))
+        .filter_map(|e| std::fs::remove_dir_all(e.path()).err().map(|err| format!("{}: {err}", e.path().display())))
+        .collect()
 }
 
 /// Looks for a newer version and, if there is one, downloads it. A version already downloaded is not looked up again.
@@ -225,7 +244,7 @@ pub async fn update_install(app: AppHandle) -> Result<(), BridgeError> {
         set(app, State::Error { message: message.clone() });
         err("io", message)
     };
-    let dir = std::env::temp_dir().join(format!("mango-code-update-{version}"));
+    let dir = std::env::temp_dir().join(format!("{INSTALLER_DIR}{version}"));
     let installer = dir.join(format!("Mango Code {version} setup.exe"));
     std::fs::create_dir_all(&dir)
         .and_then(|_| std::fs::write(&installer, &bytes))
@@ -289,6 +308,26 @@ mod tests {
         std::fs::write(paths.data.join(engine_cfg::choices::FILE), "{").unwrap();
         assert!(automatic_in(Some(&paths)), "a broken file leaves the standard value");
         assert!(automatic_in(None));
+    }
+
+    #[test]
+    fn the_installers_left_by_updates_are_removed_and_nothing_else() {
+        let temp = tempfile::tempdir().unwrap();
+        let t = temp.path();
+        for version in ["0.1.4", "0.1.5"] {
+            let dir = t.join(format!("{INSTALLER_DIR}{version}"));
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join(format!("Mango Code {version} setup.exe")), b"installer").unwrap();
+        }
+        std::fs::create_dir(t.join("other-folder")).unwrap();
+        std::fs::write(t.join(format!("{INSTALLER_DIR}0.1.6")), b"a file, not a folder").unwrap();
+
+        assert!(remove_leftover_installers(t).is_empty());
+        assert!(!t.join(format!("{INSTALLER_DIR}0.1.4")).exists());
+        assert!(!t.join(format!("{INSTALLER_DIR}0.1.5")).exists());
+        assert!(t.join("other-folder").is_dir());
+        assert!(t.join(format!("{INSTALLER_DIR}0.1.6")).is_file());
+        assert!(remove_leftover_installers(&t.join("missing")).is_empty());
     }
 
     #[test]

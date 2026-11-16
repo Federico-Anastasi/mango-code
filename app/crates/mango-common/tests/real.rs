@@ -176,8 +176,8 @@ fn a_model_of_the_catalog_makes_an_image() {
     let _ = fs::remove_dir_all(base.join("models"));
 }
 
-/// This PC's driver (560.94) supports CUDA 12.6: the CUDA 13 build downloads and extracts, but the engine sees
-/// no GPU and the install says so. On a PC with a newer driver this test makes no sense.
+/// With a driver that supports CUDA 12.6 and not 13 (560.94), the CUDA 13 build downloads and extracts, but the
+/// engine sees no GPU and the install says so. On a PC with a newer driver this test makes no sense.
 #[test]
 #[ignore = "downloads ~170 MB from GitHub; only valid with an NVIDIA driver that doesn't support CUDA 13"]
 fn cuda_13_with_an_old_driver_does_not_install_and_the_error_says_so() {

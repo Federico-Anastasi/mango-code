@@ -45,7 +45,8 @@ async function until(check: () => boolean) {
 }
 
 const where = { placement: "gpu", gpus: ["RTX 3060 Ti"], context: 65536 }
-const at = (model: object) => parseState({ revision: 1, catalog_revision: 1, model, downloads: [] })!
+const at = (model: object, conversation_model: string | null = null) =>
+  parseState({ revision: 1, catalog_revision: 1, model, downloads: [], conversation_model })!
 // a new object at each call, as each read of the state gives
 const loading = () => at({ phase: "loading", model: "3.6", label: "Qwen", seconds: 3, where })
 const ready = () => at({ phase: "ready", model: "ling", label: "Ling", where })
@@ -128,6 +129,16 @@ describe("the waiting messages", () => {
     expect(pending.sending("ses_1")).toBe(false)
     deliver(ready())
     expect(sent).toHaveLength(1)
+  })
+
+  test("a message written while the model that rewrites a picture loads leaves with the model of the conversations", async () => {
+    const { pending, sent, deliver } = await setup()
+    pending.add(draft("ses_1", "ciao"))
+    deliver(loading())
+    expect(sent).toHaveLength(0)
+    deliver(at({ phase: "ready", model: "ling", label: "Ling", where }, "3.6"))
+    expect(sent).toHaveLength(1)
+    expect(sent[0].model).toEqual({ providerID: "mango", modelID: "3.6" })
   })
 
   test("one that does not leave is tried again at each look, then says it did not leave, and «Retry» starts again", async () => {

@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { dict as en } from "@/i18n/en"
 import { parseState } from "@/utils/mango-state"
 import { arrivingParts, barDescription, barDownload, barParts, barTone, composerParts, modelTag } from "./mango-model-bar"
-import { downloadParts, etaText, fitsText, onWhere, queueText, readingText, statusLine } from "./mango-text"
+import { downloadParts, etaText, fitsText, onWhere, queueText, statusLine } from "./mango-text"
 
 // The English sentences of the app, filled like the interface fills them.
 const t = ((key: string, params?: Record<string, string | number>) =>
@@ -20,7 +20,6 @@ const line = (
   extra: {
     downloaded?: string[]
     justReady?: boolean
-    reading?: { doneTokens: number; totalTokens: number; ms: number }
     empty?: boolean
   } = {},
 ) =>
@@ -29,7 +28,6 @@ const line = (
       state: s,
       downloaded: new Set(extra.downloaded ?? []),
       justReady: extra.justReady ?? false,
-      reading: extra.reading,
       empty: extra.empty,
     },
     language,
@@ -191,20 +189,6 @@ describe("the line above the composer", () => {
       "The engine update did not succeed: No network.",
     )
     expect(barParts(state({ phase: "none" }, [engine]), t)).toEqual({ name: "Updating the engine", status: "25%" })
-  })
-
-  test("the engine working on the conversation says for how long: no tokens", () => {
-    const ready = state({ phase: "ready", model: "3.6", label: "Qwen", where })
-    expect(line(ready, { reading: { doneTokens: 1200, totalTokens: 24000, ms: 2400 } })?.text).toBe(
-      "Preparing the conversation · 2 s",
-    )
-    expect(line(ready, { reading: { doneTokens: 0, totalTokens: 24000, ms: 100 } })?.text).toBe(
-      "Preparing the conversation · 1 s",
-    )
-    // the row in the conversation says the same
-    expect(readingText({ doneTokens: 1200, totalTokens: 24000, ms: 2400 }, language)).toBe(
-      "Preparing the conversation · 2 s",
-    )
   })
 
   test("the cards lent to another program", () => {

@@ -1379,3 +1379,163 @@ fn a_model_in_use_is_loaded_again_beside_another_program() {
     until("«b» with the new context", Duration::from_secs(10), || b.running("b") && b.m.state().context == Some(2048));
     assert_eq!((count(&checks), b.m.state().failed.map(|f| f.model)), (0, None));
 }
+
+impl Fixture {
+    /// A chat request to `key` that is not a conversation's: the header says the manager lends the engine for it.
+    fn ask_aside(&self, key: &str) {
+        let body = json!({ "model": key, "stream": true, "messages": [{ "role": "user", "content": "rewrite this" }] }).to_string();
+        ok(post(&self.url("/v1/chat/completions"), &[("Content-Type", "application/json"), (http::SIDE_REQUEST, "1")], &body));
+    }
+
+    fn conversations(&self) -> Option<String> {
+        self.m.state().conversation_model
+    }
+}
+
+/// A side request that starts another model leaves the model that was in use as the one the conversations stay on, and the
+/// state of `GET /engine` says so in the read that shows the new model.
+#[test]
+fn a_side_request_that_changes_the_model_remembers_the_model_that_was_in_use() {
+    let b = fixture();
+    b.text("a");
+    assert_eq!(b.conversations(), None);
+    b.ask_aside("b");
+    assert!(b.running("b"));
+    assert_eq!(b.conversations().as_deref(), Some("a"));
+    let shown = json_of(get(&b.url("/engine"), &[]));
+    assert_eq!((shown["model"].as_str(), shown["conversation_model"].as_str()), (Some("b"), Some("a")));
+}
+
+/// Nothing is remembered when the side request is for the model already in use, or when the engine had no model.
+#[test]
+fn a_side_request_for_the_model_in_use_remembers_nothing() {
+    let b = fixture();
+    b.text("a");
+    b.ask_aside("a");
+    assert_eq!(b.conversations(), None);
+
+    let fresh = fixture();
+    fresh.ask_aside("a");
+    assert_eq!((fresh.conversations(), fresh.running("a")), (None, true));
+}
+
+/// The first model stays remembered while further side requests move the engine around.
+#[test]
+fn a_second_side_request_does_not_replace_what_is_remembered() {
+    let b = fixture();
+    b.text("a");
+    b.ask_aside("b");
+    b.ask_aside("c");
+    assert!(b.running("c"));
+    assert_eq!(b.conversations().as_deref(), Some("a"));
+}
+
+/// The engine back on the remembered model: by a side request or a conversation's.
+#[test]
+fn what_is_remembered_goes_when_the_engine_is_back_on_that_model() {
+    let b = fixture();
+    b.text("a");
+    b.ask_aside("b");
+    b.ask_aside("a");
+    assert!(b.running("a"));
+    assert_eq!(b.conversations(), None);
+
+    b.ask_aside("b");
+    assert_eq!(b.conversations().as_deref(), Some("a"));
+    b.text("a");
+    assert_eq!(b.conversations(), None);
+}
+
+/// A request of a conversation that starts a model: the conversations use that model now.
+#[test]
+fn what_is_remembered_goes_when_a_request_that_is_not_aside_starts_a_model() {
+    let b = fixture();
+    b.text("a");
+    b.ask_aside("b");
+    assert_eq!(b.conversations().as_deref(), Some("a"));
+    b.text("c");
+    assert!(b.running("c"));
+    assert_eq!(b.conversations(), None);
+}
+
+/// A request of a conversation that finds the model it names already running starts nothing and changes nothing.
+#[test]
+fn a_request_served_without_starting_a_model_leaves_what_is_remembered() {
+    let b = fixture();
+    b.text("a");
+    b.ask_aside("b");
+    b.text("b");
+    assert_eq!(b.conversations().as_deref(), Some("a"));
+}
+
+/// A model picked on purpose: `choose` (also of the model already running), `retry`, and `POST /engine/model`.
+#[test]
+fn what_is_remembered_goes_when_a_model_is_picked() {
+    let b = fixture();
+    b.text("a");
+    b.ask_aside("b");
+    b.m.choose("b");
+    assert_eq!(b.conversations(), None, "the model already running, picked");
+
+    b.m.choose("a");
+    until("«a» running", Duration::from_secs(5), || b.running("a"));
+    b.ask_aside("b");
+    assert_eq!(b.conversations().as_deref(), Some("a"));
+    b.m.choose("c");
+    assert_eq!(b.conversations(), None);
+    until("«c» running", Duration::from_secs(5), || b.running("c"));
+
+    b.ask_aside("b");
+    assert_eq!(b.conversations().as_deref(), Some("c"));
+    let (status, v) = b.control("/engine/model", json!({ "model": "b" }));
+    assert_eq!(status, 200, "{v}");
+    assert_eq!(b.conversations(), None);
+    assert!(v["conversation_model"].is_null(), "{v}");
+}
+
+/// The remembered model is taken off the computer: there is nothing to stay on.
+#[test]
+fn what_is_remembered_goes_when_that_model_is_taken_off_the_computer() {
+    let b = fixture();
+    b.text("a");
+    b.ask_aside("b");
+    let _removing = b.m.block_starts("b");
+    assert_eq!(b.conversations().as_deref(), Some("a"), "another model's removal changes nothing");
+    let _removing_a = b.m.block_starts("a");
+    assert_eq!(b.conversations(), None);
+}
+
+/// The model that writes is put aside for the card of the engine that draws and taken back: that is not a request that
+/// starts a model, and the conversations stay where they were.
+#[test]
+fn what_is_remembered_stays_when_the_model_is_put_aside_for_the_cards_and_taken_back() {
+    let b = fixture();
+    b.text("a");
+    b.ask_aside("b");
+    let (status, v) = b.control("/engine/release", json!({}));
+    assert_eq!(status, 200, "{v}");
+    assert_eq!(v["conversation_model"].as_str(), Some("a"));
+    let (status, v) = b.control("/engine/resume", json!({}));
+    assert_eq!(status, 200, "{v}");
+    assert!(b.running("b"));
+    assert_eq!(b.conversations().as_deref(), Some("a"));
+}
+
+/// A side request whose model does not start leaves the engine on the model it had and remembers nothing; one that
+/// came before keeps what it remembered.
+#[test]
+fn a_side_request_that_does_not_start_changes_nothing() {
+    let b = fixture();
+    b.text("a");
+    let body = json!({ "model": "unknown", "messages": [] }).to_string();
+    let r = post(&b.url("/v1/chat/completions"), &[("Content-Type", "application/json"), (http::SIDE_REQUEST, "1")], &body);
+    assert!(!r.status().is_success());
+    assert!(b.running("a"));
+    assert_eq!(b.conversations(), None);
+
+    b.ask_aside("b");
+    let r = post(&b.url("/v1/chat/completions"), &[("Content-Type", "application/json"), (http::SIDE_REQUEST, "1")], &body);
+    assert!(!r.status().is_success());
+    assert!(b.running("b"));
+    assert_eq!(b.conversations().as_deref(), Some("a"));
+}

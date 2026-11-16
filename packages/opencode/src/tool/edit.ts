@@ -7,7 +7,7 @@ import * as path from "path"
 import { Effect, Schema, Semaphore } from "effect"
 import * as Tool from "./tool"
 import { LSP } from "@/lsp/lsp"
-import { createTwoFilesPatch, diffLines } from "diff"
+import { createTwoFilesPatch, diffArrays, diffLines } from "diff"
 import DESCRIPTION from "./edit.txt"
 import { FileSystem } from "@opencode-ai/core/filesystem"
 import { Watcher } from "@opencode-ai/core/filesystem/watcher"
@@ -20,17 +20,48 @@ import { ProjectPath } from "./project-path"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import * as Bom from "@/util/bom"
 
-function normalizeLineEndings(text: string): string {
+export function normalizeLineEndings(text: string): string {
   return text.replaceAll("\r\n", "\n")
 }
 
-function detectLineEnding(text: string): "\n" | "\r\n" {
-  return text.includes("\r\n") ? "\r\n" : "\n"
-}
-
-function convertToLineEnding(text: string, ending: "\n" | "\r\n"): string {
-  if (ending === "\n") return text
-  return text.replaceAll("\n", "\r\n")
+/**
+ * The lines of `updated` that were already in `original` keep their line ending; new lines take the one most of
+ * `original` uses. A file with no line break takes `updated` as given.
+ */
+export function keepLineEndings(original: string, updated: string): string {
+  if (!original.includes("\n")) return updated
+  // Nearly every file has one line ending throughout: no line needs to be matched to tell which one it keeps.
+  const breaks = original.split("\n").length - 1
+  const crlfBreaks = original.split("\r\n").length - 1
+  if (crlfBreaks === 0) return normalizeLineEndings(updated)
+  if (crlfBreaks === breaks) return normalizeLineEndings(updated).replaceAll("\n", "\r\n")
+  const lines = (text: string) =>
+    (text.match(/[^\n]*\n|[^\n]+$/g) ?? []).map((raw) => {
+      const content = raw.replace(/\r?\n$/, "")
+      return { content, ending: raw.slice(content.length) }
+    })
+  const before = lines(original)
+  const after = lines(normalizeLineEndings(updated))
+  const crlf = before.filter((line) => line.ending === "\r\n").length
+  const prevailing = crlf > before.filter((line) => line.ending === "\n").length ? "\r\n" : "\n"
+  let from = 0
+  let to = 0
+  return diffArrays(
+    before.map((line) => line.content),
+    after.map((line) => line.content),
+  )
+    .flatMap((change) => {
+      if (change.removed) {
+        from += change.count
+        return []
+      }
+      return change.value.map((content) => {
+        const old = change.added ? undefined : before[from++]
+        const ending = after[to++].ending
+        return content + (ending === "" ? "" : old?.ending || prevailing)
+      })
+    })
+    .join("")
 }
 
 const locks = new Map<string, Semaphore.Semaphore>()
@@ -126,11 +157,13 @@ export const EditTool = Tool.define(
               const source = yield* Bom.readFile(afs, filePath)
               contentOld = source.text
 
-              const ending = detectLineEnding(contentOld)
-              const old = convertToLineEnding(normalizeLineEndings(params.oldString), ending)
-              const replacement = convertToLineEnding(normalizeLineEndings(params.newString), ending)
-
-              const next = Bom.split(replace(contentOld, old, replacement, params.replaceAll))
+              const replaced = replace(
+                normalizeLineEndings(contentOld),
+                normalizeLineEndings(params.oldString),
+                normalizeLineEndings(params.newString),
+                params.replaceAll,
+              )
+              const next = Bom.split(keepLineEndings(contentOld, replaced))
               const desiredBom = source.bom || next.bom
               contentNew = next.text
 
@@ -708,6 +741,8 @@ export function replace(content: string, oldString: string, newString: string, r
     MultiOccurrenceReplacer,
   ]) {
     for (const search of replacer(content, oldString)) {
+      // An empty match (an oldString of spaces against a blank line) would be found between every character.
+      if (search === "") continue
       const index = content.indexOf(search)
       if (index === -1) continue
       notFound = false

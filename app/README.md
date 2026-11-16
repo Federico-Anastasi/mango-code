@@ -6,7 +6,9 @@ agent server hidden, in a Job Object (they die with the app) → window on the h
 manager tells how it goes (`GET /engine`). Nothing at startup concerns the last conversation; `logs\startup.log` has one
 line per phase with the time since the start.
 What PowerShell 7 from the Microsoft Store starts (a web server left in the background) is created outside every job: the agent gets
-`MANGO_APP_RUN`, a value of this run, every process it starts inherits it, and at Quit `stragglers.rs` stops the ones that carry it.
+`MANGO_APP_RUN`, a value of this run, every process it starts inherits it, and at Quit `mango_common::stragglers` stops the ones that carry it; the start of the next run stops the ones left by an app
+that was closed by force (its value names the process that owned it, which no longer runs), except those with a visible window and the ones those started: the user may be working in them. Measured with `off-screen`: every
+process started by the Store's PowerShell 7 leaves the job, while the ones of Windows PowerShell 5.1 do not.
 What the app opens for the user (files with "Open", links in the browser, the logs folder) starts outside that job
 (`supervisor::open_outside_job`): a browser opened by the app stays open when the app quits. "Open" opens only documents,
 text, images, sound and video (`OPENABLE` in `bridge.rs`: the agent writes these files, and other types may run code); any other
@@ -29,7 +31,7 @@ the download and the service with a pretence of the same duration (tests and pic
 | where | what |
 |---|---|
 | `src-tauri/` | window, startup (`lib.rs`), process supervisor, native bridge for the web UI (`bridge.rs`), Preview panel (`preview.rs`), the folders served to it as sites (`sites.rs`), "Use my Chrome" (`chrome.rs`), dictation (`dictation.rs`), the control server's routes (`control.rs`), the downloads in the background (`downloads.rs`), the user's choices about the models and the computer and taking a model off it (`model_choices.rs`), the models the agent knows, told again when they change (`agent_models.rs`), the engine of another PC (`engine_remote.rs`), "Other models" (`other_models.rs`), the Team (`team.rs`), automatic updates (`updater.rs`), zoom of the window (`zoom.rs`), problem reports (`report.rs`), tray (`tray.rs`: "Open", "Settings…", "Quit") |
-| `crates/engine` | the engine manager on 47080: starts the model the request asks for, adds to the chat requests that do not say them the style and the reasoning the user chose, loads the running model again when the user's choices change its plan, saves the conversation before stopping, releases and resumes the GPUs (`/engine/*`), rejects web pages; `share.rs` shares it with the user's other PCs (below, "The engine for your other PCs") and `remote.rs` is the other side, the code of another PC checked and kept ("Using the engine of another PC"). Also `fake-engine` (the tests), `mango-bench` (the speeds of the catalog models), `mango-tune` (tuning: measures a tune, keeps the log, writes the profile; the `optimize/` skill uses it), `mango-launch` (`-p "request"`: one request from a script to the running app, `docs/INTEGRATION.md`) and `off-screen` (a command on a Windows desktop nobody sees: the integration tests without their windows on the screen) |
+| `crates/engine` | the engine manager on 47080: starts the model the request asks for, adds to the chat requests that do not say them the style and the reasoning the user chose, loads the running model again when the user's choices change its plan, remembers the model the conversations stay on while a request marked as a side one has the engine on another, saves the conversation before stopping, releases and resumes the GPUs (`/engine/*`), rejects web pages; `share.rs` shares it with the user's other PCs (below, "The engine for your other PCs") and `remote.rs` is the other side, the code of another PC checked and kept ("Using the engine of another PC"). Also `fake-engine` (the tests), `mango-bench` (the speeds of the catalog models), `mango-tune` (tuning: measures a tune, keeps the log, writes the profile; the `optimize/` skill uses it), `mango-launch` (`-p "request"`: one request from a script to the running app, `docs/INTEGRATION.md`) and `off-screen` (a command on a Windows desktop nobody sees: the integration tests without their windows on the screen) |
 | `crates/images` | the image manager: one picture at a time, drawn by a server of the image engine (`sd-server`, stable-diffusion.cpp) that stays on between the pictures of a conversation about images and is started and stopped for a single picture; it takes the card from the engine manager while it draws (a model that writes there is put aside and comes back), tells how far the picture is step by step with a small preview, and stops a picture on request. `jobs.rs` gives each picture a number to follow it by; `routes.rs` is the routes under `/control/image` on the engine manager's port (`docs/INTEGRATION.md`, "Pictures") |
 | `crates/mango-common` | paths (`Paths::discover`), data folder, service file, `Build` (the build of an engine: `cpu`, `vulkan`, `cuda-12`, `cuda-13`, and `cuda-12-gtx16` of our forks for the GTX 16 family), the app's language (`i18n`); `network` (the addresses of the home network and of Tailscale, for the phone and for the shared engine) and the key helpers (`random_hex`, `equal_ct`); `download`: download of engines (`mango-engines.json`: llama.cpp, our forks, and `sd` for the models that make images) and models (`mango-models.json`) with resume and sha256, plus Hugging Face (`download/hugging_face.rs`: search, links, GGUF files with hash); `credentials`: the keys in the Windows Credential Manager |
 | `crates/engine-cfg` | the PC's hardware (`hardware.rs`: GPUs of any vendor, CPU, RAM, build to use), the optimized profile if it applies (`profiles.rs`, `launcher/profiles/`) or the general plan with the official llama.cpp (`general.rs`), the recommended models (`recommended`), the split of layers across GPUs (`split.rs`), the plan of a model that makes images (`image.rs`: the image engine, the model's files, the card it draws on) |
@@ -66,7 +68,7 @@ installer (`bundle.windows.nsis.languages` in `tauri.conf.json`, `windows/hooks.
   `gguf`: each PC downloads the files of the engine the model runs with (Bonsai 2: `Q2_0` with the official llama.cpp,
   `PQ2_0` with prism).
 - `launcher/profiles/<family>/<model>.json` is a **profile**: model + hardware + engine + build + arguments +
-  context + measured numbers (`measurements`). It applies if the PC's GPUs with at least 2 GiB are exactly the ones it asks for
+  context + measured numbers (`measurements`). It applies if the PC's GPUs with more than 2 GiB are exactly the ones it asks for
   (`3060ti-1080-1660s/`), or on every PC with one of its builds (`general/`: TOQ on NVIDIA). Format in `launcher/profiles/README.md`.
 - Without a profile that applies, `plan()` uses the **general plan**: official llama.cpp
   (`<engines>\llamacpp\<version>-<build>\`) with the build from `choose_build` and the arguments computed from the hardware.
@@ -84,11 +86,18 @@ installer (`bundle.windows.nsis.languages` in `tauri.conf.json`, `windows/hooks.
   than half for many PCs. The interface says the band (`ModelView.verdict.speed` and, for the models found online,
   `Proposal.speed`, which takes them as dense). Builds:
   NVIDIA with CUDA 13.4 driver and Turing or later GPUs `cuda-13`; CUDA 12.4 driver `cuda-12`; AMD, Intel or NVIDIA
-  with an older driver `vulkan`; no GPU with 2 GiB `cpu`. Models with `requires_engine` do not run without a
-  profile of their own (for the GPUs or the build).
+  with an older driver `vulkan`; no GPU with more than 2 GiB of its own `cpu` (the processor's integrated graphics counts as a GPU only when it was given 8 GB or more, as on a Ryzen AI Max: `Gpu::is_integrated`, read from the adapter's name, and `MIN_INTEGRATED_GPU_MEMORY_MIB`; a name that does not say it for certain is a card). Models with `requires_engine` do not run without a
+  profile of their own (for the GPUs or the build). Our forks (`prism`, `toq`) are compiled for AVX2 and cannot start on a
+  processor without it (`avx2` in `mango-engines.json`); the official llama.cpp picks its code for the processor at run time and
+  starts on any x64 one (checked in the zips of the catalog: `ggml-cpu-x64` up to `ggml-cpu-sapphirerapids`, also in the Vulkan and CUDA ones).
+  On a processor without AVX2 a profile on a fork does not apply (the general plan does) and a model that requires a fork says so in
+  its line.
 - `recommended(paths, hw)` says for each model where it runs (GPUs or CPU) with what context, or why it does not fit, and
   which of the recommended ones is probably the fastest: on the GPUs it beats the CPU, at equal placement the one that
   reads fewer weights per token wins (`active_permille` of the MoEs in the catalog).
+  The model proposed to whoever has none (`mark_recommended`) is the first in the catalog that fits and is not on the disk, on
+  the GPUs if one fits there; on the processor, the first that writes at the speed of reading or faster (band «fair»), or the
+  fastest if none does: a 27B dense model that merely fits in a laptop's 16 GB is not proposed.
 
 ## The models on the computer
 
@@ -101,7 +110,12 @@ that runs on the CPU or does not fit says so in its name; choosing one that does
 manager answers 422, which the agent does not retry). The agent knows every model of the catalog, also the ones not
 downloaded yet; the model menu under the chat lists those on the disk (`present`), and the engine loads the model chosen
 there with the next message. When the app opens it loads the default model (`default` in
-`<data>\choices.json`) or, without one, the first model on disk in the catalog's order. Under each name the menu has a line (weight, «sulla scheda video» / «sul processore · lento»,
+`<data>\choices.json`) or, without one, the first model on disk in the catalog's order. If the default's engine is being
+updated (a new version of it came with the app), the app waits for it as long as a download that brings that engine is
+queued or running, and loads the default as soon as the engine is on the disk (not when the files of the download that
+brought it end), also if a message to the agent had made its start fail meanwhile;
+if the download fails, is paused or cancelled, or none was queued, it loads another model that is ready (never one being
+taken off the computer). Under each name the menu has a line (weight, «sulla scheda video» / «sul processore · lento»,
 «legge le immagini» in Italian; a model of another PC has its PC in its name) and, for a model marked `on_request`, the catalog's own warning that it is not reliable as an agent: the app gives
 the facts from its control server (`/control/models`, `/control/state`), which the web UI reads through the agent's
 `GET /mango/models` and `GET /mango/state` (the agent forwards them to `MANGO_CONTROL_URL`).
@@ -112,40 +126,48 @@ The models that make pictures (`image` in the catalog; `about` is the line under
 models that write) come in the same answer of `/control/models` as `image_models` (`key`, `label`, `about`, `license`,
 `present`, `bytes`, `where`: the cards its plan draws on, or the processor) and `image_default`; the engine that is on
 after a picture is `image_loaded` in `/control/state`. Whether one fits this computer is not told: what they ask of a card
-and of the processor is not measured. In the settings, Models has the group «Fanno immagini» (`settings-page/images.tsx`)
-with the words and the actions of the other models: the same background downloads, «Togli dal computer», and «Usa come
-predefinito» (`models.setImageDefault`, saved as `image_default` in `choices.json`; a picture asked without a model is
+and of the processor is not measured. In the settings, Models has the group «They make pictures» (`settings-page/images.tsx`)
+with the words and the actions of the other models: the same background downloads, «Remove from the computer», and «Use as
+default» (`models.setImageDefault`, saved as `image_default` in `choices.json`; a picture asked without a model is
 made by it, and taking that model off the computer gives the choice back to the catalog's default). Under the models, two
 choices of the web UI itself, kept with its other settings (`images.rewrite`, `images.rewriter`): whether a model that
 writes rewrites the request before the picture (on by default), and which one (automatic: Ling if it is on the computer,
 otherwise the default model).
 
 **Pictures in the conversation** (`packages/app/src/components/prompt-picture.tsx`, `packages/session-ui/src/components/picture-tool.tsx`).
-The box a conversation is written in has a choice «Testo / Immagine» (`Text / Picture`), first of its controls, in a
-conversation and in a new one. On «Immagine» what is written is the description of the picture: the model menu lists the
+The box a conversation is written in has a choice «Text / Picture», first of its controls, in a
+conversation and in a new one. On «Picture» what is written is the description of the picture: the model menu lists the
 models that make pictures and are on the computer (the conversation's choice holds; without one, the default), the format
-(Quadrata, Verticale 9:16, Orizzontale 16:9) and the size (Piccola, Grande) are two segmented controls that take a second
+(Square, Portrait 9:16, Landscape 16:9) and the size (Small, Large) are two segmented controls that take a second
 line of the box when they do not fit, and attachments, commands, mentions and the shell are not offered; dictation is.
-What was attached on «Testo» is not sent with a picture and stays in the box.
+What was attached on «Text» is not sent with a picture and stays in the box.
 Sending asks the agent for a turn of the conversation (`POST /session/<id>/image`, `docs/INTEGRATION.md`, "Pictures"); a new
 conversation is created as for a message, and in a new worktree the picture is asked once the worktree is ready. With no model that makes pictures on the computer the side says so in one line
 and leads to its group in Models, and sending is off; a model that writes is not needed with rewriting off. Rewriting
 follows the settings: off, the words go as they are; on, the model chosen there writes the description, if the agent still
 offers it, otherwise the agent chooses. The choice is the conversation's, kept in its prompt (`PicturePick`); without one a
-conversation whose last turn was a picture opens on «Immagine». The row of the tool `image_generate` is the same for the
-picture the user asked for and for the one the model makes by itself: it says what is going on («Scrivo la descrizione»,
-«Aspetto il mio turno», «Preparo la scheda», «Passo 5 di 8», «Finisco»), shows the picture as it forms in a frame of its
+conversation whose last turn was a picture opens on «Picture». The row of the tool `image_generate` is the same for the
+picture the user asked for and for the one the model makes by itself: it says what is going on («Writing the description»,
+«Waiting for my turn», «Getting the card ready», «Step 5 of 8», «Finishing»), shows the picture as it forms in a frame of its
 final proportions, then the picture (a click opens its file in the panel that shows PDFs and pages), how long it took and how
-big it is, the file with «Apri» and «Mostra nella cartella» among the files of the turn, and a collapsed «Descrizione»
-with the description in English to correct: «Rifai con questa descrizione» draws it again with the corrected text and
-«Rifai» with the same one (a new seed); neither while the conversation is busy. A question of the model that rewrites is
-shown by the conversation's question dock, which closes by itself if the turn is stopped; «Ignora» leaves the choice to
+big it is, the file with «Open» and «Show in folder» among the files of the turn, and a collapsed «Description»
+with the description in English to correct: «Make it again with this description» draws it again with the corrected text and
+«Again» with the same one (a new seed); neither while the conversation is busy. A question of the model that rewrites is
+shown by the conversation's question dock, which closes by itself if the turn is stopped; «Dismiss» leaves the choice to
 the model, and the picture is made. The first picture the model makes
 by itself asks the permission `image`, in plain words with what it will draw. The engine that draws stays on while pictures
-are on view; when the box goes back to «Testo», or the conversation is closed or left for another one or for the Home, it is
+are on view; when the box goes back to «Text», or the conversation is closed or left for another one or for the Home, it is
 put away a moment later (`utils/mango-picture-engine.ts`): the app is asked once (`POST /mango/image/unload`), and an
-engine that is drawing then stops when its picture is made. An engine another program left on is not touched: only leaving
-pictures in this window asks.
+engine that is drawing then stops when its picture is made. The tab remembers that pictures were shown in it (the box on
+«Picture», or a picture asked for) until the engine has been put away, so a page reloaded in that moment asks when it is
+back; it does not start counting before it has read the state, the models and the conversation's messages, and it does not
+ask if pictures are on view again. A tab that never showed pictures does not ask, whoever turned the engine on. The model
+that writes the description takes the engine for a while
+(only one local model runs at a time). The agent marks that request as a side one (`X-Mango-Side-Request`), and the engine
+manager keeps the model that was in use as `conversation_model` of its state (`docs/INTEGRATION.md`, section 6): the
+conversations, the new ones too, the messages waiting for the model and every page, phone and window follow it, the box
+names it, and the top bar says what the engine really runs. The state loses it when the engine is on that model again, when
+a message of a conversation starts a model, or when the user picks one.
 `integration/tests/pictures.test.ts` drives all of this in the real window with the fake image engine; `FAKE_SD_PNG=1` makes
 the fake engine draw real PNGs.
 
@@ -161,6 +183,9 @@ stay where they are. The control server's state (`GET /control/state`, `download
 goes; when a model arrives and no model is running, it is loaded.
 Development builds download from `MANGO_HF_URL` instead of Hugging Face, if set (`integration/tests/downloads.test.ts`
 serves the files itself).
+
+The models folder is watched (`src-tauri/src/models_watch.rs`): a file put in it or taken out by hand, at any depth, makes the
+interface read the catalog and the computer again (the space the models use, the models on the computer) two seconds after the last change. If the folder is deleted or renamed while the app runs the watch ends, with one line in the startup log; the folder is watched again at the next start.
 
 With `--service` and no model the app is in use all the same: whoever asks the engine for a model that is not on disk gets
 the sentence that says so.
@@ -181,7 +206,7 @@ next to it is offered as the version with images only if it is shown to be the m
 equals the model's `embedding_length`, and the same `general.basename` or `general.name`, or a file named after the
 model's; another one is left out and `startup.log` says why).
 For a repo the app lists the quantizations (the pieces of a split model joined, the image encoder as an
-option) and proposes, on the cards, the largest that keeps the context of «Automatico» (`AUTO_CTX`, or the model's own
+option) and proposes, on the cards, the largest that keeps the context of «Automatic» (`AUTO_CTX`, or the model's own
 if smaller), otherwise the largest that fits, never F16, BF16 or F32; on the processor, where speed counts more, Q4_K_M
 or the nearest below it that fits. For each it
 says **before** whether it fits in the PC's memory and with what context: the same estimate as the recommended ones
@@ -273,8 +298,7 @@ The other half: a PC that uses the engine another one shares, even a laptop with
   downloaded, and the engine manager is there with no model to load (its port must be free in this case too). The other PC is checked again
   (the app's page shows the logo meanwhile); the models offered to the agent are that PC's, named "… · on PC <ip>", and the
   default is the one running there. `service.json` has `"engine": null` (and `control`, as always). A PC that does not answer is the startup error page,
-  with "Retry" and "Back to the engine of this PC" (`ErrorInfo.remote`): until the web UI has its own screen for it, it is the
-  only way out at that point. Dictation and the rest start as always.
+  with "Retry" and "Back to the engine of this PC" (`ErrorInfo.remote`): it is the only way out at that point. Dictation and the rest start as always.
 - **The agent** (`agent-cfg`): `AgentInputs.engine_key` puts the key in the environment variable `MANGO_ENGINE_KEY` and the provider's
   `apiKey` becomes `{env:MANGO_ENGINE_KEY}`: the key is never in `opencode.json`. The agent sends it on `/v1` and on its two reads of
   the manager (`/engine`, `/slots`: "loading the model", the reading bar). `POST /tokenize` is not offered by the other PC's network
@@ -461,7 +485,6 @@ a segfault on Windows). Which runtime is in a binary:
 (the staging) use a separate build, in a folder with `web\mango-code.exe`. The tests of the agent sources
 are run from the package folder (`cd packages\opencode; bun test --timeout 30000`, which is what `bun run test` does: Bun's own
 limit of 5 s fails the slow ones on a busy computer, and `bunfig.toml` cannot set it): the root refuses them.
-`test/project/vcs.test.ts` "keeps carriage returns inside patch hunks" fails the same way on the upstream tag (v1.19.5, Windows): it is upstream's, not ours.
 
 With the app or the agent windows open, copying over the exe fails (file in use). Windows does let you **rename**
 a running exe: rename the old one, copy the new one, and what is already open stays on the renamed file.
@@ -584,6 +607,8 @@ a pre-release), downloads the newer installer in the background and checks its s
 Help, which also has "Check for updates". The click stops agent and engine as "Quit" does, starts the installer in
 passive mode (`/P /UPDATE /R`: only its progress bar, then it reopens the app) and closes the app. The installer is
 started by the app with `CREATE_BREAKAWAY_FROM_JOB`: inside the app's job Windows would kill it together with the app.
+It waits in `%TEMP%\mango-code-update-<version>`; a minute after the next start (the installer has ended by then) the app deletes
+the folders with that name, those of earlier updates too.
 No automatic checks in the service, in test instances (`MANGO_DATA`) and in debug builds. The user can turn the check of each start
 off (bridge `updates.setAutomatic(false)`, saved as `update.automatic` in `<data>\choices.json`; read when the check is due, so a
 choice made in the first minute counts); "Check for updates" works all the same. The state the web UI reads carries `automatic`.

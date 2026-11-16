@@ -26,7 +26,7 @@ isolation, run it in a virtual machine.
   closes the port and removes the key; "New key" invalidates the code at once. At home the code and the requests travel
   unencrypted on the Wi-Fi (on Tailscale they are encrypted): give the code only to your own PCs. Whoever has it can also
   make your model busy or reload it, and every refusal is a line in `logs\manager.log`, never the key.
-- Using the engine of another PC ("Use the engine of another PC of mine", same page) keeps that PC's code in
+- Using the engine of another PC ("Use the engine of another PC", same page) keeps that PC's code in
   `remote-engine.json` in the Mango Code data folder, **in the clear**, like the phone's and the sharing's keys: it is in your
   Windows profile, readable by whoever can read your files. The key travels to that PC in a header, in the clear on the home Wi-Fi
   (encrypted on Tailscale), and reaches the agent only through its environment, never in `opencode.json`. It is not written in

@@ -35,6 +35,8 @@ export type MangoState = {
   downloads: Download[]
   /** The model of the image engine that stayed on after a picture; none while the engine is off. */
   image_loaded: string | null
+  /** While a side request has the engine on another model: the model the conversations stay on. */
+  conversation_model: string | null
 }
 
 export type Verdict = {
@@ -191,6 +193,7 @@ export function parseState(value: unknown): MangoState | undefined {
     default_model: text(raw.default_model) ?? null,
     downloads,
     image_loaded: text(raw.image_loaded) ?? null,
+    conversation_model: text(raw.conversation_model) ?? null,
   }
 }
 
@@ -475,10 +478,12 @@ export function offered(state: MangoState | undefined, catalog: CatalogEntry[] |
 }
 
 /**
- * The model the engine is on or going to: its key, to keep the conversation's model the same. With no model in use, the
- * one being downloaded: the app loads it as soon as it arrives.
+ * The model the conversations follow, to keep their model the same as the engine's: the one a side request (the rewrite
+ * of a picture's description) found in use while it has the engine on another; otherwise the one the engine is on or going
+ * to, or with no model in use the one being downloaded, which the app loads as soon as it arrives.
  */
-export function engineModel(state: MangoState | undefined) {
+export function conversationModel(state: MangoState | undefined) {
+  if (state?.conversation_model) return state.conversation_model
   const model = state?.model
   if (model?.phase === "loading" || model?.phase === "ready") return model.model
   const download = state && comingDownload(state)

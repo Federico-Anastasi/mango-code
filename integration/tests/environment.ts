@@ -22,6 +22,14 @@ export const LAUNCH_EXE = path.join(DEBUG, "mango-launch.exe");
 export const FAKE_SD_EXE = path.join(DEBUG, "fake-sd.exe");
 export const OFF_SCREEN_EXE = path.join(DEBUG, "off-screen.exe");
 
+/** Chrome's program, from the places Windows installs it in (for everyone, 32-bit, for the user): the ones the app looks in. */
+export function installedChrome() {
+  const places = ["ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA"].flatMap((name) => (process.env[name] ? [path.join(process.env[name], "Google", "Chrome", "Application", "chrome.exe")] : []));
+  const found = places.find((exe) => fs.existsSync(exe));
+  if (!found) throw new Error(`Chrome is not installed: it is in none of ${places.join(", ")}`);
+  return found;
+}
+
 // What must not end up in the distribution: machine files, generated files, packages (linked separately).
 const EXCLUDED = new Set(["node_modules", "runtime", "opencode", "mango-paths.json", "mango-secrets.json", "opencode.json"]);
 

@@ -32,7 +32,7 @@ import { MANGO_PROVIDER } from "@/utils/model-info"
 import { bringBackPending, failureText, useMango } from "@/context/mango"
 import { dismissReady, MangoStatusLine } from "@/components/mango-composer"
 import { composerParts, ModelLabel, modelTag } from "@/components/mango-model-bar"
-import { engineModel, messageWaits, noModel } from "@/utils/mango-state"
+import { conversationModel, messageWaits, noModel } from "@/utils/mango-state"
 import {
   createPromptPicture,
   PictureChoices,
@@ -58,8 +58,6 @@ export type PromptInputV2ControllerProps = Omit<PromptInputProps, "class" | "sub
 export type PromptInputV2ComposerController = PromptInputV2Interaction & {
   readonly model: PromptInputProps["controls"]["model"]
   readonly agents: PromptInputProps["controls"]["agents"]
-  /** mango-code: the conversation whose messages wait for the model and whose engine line is shown. */
-  readonly pending: { sessionID: () => string | undefined }
   /** mango-code: what the box asks of a picture (the choice between a text and a picture, the model, format and size). */
   readonly picture: PromptPicture
 }
@@ -69,11 +67,13 @@ export function PromptInputV2Composer(props: PromptInputV2ComposerProps) {
   const language = useLanguage()
   const mango = useMango()
   // mango-code: a model of this PC is named from the app's state, as in the top bar (the engine's model, its load, the
-  // first model's download); a model of another provider or the other PC's engine by the conversation's choice.
+  // first model's download); a model of another provider, the other PC's engine, or the engine on another model for a side
+  // request (a picture's description being written), by the conversation's choice.
   const modelLabel = () => {
     const current = props.controller.model.selection.current()
     const state = mango.state()
-    if (state && state.model.phase !== "remote" && (!current || current.provider?.id === MANGO_PROVIDER))
+    const fromEngine = !state?.conversation_model && (!current || current.provider?.id === MANGO_PROVIDER)
+    if (state && state.model.phase !== "remote" && fromEngine)
       return composerParts(state, language.t)
     return { name: current?.name ?? language.t("dialog.model.select.title") }
   }
@@ -85,10 +85,7 @@ export function PromptInputV2Composer(props: PromptInputV2ComposerProps) {
   const picture = () => props.controller.picture
   return (
     <div class="flex flex-col gap-3">
-      <Show
-        when={picture().on()}
-        fallback={<MangoStatusLine sessionID={props.controller.pending.sessionID()} />}
-      >
+      <Show when={picture().on()} fallback={<MangoStatusLine />}>
         <Show when={picture().empty()}>
           <PictureNotice picture={picture()} />
         </Show>
@@ -504,14 +501,14 @@ export function usePromptInputV2Controller(props: PromptInputV2ControllerProps):
   Object.defineProperty(controller, "picture", { get: () => picture })
 
   const sessionID = () => props.controls.session.id
-  Object.defineProperty(controller, "pending", { get: () => ({ sessionID }) })
   bringBackPending({ sessionID, pending: mango.pending, prompt, blank, focus: () => controller.restoreFocus() })
-  // One local model runs at a time: the conversation's model follows the one the engine is on or going to, so a message
-  // does not make the engine change model behind the user's back. While a model chosen in a menu is being asked it waits;
-  // if the app refuses it, the conversation goes back to the engine's model.
+  // One local model runs at a time: the conversation's model follows the one the engine is on or going to (or, while a
+  // side request has the engine, the one it had), so a message does not make the engine change model behind the user's
+  // back. While a model chosen in a menu is being asked it waits; if the app refuses it, the conversation goes back to
+  // the engine's model.
   createEffect(
     on(
-      () => [engineModel(mango.state()), props.controls.model.selection.current()?.id, mango.asked()] as const,
+      () => [conversationModel(mango.state()), props.controls.model.selection.current()?.id, mango.asked()] as const,
       ([key, , asked]) => {
         const selection = props.controls.model.selection
         const current = selection.current()

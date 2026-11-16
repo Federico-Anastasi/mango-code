@@ -25,7 +25,7 @@ mod speed;
 mod split;
 mod view;
 
-pub use catalog::{catalog, catalog_for, default_to_save, download_of, startup_model, DownloadPlan, Origin, ModelEntry};
+pub use catalog::{catalog, catalog_for, default_to_save, download_of, model_to_load, startup_model, DownloadPlan, EngineNow, Load, Origin, ModelEntry, Situation};
 pub use general::Placement;
 pub use image::{image_models, image_plan, image_plan_for, image_views, Draws, ImageCatalog, ImageEntry, ImagePlan, ImageView, ImageViews};
 pub use view::{after_failure, taken_before_start, CardsTaken, computer_view, engine_label, engine_updates, models_view, recommended, AfterFailure, ComputerView, EngineUpdate, Limits, ModelView, Recommendation, Verdict, Where};

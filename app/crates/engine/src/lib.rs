@@ -125,6 +125,17 @@ fn moment(s: &State) -> (Phase, Option<String>, Option<String>, bool, Vec<u32>) 
     (s.phase, s.running.as_ref().map(|a| a.plan.url.clone()), s.chosen.clone(), s.all, s.excluded.clone())
 }
 
+/// What asks for a model to start, for the model the conversations stay on (`PublicState::conversation_model`).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Asker {
+    /// A request of a conversation: the model it names is the one the conversations use from then on.
+    Conversation,
+    /// A side request: it takes the engine for a while, the conversations stay on the model in use before it.
+    Side,
+    /// A choice, the restart after a loan, a reload: they do not say what the conversations use.
+    Other,
+}
+
 /// The load in progress was stopped on purpose (`choose`): it is not a failure of the engine.
 #[derive(Debug)]
 struct LoadStopped;
@@ -202,6 +213,10 @@ pub struct PublicState {
     pub failed: Option<PublicFailure>,
     /// The model the user picked that has not begun to load yet: it waits for the answer in progress of the running one.
     pub chosen: Option<String>,
+    /// While a side request (`http::SIDE_REQUEST`) has the engine on another model: the model that was in use when it came,
+    /// the one the conversations stay on. It goes when the engine is on that model again, when a request that is not a
+    /// side one starts a model, when a model is picked, or when that model is taken off the computer.
+    pub conversation_model: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -287,6 +302,8 @@ struct State {
     in_flight: usize,
     /// The model the user picked (`choose`) that has not begun to start yet: until it does, the other requests wait.
     chosen: Option<String>,
+    /// See `PublicState::conversation_model`.
+    conversation_model: Option<String>,
     /// The load in progress has to stop: the user picked another model.
     stop_load: bool,
     /// How many loads were stopped, and the model of the last one: a request that was waiting for it is told.
@@ -490,9 +507,10 @@ impl EngineManager {
     }
 
     /// Starts `key` (stopping the other model, if any) and waits until it's ready. `tick` receives the seconds
-    /// elapsed while loading.
+    /// elapsed while loading. The model is picked on purpose: the conversations stay on no other.
     pub fn start(&self, key: &str, tick: &mut dyn FnMut(u64)) -> Result<()> {
-        drop(self.use_with(Some(key), tick, false, true)?);
+        self.lock().conversation_model = None;
+        drop(self.use_with(Some(key), tick, false, true, Asker::Other)?);
         Ok(())
     }
 
@@ -517,11 +535,12 @@ impl EngineManager {
             s.chosen = Some(key.to_string());
             s.wanted_by_choice = false;
             s.failed = None;
+            s.conversation_model = None;
         }
         self.0.cv.notify_all();
         let (m, key) = (self.clone(), key.to_string());
         let _ = std::thread::Builder::new().name("engine-choice".into()).spawn(move || {
-            if let Err(e) = m.use_with(Some(&key), &mut |_| {}, true, check) {
+            if let Err(e) = m.use_with(Some(&key), &mut |_| {}, true, check, Asker::Other) {
                 // A newer choice took its place, or it waits for the cards: nothing went wrong.
                 if !e.is::<Superseded>() && !e.is::<Parked>() {
                     m.log(serde_json::json!({ "event": "choice", "model": key, "error": format!("{e:#}") }));
@@ -533,12 +552,18 @@ impl EngineManager {
     /// The engine for a request: `key` is the model it asks for (`None` = the running or wanted one).
     /// If needed, starts the model; while the GPUs are released it waits for them to resume.
     pub fn acquire(&self, key: Option<&str>) -> Result<Permit> {
-        self.use_with(key, &mut |_| {}, false, true)
+        self.use_with(key, &mut |_| {}, false, true, Asker::Conversation)
+    }
+
+    /// `acquire` for a request that is not a conversation's (`http::SIDE_REQUEST`): if its model changes the one in use, the
+    /// conversations stay on the model that was.
+    pub fn acquire_side(&self, key: Option<&str>) -> Result<Permit> {
+        self.use_with(key, &mut |_| {}, false, true, Asker::Side)
     }
 
     /// `choice`: the call is the user's choice (`choose`), which stops a load in progress for another model. `check`: see
-    /// `start_model`.
-    fn use_with(&self, key: Option<&str>, tick: &mut dyn FnMut(u64), choice: bool, check: bool) -> Result<Permit> {
+    /// `start_model`. `asker`: see `Asker`.
+    fn use_with(&self, key: Option<&str>, tick: &mut dyn FnMut(u64), choice: bool, check: bool, asker: Asker) -> Result<Permit> {
         let t0 = Instant::now();
         let mut s = self.lock();
         let stops = s.stops;
@@ -627,7 +652,7 @@ impl EngineManager {
                 }
                 // Released only in part: the model restarts on the remaining GPUs, if it fits.
                 Phase::Released if !s.all && s.doesnt_fit.as_deref() != Some(want.as_str()) => {
-                    let started = self.start_model(s, &want, tick, check);
+                    let started = self.start_model(s, &want, tick, check, asker);
                     if started.as_ref().is_err_and(|e| e.is::<Moved>()) {
                         s = self.lock();
                         continue;
@@ -676,7 +701,7 @@ impl EngineManager {
                 // Another model is running: wait for its requests to finish, then switch.
                 Phase::Running if s.in_flight > 0 => s = self.wait(s, Duration::from_secs(1)),
                 Phase::Running | Phase::Stopped | Phase::Error => {
-                    let started = self.start_model(s, &want, tick, check);
+                    let started = self.start_model(s, &want, tick, check, asker);
                     if started.as_ref().is_err_and(|e| e.is::<Moved>()) {
                         s = self.lock();
                         continue;
@@ -717,8 +742,8 @@ impl EngineManager {
     /// `chosen`, holding the other requests back, until its load begins here.
     ///
     /// `check`: once the model before has stopped, a model that goes on the cards starts only if there is room for it beside
-    /// the other programs (`room_for`); `retry` and `reload` pass `false`.
-    fn start_model<'a>(&'a self, s: MutexGuard<'a, State>, key: &str, tick: &mut dyn FnMut(u64), check: bool) -> Result<MutexGuard<'a, State>> {
+    /// the other programs (`room_for`); `retry` and `reload` pass `false`. `asker`: see `Asker`.
+    fn start_model<'a>(&'a self, s: MutexGuard<'a, State>, key: &str, tick: &mut dyn FnMut(u64), check: bool, asker: Asker) -> Result<MutexGuard<'a, State>> {
         refuse_blocked(&s, key)?;
         let before = moment(&s);
         let excluded = if s.all { None } else { Some(s.excluded.clone()) };
@@ -737,6 +762,16 @@ impl EngineManager {
         refuse_blocked(&s, key)?;
         let wanted_before = s.wanted.clone();
         let stale_before = s.stale;
+        let conversations_before = s.conversation_model.clone();
+        let in_use = s.running.as_ref().map(|a| a.plan.key.clone()).or_else(|| wanted_before.clone());
+        s.conversation_model = match (asker, &conversations_before) {
+            (_, Some(remembered)) if remembered == key => None,
+            (Asker::Conversation, _) => None,
+            (Asker::Side, None) => in_use.filter(|k| k != key),
+            _ => conversations_before.clone(),
+        };
+        let remembered_now = s.conversation_model.clone();
+        let born = conversations_before.is_none() && remembered_now.is_some();
         s.phase = Phase::Starting;
         if s.chosen.as_deref() == Some(key) {
             s.chosen = None;
@@ -793,6 +828,10 @@ impl EngineManager {
                         s.phase = Phase::Running;
                         s.running = Some(a);
                         s.wanted = wanted_before;
+                        // The side request that began to remember did not take the engine. A pick made meanwhile stays.
+                        if born && s.conversation_model == remembered_now {
+                            s.conversation_model = None;
+                        }
                     }
                     None => s.phase = if stopped { Phase::Stopped } else { Phase::Error },
                 }
@@ -1049,7 +1088,7 @@ impl EngineManager {
             self.0.cv.notify_all();
         }
         if let Some(k) = wanted {
-            self.start(&k, tick)?;
+            drop(self.use_with(Some(&k), tick, false, true, Asker::Other)?);
         }
         Ok(self.state())
     }
@@ -1101,6 +1140,7 @@ impl EngineManager {
                     }),
                     failed: s.failed.clone(),
                     chosen: s.chosen.clone(),
+                    conversation_model: s.conversation_model.clone(),
                 },
                 s.running.is_some(),
             )
@@ -1227,7 +1267,7 @@ impl EngineManager {
                 s = self.wait(s, Duration::from_secs(1));
                 continue;
             }
-            match self.start_model(s, key, &mut |_| {}, false) {
+            match self.start_model(s, key, &mut |_| {}, false, Asker::Other) {
                 Ok(_) => return,
                 // something moved while the plan was made: look again
                 Err(e) if e.is::<Moved>() => s = self.lock(),
@@ -1239,9 +1279,15 @@ impl EngineManager {
     /// While the returned guard lives, `key` is not started: a request, a reload, a choice or a `resume` that would start
     /// it gets `BeingRemoved` (422 on the port) instead. It is for taking the model off the computer: take the guard,
     /// stop the engine if it runs the model (`unload`), delete the files, drop the guard. The guard stops nothing itself:
-    /// a model running when it is taken answers until `unload`, one loading finishes loading.
+    /// a model running when it is taken answers until `unload`, one loading finishes loading. The conversations no longer
+    /// stay on it (`PublicState::conversation_model`).
     pub fn block_starts(&self, key: &str) -> StartBlock {
-        self.lock().blocked.push(key.to_string());
+        let mut s = self.lock();
+        s.blocked.push(key.to_string());
+        if s.conversation_model.as_deref() == Some(key) {
+            s.conversation_model = None;
+        }
+        drop(s);
         StartBlock { m: self.clone(), key: key.to_string() }
     }
 

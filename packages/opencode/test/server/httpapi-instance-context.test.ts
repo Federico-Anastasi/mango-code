@@ -178,14 +178,14 @@ describe("HttpApi instance context middleware", () => {
 
   it.live("falls back to the raw directory when URI decoding fails", () =>
     Effect.gen(function* () {
+      const dir = path.join(yield* tmpdirScoped(), "%E0%A4%A")
+      yield* Effect.promise(() => mkdir(dir))
       yield* serveProbe()
 
-      const response = yield* HttpClient.get("/probe?directory=%25E0%25A4%25A")
+      const response = yield* HttpClient.get(`/probe?directory=${encodeURIComponent(dir)}`)
 
       expect(response.status).toBe(200)
-      expect(yield* response.json).toMatchObject({
-        directory: path.join(process.cwd(), "%E0%A4%A"),
-      })
+      expect(yield* response.json).toMatchObject({ directory: dir })
     }),
   )
 

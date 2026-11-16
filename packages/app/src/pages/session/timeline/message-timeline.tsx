@@ -70,7 +70,6 @@ import { shouldMarkBoundaryGesture, normalizeWheelDelta } from "@/pages/session/
 import { SessionContextUsage } from "@/components/session-context-usage"
 import { createEngineLive, createEngineTurn, SessionWorkTime, TurnStats, waitLabel } from "@/components/engine-speed"
 import { ownsEngineNumbers, type EngineSession } from "@/utils/engine-speed"
-import { readingText } from "@/components/mango-text"
 import { useDialog } from "@opencode-ai/ui/context/dialog"
 import { useLanguage } from "@/context/language"
 import { useSessionKey } from "@/pages/session/session-layout"
@@ -166,8 +165,8 @@ function TimelineThinkingRow(props: { since: number; afterParts: boolean }) {
     // The engine waits for the gpus or loads the model: it says so instead of "Reading the request".
     const wait = ownsEngineNumbers(turn()) ? engine().wait : undefined
     if (wait) return withTime(waitLabel(wait, language.t, language.intl()))
-    // the seconds of the reading itself, as the status line says them
-    if (reading && reading.totalTokens > 0) return readingText(reading, language)
+    if (reading && reading.totalTokens > 0)
+      return language.t("mango.status.reading", { seconds: Math.max(1, Math.round(reading.ms / 1000)) })
     return withTime(language.t(props.afterParts ? "ui.wait.working" : "ui.wait.request"))
   }
 

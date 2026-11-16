@@ -15,6 +15,7 @@ import path from "node:path";
 import { start, type Environment } from "./environment";
 import { page, type Page } from "./cdp";
 import { answer } from "./dialog";
+import { atSizes } from "./window";
 
 const [AGENT, ENGINE, DEBUG] = [47650, 47651, 47652];
 // A folder the test makes pass for the OneDrive folder (the agent reads the variable), and the PC's real Desktop (only read: it
@@ -55,14 +56,12 @@ afterAll(() => {
 const text = () => p.evaluate("document.body.innerText") as Promise<string>;
 const photo = async (name: string) => {
   if (!process.env.MC_PHOTOS) return;
-  for (const [width, height, suffix] of [[860, 700, "860"], [390, 800, "390"]] as const) {
-    await p.send("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: 1, mobile: false });
+  fs.mkdirSync(process.env.MC_PHOTOS, { recursive: true });
+  await atSizes(env.app.pid!, p, [[860, 700], [390, 800]], async (width) => {
     await Bun.sleep(700);
     const r = await p.send("Page.captureScreenshot", { format: "png" });
-    fs.mkdirSync(process.env.MC_PHOTOS, { recursive: true });
-    fs.writeFileSync(path.join(process.env.MC_PHOTOS, `${name}-${suffix}.png`), Buffer.from(r.result.data, "base64"));
-  }
-  await p.send("Emulation.clearDeviceMetricsOverride");
+    fs.writeFileSync(path.join(process.env.MC_PHOTOS!, `${name}-${width}.png`), Buffer.from(r.result.data, "base64"));
+  });
 };
 
 async function click(label: string) {

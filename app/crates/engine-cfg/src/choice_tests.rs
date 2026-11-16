@@ -840,6 +840,14 @@ fn the_computer_lists_the_cards_the_disk_and_the_tailored_models() {
     hw.gpus.push(other(3, "AMD Radeon RX 6600", Vendor::Amd, 8176));
     let c = computer_view(&paths, &hw).unwrap();
     assert!(!c.gpus[3].used && c.gpus[3].note.contains("NVIDIA"), "{:?}", c.gpus[3]);
+    // Integrated graphics with memory from the BIOS is not a card, and the list says so.
+    hw.gpus.push(other(4, "AMD Radeon(TM) Graphics", Vendor::Amd, 4096));
+    let c = computer_view(&paths, &hw).unwrap();
+    assert!(!c.gpus[4].used && c.gpus[4].note.contains(&tr!("grafica integrata", "integrated graphics")), "{:?}", c.gpus[4]);
+    // Integrated graphics with the memory of a card is listed as the card it is, and can be left out like one.
+    let hw = pc(vec![other(0, "AMD Radeon(TM) 8060S Graphics", Vendor::Amd, 65_536)], 63_000);
+    let c = computer_view(&paths, &hw).unwrap();
+    assert_eq!((c.gpus[0].used, c.gpus[0].note.as_str()), (true, ""));
 }
 
 /// The verdicts of the catalog's models in `recommended` follow the choices too: the fastest is not a model sent to
@@ -1013,6 +1021,16 @@ fn the_model_to_propose_is_the_first_that_fits_and_is_not_on_disk_on_the_cards_i
     assert_eq!(proposed(vec![listed("a", Some(Gpu), true), listed("b", Some(Gpu), false)], &none), ["b"], "the one on disk is not proposed again");
     assert_eq!(proposed(vec![listed("slow", Some(Cpu), false), listed("b", Some(Gpu), false)], &none), ["b"], "on the cards before the processor");
     assert_eq!(proposed(vec![listed("slow", Some(Cpu), false), listed("huge", None, false)], &none), ["slow"]);
+
+    // On the processor: the first that writes at the speed of reading or faster, otherwise the fastest.
+    let at = |key: &str, speed| {
+        let mut v = listed(key, Some(Cpu), false);
+        v.verdict.speed = Some(speed);
+        v
+    };
+    use crate::Speed::{Fair, Quick, Slow, VerySlow};
+    assert_eq!(proposed(vec![at("dense", Slow), at("moe", Fair), at("small", Quick)], &none), ["moe"]);
+    assert_eq!(proposed(vec![at("dense", VerySlow), at("big", Slow), at("huge", VerySlow)], &none), ["big"], "none is fair: the fastest");
     assert!(proposed(vec![listed("a", Some(Gpu), true), listed("huge", None, false)], &none).is_empty());
 
     let mut user = listed("mine", Some(Gpu), false);

@@ -6,11 +6,14 @@
 //! off-screen bun test --cwd integration
 //! ```
 //!
-//! Input, output and the exit code are the command's. Everything the command started ends with this program, also
-//! when it is stopped halfway: on a desktop nobody sees, a process left behind could not be found by looking.
+//! Input, output and the exit code are the command's. When the command ends, what it started ends with it: a job holds
+//! the processes it starts and closes with `off-screen`, also if `off-screen` is stopped halfway. What the Store's
+//! PowerShell 7 starts is outside any job and carries `MANGO_OFF_SCREEN`: the processes with that name are stopped when
+//! the command ends, but not if `off-screen` is stopped halfway, so those stay until someone stops them.
 //! The command finds the name of its desktop in `MANGO_OFF_SCREEN`: the keyboard and the mouse of Windows do not
 //! reach it, so what needs them (a real wheel, a real key) knows it cannot run there.
-//! Exit code 2 for a missing command, 3 when the desktop or the command cannot be started.
+//! Exit code 2 when no command is given, 3 when the desktop, the job or the command cannot be started (a command that
+//! does not exist too); any other code is the command's.
 
 use std::os::windows::io::AsRawHandle;
 use std::ptr::null;
@@ -46,9 +49,9 @@ fn run(args: &[String]) -> Result<i32, String> {
     let failed = |what: &str| format!("{what} failed (Windows error {})", unsafe { GetLastError() });
     let wide = |text: &str| text.encode_utf16().chain([0]).collect::<Vec<u16>>();
     // One desktop per run: two runs at the same time do not see each other's windows.
-    let desktop = format!("mango-off-screen-{}", std::process::id());
-    std::env::set_var("MANGO_OFF_SCREEN", &desktop);
-    let name = wide(&desktop);
+    let desktop_name = format!("mango-off-screen-{}", std::process::id());
+    std::env::set_var("MANGO_OFF_SCREEN", &desktop_name);
+    let name = wide(&desktop_name);
     let mut command = wide(&args.iter().map(|a| quoted(a)).collect::<Vec<_>>().join(" "));
     let inherited = |handle: HANDLE| unsafe {
         SetHandleInformation(handle, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT);
@@ -89,6 +92,7 @@ fn run(args: &[String]) -> Result<i32, String> {
         WaitForSingleObject(process.hProcess, INFINITE);
         let mut code = 0u32;
         GetExitCodeProcess(process.hProcess, &mut code);
+        mango_common::stragglers::kill_where_env("MANGO_OFF_SCREEN", |value| value == desktop_name);
         CloseDesktop(desktop);
         Ok(code as i32)
     }

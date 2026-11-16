@@ -86,7 +86,7 @@ A PC can share its engine with the user's other PCs ("Lend the engine to my PCs"
 `mango://<ip>:<port>/<key>` (the key is 48 hex characters); the client splits it into address and key and sends the key on
 every request: `Authorization: Bearer <key>`, `Host` the numeric address, no `Origin`. To use that engine, an agent's
 provider has `baseURL` `http://<ip>:<port>/v1` and the key as its `apiKey`. Mango Code itself does this from "Use the engine of
-another PC of mine" (`app/README.md`): it keeps the code in `<data>\remote-engine.json`, starts the agent with the key in the
+another PC" (`app/README.md`): it keeps the code in `<data>\remote-engine.json`, starts the agent with the key in the
 environment variable `MANGO_ENGINE_KEY` (the config reads it as `{env:MANGO_ENGINE_KEY}`) and the agent sends it to the engine on
 `/v1`, `/engine` and `/slots`.
 
@@ -198,7 +198,9 @@ repository if there is one): `CLAUDE.md`, `CLAUDE.local.md`, `AGENTS.md`, `.clau
 `.claude/skills/<name>/SKILL.md`, the MCP servers in `.mcp.json` (`mcpServers`, over stdio or http), which start in the
 file's folder. When the agent is started by Mango Code (the app) it reads nothing of what is on the
 PC (`~/.claude`, global skills): the app sets `OPENCODE_DISABLE_CLAUDE_CODE`, `OPENCODE_DISABLE_EXTERNAL_SKILLS` and
-`OPENCODE_DISABLE_BUILTIN_COMMANDS`. An agent started by hand without them reads them like opencode does.
+`OPENCODE_DISABLE_BUILTIN_COMMANDS`. An agent started by hand without them reads them like opencode does. The hooks of
+`.claude/settings.json` are not read, and the `task` tool (subagents) is off: a local model with one slot gains nothing
+by splitting itself.
 
 **Rules by path.** A `.claude/rules/*.md` rule with `paths:` in the frontmatter (a list of globs, relative to the folder that
 contains `.claude/`, e.g. `src/**/*.ts`) is not in the prompt: it is appended to the result of `read`, `edit` or `write` on a
@@ -323,11 +325,14 @@ the types of `packages/app/src/utils/mango-state.ts`. An agent the app did not s
 
 ## 6. The engine and the GPUs
 
+The engine serves one session at a time: requests of different sessions queue, and two different models do not run
+together (changing model costs 20-80 s of loading).
+
 The local model holds the GPUs. Whoever needs to do heavy work on the same GPUs borrows them:
 
 | what | call (on the `engine` address) |
 |---|---|
-| state | `GET /engine` → `{ phase, model, name, context, gpus: [{index, name, memory_used_mib, memory_total_mib}], released_gpus, all_released, loans: [{gpus, pid, who, since}], requests_in_flight, error, loading, failed, chosen }` (`loading`: while `starting`, `{model, name, context, gpus: [names], seconds}`; `failed`: the last start that failed, `{model, reason, taken}`, where `taken` is the sentence that says which card another program holds when the manager did not start the model for that, otherwise null; `chosen`: the model the user picked that has not begun to load yet) |
+| state | `GET /engine` → `{ phase, model, name, context, gpus: [{index, name, memory_used_mib, memory_total_mib}], released_gpus, all_released, loans: [{gpus, pid, who, since}], requests_in_flight, error, loading, failed, chosen, conversation_model }` (`loading`: while `starting`, `{model, name, context, gpus: [names], seconds}`; `failed`: the last start that failed, `{model, reason, taken}`, where `taken` is the sentence that says which card another program holds when the manager did not start the model for that, otherwise null; `chosen`: the model the user picked that has not begun to load yet; `conversation_model`: see "Side requests" below) |
 | release | `POST /engine/release` `{ "gpus": [0, 2], "pid"?: 1234 }` (without `gpus`: all) → the state, when the GPUs are free |
 | resume | `POST /engine/resume` → the state, when the model is ready |
 | load a model | `POST /engine/model` `{ "model": "toq" }` → the state, when it is ready; a model that does not start (unknown, missing files) leaves the previous one running, with `error` saying why |
@@ -344,6 +349,18 @@ The local model holds the GPUs. Whoever needs to do heavy work on the same GPUs 
 | `error` | the last start failed or the engine closed on its own: `error` says why, and the next request restarts it |
 
 `loans[].gpus` is `null` for "all".
+
+**Side requests.** The conversations follow the model the engine is on. A program that needs another model for a moment,
+without the conversations moving to it (the agent does it to rewrite the description of a picture), marks its chat request
+with the header `X-Mango-Side-Request: 1`. If the model it names is not the one in use, the manager loads it as for any
+request and remembers the model that was in use: `conversation_model` in `GET /engine` (and in the app's state,
+`GET /control/state`, read together with `model`) is that model, `null` otherwise. The interface shows the conversations on
+it while the engine is on the other. The memory is born only when a side request really changes the model, and a second side
+request leaves it as it is. It goes when the engine is on that model again, when a request without the header starts a model,
+when a model is picked (`POST /engine/model`, "use this model" in the app), and when that model is taken off the computer. It
+stays when the model of the side request is put aside for the cards (`release`) and taken back (`resume`), and when the work
+the side request was for fails or is stopped. A request without the header does what it always did: the model it names is
+loaded and the conversations follow it.
 
 **The loan belongs to whoever asks.** `release` ties the loan to the process that makes the call (the manager recognizes it
 from the connection): when that process exits without having called `resume` (a crash, an interrupted test), the manager
@@ -365,7 +382,7 @@ releases nothing: never "all the GPUs" by default.
 2. Otherwise it goes to `releasing`: new requests wait; **those in progress continue and finish, for 60 s at most**. A
    generation that does not finish within 60 s drops: the connection closes mid-answer, and the agent retries when the
    engine is running again.
-3. It saves the open conversation to the on-disk memory (every model; up to 60 s, usually 1-3 s), stops the engine and
+3. It saves the open conversation to disk (every model; up to 60 s, usually 1-3 s), stops the engine and
    answers with `phase: "released"`. Until then `phase` stays `releasing` and new requests wait: a model restarting on the
    remaining GPUs before the end of the save would read the old conversation. The same holds for `resume` of a model that
    restarted on fewer GPUs: until the old one is stopped `phase` is `starting`.
@@ -388,10 +405,11 @@ On an RTX 3060 Ti + GTX 1080 + GTX 1660 SUPER (Qwen3.6 on the three GPUs, a conv
 included; **resume** 16.9 s, reload included (2.9 s); the next message rereads 34 tokens and the answer starts 2.9 s after
 sending (without the memory: 6-8 minutes of rereading).
 
-**On-disk memory**: every model keeps the state of its conversations and of the system prompt in a folder of its own under
-the data folder; an engine that restarts (after `release`, a model change, closing) reloads the conversation used last, and
-a new conversation in the same folder starts from the system prompt already read. Cap of 6 GiB and age of 24 hours for all
-models together: the files used longest ago go out first.
+**On-disk memory**: a model that runs with a profile keeps the state of its conversations and of the system prompt in a
+folder of its own under the data folder; an engine that restarts (after `release`, a model change, closing) reloads the
+conversation used last, and a new conversation in the same folder starts from the system prompt already read. Cap of 6 GiB
+and age of 24 hours for all models together: the files used longest ago go out first. A model on the general plan
+(official llama.cpp) keeps only the conversation that was open when the engine stopped, and reloads it at the next start.
 
 **Log**: every `POST /engine/…` leaves a JSON line in `<data>\logs\manager.log` (`time` local, `route`, `body`, `status`,
 `duration_ms`, `error` if not 200, `address` and `user_agent` of the caller): to know who released or resumed and when, a
@@ -485,6 +503,8 @@ for): ask it, then send the same request again with `answers: [{ "question", "op
 - Rewriting is a choice of whoever asks for the picture: a request can go to `generate` as it is.
 - `502`: the model did not answer, or not in the form the rules ask for; `404`: there is no such model, or none at
   all. With Ling on a graphics card a request takes about half a second.
+- The agent marks its request to the model with `X-Mango-Side-Request` (section 6): the model that writes takes the engine
+  for the time of the picture, and the conversations stay on the model they had.
 - Test: `packages/opencode/test/server/mango-image-rewrite.test.ts`.
 
 **From the model that writes.** In a session the model has the tool `image_generate` `{ "prompt", "name", "format"?,
@@ -554,18 +574,7 @@ any model is asked, and the tool is not offered there.
 
 Test: `packages/opencode/test/session/image-turn.test.ts`.
 
-## 8. What Claude Code has that Mango Code does not
-
-- **Subagents**: the `task` tool is off (a local model with one slot gains nothing by splitting itself).
-- **Effort / reasoning levels**: the model always reasons; there is no selector.
-- **The user's Chrome**: the agent's browser is the app's Preview panel, and the agent opens a page in your Chrome only
-  when it asks for it on purpose (`new_page` with `userChrome`), as a new tab. "Use my Chrome" needs a manual step: turn on
-  remote debugging at `chrome://inspect/#remote-debugging`, and Chrome asks for confirmation at every connection.
-- **One session at a time on the engine**: requests of different sessions queue; two different models do not run together
-  (changing model costs 20-80 s of loading).
-- **Claude Code hooks** (`.claude/settings.json`): they are not read.
-
-## 9. Example
+## 8. Example
 
 ```ts
 import { launch, MangoCode } from "./integration/client/mango-code";
@@ -582,7 +591,7 @@ for await (const s of mc.turn(id, directory, "Which files are here?", { model: "
 
 From the command line: `bun integration/example-cli.ts <folder> "<message>" [model]`.
 
-## 10. The client
+## 9. The client
 
 `integration/client/mango-code.ts` exports:
 

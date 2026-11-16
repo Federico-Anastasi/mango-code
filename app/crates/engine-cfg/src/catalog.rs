@@ -336,13 +336,18 @@ pub(crate) fn setup_for(paths: &Paths, key: &str, cfg: &ModelCfg, hw: &Hardware,
     if cfg.requires_engine.is_some() && choices.place != WhereChoice::Auto {
         bail!("{}", choices::only_automatic(&cfg.label));
     }
-    if choices.place == WhereChoice::Auto {
-        if let Some(p) = profiles::lookup(paths, key, hw)? {
-            return Ok(Setup::Profile(Box::new(p)));
-        }
-    }
-    match &cfg.requires_engine {
-        Some(m) => Err(user(
+    let profile = if choices.place == WhereChoice::Auto { profiles::lookup(paths, key, hw)? } else { None };
+    match (profile, &cfg.requires_engine) {
+        (Some(p), _) => Ok(Setup::Profile(Box::new(p))),
+        (None, Some(m)) if !hw.cpu.avx2 && mango_common::download::needs_avx2(paths, m) => Err(user(
+            &tr!(
+                "Il modello «{}» gira solo sul motore «{m}», che richiede un processore con AVX2: quello di questo PC non ce l'ha.",
+                "The model «{}» only runs on the engine «{m}», which needs a processor with AVX2: this PC's does not have it.",
+                cfg.label
+            ),
+            format!("«{m}» is compiled for AVX2, the CPU has none"),
+        )),
+        (None, Some(m)) => Err(user(
             &tr!(
                 "Il modello «{}» gira solo sul motore «{m}», che per questo PC non c'è ancora.",
                 "The model «{}» only runs on the engine «{m}», which isn't available for this PC yet.",
@@ -350,7 +355,7 @@ pub(crate) fn setup_for(paths: &Paths, key: &str, cfg: &ModelCfg, hw: &Hardware,
             ),
             format!("no profile of «{key}» for this PC's GPUs or build ({})", choose_build(hw).as_str()),
         )),
-        None => Ok(Setup::General { build: choose_build(hw) }),
+        (None, None) => Ok(Setup::General { build: choose_build(hw) }),
     }
 }
 
@@ -369,6 +374,11 @@ pub struct ModelEntry {
     pub missing: Option<String>,
     /// Weights and image encoder are on disk (the engine may still be missing).
     pub weights: bool,
+    /// Its files are on the disk and it waits for the new version of its engine, whose old version is on the disk: the
+    /// update of the engine brings it.
+    pub waits_engine: bool,
+    /// The engine and the build it runs with on this computer; `None` if it has none (`missing` says why).
+    pub engine: Option<(String, Build)>,
     /// The weights it loads, without the image encoder.
     pub bytes: u64,
     /// How fast it writes, if it runs on the processor.
@@ -405,8 +415,11 @@ pub fn catalog_for(paths: &Paths, hw: &Hardware) -> Result<(Vec<ModelEntry>, Str
             Ok(Setup::Profile(p)) => p.ctx,
             _ => target,
         };
+        let mut waits_engine = false;
+        let used_engine = assessed.setup.as_ref().ok().map(|a| (a.engine().to_string(), a.build()));
         match &assessed.setup {
             Ok(a) if installed_engine(paths, a.engine(), a.build()).is_none() => {
+                waits_engine = weights && mango_common::download::older_engine(paths, a.engine(), a.build());
                 missing.get_or_insert(tr!("manca il motore {} ({})", "the engine {} ({}) is missing", a.engine(), a.build().as_str()));
             }
             Err(e) => {
@@ -420,7 +433,7 @@ pub fn catalog_for(paths: &Paths, hw: &Hardware) -> Result<(Vec<ModelEntry>, Str
         };
         let speed = (placement == Some(Placement::Cpu)).then(|| crate::cpu_speed(read_per_token));
         let estimated = cfg.memory_estimated();
-        entries.push(ModelEntry { key: key.to_string(), label: cfg.label, origin: file.origin(key), ctx, placement, images: cfg.mmproj.is_some(), missing, weights, bytes, speed, estimated });
+        entries.push(ModelEntry { key: key.to_string(), label: cfg.label, origin: file.origin(key), ctx, placement, images: cfg.mmproj.is_some(), missing, weights, waits_engine, engine: used_engine, bytes, speed, estimated });
     }
     Ok((entries, file.default))
 }
@@ -482,13 +495,75 @@ pub(crate) fn image_build(hw: &Hardware) -> Build {
 }
 
 /// The model the app loads when it opens: the one the user made the default (`choices.json`) if it is on disk with its
-/// engine, also when it no longer fits (its start then says why). Otherwise, of `entries`, which come in the catalog's
-/// order, the first on disk that fits this computer; if none fits, the first on disk. `None`: there is nothing to load yet.
+/// engine, or waiting for the new version of its engine (then it is loaded when the engine arrives, and no other model
+/// takes its place), also when it no longer fits (its start then says why). Otherwise `ready_model`.
 pub fn startup_model(paths: &Paths, entries: &[ModelEntry]) -> Result<Option<String>> {
-    let on_disk = || entries.iter().filter(|e| e.missing.is_none());
     let default = choices::read(paths)?.default;
-    let chosen = on_disk().find(|e| Some(&e.key) == default.as_ref()).or_else(|| on_disk().find(|e| e.placement.is_some())).or_else(|| on_disk().next());
-    Ok(chosen.map(|e| e.key.clone()))
+    let waiting = entries.iter().find(|e| Some(&e.key) == default.as_ref() && (e.missing.is_none() || e.waits_engine));
+    Ok(waiting.map(|e| e.key.clone()).or_else(|| ready_model(entries.iter())))
+}
+
+/// Of `entries`, which come in the catalog's order, the first on disk with its engine that fits this computer; if none
+/// fits, the first on disk. `None`: no model can be loaded now.
+fn ready_model<'a>(entries: impl Iterator<Item = &'a ModelEntry> + Clone) -> Option<String> {
+    let on_disk = entries.filter(|e| e.missing.is_none());
+    on_disk.clone().find(|e| e.placement.is_some()).or_else(|| on_disk.clone().next()).map(|e| e.key.clone())
+}
+
+/// What the engine manager is doing, as far as loading the default model is concerned.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EngineNow {
+    /// No model is running or loading, and the last start did not fail.
+    Free,
+    /// Nothing runs, and the last start, of the model the app was waiting to load (its key), failed.
+    Failed(String),
+    /// A model runs, loads or was chosen, the user stopped the engine, or a start they asked for failed: it is left alone.
+    Busy,
+}
+
+/// What `model_to_load` looks at.
+pub struct Situation<'a> {
+    /// The catalog as it is now.
+    pub entries: &'a [ModelEntry],
+    /// The model the app loads when nothing is loaded (`startup_model`).
+    pub default: Option<&'a str>,
+    pub engine: &'a EngineNow,
+    /// The models whose download is queued or in progress (not paused, not failed).
+    pub live: &'a [String],
+    /// The models being taken off the computer.
+    pub removing: &'a [String],
+}
+
+/// What the app does about the model to load.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Load {
+    /// The default's engine is coming: nothing is loaded yet.
+    Wait,
+    Model(String),
+    Nothing,
+}
+
+/// What to do about the model to load. A model that is running, loading or chosen, or the failure of another model than
+/// the default, is left alone. Otherwise the default loads once it is ready, also after a start that failed for its
+/// missing engine; it waits while a download that brings its engine is queued or in progress; when nothing brings the
+/// engine, a model that is ready loads. A model being taken off the computer is never loaded.
+pub fn model_to_load(s: &Situation) -> Load {
+    match s.engine {
+        EngineNow::Busy => return Load::Nothing,
+        EngineNow::Failed(model) if s.default != Some(model.as_str()) => return Load::Nothing,
+        _ => {}
+    }
+    let usable = |e: &&ModelEntry| !s.removing.contains(&e.key);
+    let default = s.default.and_then(|key| s.entries.iter().find(|e| e.key == key)).filter(usable);
+    if let Some(d) = default {
+        if d.missing.is_none() {
+            return Load::Model(d.key.clone());
+        }
+        if d.waits_engine && s.entries.iter().any(|e| s.live.contains(&e.key) && e.engine == d.engine) {
+            return Load::Wait;
+        }
+    }
+    ready_model(s.entries.iter().filter(usable)).map_or(Load::Nothing, Load::Model)
 }
 
 /// The model to save as the default while the user has none (the model a computer starts with does not change

@@ -403,6 +403,51 @@ test("«Ignora» on the question leaves the choice to the model, and the picture
   await waitUntil(async () => !(await body()).includes("Di che colore?") && (await exists(`${ROW} [data-slot="picture-image"]`)), "the dock closed and the picture shown");
 }, 180_000);
 
+test("a page reloaded just after the user left pictures still puts the engine away", async () => {
+  await click('[data-mode="picture"]');
+  await write("Un'insegna arancione");
+  await sendOn();
+  await send();
+  await waitUntil(async () => (await control("state")).image_loaded === "pic1", "the engine on", 90_000);
+  await waitUntil(async () => !(await body()).includes("Passo "), "the picture made");
+  await p.evaluate(`(() => { const e = [...document.querySelectorAll("span, div, a, button")].find((n) => n.children.length === 0 && n.textContent.trim() === "Home"); e.setAttribute("data-test-home", ""); })()`);
+  // leaving for the Home starts the wait before the engine is put away (a second and a half); the page goes at once, before it ends
+  await click("[data-test-home]");
+  const clicked = Date.now();
+  while (await exists(FIELD)) await Bun.sleep(5);
+  await p.send("Page.reload");
+  expect(Date.now() - clicked).toBeLessThan(1000);
+  await waitUntil(async () => (await body()).includes("pizzeria-site"), "the Home back", 60_000);
+  expect(await exists(FIELD)).toBe(false);
+  await waitUntil(async () => (await control("state")).image_loaded === null, "the engine put away by the page that came back", 20_000);
+}, 180_000);
+
+test("a page reloaded with pictures on view keeps the engine however long the app takes to answer", async () => {
+  await newConversation();
+  await click('[data-mode="picture"]');
+  await write("Un'insegna blu");
+  await sendOn();
+  await send();
+  await waitUntil(async () => (await control("state")).image_loaded === "pic1", "the engine on", 90_000);
+  await waitUntil(async () => !(await body()).includes("Passo "), "the picture made");
+  // every answer takes longer than the wait before the engine is put away (a second and a half)
+  await p.send("Network.enable");
+  await p.send("Network.emulateNetworkConditions", { offline: false, latency: 2500, downloadThroughput: -1, uploadThroughput: -1 });
+  try {
+    await p.send("Page.reload");
+    await Bun.sleep(12_000);
+    expect((await control("state")).image_loaded).toBe("pic1");
+  } finally {
+    await p.send("Network.emulateNetworkConditions", { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1 });
+  }
+  await waitUntil(() => exists(FIELD), "the conversation back", 90_000);
+  await Bun.sleep(3000);
+  expect((await control("state")).image_loaded).toBe("pic1");
+  // leaving the pictures puts it away, as always
+  await click('[data-mode="text"]');
+  await waitUntil(async () => (await control("state")).image_loaded === null, "the engine put away", 20_000);
+}, 240_000);
+
 test("the first picture the model makes by itself asks first, in plain words with what it will draw", async () => {
   // as long as the descriptions a model writes
   const drawn =
@@ -439,6 +484,63 @@ test("the first picture the model makes by itself asks first, in plain words wit
     // a picture the model made by itself is not made again from the row: the words were not the user's
     expect(await exists(`${ROW} [data-action="picture-again"]`)).toBe(false);
     await shoot("own-picture", ROW);
+  } finally {
+    q.close();
+    own.close();
+    p = previous;
+    env = main;
+  }
+}, 300_000);
+
+test("a picture rewritten by another model leaves the conversations that write with the model they had", async () => {
+  const own = await start(SCRIPT, {
+    window: true,
+    context: 65536,
+    otherModels: ["ling"],
+    imageModels: ["pic1"],
+    imagePresent: ["pic1"],
+    args: [`${site}\\.`],
+    env: { FAKE_SD_PNG: "1" },
+  });
+  const q = await page(own.cdp!, (t) => t.url.startsWith(own.agent), 120_000);
+  const [previous, main] = [p, env];
+  p = q;
+  env = own;
+  const writer = () => p.evaluate(`document.querySelector('[data-action="prompt-model"]')?.innerText ?? ""`) as Promise<string>;
+  try {
+    await waitUntil(async () => (await control("state")).model.phase === "ready", "the model ready");
+    await newConversation();
+    await waitUntil(async () => (await writer()).includes("Fake model"), "the model that writes");
+    const before = files().length;
+    await click('[data-mode="picture"]');
+    await write("Un'insegna al neon per una pizzeria");
+    await sendOn();
+    await send();
+    await waitUntil(async () => files().length === before + 1, "the picture", 90_000);
+    // Ling wrote the description: the engine is on it
+    await waitUntil(async () => (await control("state")).model.model === "ling", "the engine on the model that rewrites");
+    await Bun.sleep(3000);
+    await click('[data-mode="text"]');
+    await waitUntil(async () => (await writer()) !== "", "the model of the text side");
+    expect(await writer()).toContain("Fake model");
+    // the manager says which model the conversations stay on: a page loaded again, with no memory of the picture, finds it
+    expect((await control("state")).conversation_model).toBe("fake");
+    await p.send("Page.reload");
+    await waitUntil(async () => (await exists(FIELD)) && (await writer()) !== "", "the conversation back");
+    await Bun.sleep(3000);
+    expect(await writer()).toContain("Fake model");
+    // a new conversation opens with the default model, not with the one the engine was lent to
+    await click('[aria-label="Nuova conversazione"]');
+    await waitUntil(async () => (await exists(FIELD)) && (await rows()) === 0, "the new conversation");
+    await Bun.sleep(3000);
+    expect(await writer()).toContain("Fake model");
+    // a message there is answered by that model: the engine goes back to it
+    await write("Ciao");
+    await sendOn();
+    await send();
+    await waitUntil(async () => (await control("state")).model.model === "fake", "the engine back on the model of the conversation", 60_000);
+    expect((await control("state")).conversation_model).toBeNull();
+    expect(await writer()).toContain("Fake model");
   } finally {
     q.close();
     own.close();

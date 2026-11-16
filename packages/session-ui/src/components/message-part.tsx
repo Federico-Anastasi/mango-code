@@ -1676,7 +1676,8 @@ PART_MAPPING["tool"] = function ToolPartDisplay(props) {
   )
   const render = createMemo(() => ToolRegistry.render(part().tool) ?? GenericTool)
   // A picture that was stopped is not a failure: its row says so, like the one of a picture that goes on.
-  const stoppedPicture = () => part().tool === "image_generate" && partMetadata().stopped === true
+  const stoppedPicture = () =>
+    part().tool === "image_generate" && (partMetadata().stopped === true || partMetadata().interrupted === true)
   // Nor is one that could not be made for want of a model that draws: its row says so and offers to get one.
   const missingPicture = () => part().tool === "image_generate" && partMetadata().missing === true
   const completedAttachments = () => {

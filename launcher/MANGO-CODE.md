@@ -80,6 +80,9 @@ agent `team` of the app's server, dev and agents are hidden `opencode serve` pro
 | Port | Process | Note |
 |---|---|---|
 | 47080 | the app's engine manager (and under it llama-server) | the active model |
+| 47096 | the phone service: the web interface | off by default |
+| 47097 | the phone service: the pages of the browser panel | open only while 47096 is |
+| 47098 | the engine lent to the user's other PCs | off by default |
 | 4096 | the agent's server: the web interface | |
 | 4097 | the dictation service | |
 | 4090-4095 | the Team: dev, agents | |
@@ -117,9 +120,11 @@ the speed of each on the development PC is in the root `README.md`.
 
 How a model runs on a given PC (engine, arguments, measured context, the reason for each argument) is in its profile
 (`profiles/3060ti-1080-1660s/<model>.json` for an RTX 3060 Ti + GTX 1080 + GTX 1660 SUPER, `measurements.note`); on
-another PC the general plan applies (official llama.cpp, arguments from the hardware: `app/README.md`). All the models
-keep the conversations' **disk memory** (`--cache-disk`): the system prompt and the conversations of the last 24 hours
-stay ready after an engine shutdown (loaned GPUs, model switch, closing).
+another PC the general plan applies (official llama.cpp, arguments from the hardware: `app/README.md`). A model with a
+profile keeps the conversations' **disk memory** (`--cache-disk`, an addition of the forks): the system prompt and the
+conversations of the last 24 hours stay ready after an engine shutdown (loaned GPUs, model switch, closing). With the
+general plan only the conversation that was open is saved at the shutdown (`slots\<model>.bin`) and reloaded at the
+next start.
 
 Models without images get their own web instructions: `mango-discipline.js` adds `MANGO-web-text.md` (pages are read
 with `take_snapshot`) instead of `MANGO-web-images.md`, depending on the request's model: whether it sees images is
@@ -150,8 +155,8 @@ measured on its hardware. The agent's config uses the **effective** ctx of the l
 
 - **Thinking is on by default**: it makes the model better at programming, at the price of time on short messages.
 - **KV cache:** the context lives ONLY in the KV caches. A new turn goes through the model only for the new tokens; the
-  past is read from the cache (prefix reuse, safe, doesn't mix). Disk memory (`--cache-disk`) keeps the conversations
-  even after an engine restart.
+  past is read from the cache (prefix reuse, safe, doesn't mix). With a profile, disk memory (`--cache-disk`) keeps the
+  conversations even after an engine restart; with the general plan, the one that was open.
 
 ## Extensions (MCP + skills + plugins)
 

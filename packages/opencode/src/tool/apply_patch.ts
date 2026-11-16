@@ -7,7 +7,7 @@ import { InstanceState } from "@/effect/instance-state"
 import { Patch } from "../patch"
 import { createTwoFilesPatch, diffLines } from "diff"
 import { assertExternalDirectoryEffect } from "./external-directory"
-import { trimDiff } from "./edit"
+import { keepLineEndings, normalizeLineEndings, trimDiff } from "./edit"
 import { LSP } from "@/lsp/lsp"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import DESCRIPTION from "./apply_patch.txt"
@@ -122,9 +122,9 @@ export const ApplyPatchTool = Tool.define(
               const fileUpdate = Patch.deriveNewContentsFromChunks(
                 filePath,
                 hunk.chunks,
-                Bom.join(source.text, source.bom),
+                Bom.join(normalizeLineEndings(source.text), source.bom),
               )
-              newContent = fileUpdate.content
+              newContent = keepLineEndings(oldContent, fileUpdate.content)
               bom = fileUpdate.bom
             } catch (error) {
               return yield* Effect.fail(new Error(`apply_patch verification failed: ${error}`))

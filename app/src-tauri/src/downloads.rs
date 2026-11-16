@@ -235,6 +235,10 @@ struct Inner {
     settled: Condvar,
     /// A model has arrived whole.
     arrived: Box<dyn Fn(&str) + Send + Sync>,
+    /// A download that was queued or in progress ended without its model arriving: it failed, or was paused or cancelled.
+    stopped: Box<dyn Fn(&str) + Send + Sync>,
+    /// The engine a download brings is on the disk, and its files still come.
+    engine: Box<dyn Fn(&str) + Send + Sync>,
     /// The files of a model changed on the disk, and nothing is to be loaded for that: a download cancelled when it had
     /// just ended whole.
     changed: Box<dyn Fn(&str) + Send + Sync>,
@@ -246,10 +250,14 @@ struct Inner {
     stop_wait: Duration,
 }
 
-/// Callbacks of the queue: `arrived(model)` when a model is whole on the disk, `changed(model)` when its files changed
-/// without anything to load, `log(line)` for what went wrong in the background.
+/// Callbacks of the queue: `arrived(model)` when a model is whole on the disk, `stopped(model)` when its download ended
+/// without it (failed, paused, cancelled), `engine(model)` when the engine it brings is on the disk and its files still
+/// come (another model that waited for that engine can load), `changed(model)` when its files changed without anything
+/// to load, `log(line)` for what went wrong in the background.
 pub struct Tell {
     pub arrived: Box<dyn Fn(&str) + Send + Sync>,
+    pub stopped: Box<dyn Fn(&str) + Send + Sync>,
+    pub engine: Box<dyn Fn(&str) + Send + Sync>,
     pub changed: Box<dyn Fn(&str) + Send + Sync>,
     pub log: Box<dyn Fn(&str) + Send + Sync>,
 }
@@ -282,6 +290,8 @@ impl Downloads {
             queue: Mutex::new(Queue::default()),
             settled: Condvar::new(),
             arrived: tell.arrived,
+            stopped: tell.stopped,
+            engine: tell.engine,
             changed: tell.changed,
             log: tell.log,
             restored: AtomicBool::new(false),
@@ -292,6 +302,17 @@ impl Downloads {
     /// `model` is being taken off the computer: whoever would load it waits for the end.
     pub fn removing(&self, model: &str) -> bool {
         self.0.queue.lock().unwrap().removing.iter().any(|m| m == model)
+    }
+
+    /// The models taken off the computer right now.
+    pub fn removals(&self) -> Vec<String> {
+        self.0.queue.lock().unwrap().removing.clone()
+    }
+
+    /// The models whose download is queued or in progress: not paused, not failed, not cancelled.
+    pub fn live(&self) -> Vec<String> {
+        let q = self.0.queue.lock().unwrap();
+        q.entries.iter().filter(|e| !e.cancelled && matches!(e.state, Status::Active | Status::Waiting)).map(|e| e.model.clone()).collect()
     }
 
     /// The downloads, in the order they were asked.
@@ -327,7 +348,10 @@ impl Downloads {
         }
         e.stop.store(true, Ordering::SeqCst);
         e.state = Status::Paused;
-        self.save(&q)
+        let saved = self.save(&q);
+        drop(q);
+        (self.0.stopped)(model);
+        saved
     }
 
     /// A paused download, or one that failed, waits its turn again.
@@ -377,16 +401,25 @@ impl Downloads {
     /// Cancels `model` if it is in the queue and not cancelled already.
     fn cancel_queued(&self, mut q: MutexGuard<'_, Queue>, model: &str) -> Result<()> {
         let Some(e) = q.entries.iter_mut().find(|e| e.model == model && !e.cancelled) else { return Ok(()) };
+        let was_live = matches!(e.state, Status::Active | Status::Waiting);
         e.cancelled = true;
         e.stop.store(true, Ordering::SeqCst);
         // The thread inside it, or the one already deleting its files, does the rest (`finish`, `discarded`).
         if e.running || e.discarding {
-            return self.save(&q);
+            let saved = self.save(&q);
+            drop(q);
+            if was_live {
+                (self.0.stopped)(model);
+            }
+            return saved;
         }
         e.discarding = true;
         let saved = self.save(&q);
         let others = q.others(model);
         drop(q);
+        if was_live {
+            (self.0.stopped)(model);
+        }
         let deleted = self.0.source.discard(model, &others);
         self.discarded(model);
         saved.and(deleted)
@@ -507,6 +540,9 @@ impl Downloads {
         let failed = |e: anyhow::Error| if e.is::<Stopped>() { Ended::Stopped } else { Ended::Failed(failure(&need.label, engine_only, &e), e) };
         if need.engine_bytes > 0 {
             self.0.source.engine(model, stop, &mut |done, total| self.update(model, |e| e.engine = (done, total))).map_err(failed)?;
+            if !engine_only {
+                (self.0.engine)(model);
+            }
         }
         if need.weights_bytes > 0 {
             self.0.source.weights(model, stop, &mut |done, total| self.update(model, |e| e.weights = (done, total))).map_err(failed)?;
@@ -542,7 +578,7 @@ impl Downloads {
             }
             return self.discarded(model);
         }
-        let mut arrived = false;
+        let (mut arrived, mut stopped) = (false, false);
         match outcome {
             Ok(()) => {
                 q.entries.remove(i);
@@ -560,6 +596,7 @@ impl Downloads {
                 (self.0.log)(&format!("download of {model} failed: {e:#}"));
                 q.entries[i].state = Status::Failed;
                 q.entries[i].error = Some(sentence);
+                stopped = true;
             }
         }
         self.0.settled.notify_all();
@@ -569,6 +606,9 @@ impl Downloads {
         drop(q);
         if arrived {
             (self.0.arrived)(model);
+        }
+        if stopped {
+            (self.0.stopped)(model);
         }
     }
 }
@@ -905,6 +945,8 @@ mod tests {
         fake: Arc<Fake>,
         downloads: Downloads,
         arrived: Arc<Mutex<Vec<String>>>,
+        stopped: Arc<Mutex<Vec<String>>>,
+        engines: Arc<Mutex<Vec<String>>>,
         changed: Arc<Mutex<Vec<String>>>,
         log: Arc<Mutex<Vec<String>>>,
         _dir: tempfile::TempDir,
@@ -917,15 +959,18 @@ mod tests {
 
     fn fixture_waiting(fake: Fake, dir: tempfile::TempDir, stop_wait: Duration) -> Fixture {
         let fake = Arc::new(fake);
-        let (arrived, changed, log) = (Arc::new(Mutex::new(Vec::new())), Arc::new(Mutex::new(Vec::new())), Arc::new(Mutex::new(Vec::new())));
-        let (seen, touched, lines) = (arrived.clone(), changed.clone(), log.clone());
+        let (arrived, stopped, changed, log) = (Arc::new(Mutex::new(Vec::new())), Arc::new(Mutex::new(Vec::new())), Arc::new(Mutex::new(Vec::new())), Arc::new(Mutex::new(Vec::new())));
+        let engines = Arc::new(Mutex::new(Vec::new()));
+        let (seen, lost, touched, lines, brought) = (arrived.clone(), stopped.clone(), changed.clone(), log.clone(), engines.clone());
         let tell = Tell {
             arrived: Box::new(move |m| seen.lock().unwrap().push(m.to_string())),
+            stopped: Box::new(move |m| lost.lock().unwrap().push(m.to_string())),
+            engine: Box::new(move |m| brought.lock().unwrap().push(m.to_string())),
             changed: Box::new(move |m| touched.lock().unwrap().push(m.to_string())),
             log: Box::new(move |l| lines.lock().unwrap().push(l.to_string())),
         };
         let downloads = Downloads::waiting(Box::new(fake.clone()), dir.path().join("downloads.json"), tell, stop_wait);
-        Fixture { fake, downloads, arrived, changed, log, _dir: dir }
+        Fixture { fake, downloads, arrived, stopped, engines, changed, log, _dir: dir }
     }
 
     /// A queue in use: the start has taken up the downloads of the last time (none).
@@ -1014,6 +1059,25 @@ mod tests {
         f.fake.hold_engine.store(false, Ordering::SeqCst);
         until("«a» arrived", || f.states().is_empty());
         assert_eq!(f.arrived(), ["a"]);
+        assert!(f.engines.lock().unwrap().is_empty(), "the engine alone: the arrival of the model says it all");
+    }
+
+    /// A download that brings an engine and files tells the engine as soon as it is on the disk, while the files still
+    /// come: a model that waited for that engine does not wait for them too.
+    #[test]
+    fn the_engine_a_download_brings_is_told_before_its_files_arrive() {
+        let f = fixture();
+        f.fake.engine_missing.store(true, Ordering::SeqCst);
+        f.fake.hold_engine.store(true, Ordering::SeqCst);
+        f.ask(&["a"]).unwrap();
+        until("«a» active", || f.states() == states(&[("a", Status::Active)]));
+        assert!(f.engines.lock().unwrap().is_empty(), "the engine is still coming");
+        f.fake.hold_engine.store(false, Ordering::SeqCst);
+        until("the engine told", || *f.engines.lock().unwrap() == ["a"]);
+        assert!(f.arrived().is_empty(), "the files still come");
+        f.go();
+        until("«a» arrived", || f.arrived() == ["a"]);
+        assert_eq!(*f.engines.lock().unwrap(), ["a"]);
     }
 
     /// A model that arrived by another road while it waited its turn: it leaves the queue, it does not fail.
@@ -1047,6 +1111,47 @@ mod tests {
         assert!(f.fake.discarded.lock().unwrap().is_empty(), "a pause deletes nothing");
     }
 
+    /// Whoever waits for a download is told when it is no more: paused or cancelled while it was queued or in progress.
+    /// A download that was not live (a paused one, cancelled) says nothing, and `live` lists only the queued and running.
+    #[test]
+    fn the_end_of_a_queued_or_running_download_is_told_and_only_those_are_live() {
+        let f = fixture();
+        f.ask(&["a", "b", "c", "d"]).unwrap();
+        until("«a» active", || f.states().first() == Some(&("a".to_string(), Status::Active)));
+        let live = || f.downloads.live();
+        let told = || f.stopped.lock().unwrap().clone();
+        assert_eq!(live(), ["a", "b", "c", "d"]);
+        assert!(told().is_empty());
+
+        f.downloads.pause("b").unwrap();
+        assert_eq!((live(), told()), (vec!["a".into(), "c".into(), "d".into()], vec!["b".to_string()]));
+        f.downloads.pause("b").unwrap();
+        f.downloads.cancel("b").unwrap();
+        assert_eq!(told(), ["b"], "a download that was paused already says nothing more");
+
+        f.downloads.cancel("c").unwrap();
+        assert_eq!((live(), told()), (vec!["a".into(), "d".into()], vec!["b".to_string(), "c".to_string()]));
+
+        f.downloads.cancel("a").unwrap();
+        assert_eq!(told(), ["b", "c", "a"], "also the one in progress");
+        f.go();
+        until("«d» arrived", || f.arrived() == ["d"]);
+        assert_eq!((live(), told()), (vec![], vec!["b".to_string(), "c".to_string(), "a".to_string()]), "arriving is told by `arrived`");
+    }
+
+    /// Taking a model off the computer stops its download for good: whoever waits for it is told, and the model is among
+    /// those being removed until it is over.
+    #[test]
+    fn a_removal_tells_the_end_of_the_download_and_lists_the_model_until_it_is_over() {
+        let f = fixture();
+        f.ask(&["a"]).unwrap();
+        until("«a» active", || f.states() == states(&[("a", Status::Active)]));
+        let removal = f.downloads.stop_for_removal("a").unwrap();
+        assert_eq!((f.downloads.live(), f.downloads.removals(), f.stopped.lock().unwrap().clone()), (vec![], vec!["a".to_string()], vec!["a".to_string()]));
+        drop(removal);
+        assert!(f.downloads.removals().is_empty());
+    }
+
     /// The download fails after the user paused it, before it saw the pause: it stays paused, also in the file.
     #[test]
     fn a_pause_stays_a_pause_when_the_download_fails_before_stopping() {
@@ -1060,6 +1165,7 @@ mod tests {
         until("the download ended", || f.log.lock().unwrap().iter().any(|l| l.contains("paused")));
         assert_eq!(f.states(), states(&[("a", Status::Paused)]));
         assert_eq!(f.downloads.list()[0].error, None);
+        assert_eq!(*f.stopped.lock().unwrap(), ["a"], "told once, when the user paused it, not again when the download failed");
         assert_eq!(f.saved(), r#"[{"model":"a","paused":true}]"#);
     }
 
@@ -1358,6 +1464,8 @@ mod tests {
         );
         assert_eq!(f.downloads.list()[0].error, Some(sentence));
         assert!(f.log.lock().unwrap().iter().any(|l| l.contains("https://huggingface.co/x")), "the address goes to the log");
+        assert_eq!(*f.stopped.lock().unwrap(), ["a"], "whoever waits for it is told");
+        assert_eq!(f.downloads.live(), Vec::<String>::new(), "a failed download brings nothing");
         f.fake.broken.lock().unwrap().clear();
         f.downloads.resume("a").unwrap();
         until("«a» arrived", || f.states().is_empty());

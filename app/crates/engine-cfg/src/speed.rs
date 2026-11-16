@@ -16,8 +16,9 @@ const GIB: f64 = 1024.0 * 1024.0 * 1024.0;
 /// Effective bandwidth taken for any PC, in GiB/s: between the two measured ones.
 const BANDWIDTH_GIB_S: f64 = 17.0;
 
-/// A band of speed of writing on the processor.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+/// A band of speed of writing on the processor. The order of the variants, from the slowest to the fastest, is the order
+/// of the comparisons (`mark_recommended`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Speed {
     /// Under 1 token/s: less than a word a second, a long answer takes minutes.

@@ -1,9 +1,9 @@
-import { afterEach, describe, expect } from "bun:test"
+import { afterEach, describe, expect, test } from "bun:test"
 import path from "path"
 import fs from "fs/promises"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { Cause, Deferred, Effect, Exit, Fiber } from "effect"
-import { EditTool } from "../../src/tool/edit"
+import { EditTool, keepLineEndings } from "../../src/tool/edit"
 import { disposeAllInstances, TestInstance } from "../fixture/fixture"
 import { LSP } from "@/lsp/lsp"
 import { FSUtil } from "@opencode-ai/core/fs-util"
@@ -574,6 +574,51 @@ describe("tool.edit", () => {
         expectCrlf(output)
       }),
     )
+
+    it.instance("preserves CRLF when oldString matches only ignoring whitespace around lines", () =>
+      Effect.gen(function* () {
+        const output = yield* apply({
+          content: "function f() {\r\n    return 1\r\n}\r\n",
+          oldString: "  return 1  \n}",
+          newString: "    const a = 2\n    return a\n}",
+        })
+        expect(output).toBe("function f() {\r\n    const a = 2\r\n    return a\r\n}\r\n")
+      }),
+    )
+
+    it.instance("leaves the lines it does not touch as they are in a file with mixed line endings", () =>
+      Effect.gen(function* () {
+        const output = yield* apply({
+          content: "one\ntwo\r\nthree\nfour\n",
+          oldString: "three",
+          newString: "THREE\nextra",
+        })
+        expect(output).toBe("one\ntwo\r\nTHREE\nextra\nfour\n")
+      }),
+    )
+
+    it.instance("gives new lines the prevailing line ending of a file with mixed line endings", () =>
+      Effect.gen(function* () {
+        const output = yield* apply({
+          content: "one\r\ntwo\r\nthree\nfour\r\n",
+          oldString: "two",
+          newString: "TWO\nextra",
+        })
+        expect(output).toBe("one\r\nTWO\r\nextra\r\nthree\nfour\r\n")
+      }),
+    )
+
+    it.instance("never matches an empty text when oldString is only spaces", () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const filePath = path.join(test.directory, "blank.txt")
+        const content = "a\r\n\r\nb\r\n"
+        yield* put(filePath, content)
+        const error = yield* fail({ filePath, oldString: "   ", newString: "X", replaceAll: true })
+        expect(error.message).toContain("Could not find oldString")
+        expect(yield* load(filePath)).toBe(content)
+      }),
+    )
   })
 
   describe("concurrent editing", () => {
@@ -621,5 +666,19 @@ describe("tool.edit", () => {
         expect(yield* load(filepath)).toBe("top = 1\nmiddle = keep\nbottom = 2\n")
       }),
     )
+  })
+})
+
+describe("keepLineEndings", () => {
+  test("ends a line that was the last one without a line break like the rest of the file", () => {
+    expect(keepLineEndings("a\r\nb", "a\nb\nc")).toBe("a\r\nb\r\nc")
+  })
+
+  test("drops the final line break when the update has none", () => {
+    expect(keepLineEndings("a\r\nb\r\n", "a\nb")).toBe("a\r\nb")
+  })
+
+  test("returns the update untouched when the original has no line break", () => {
+    expect(keepLineEndings("a", "a\r\nb\r\n")).toBe("a\r\nb\r\n")
   })
 })

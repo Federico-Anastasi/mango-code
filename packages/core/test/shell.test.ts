@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import path from "path"
-import { existsSync } from "fs"
+import { existsSync, mkdirSync, mkdtempSync, rmSync } from "fs"
+import { tmpdir } from "os"
 import { Shell } from "@opencode-ai/core/shell"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import { which } from "@opencode-ai/core/util/which"
@@ -108,6 +109,27 @@ describe("shell", () => {
         expect(Shell.acceptable(alias)).toBe(alias)
         expect((await Shell.list()).map((item) => item.path)).toContain(alias)
       })
+    })
+
+    test("accepts the Store PowerShell 7 by the path of its package alias", async () => {
+      const local = mkdtempSync(path.join(tmpdir(), "shell-alias-"))
+      const saved = process.env.LOCALAPPDATA
+      // A directory stands for the alias: it exists, but `stat` does not report a file, as with the real one.
+      const alias = path.win32.join(local, "Microsoft", "WindowsApps", "Vendor.PowerShell_abc", "pwsh.exe")
+      mkdirSync(alias, { recursive: true })
+      process.env.LOCALAPPDATA = local
+      try {
+        await withShell(undefined, async () => {
+          expect(Shell.acceptable(alias)).toBe(alias)
+          expect(Shell.preferred(alias)).toBe(alias)
+        })
+      } finally {
+        if (saved === undefined) delete process.env.LOCALAPPDATA
+        else process.env.LOCALAPPDATA = saved
+        rmSync(local, { recursive: true, force: true })
+        Shell.acceptable.reset()
+        Shell.preferred.reset()
+      }
     })
 
     test("resolves bare PowerShell shells", async () => {

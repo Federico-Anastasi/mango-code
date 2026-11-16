@@ -1,16 +1,12 @@
 // mango-code: above the composer, the line that says what the engine is doing now: a download, a load with its
 // seconds, a start that failed, the cards lent, the other PC's engine that does not answer, no model on the computer
-// (with the way to Models), a model just ready, the conversation read again. Only what the app's state says: never a
-// promise.
+// (with the way to Models), a model just ready. Only what the app's state says: never a promise.
 import { createMediaQuery } from "@solid-primitives/media"
 import { createMemo, createSignal, Show } from "solid-js"
 import { ButtonV2 } from "@opencode-ai/ui/v2/button-v2"
 import { ProgressBarV2 } from "@opencode-ai/ui/v2/progress-bar-v2"
 import { useLanguage } from "@/context/language"
 import { failureText, useMango } from "@/context/mango"
-import { useSync } from "@/context/sync"
-import { createEngineLive, createEngineTurn } from "@/components/engine-speed"
-import { ownsEngineNumbers } from "@/utils/engine-speed"
 import { noModel } from "@/utils/mango-state"
 import { showToast } from "@/utils/toast"
 import { statusLine } from "./mango-text"
@@ -45,19 +41,11 @@ export function dismissReady(mango: Pick<ReturnType<typeof useMango>, "justReady
   } catch {}
 }
 
-export function MangoStatusLine(props: { sessionID?: string }) {
+export function MangoStatusLine() {
   const mango = useMango()
   const language = useLanguage()
-  const sync = useSync()
   // the same width at which the top bar becomes the phone's (titlebar.tsx)
   const narrow = createMediaQuery("(max-width: 767px)")
-
-  const working = createMemo(
-    () => !!props.sessionID && (sync().data.session_status[props.sessionID]?.type ?? "idle") !== "idle",
-  )
-  const engine = createEngineLive(working)
-  const turn = createEngineTurn(engine, () => props.sessionID)
-  const reading = () => (working() && ownsEngineNumbers(turn()) ? engine().reading : undefined)
 
   const act = (action: () => Promise<void>) =>
     void action().catch((error: unknown) =>
@@ -76,7 +64,6 @@ export function MangoStatusLine(props: { sessionID?: string }) {
         state,
         downloaded: mango.downloaded(),
         justReady: showReady(mango.justReady()),
-        reading: reading(),
         empty: noModel(state, mango.catalog()),
       },
       language,

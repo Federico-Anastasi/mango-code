@@ -4,7 +4,7 @@ import {
   canSend,
   chosenBytes,
   diskDrive,
-  engineModel,
+  conversationModel,
   etaParts,
   firstRun,
   homeView,
@@ -23,8 +23,8 @@ import {
 } from "./mango-state"
 
 const where = { placement: "gpu", gpus: ["RTX 3060 Ti", "GTX 1080"], context: 131072 }
-const state = (model: unknown, downloads: unknown[] = []) =>
-  parseState({ revision: 3, catalog_revision: 1, model, default_model: "3.6", downloads })!
+const state = (model: unknown, downloads: unknown[] = [], conversation_model: string | null = null) =>
+  parseState({ revision: 3, catalog_revision: 1, model, default_model: "3.6", downloads, conversation_model })!
 const download = (state: string) => ({
   model: "3.6",
   label: "Qwen",
@@ -281,23 +281,40 @@ describe("the app's state, as the agent tells it", () => {
   })
 
   test("the conversation's model follows the one the engine is on or going to", () => {
-    expect(engineModel(state({ phase: "loading", model: "ling", label: "Ling", seconds: 0 }))).toBe("ling")
-    expect(engineModel(state({ phase: "ready", model: "3.6", label: "Qwen", where }))).toBe("3.6")
-    expect(engineModel(state({ phase: "failed", model: "3.6", label: "Qwen", reason: "" }))).toBeUndefined()
-    expect(engineModel(state({ phase: "none" }))).toBeUndefined()
+    expect(conversationModel(state({ phase: "loading", model: "ling", label: "Ling", seconds: 0 }))).toBe("ling")
+    expect(conversationModel(state({ phase: "ready", model: "3.6", label: "Qwen", where }))).toBe("3.6")
+    expect(conversationModel(state({ phase: "failed", model: "3.6", label: "Qwen", reason: "" }))).toBeUndefined()
+    expect(conversationModel(state({ phase: "none" }))).toBeUndefined()
   })
 
   test("with no model in use, the conversation's model is the one being downloaded, never the agent's own pick", () => {
-    expect(engineModel(state({ phase: "none" }, [download("active")]))).toBe("3.6")
-    expect(engineModel(state({ phase: "none" }, [download("waiting")]))).toBe("3.6")
+    expect(conversationModel(state({ phase: "none" }, [download("active")]))).toBe("3.6")
+    expect(conversationModel(state({ phase: "none" }, [download("waiting")]))).toBe("3.6")
     // a size not known yet: the bar does not name it, the engine still goes to it
-    expect(engineModel(state({ phase: "none" }, [{ ...download("active"), total: 0 }]))).toBe("3.6")
-    expect(engineModel(state({ phase: "none" }, [download("paused")]))).toBeUndefined()
-    expect(engineModel(state({ phase: "none" }, [download("failed")]))).toBeUndefined()
-    expect(engineModel(state({ phase: "none" }, [{ ...download("active"), engine_only: true }]))).toBeUndefined()
+    expect(conversationModel(state({ phase: "none" }, [{ ...download("active"), total: 0 }]))).toBe("3.6")
+    expect(conversationModel(state({ phase: "none" }, [download("paused")]))).toBeUndefined()
+    expect(conversationModel(state({ phase: "none" }, [download("failed")]))).toBeUndefined()
+    expect(conversationModel(state({ phase: "none" }, [{ ...download("active"), engine_only: true }]))).toBeUndefined()
     expect(
-      engineModel(state({ phase: "failed", model: "ling", label: "Ling", reason: "" }, [download("active")])),
+      conversationModel(state({ phase: "failed", model: "ling", label: "Ling", reason: "" }, [download("active")])),
     ).toBeUndefined()
+  })
+})
+
+describe("the model the conversations follow when the engine is on another for a side request", () => {
+  test("the app says it with the state, none otherwise", () => {
+    const base = { revision: 3, catalog_revision: 1, model: { phase: "none" }, default_model: null, downloads: [] }
+    expect(parseState({ ...base, conversation_model: "3.6" })?.conversation_model).toBe("3.6")
+    expect(parseState({ ...base, conversation_model: null })?.conversation_model).toBeNull()
+    expect(parseState(base)?.conversation_model).toBeNull()
+  })
+
+  test("it is the model the conversations had, whatever the engine is on or loading", () => {
+    const ling = { phase: "ready", model: "ling", label: "Ling", where }
+    expect(conversationModel(state(ling, [], "3.6"))).toBe("3.6")
+    expect(conversationModel(state({ phase: "loading", model: "ling", label: "Ling", seconds: 1 }, [], "3.6"))).toBe("3.6")
+    expect(conversationModel(state({ phase: "lent", model: "ling", label: "Ling" }, [], "3.6"))).toBe("3.6")
+    expect(conversationModel(state(ling))).toBe("ling")
   })
 })
 

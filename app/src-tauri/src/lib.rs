@@ -17,9 +17,9 @@ mod control;
 mod downloads;
 mod dictation;
 mod model_choices;
+mod models_watch;
 mod preview;
 mod supervisor;
-mod stragglers;
 mod team;
 mod phone;
 mod engine_share;
@@ -100,6 +100,9 @@ pub(crate) struct EngineUse {
     pub models: Vec<agent_cfg::AgentModel>,
     /// The model of new conversations; none while no model is on this computer.
     pub default_model: Option<String>,
+    /// The default model waits for the new version of its engine: the start does not load it. What loads is decided once
+    /// the updates of the engines are queued, and again at every change of the downloads (`load_default`).
+    pub default_waits: bool,
 }
 
 #[derive(Default)]
@@ -134,6 +137,11 @@ struct AppState {
     sites: sites::Sites,
     /// The models being downloaded (`downloads.rs`), born at the first startup.
     downloads: OnceLock<downloads::Downloads>,
+    /// The models folder is watched from the first startup on (`models_watch.rs`).
+    models_watched: OnceLock<()>,
+    /// The default model whose engine the app is waiting for (`load_default`): a start of it that fails meanwhile, for the
+    /// missing engine, does not stop it from loading when the engine arrives.
+    awaited: Mutex<Option<String>>,
     /// The models and the default the agent knows, to tell it when they change (`agent_models.rs`).
     declared: agent_models::Declared,
     /// The section of the settings asked from the tray or the model menu, until the interface reads it (`tray.rs`).
@@ -268,6 +276,13 @@ fn startup(app: &AppHandle) -> Result<()> {
     // One line per phase, with the time since the start: where a slow startup spends its time.
     let phase = |name: &str| startup_log(&paths, &format!("startup: {name} (+{} ms)", t0.elapsed().as_millis()));
     phase("begins");
+    st.models_watched.get_or_init(|| {
+        let (app, logs) = (app.clone(), paths.clone());
+        let lost = move |why: String| startup_log(&logs, &format!("the models folder is no longer watched: {why}"));
+        if let Err(e) = models_watch::watch(&paths.models, models_watch::QUIET, move || app.state::<AppState>().control.catalog_changed(), lost) {
+            startup_log(&paths, &format!("the models folder is not watched: {e:#}"));
+        }
+    });
     // Dictation, the microphone in the chat: off until the user turns it on, then it downloads and starts by itself once the
     // app is ready (`dictation.rs`). The agent only needs to know where the service will be.
     if st.dictation.get().is_none() {
@@ -278,6 +293,13 @@ fn startup(app: &AppHandle) -> Result<()> {
         None => {
             let s = Supervisor::new(&paths.logs())?;
             let _ = st.sup.set(s);
+            let logs = paths.clone();
+            std::thread::spawn(move || {
+                let stopped = Supervisor::stop_stale_stragglers();
+                if stopped > 0 {
+                    startup_log(&logs, &format!("stopped {stopped} processes left by an app that was closed by force"));
+                }
+            });
             st.sup.get().unwrap()
         }
     };
@@ -292,7 +314,7 @@ fn startup(app: &AppHandle) -> Result<()> {
     phase("control server");
     // The downloads of the last time go on once the window is in use (`restore`, at the end).
     let downloads = st.downloads.get_or_init(|| {
-        let (arrived, changed, logs) = (app.clone(), app.clone(), paths.clone());
+        let (arrived, stopped, engine, changed, logs) = (app.clone(), app.clone(), app.clone(), app.clone(), paths.clone());
         downloads::Downloads::new(
             Box::new(downloads::Real { paths: paths.clone(), hardware: engine_cfg::detect }),
             paths.data.join("downloads.json"),
@@ -301,6 +323,8 @@ fn startup(app: &AppHandle) -> Result<()> {
                 changed: Box::new(move |_| {
                     catalog_read_again(&changed);
                 }),
+                stopped: Box::new(move |_| default_reconsidered(&stopped)),
+                engine: Box::new(move |_| engine_arrived(&engine)),
                 log: Box::new(move |line| startup_log(&logs, &format!("downloads: {line}"))),
             },
         )
@@ -371,7 +395,7 @@ fn startup(app: &AppHandle) -> Result<()> {
     // The model loads in the background, and the manager tells how it goes: the default one, or the one that was in use before
     // the engine was stopped (the engine of another PC, then back to this one). A model that is running or loading is left
     // alone: only the agent started again.
-    if !remote && engine.phase() == engine::Phase::Stopped {
+    if !remote && !used.default_waits && engine.phase() == engine::Phase::Stopped {
         if let Some(key) = engine.state().model.or(used.default_model) {
             engine.choose(&key);
         }
@@ -413,6 +437,8 @@ fn startup(app: &AppHandle) -> Result<()> {
         startup_log(&paths, &format!("the new engine not queued: {e:#}"));
     }
     phase("engine update");
+    // A default that waited for its engine update is decided now that the update is queued, or is not.
+    default_reconsidered(app);
     Ok(())
 }
 
@@ -494,18 +520,70 @@ fn read_catalog(app: &AppHandle, paths: &Paths) -> Result<(Vec<engine_cfg::Model
 
 /// `model` has just arrived on this computer: the catalog is read again, the interface is told (`catalog_revision`),
 /// without a default saved it becomes it if it is the one to keep (`keep_default`: the first model downloaded that
-/// fits), and, if no model is running, loading or failed, the one to load is loaded: the first model downloaded starts
-/// by itself.
+/// fits), and the model to load is loaded if none is in use (`load_default`): the first model downloaded starts by itself.
 fn models_arrived(app: &AppHandle, model: &str) {
     let st = app.state::<AppState>();
-    let (Some(paths), Some(engine), Some((catalog, Some(key)))) = (st.paths.get(), st.engine.get(), catalog_read_again(app)) else { return };
+    let (Some(paths), Some((catalog, default))) = (st.paths.get(), catalog_read_again(app)) else { return };
     keep_default(app, paths, &catalog, Keep::Arrived(model));
+    load_default(app, &catalog, default.as_deref());
+}
+
+/// A download ended without its model (failed, paused, cancelled), or the start has queued the updates of the engines:
+/// if the default waits for its engine, what to load is decided again. Any other download ending changes nothing for
+/// the model to load.
+fn default_reconsidered(app: &AppHandle) {
+    let st = app.state::<AppState>();
+    let Some(paths) = st.paths.get() else { return };
+    match read_catalog(app, paths) {
+        Ok((catalog, default)) => {
+            if catalog.iter().any(|e| Some(&e.key) == default.as_ref() && e.waits_engine) {
+                load_default(app, &catalog, default.as_deref());
+            }
+        }
+        Err(e) => startup_log(paths, &format!("the model to load was not decided after a download stopped: {e:#}")),
+    }
+}
+
+/// The engine a download brings is on the disk while its files still come: a default that waited for that engine loads
+/// now, not when the whole download ends.
+fn engine_arrived(app: &AppHandle) {
+    if app.state::<AppState>().awaited.lock().unwrap().is_none() {
+        return;
+    }
+    if let Some((catalog, default)) = catalog_read_again(app) {
+        load_default(app, &catalog, default.as_deref());
+    }
+}
+
+/// The only place that loads a model by itself when none is in use (`engine_cfg::model_to_load`): the default once it is
+/// ready, also after a start that failed while the app waited for its engine; nothing while a download brings that
+/// engine; a model that is ready when none does.
+fn load_default(app: &AppHandle, catalog: &[engine_cfg::ModelEntry], default: Option<&str>) {
+    let st = app.state::<AppState>();
+    let (Some(paths), Some(engine), Some(downloads)) = (st.paths.get(), st.engine.get(), st.downloads.get()) else { return };
+    if st.remote.lock().unwrap().is_some() {
+        return;
+    }
     let state = engine.state();
-    let idle = state.phase == engine::Phase::Stopped && state.model.is_none() && state.failed.is_none() && state.chosen.is_none();
-    let remote = st.remote.lock().unwrap().is_some();
-    // A model being taken off the computer is not loaded, also if it is the one the catalog read before its files went.
-    let removing = st.downloads.get().is_some_and(|d| d.removing(&key));
-    if idle && !remote && !removing {
+    let mut awaited = st.awaited.lock().unwrap();
+    let engine_now = match (&state.failed, state.phase) {
+        _ if state.chosen.is_some() => engine_cfg::EngineNow::Busy,
+        (None, engine::Phase::Stopped) if state.model.is_none() => engine_cfg::EngineNow::Free,
+        // Any other failure is one the user sees, with its way to try again: it is left alone.
+        (Some(failed), engine::Phase::Stopped | engine::Phase::Error) if awaited.as_deref() == Some(failed.model.as_str()) => {
+            engine_cfg::EngineNow::Failed(failed.model.clone())
+        }
+        _ => engine_cfg::EngineNow::Busy,
+    };
+    let (live, removing) = (downloads.live(), downloads.removals());
+    let situation = engine_cfg::Situation { entries: catalog, default, engine: &engine_now, live: &live, removing: &removing };
+    let load = engine_cfg::model_to_load(&situation);
+    *awaited = default.filter(|_| load == engine_cfg::Load::Wait).map(str::to_string);
+    drop(awaited);
+    if let engine_cfg::Load::Model(key) = load {
+        if let Some(default) = default.filter(|d| *d != key) {
+            startup_log(paths, &format!("{default} cannot be loaded now: {key} loads instead"));
+        }
         engine.choose(&key);
     }
 }
@@ -612,10 +690,12 @@ fn local_models(app: &AppHandle, paths: &Paths) -> Result<EngineUse> {
             (catalog, default_model) = read_catalog(app, paths)?;
         }
     }
+    let default_waits = default_model.as_ref().is_some_and(|key| catalog.iter().any(|e| &e.key == key && e.waits_engine));
     Ok(EngineUse {
         url: format!("http://127.0.0.1:{}", engine_port()),
         key: None,
         default_model,
+        default_waits,
         models: agent_models::of(&catalog),
     })
 }

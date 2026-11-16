@@ -13,6 +13,7 @@ import path from "node:path";
 import { MangoCode, find } from "../client/mango-code";
 import { start, type Environment } from "./environment";
 import { page, type Page } from "./cdp";
+import { atSizes } from "./window";
 
 const [AGENT, ENGINE, DEBUG] = [47696, 47697, 47698];
 const GB = 1024 ** 3;
@@ -88,13 +89,11 @@ test("each row of the menu that fits says where it runs, as the top bar's menu; 
   expect(text).not.toContain("mango");
   if (process.env.MC_PHOTOS) {
     fs.mkdirSync(process.env.MC_PHOTOS, { recursive: true });
-    for (const [width, height] of [[860, 800], [390, 800]]) {
-      await p.send("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: 1, mobile: false });
+    await atSizes(env.app.pid!, p, [[860, 800], [390, 800]], async (width) => {
       await Bun.sleep(900);
       const shot = await p.send("Page.captureScreenshot", { format: "png" });
-      fs.writeFileSync(path.join(process.env.MC_PHOTOS, `menu-modelli-${width}.png`), Buffer.from(shot.result.data, "base64"));
-    }
-    await p.send("Emulation.clearDeviceMetricsOverride");
+      fs.writeFileSync(path.join(process.env.MC_PHOTOS!, `menu-modelli-${width}.png`), Buffer.from(shot.result.data, "base64"));
+    });
   }
   // closed before the next test: a menu still open would be read with the top bar's one
   await p.send("Input.dispatchKeyEvent", { type: "keyDown", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 });

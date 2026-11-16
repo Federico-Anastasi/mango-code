@@ -49,6 +49,48 @@ pub struct Gpu {
 }
 
 impl Gpu {
+    /// The graphics built into the processor. The BIOS gives it part of the PC's own memory, and whether it counts as a
+    /// card depends on how much (`counts`). Windows does not say it in the adapter's description, so the name tells, and
+    /// only a name that says it for certain is taken as integrated: any other is a card. Intel's integrated graphics are
+    /// the HD, UHD and Iris ones, «Graphics» alone, «Arc Graphics» and the Arc 100V and 100T series; its discrete cards
+    /// are the Arc A and B series (also the M ones of laptops), Iris Xe MAX and the Data Center GPUs. AMD's integrated
+    /// ones end in «Graphics» (Radeon Graphics, Vega 8 Graphics, 780M Graphics) or are a number with an M and no RX; the
+    /// cards named «RX <number>» and the professional ones (Pro, FirePro, WX) are discrete whatever the driver adds to
+    /// the name.
+    pub fn is_integrated(&self) -> bool {
+        let name = self.name.replace("(TM)", "").replace("(tm)", "").replace("(R)", "").replace("(r)", "");
+        let words: Vec<&str> = name.split_whitespace().collect();
+        let digits = |s: &str| s.chars().all(|c| c.is_ascii_digit());
+        match self.vendor {
+            Vendor::Intel => {
+                let arc_card = |w: &&str| {
+                    let number = w.strip_suffix('M').unwrap_or(*w);
+                    number.starts_with(['A', 'B']) && (3..=4).contains(&number.len()) && digits(&number[1..])
+                };
+                let discrete = words.iter().any(|w| w.eq_ignore_ascii_case("MAX") || matches!(*w, "Data" | "Flex") || arc_card(w));
+                let rest = &words[words.len().min(1)..];
+                let integrated = words.iter().any(|w| matches!(*w, "HD" | "UHD" | "Iris"))
+                    || rest == ["Graphics"]
+                    || rest == ["Arc", "Graphics"]
+                    || (rest.first() == Some(&"Arc") && words.iter().any(|w| w.strip_suffix(['V', 'T']).is_some_and(|n| n.len() == 3 && digits(n))));
+                integrated && !discrete
+            }
+            Vendor::Amd => {
+                let discrete_rx = words.windows(2).any(|w| w[0] == "RX" && w[1].starts_with(|c: char| c.is_ascii_digit()));
+                let professional = words.iter().any(|w| matches!(*w, "Pro" | "FirePro" | "WX"));
+                let mobile_number = words.iter().any(|w| w.strip_suffix('M').is_some_and(|n| n.len() == 3 && digits(n))) && !words.contains(&"RX");
+                !discrete_rx && !professional && (words.last() == Some(&"Graphics") || mobile_number)
+            }
+            Vendor::Nvidia | Vendor::Other => false,
+        }
+    }
+
+    /// The card can hold a model: something is left on it after the reserve, and integrated graphics was given the
+    /// memory of a card.
+    pub fn counts(&self) -> bool {
+        self.memory_mib >= if self.is_integrated() { MIN_INTEGRATED_GPU_MEMORY_MIB } else { MIN_GPU_MEMORY_MIB }
+    }
+
     /// The card has tensor cores, which llama.cpp's fast paths for reading the prompt count on. Volta and Ampere and
     /// later have them; Turing (compute capability 7.5) has them in the RTX, TITAN RTX, Quadro RTX and T4 cards, not in
     /// the GTX 16 family or the other small ones, which declare 7.5 all the same (a GTX 1660 SUPER reads the prompt at
@@ -85,9 +127,14 @@ pub struct Hardware {
 /// margin for the engine's compute buffers (1024 MiB, what `-fit` would leave free by default).
 pub(crate) const GPU_RESERVE_MIB: u64 = 1100 + 1024;
 
-/// A card counts only if something is left on it after the reserve. Integrated graphics have a few hundred MiB, and
-/// on a 2 GiB card (a GT 710) no model fits: counting it would pick an engine build for a card no model uses.
-pub const MIN_GPU_MEMORY_MIB: u64 = GPU_RESERVE_MIB + 1;
+/// A card counts only if something is left on it after the reserve. On a 2 GiB card (a GT 710) no model fits:
+/// counting it would pick an engine build for a card no model uses.
+const MIN_GPU_MEMORY_MIB: u64 = GPU_RESERVE_MIB + 1;
+
+/// Integrated graphics counts from an 8 GB setting up: a Ryzen AI Max, or a mini PC set that way. What a laptop gives
+/// by default (512 MiB to 4 GiB) is taken from the processor's memory without leaving room for a model and its
+/// context. Windows reports a setting some MiB short (8176 for 8 GB), hence the margin.
+const MIN_INTEGRATED_GPU_MEMORY_MIB: u64 = 7 * 1024;
 
 /// CUDA version of the official llama.cpp builds: the driver must support it, and for 13 the cards must be Turing
 /// or later (CUDA 13 dropped the earlier architectures).
@@ -96,9 +143,9 @@ const CUDA_13_BUILD: (u32, u32) = (13, 4);
 const CC_MIN_CUDA_13: (u32, u32) = (7, 5);
 
 impl Hardware {
-    /// The cards that count: those with enough memory (integrated graphics and software adapters stay out).
+    /// The cards that count (`Gpu::counts`); software adapters are not in the list at all.
     pub fn usable(&self) -> impl Iterator<Item = &Gpu> {
-        self.gpus.iter().filter(|s| s.memory_mib >= MIN_GPU_MEMORY_MIB)
+        self.gpus.iter().filter(|s| s.counts())
     }
 
     /// The PC has Turing cards (compute capability 7.5) and none of them has tensor cores: the GTX 16 family. An engine
@@ -394,6 +441,88 @@ mod tests {
         let hw = pc(vec![other(0, "Intel(R) UHD Graphics 770", Vendor::Intel, 128)], 16_384);
         assert_eq!(choose_build(&hw), Build::Cpu);
         assert_eq!(hw.usable().count(), 0);
+    }
+
+    /// The BIOS of a laptop gives the integrated graphics up to 4 GiB of the PC's own memory: no model fits there with
+    /// its context, and the processor has the rest.
+    #[test]
+    fn integrated_graphics_does_not_count_with_the_memory_a_laptop_gives_it() {
+        for (name, vendor) in [
+            ("AMD Radeon(TM) Graphics", Vendor::Amd),
+            ("AMD Radeon(TM) Vega 8 Graphics", Vendor::Amd),
+            ("AMD Radeon RX Vega 11 Graphics", Vendor::Amd),
+            ("AMD Radeon 780M Graphics", Vendor::Amd),
+            ("Intel(R) UHD Graphics 770", Vendor::Intel),
+            ("Intel(R) Iris(R) Xe Graphics", Vendor::Intel),
+            ("Intel(R) Arc(TM) Graphics", Vendor::Intel),
+            ("Intel(R) HD Graphics 620", Vendor::Intel),
+            ("Intel(R) Graphics", Vendor::Intel),
+            ("Intel(R) Arc(TM) 140V GPU (16GB)", Vendor::Intel),
+            ("Intel(R) Arc(TM) 140T GPU (16GB)", Vendor::Intel),
+            ("Intel(R) Arc(TM) 130T GPU", Vendor::Intel),
+            ("AMD Radeon(TM) 610M", Vendor::Amd),
+            ("AMD Radeon(TM) R5 Graphics", Vendor::Amd),
+            ("AMD Radeon 8060S Graphics", Vendor::Amd),
+        ] {
+            let hw = pc(vec![other(0, name, vendor, 4096)], 16_384);
+            assert_eq!(hw.usable().count(), 0, "{name}");
+            assert_eq!(choose_build(&hw), Build::Cpu, "{name}");
+        }
+    }
+
+    /// Integrated graphics that was given 8 GB or more (a Ryzen AI Max, a mini PC set that way) is the card of that PC:
+    /// the memory is taken from the processor's and the models run on Vulkan. Windows reports a setting some MiB short.
+    #[test]
+    fn integrated_graphics_given_8_gb_or_more_is_a_card() {
+        for (name, vendor, memory_mib, ram_mib) in [
+            ("AMD Radeon(TM) 8060S Graphics", Vendor::Amd, 98_304, 32_000),
+            ("AMD Radeon(TM) 8060S Graphics", Vendor::Amd, 32_768, 32_000),
+            ("AMD Radeon(TM) 8050S Graphics", Vendor::Amd, 8176, 24_000),
+            ("AMD Radeon 780M Graphics", Vendor::Amd, 16_384, 16_000),
+            ("Intel(R) Arc(TM) Graphics", Vendor::Intel, 8192, 24_000),
+        ] {
+            let hw = pc(vec![other(0, name, vendor, memory_mib)], ram_mib);
+            assert_eq!(hw.usable().map(|g| g.name.as_str()).collect::<Vec<_>>(), [name], "{memory_mib} MiB");
+            assert_eq!(choose_build(&hw), Build::Vulkan, "{name}, {memory_mib} MiB");
+        }
+        let below = pc(vec![other(0, "AMD Radeon(TM) 8060S Graphics", Vendor::Amd, 6144)], 58_000);
+        assert_eq!((below.usable().count(), choose_build(&below)), (0, Build::Cpu));
+    }
+
+    /// Next to an NVIDIA card with CUDA the engine uses only that one, as with any card of another brand.
+    #[test]
+    fn integrated_graphics_with_much_memory_does_not_take_cuda_away() {
+        let mut hw = three_gpus();
+        hw.gpus.push(other(3, "AMD Radeon(TM) 8060S Graphics", Vendor::Amd, 32_768));
+        assert_eq!(choose_build(&hw), Build::Cuda12);
+    }
+
+    #[test]
+    fn a_discrete_card_counts_whoever_makes_it() {
+        for (name, vendor, memory_mib) in [
+            ("AMD Radeon RX 7800 XT", Vendor::Amd, 16_368),
+            ("AMD Radeon RX 6800M", Vendor::Amd, 12_272),
+            ("AMD Radeon RX Vega 64", Vendor::Amd, 8176),
+            ("AMD Radeon Pro W7800", Vendor::Amd, 32_752),
+            ("Intel(R) Arc(TM) A770 Graphics", Vendor::Intel, 16_256),
+            ("Intel(R) Arc(TM) B580 Graphics", Vendor::Intel, 12_272),
+            ("Intel(R) Iris(R) Xe MAX Graphics", Vendor::Intel, 4096),
+            ("Intel(R) Arc(TM) A370M Graphics", Vendor::Intel, 4096),
+            ("Intel(R) Arc(TM) A550M Graphics", Vendor::Intel, 8192),
+            ("Intel(R) Arc(TM) A730M Graphics", Vendor::Intel, 12_288),
+            ("Intel(R) Arc(TM) A770M Graphics", Vendor::Intel, 16_256),
+            ("Intel(R) Arc(TM) Pro A60 Graphics", Vendor::Intel, 12_288),
+            ("Intel(R) Data Center GPU Max 1100", Vendor::Intel, 49_152),
+            ("AMD Radeon Pro WX 7100", Vendor::Amd, 8176),
+            ("AMD Radeon Pro WX 7100 Graphics", Vendor::Amd, 8176),
+            ("AMD Radeon(TM) Pro W6600 Graphics", Vendor::Amd, 8176),
+            ("AMD FirePro W5100", Vendor::Amd, 4096),
+            ("AMD FirePro W5100 Graphics", Vendor::Amd, 4096),
+        ] {
+            let hw = pc(vec![other(0, name, vendor, memory_mib)], 16_384);
+            assert_eq!(hw.usable().count(), 1, "{name}");
+            assert_eq!(choose_build(&hw), Build::Vulkan, "{name}");
+        }
     }
 
     #[test]

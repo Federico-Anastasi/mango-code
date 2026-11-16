@@ -77,6 +77,9 @@ pub struct State {
     pub downloads: Vec<Download>,
     /// The model of the image engine that stayed on after a picture; none while the engine is off.
     pub image_loaded: Option<String>,
+    /// While a side request has the engine on another model: the model the conversations stay on. Read in the same snapshot as
+    /// `model`, so that the engine is never seen on the other one without it.
+    pub conversation_model: Option<String>,
 }
 
 /// What the routes remember between one call and the next.
@@ -361,6 +364,7 @@ fn state(app: &AppHandle, st: &AppState, engine: &PublicState) -> State {
         default_model: known.default_model.clone(),
         downloads: st.downloads.get().map(|d| d.list()).unwrap_or_default(),
         image_loaded: st.images.get().and_then(|images| images.manager().loaded()),
+        conversation_model: engine.conversation_model.clone().filter(|_| remote.is_none()),
     };
     let now = serde_json::to_string(&state).unwrap_or_default();
     let mut served = st.control.served.lock().unwrap();
@@ -392,6 +396,7 @@ mod tests {
             loading: None,
             failed: None,
             chosen: None,
+            conversation_model: None,
         }
     }
 

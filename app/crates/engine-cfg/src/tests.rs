@@ -3,6 +3,7 @@ use crate::hardware::fixture::*;
 use crate::fixtures::Fake;
 use crate::split::fixture::*;
 use crate::choices::{Choices, Scope};
+use mango_common::Build;
 use std::collections::BTreeMap;
 
 /// The command line of a measured, working run of the engine on the three cards, with neutral paths (`C:\Test\...`): in the
@@ -528,6 +529,8 @@ fn the_model_loaded_at_startup_fits_unless_it_is_the_users_default() {
         images: false,
         missing: None,
         weights: true,
+        waits_engine: false,
+        engine: None,
         bytes: 1,
         speed: None,
         estimated: false,
@@ -539,6 +542,137 @@ fn the_model_loaded_at_startup_fits_unless_it_is_the_users_default() {
     assert_eq!(catalog::startup_model(&t.paths, &entries[..1]).unwrap().as_deref(), Some("huge"), "nothing else on disk: its start says why");
     choices::set_default(&t.paths, Some("huge")).unwrap();
     assert_eq!(catalog::startup_model(&t.paths, &entries).unwrap().as_deref(), Some("huge"));
+}
+
+/// A model whose files are on the disk and whose engine is being updated (its old version is there) waits for it; one
+/// whose files are missing does not.
+#[test]
+fn a_model_waits_for_the_new_version_of_its_engine_only_when_its_files_and_the_old_engine_are_there() {
+    let t = with_user_models(serde_json::json!({}));
+    t.save();
+    std::fs::write(t.paths.models.join("a.gguf"), b"").unwrap();
+    let waits = || catalog_on_three_gpus(&t).0.iter().map(|e| (e.key.clone(), e.waits_engine)).collect::<Vec<_>>();
+    assert_eq!(waits(), [("b".to_string(), false), ("a".to_string(), false)], "the engine is there");
+    for build in std::fs::read_dir(t.paths.engines.join("llamacpp")).unwrap().flatten() {
+        let old = build.file_name().to_string_lossy().replace("b12110", "b0-old");
+        std::fs::rename(build.path(), build.path().with_file_name(old)).unwrap();
+    }
+    assert_eq!(waits(), [("b".to_string(), false), ("a".to_string(), true)], "b has no files on the disk: it waits for nothing");
+    let engines = || catalog_on_three_gpus(&t).0.iter().map(|e| e.engine.clone().map(|(engine, _)| engine)).collect::<Vec<_>>();
+    assert_eq!(engines(), [Some("llamacpp".to_string()), Some("llamacpp".to_string())], "the engine each model runs with is told");
+}
+
+/// The default whose engine is being updated is the model to load: the app waits for the engine instead of loading
+/// another model that is ready, and keeps it for the whole session.
+#[test]
+fn the_default_that_waits_for_its_engine_is_the_model_loaded_at_startup() {
+    let entry = |key: &str, missing: Option<&str>, waits_engine| ModelEntry {
+        key: key.into(),
+        label: key.into(),
+        origin: Origin::Recommended,
+        ctx: 4096,
+        placement: Some(Placement::Gpu),
+        images: false,
+        missing: missing.map(str::to_string),
+        weights: true,
+        waits_engine,
+        engine: None,
+        bytes: 1,
+        speed: None,
+        estimated: false,
+    };
+    let t = with_user_models(serde_json::json!({}));
+    t.save();
+    let entries = [entry("ready", None, false), entry("updating", Some("the engine is missing"), true)];
+    let startup = |entries: &[ModelEntry]| catalog::startup_model(&t.paths, entries).unwrap();
+    assert_eq!(startup(&entries).as_deref(), Some("ready"), "no default saved: the one that is ready");
+    choices::set_default(&t.paths, Some("updating")).unwrap();
+    assert_eq!(startup(&entries).as_deref(), Some("updating"));
+    let not_coming = [entry("ready", None, false), entry("updating", Some("the engine is missing"), false)];
+    assert_eq!(startup(&not_coming).as_deref(), Some("ready"), "an engine that no update brings: another model");
+}
+
+/// The catalog of the cases of `model_to_load`: `new` waits for the new version of its engine (files on the disk, the old
+/// engine there); `ready` runs on another engine; `fresh` has no files yet and would bring the engine of `new`.
+fn waiting_catalog() -> Vec<ModelEntry> {
+    let entry = |key: &str, engine: (&str, Build), missing: Option<&str>, waits_engine| ModelEntry {
+        key: key.into(),
+        label: key.into(),
+        origin: Origin::Recommended,
+        ctx: 4096,
+        placement: Some(Placement::Gpu),
+        images: false,
+        missing: missing.map(str::to_string),
+        weights: waits_engine,
+        waits_engine,
+        engine: Some((engine.0.to_string(), engine.1)),
+        bytes: 1,
+        speed: None,
+        estimated: false,
+    };
+    vec![
+        entry("ready", ("llamacpp", Build::Cpu), None, false),
+        entry("new", ("llamacpp", Build::Vulkan), Some("the engine is missing"), true),
+        entry("fresh", ("llamacpp", Build::Vulkan), Some("missing the files"), false),
+    ]
+}
+
+fn to_load(entries: &[ModelEntry], default: Option<&str>, engine: EngineNow, live: &[&str], removing: &[&str]) -> Load {
+    let owned = |keys: &[&str]| keys.iter().map(|k| k.to_string()).collect::<Vec<_>>();
+    model_to_load(&Situation { entries, default, engine: &engine, live: &owned(live), removing: &owned(removing) })
+}
+
+/// The default waits for its engine only while a download that brings that engine is queued or in progress.
+#[test]
+fn the_default_waits_only_while_a_download_brings_its_engine() {
+    let entries = waiting_catalog();
+    let go = |live: &[&str]| to_load(&entries, Some("new"), EngineNow::Free, live, &[]);
+    assert_eq!(go(&["new"]), Load::Wait, "the engine alone, carried by the default");
+    assert_eq!(go(&["fresh"]), Load::Wait, "a model that shares the engine brings it first");
+    assert_eq!(go(&["ready"]), Load::Model("ready".into()), "another engine brings nothing for the default");
+    assert_eq!(go(&[]), Load::Model("ready".into()), "no download: a model that is ready, at once");
+}
+
+/// The engine has arrived: the default loads, whether the engine is free or a start failed meanwhile for the missing
+/// engine; a failure of another model, which the user chose, is left alone.
+#[test]
+fn the_default_loads_when_its_engine_arrives_also_after_a_failed_start() {
+    let mut entries = waiting_catalog();
+    entries[1].missing = None;
+    entries[1].waits_engine = false;
+    let go = |engine| to_load(&entries, Some("new"), engine, &[], &[]);
+    assert_eq!(go(EngineNow::Free), Load::Model("new".into()));
+    assert_eq!(go(EngineNow::Failed("new".into())), Load::Model("new".into()), "the start that failed for the missing engine does not block");
+    assert_eq!(go(EngineNow::Failed("ready".into())), Load::Nothing, "the user's choice failed: they see it");
+    assert_eq!(go(EngineNow::Busy), Load::Nothing, "something runs or loads");
+}
+
+/// The wait is over (nothing brings the engine) while a start failed for the missing engine: a model that is ready loads.
+#[test]
+fn a_failed_start_does_not_keep_the_app_waiting_for_an_engine_that_is_not_coming() {
+    let entries = waiting_catalog();
+    assert_eq!(to_load(&entries, Some("new"), EngineNow::Failed("new".into()), &["new"], &[]), Load::Wait, "still coming");
+    assert_eq!(to_load(&entries, Some("new"), EngineNow::Failed("new".into()), &[], &[]), Load::Model("ready".into()));
+    assert_eq!(to_load(&entries, Some("new"), EngineNow::Busy, &[], &[]), Load::Nothing, "a model in use stays");
+}
+
+/// A model being taken off the computer is never the one to load, whether it is the default or the fallback.
+#[test]
+fn a_model_being_removed_is_not_loaded() {
+    let mut entries = waiting_catalog();
+    assert_eq!(to_load(&entries, Some("new"), EngineNow::Free, &[], &["ready"]), Load::Nothing, "the only one ready is going");
+    entries[1].missing = None;
+    entries[1].waits_engine = false;
+    assert_eq!(to_load(&entries, Some("new"), EngineNow::Free, &[], &["new"]), Load::Model("ready".into()));
+    assert_eq!(to_load(&entries, Some("new"), EngineNow::Free, &[], &["new", "ready"]), Load::Nothing);
+}
+
+/// Nothing to wait for and nothing ready: nothing to load.
+#[test]
+fn without_a_model_that_is_ready_nothing_is_loaded() {
+    let entries = waiting_catalog();
+    assert_eq!(to_load(&entries[1..], Some("new"), EngineNow::Free, &[], &[]), Load::Nothing);
+    assert_eq!(to_load(&entries, Some("ready"), EngineNow::Free, &["new"], &[]), Load::Model("ready".into()), "the default is ready");
 }
 
 /// The default saved while the user has none: only a model on the disk with a place to run; the last model of 0.1.2
@@ -554,6 +688,8 @@ fn the_default_to_save_is_a_model_that_fits() {
         images: false,
         missing: missing.map(str::to_string),
         weights: true,
+        waits_engine: false,
+        engine: None,
         bytes: 1,
         speed: None,
         estimated: false,
@@ -651,6 +787,57 @@ fn a_model_that_requires_an_engine_does_not_run_without_its_profile() {
     t.profile["hardware"]["gpus"] = serde_json::json!(["NVIDIA GeForce RTX 4090"]);
     let e = make_plan(&t, &three_gpus()).unwrap_err().to_string();
     assert!(e.contains(&tr!("solo sul motore «toq»", "only runs on the engine «toq»")), "{e}");
+}
+
+/// The engines our forks build are compiled for AVX2 and cannot start on a processor without it (the official llama.cpp
+/// picks its code for the processor at run time and does). A model that requires such an engine says so in one sentence;
+/// a model with a profile on such an engine falls back to the general plan.
+#[test]
+fn an_engine_built_for_avx2_is_not_planned_on_a_processor_without_it() {
+    let mut t = Fake::new();
+    t.llamacpp_installed();
+    t.save();
+    std::fs::write(
+        t.paths.dist.join("mango-engines.json"),
+        r#"{ "llamacpp": { "version": "b12110", "build": {} }, "toq": { "version": "1", "avx2": true, "build": {} } }"#,
+    )
+    .unwrap();
+    let mut old = three_gpus();
+    old.cpu.avx2 = false;
+    assert!(make_plan(&t, &three_gpus()).is_ok(), "with AVX2 the profile applies");
+    let e = make_plan(&t, &old).unwrap_err().to_string();
+    assert!(e.contains(&tr!("richiede un processore con AVX2", "needs a processor with AVX2")), "{e}");
+    let (entries, _) = catalog::catalog_for(&t.paths, &old).unwrap();
+    assert_eq!(entries[0].placement, None);
+
+    // a model that can run on the official engine does so
+    t.catalog["models"]["toq"].as_object_mut().unwrap().remove("requires_engine");
+    let plan = make_plan(&t, &old).unwrap();
+    assert!(plan.spec.exe.to_string_lossy().contains("llamacpp"), "{:?}", plan.spec.exe);
+}
+
+/// Where the plan is the general one the views do not say «tailored» either: a profile on an engine built for AVX2 does not
+/// apply on a processor without it, for the list of models, the computer and the profile asked for.
+#[test]
+fn a_profile_that_does_not_apply_without_avx2_is_not_called_tailored() {
+    let mut t = Fake::new();
+    t.llamacpp_installed();
+    t.catalog["models"]["toq"].as_object_mut().unwrap().remove("requires_engine");
+    t.save();
+    std::fs::write(
+        t.paths.dist.join("mango-engines.json"),
+        r#"{ "llamacpp": { "version": "b12110", "build": {} }, "toq": { "version": "1", "avx2": true, "build": {} } }"#,
+    )
+    .unwrap();
+    let mut old = three_gpus();
+    old.cpu.avx2 = false;
+    let tailored = |hw: &Hardware| {
+        let listed = models_view(&t.paths, hw).unwrap().into_iter().find(|m| m.key == "toq").unwrap().tailored;
+        let computer = computer_view(&t.paths, hw).unwrap().tailored.is_some();
+        (listed, computer, profile_for(&t.paths, "toq", hw).unwrap().is_some())
+    };
+    assert_eq!(tailored(&three_gpus()), (true, true, true));
+    assert_eq!(tailored(&old), (false, false, false));
 }
 
 // --- the user's models -------------------------------------------------------------------------------
@@ -1589,5 +1776,48 @@ fn a_pc_with_only_an_old_small_card_gets_a_quick_model_on_the_processor() {
         assert!(all.iter().all(|r| r.placement != Some(Placement::Gpu)), "{memory_mib} MiB: nothing fits on the card");
         let ling = all.iter().find(|r| r.model == "ling").unwrap();
         assert_eq!((ling.placement, ling.speed, ling.fastest), (Some(Placement::Cpu), Some(Speed::Quick), true), "{memory_mib} MiB");
+    }
+}
+
+/// What the PC of a laptop with 16 GB and integrated graphics only is proposed (invented values): a model that writes at
+/// the speed of reading or faster on the processor, not the first one of the catalog that merely fits in memory.
+#[test]
+fn a_laptop_without_a_graphics_card_is_proposed_a_model_that_is_quick_on_its_processor() {
+    let hw = pc(vec![other(0, "AMD Radeon Graphics", Vendor::Amd, 512)], 15_700);
+    let views = models_view(&real_paths(), &hw).unwrap();
+    let speed = |key: &str| views.iter().find(|v| v.key == key).unwrap().verdict.speed;
+    assert_eq!((speed("bonsai2"), speed("ling")), (Some(Speed::Slow), Some(Speed::Quick)), "27B dense is slow here, Ling is quick");
+    assert_eq!(views.iter().filter(|v| v.recommended).map(|v| v.key.as_str()).collect::<Vec<_>>(), ["ling"]);
+}
+
+/// The line of a model that cannot run here is a sentence in the user's language: the technical detail of the error
+/// that says why stays out of it (the log has it).
+#[test]
+fn the_verdict_of_a_model_that_cannot_run_here_has_no_technical_detail() {
+    let hw = pc(vec![other(0, "AMD Radeon Graphics", Vendor::Amd, 512)], 15_700);
+    let toq = models_view(&real_paths(), &hw).unwrap().into_iter().find(|v| v.key == "toq").unwrap();
+    assert!(!toq.verdict.fits);
+    assert_eq!(toq.verdict.reason, tr!("Il modello «Qwen3.8-27B-TOQ-v1» gira solo sul motore «toq», che per questo PC non c'è ancora.", "The model «Qwen3.8-27B-TOQ-v1» only runs on the engine «toq», which isn't available for this PC yet."));
+}
+
+/// A laptop whose BIOS gives the integrated graphics 4 GiB: the models are planned on the processor, as with 512 MiB.
+#[test]
+fn integrated_graphics_with_4_gib_from_the_bios_is_not_a_card_in_the_plan() {
+    let hw = pc(vec![other(0, "AMD Radeon(TM) Graphics", Vendor::Amd, 4096)], 15_700);
+    let views = models_view(&real_paths(), &hw).unwrap();
+    let ling = views.iter().find(|v| v.key == "ling").unwrap();
+    assert_eq!(ling.verdict.place.as_ref().map(|p| (p.placement, p.gpus.clone())), Some((Placement::Cpu, vec![])));
+    assert!(views.iter().all(|v| v.verdict.place.as_ref().is_none_or(|p| p.placement == Placement::Cpu)));
+}
+
+/// A PC whose integrated graphics was given 64 GiB of its 128 (invented values): the models are planned on it, whole.
+#[test]
+fn integrated_graphics_with_much_memory_is_the_card_of_the_plan() {
+    const RADEON_8060S: &str = "AMD Radeon(TM) 8060S Graphics";
+    let hw = pc(vec![other(0, RADEON_8060S, Vendor::Amd, 65_536)], 63_000);
+    let views = models_view(&real_paths(), &hw).unwrap();
+    for key in ["ling", "bonsai2"] {
+        let place = views.iter().find(|v| v.key == key).unwrap().verdict.place.clone();
+        assert_eq!(place.map(|p| (p.placement, p.gpus)), Some((Placement::Gpu, vec![RADEON_8060S.to_string()])), "{key}");
     }
 }

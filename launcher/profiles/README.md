@@ -4,6 +4,7 @@ A profile says how a model runs on a piece of hardware: engine, arguments, conte
 PC's GPUs are exactly the ones it asks for (order doesn't matter) or, if it asks for no GPUs, on every PC whose build
 (`cpu`, `vulkan`, `cuda-12`, `cuda-13`, chosen from the hardware) is among its own. The GPU profile wins over the build
 profile; with neither, the general plan applies (official llama.cpp).
+A profile on an engine marked `avx2` in `mango-engines.json` (the forks) does not apply on a processor without AVX2.
 
 ## Where they are
 

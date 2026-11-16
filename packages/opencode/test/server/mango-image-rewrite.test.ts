@@ -17,12 +17,14 @@ afterEach(async () => {
 
 function engine(reply: string | number) {
   const seen: any[] = []
+  const headers: Headers[] = []
   const chunk = (delta: object, finish: string | null = null) =>
     `data: ${JSON.stringify({ id: "c", object: "chat.completion.chunk", created: 0, model: "m", choices: [{ index: 0, delta, finish_reason: finish }] })}\n\n`
   const server = Bun.serve({
     port: 0,
     hostname: "127.0.0.1",
     async fetch(request) {
+      headers.push(request.headers)
       seen.push(await request.json())
       if (typeof reply === "number") return new Response("the engine is not well", { status: reply })
       return new Response(chunk({ role: "assistant", content: reply }) + chunk({}, "stop") + "data: [DONE]\n\n", {
@@ -31,7 +33,7 @@ function engine(reply: string | number) {
     },
   })
   servers.push(server)
-  return { seen, url: `http://127.0.0.1:${server.port}/v1` }
+  return { seen, headers, url: `http://127.0.0.1:${server.port}/v1` }
 }
 
 const project = (url: string, models: string[]) =>
@@ -93,6 +95,14 @@ describe("a request for a picture is rewritten", () => {
     const named = await rewrite(both.path, { request: "un gatto", model: { providerID: "mango", modelID: "local" } })
     expect((await named.json()).model).toEqual({ providerID: "mango", modelID: "local" })
     expect(fake.seen.map((sent) => sent.model)).toEqual(["local", "local"])
+  })
+
+  test("the request to the engine says it is a side request, so that the conversations keep their model", async () => {
+    const fake = engine("PROMPT: A cat.")
+    await using tmp = await project(fake.url, ["local", "ling"])
+    await rewrite(tmp.path, { request: "un gatto" })
+    await rewrite(tmp.path, { request: "un gatto", model: { providerID: "mango", modelID: "local" } })
+    expect(fake.headers.map((headers) => headers.get("x-mango-side-request"))).toEqual(["1", "1"])
   })
 
   test("a question comes back with its answers, and the answer goes on with the conversation", async () => {

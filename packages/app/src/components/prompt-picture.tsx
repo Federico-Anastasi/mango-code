@@ -47,6 +47,15 @@ export function createPromptPicture(input: {
   })
   const on = () => available() && pictureMode(pick(), lastWasPicture()) === "picture"
 
+  // Whether pictures are on view is known once the app has answered and the conversation's messages have come: until
+  // then the engine is not put away.
+  const decided = mango.pictures.undecided()
+  onCleanup(decided)
+  createEffect(() => {
+    const id = input.sessionID()
+    if (available() && (!id || sync().data.message[id] !== undefined)) decided()
+  })
+
   // The engine that draws stays on while pictures are on view; the last view that goes puts it away.
   createEffect(() => {
     if (!on()) return

@@ -27,6 +27,9 @@ struct Engine {
     /// `false` for the engine that can't list GPUs (`--list-devices`): for CUDA it's enough that it starts.
     #[serde(default = "default_true")]
     gpu_check: bool,
+    /// The builds are compiled for AVX2 and cannot start on a processor without it.
+    #[serde(default)]
+    avx2: bool,
     build: BTreeMap<String, EngineBuild>,
 }
 
@@ -75,6 +78,12 @@ impl std::fmt::Display for EngineUnusable {
 }
 
 impl std::error::Error for EngineUnusable {}
+
+/// The engine cannot start on a processor without AVX2 (our forks are compiled for it; the official llama.cpp picks its
+/// code for the processor at run time and starts on any x64 one).
+pub fn needs_avx2(paths: &Paths, engine: &str) -> bool {
+    catalog(paths).is_ok_and(|c| c.get(engine).is_some_and(|m| m.avx2))
+}
 
 /// The catalog has this build of the engine: only our forks have the one for the GTX 16 family.
 pub fn has_build(paths: &Paths, engine: &str, build: Build) -> bool {
@@ -728,6 +737,7 @@ mod tests {
         for (engine, m) in &cat {
             assert!(!m.version.is_empty() && !m.build.is_empty(), "{engine}");
             assert_eq!(m.gpu_check, engine != "toq", "{engine}");
+            assert_eq!(m.avx2, engine == "prism" || engine == "toq", "{engine}: only our forks are compiled for AVX2");
             assert_eq!(m.exe, if engine == "sd" { "sd-server.exe" } else { LLAMA_SERVER }, "{engine}");
             for (name, b) in &m.build {
                 for f in std::iter::once(&b.file).chain(&b.runtime) {

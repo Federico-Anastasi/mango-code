@@ -12,9 +12,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { MangoCode, find } from "../client/mango-code";
-import { start, type Environment } from "./environment";
-
-const CHROME = path.join(process.env.ProgramFiles ?? "C:\\Program Files", "Google", "Chrome", "Application", "chrome.exe");
+import { installedChrome, start, type Environment } from "./environment";
 
 let env: Environment;
 let mc: MangoCode;
@@ -26,11 +24,11 @@ const TEST_URL = `http://myapp.test:${SITE}/`;
 let site: ReturnType<typeof Bun.serve>;
 
 beforeAll(async () => {
-  if (!fs.existsSync(CHROME)) throw new Error(`${CHROME} is missing`);
+  const chromeExe = installedChrome();
   fakeRoot = fs.mkdtempSync(path.join(os.tmpdir(), "mango-my-chrome-"));
   const profile = path.join(fakeRoot, "profile");
   site = Bun.serve({ port: SITE, hostname: "127.0.0.1", fetch: () => new Response("<!doctype html><title>my-chrome</title>MY CHROME", { headers: { "content-type": "text/html" } }) });
-  chrome = spawn(CHROME, ["--headless=new", "--remote-debugging-port=0", `--user-data-dir=${profile}`, "--no-first-run", "--host-resolver-rules=MAP myapp.test 127.0.0.1", "about:blank"], { stdio: "ignore" });
+  chrome = spawn(chromeExe, ["--headless=new", "--remote-debugging-port=0", `--user-data-dir=${profile}`, "--no-first-run", "--host-resolver-rules=MAP myapp.test 127.0.0.1", "about:blank"], { stdio: "ignore" });
   // With port 0 Chrome picks one and writes it in the profile's DevToolsActivePort: the same file Chrome
   // writes in the default profile when debugging is turned on from chrome://inspect.
   const active = path.join(profile, "DevToolsActivePort");

@@ -47,6 +47,9 @@ const MAX_HEADERS: usize = 100;
 const READ_TIMEOUT: Duration = if cfg!(test) { Duration::from_secs(1) } else { Duration::from_secs(30) };
 /// The time a PC of the network has to send the head of its request, however slowly it comes.
 const HEAD_DEADLINE: Duration = if cfg!(test) { Duration::from_secs(1) } else { Duration::from_secs(10) };
+/// The header of a request that is not a conversation's (a rewrite of what a person asks for a picture): the model it names takes
+/// the engine for a while, and the conversations stay on the model they had.
+pub const SIDE_REQUEST: &str = "X-Mango-Side-Request";
 /// Request headers that pass on to the engine.
 const FORWARDED: &[&str] = &["content-type", "accept", "authorization"];
 
@@ -282,7 +285,10 @@ fn handle(c: TcpStream, m: &EngineManager, net: Option<&Share>, app: Option<&dyn
     }
     let permit = if path.starts_with("/v1/") && req.method == "POST" {
         let key = serde_json::from_slice::<Value>(&req.body).ok().and_then(|v| v.get("model").and_then(Value::as_str).map(str::to_string));
-        m.acquire(key.as_deref())
+        match req.header(SIDE_REQUEST) {
+            Some(_) => m.acquire_side(key.as_deref()),
+            None => m.acquire(key.as_deref()),
+        }
     } else {
         match m.phase() {
             crate::Phase::Running => m.acquire(None),

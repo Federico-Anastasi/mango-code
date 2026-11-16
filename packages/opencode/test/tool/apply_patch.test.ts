@@ -220,6 +220,60 @@ describe("tool.apply_patch freeform", () => {
     }),
   )
 
+  it.instance("keeps the CRLF line endings of an updated file", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      const { ctx } = makeCtx()
+      const target = path.join(test.directory, "windows.txt")
+      yield* writeText(target, "line1\r\nline2\r\nline3\r\n")
+
+      const patchText = "*** Begin Patch\n*** Update File: windows.txt\n@@\n-line2\n+changed2\n+extra\n*** End Patch"
+
+      const result = yield* execute({ patchText }, ctx)
+
+      expect(yield* readText(target)).toBe("line1\r\nchanged2\r\nextra\r\nline3\r\n")
+      expect(result.metadata.files[0].additions).toBe(2)
+      expect(result.metadata.files[0].deletions).toBe(1)
+    }),
+  )
+
+  it.instance("leaves the lines it does not touch as they are in a file with mixed line endings", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      const { ctx } = makeCtx()
+      const target = path.join(test.directory, "mixed.txt")
+      yield* writeText(target, "one\ntwo\r\nthree\nfour\n")
+
+      const patchText = "*** Begin Patch\n*** Update File: mixed.txt\n@@\n-three\n+THREE\n+extra\n*** End Patch"
+
+      const result = yield* execute({ patchText }, ctx)
+
+      expect(yield* readText(target)).toBe("one\ntwo\r\nTHREE\nextra\nfour\n")
+      expect(result.metadata.files[0].additions).toBe(2)
+      expect(result.metadata.files[0].deletions).toBe(1)
+    }),
+  )
+
+  it.instance("takes a patch written with CRLF line endings without doubling the carriage returns", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      const { ctx } = makeCtx()
+      const windows = path.join(test.directory, "windows.txt")
+      const unix = path.join(test.directory, "unix.txt")
+      yield* writeText(windows, "line1\r\nline2\r\nline3\r\n")
+      yield* writeText(unix, "line1\nline2\nline3\n")
+
+      const patch = (name: string) =>
+        `*** Begin Patch\r\n*** Update File: ${name}\r\n@@\r\n-line2\r\n+changed2\r\n+extra\r\n*** End Patch`
+
+      yield* execute({ patchText: patch("windows.txt") }, ctx)
+      yield* execute({ patchText: patch("unix.txt") }, ctx)
+
+      expect(yield* readText(windows)).toBe("line1\r\nchanged2\r\nextra\r\nline3\r\n")
+      expect(yield* readText(unix)).toBe("line1\nchanged2\nextra\nline3\n")
+    }),
+  )
+
   it.instance("does not invent a first-line diff for BOM files", () =>
     Effect.gen(function* () {
       const test = yield* TestInstance

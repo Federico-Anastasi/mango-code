@@ -43,6 +43,10 @@ const Asked = Schema.Struct({
 export const MAX_BODY = 32 * 1024
 const LING = { providerID: ProviderV2.ID.make("mango"), modelID: ModelV2.ID.make("ling") }
 
+// The engine of this computer runs one model at a time. This header tells its manager that the request is not a
+// conversation's, so that the model it loads does not become the one the conversations follow (docs/INTEGRATION.md).
+const SIDE_REQUEST = "X-Mango-Side-Request"
+
 // The rules are the whole system prompt: as the agent's own prompt they take the place of Mango Code's, which would
 // make the model answer as an assistant. Temperature and top-p are the values the rules were tried with, and the
 // model answers without reasoning, as for every small job.
@@ -156,7 +160,10 @@ export function rewrite(
         system: [],
         small: true,
         tools: {},
-        model: model.value,
+        model:
+          model.value.providerID === LING.providerID
+            ? { ...model.value, headers: { ...model.value.headers, [SIDE_REQUEST]: "1" } }
+            : model.value,
         sessionID,
         retries: 1,
         messages: [

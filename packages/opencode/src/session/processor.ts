@@ -630,19 +630,7 @@ const layer = Layer.effect(
         for (const toolCallID of Object.keys(ctx.toolcalls)) {
           const match = yield* readToolCall(toolCallID)
           if (!match) continue
-          const part = match.part
-          const end = Date.now()
-          const metadata = "metadata" in part.state && isRecord(part.state.metadata) ? part.state.metadata : {}
-          yield* session.updatePart({
-            ...part,
-            state: {
-              ...part.state,
-              status: "error",
-              error: "Tool execution aborted",
-              metadata: { ...metadata, interrupted: true },
-              time: { start: "time" in part.state ? part.state.time.start : end, end },
-            },
-          })
+          yield* session.updatePart(MessageV2.interruptedTool(match.part, Date.now()))
         }
         ctx.toolcalls = {}
         ctx.assistantMessage.time.completed ??= Date.now()

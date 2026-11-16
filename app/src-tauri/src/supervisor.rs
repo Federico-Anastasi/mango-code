@@ -5,7 +5,8 @@
 //! engines holding the VRAM. A process started with CREATE_BREAKAWAY_FROM_JOB leaves it (the job allows it): the
 //! installer of an update (`updater.rs`), which must outlive the app it replaces, and the programs the app opens for
 //! the user (`open_outside_job`).
-//! The Job does not hold what the Store's PowerShell 7 starts: at quit `stop_stragglers` stops those (`stragglers.rs`).
+//! The Job does not hold what the Store's PowerShell 7 starts: at quit `stop_stragglers` stops those, and a start stops the
+//! ones left by an app that was closed by force (`mango_common::stragglers`).
 
 use anyhow::{bail, Context, Result};
 use mango_common::{tail, tr, ProcSpec, CREATE_NO_WINDOW};
@@ -26,7 +27,7 @@ use windows::Win32::System::Threading::GetCurrentProcess;
 /// The process leaves the app's job (which allows it): it survives the app.
 pub const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x0100_0000;
 
-/// Names this run of the app in the environment of the agent, and so of every process the agent starts (`stragglers.rs`).
+/// Names this run of the app in the environment of the agent, and so of every process the agent starts.
 const RUN_VAR: &str = "MANGO_APP_RUN";
 
 pub struct Supervisor {
@@ -63,7 +64,7 @@ impl Supervisor {
                 .context("AssignProcessToJobObject (app)")?;
             job
         };
-        Ok(Self { _job: job, run: mango_common::random_hex(16), children: Mutex::new(Vec::new()), logs: logs.to_path_buf() })
+        Ok(Self { _job: job, run: mango_common::stragglers::run_name(), children: Mutex::new(Vec::new()), logs: logs.to_path_buf() })
     }
 
     /// Starts the process hidden, with stdout and stderr on `<logs>/<name>.log`.
@@ -158,9 +159,14 @@ impl Supervisor {
 }
 
 impl Supervisor {
-    /// At quit: stops what the agent started and the Job did not hold (`stragglers.rs`).
+    /// At quit: stops what the agent started and the Job did not hold.
     pub fn stop_stragglers(&self) -> usize {
-        crate::stragglers::kill_with_env(RUN_VAR, &self.run)
+        mango_common::stragglers::kill_where_env(RUN_VAR, |value| value == self.run)
+    }
+
+    /// At the start: stops what the agent of an app closed by force started and the Job did not hold.
+    pub fn stop_stale_stragglers() -> usize {
+        mango_common::stragglers::kill_background_where_env(RUN_VAR, mango_common::stragglers::stale_runs)
     }
 }
 

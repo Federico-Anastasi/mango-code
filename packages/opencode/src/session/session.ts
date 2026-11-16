@@ -26,7 +26,7 @@ import { inArray } from "drizzle-orm"
 import { lt } from "drizzle-orm"
 import { or } from "drizzle-orm"
 import type { SQL } from "drizzle-orm"
-import { PartTable, SessionTable } from "@opencode-ai/core/session/sql"
+import { MessageTable, PartTable, SessionTable } from "@opencode-ai/core/session/sql"
 import { ProjectTable } from "@opencode-ai/core/project/sql"
 import { MessageV2 } from "./message-v2"
 import type { InstanceContext } from "../project/instance-context"
@@ -44,6 +44,9 @@ import { RuntimeFlags } from "@/effect/runtime-flags"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { ModelV2 } from "@opencode-ai/core/model"
 import { SessionMessage } from "@opencode-ai/schema/session-message"
+
+// One reading, taken when the process starts: a message created before it belongs to an earlier process.
+const PROCESS_STARTED = Date.now()
 
 const parentTitlePrefix = "New session - "
 const childTitlePrefix = "Child session - "
@@ -457,6 +460,8 @@ export interface Interface {
     partID: PartID
   }) => Effect.Effect<SessionV1.Part | undefined>
   readonly updatePart: <T extends SessionV1.Part>(part: T) => Effect.Effect<T>
+  /** Closes, as an interrupted turn, the assistant messages of the folder that an earlier process left unfinished. */
+  readonly interruptStale: () => Effect.Effect<void>
   readonly updatePartDelta: (input: {
     sessionID: SessionID
     messageID: MessageID
@@ -662,6 +667,72 @@ const layer: Layer.Layer<
         sessionID: row.session_id,
         messageID: row.message_id,
       } as SessionV1.Part
+    })
+
+    const interruptStale: Interface["interruptStale"] = Effect.fn("Session.interruptStale")(function* () {
+      const ctx = yield* InstanceState.context
+      const messages = yield* db
+        .select({ message: MessageTable })
+        .from(MessageTable)
+        .innerJoin(SessionTable, eq(SessionTable.id, MessageTable.session_id))
+        .where(
+          and(
+            eq(SessionTable.project_id, ctx.project.id),
+            lt(MessageTable.time_created, PROCESS_STARTED),
+            sql`json_extract(${MessageTable.data}, '$.role') = 'assistant'`,
+            sql`json_extract(${MessageTable.data}, '$.time.completed') is null`,
+          ),
+        )
+        .all()
+        .pipe(Effect.orDie)
+      if (messages.length === 0) return
+      const parts = yield* db
+        .select()
+        .from(PartTable)
+        .where(
+          inArray(
+            PartTable.message_id,
+            messages.map((row) => row.message.id),
+          ),
+        )
+        .all()
+        .pipe(Effect.orDie)
+      const end = Date.now()
+      yield* Effect.forEach(
+        parts,
+        (row) => {
+          const part = {
+            ...row.data,
+            id: row.id,
+            sessionID: row.session_id,
+            messageID: row.message_id,
+          } as SessionV1.Part
+          if (part.type === "tool")
+            return part.state.status === "running" || part.state.status === "pending"
+              ? updatePart(MessageV2.interruptedTool(part, end))
+              : Effect.void
+          if ((part.type === "text" || part.type === "reasoning") && !part.time?.end)
+            return updatePart({ ...part, time: { start: part.time?.start ?? end, end } })
+          return Effect.void
+        },
+        { discard: true },
+      )
+      yield* Effect.forEach(
+        messages,
+        (row) => {
+          const message = {
+            ...row.message.data,
+            id: row.message.id,
+            sessionID: row.message.session_id,
+          } as SessionV1.Assistant
+          return updateMessage({
+            ...message,
+            error: message.error ?? MessageV2.abortedError(message.providerID),
+            time: { ...message.time, completed: end },
+          })
+        },
+        { discard: true },
+      )
     })
 
     const create = Effect.fn("Session.create")(function* (input?: {
@@ -929,6 +1000,7 @@ const layer: Layer.Layer<
       removePart,
       updatePart,
       getPart,
+      interruptStale,
       updatePartDelta,
       findMessage,
     })

@@ -11,22 +11,22 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { REPO } from "./environment";
+import { REPO, installedChrome } from "./environment";
 
-const CHROME = path.join(process.env.ProgramFiles ?? "C:\\Program Files", "Google", "Chrome", "Application", "chrome.exe");
 const RUNTIME_EXE = path.join(process.env.MANGO_OPENCODE ?? path.join(REPO, "launcher", "opencode"), "web", "mango-code.exe");
 const SERVER = path.join(REPO, "launcher", "mango-chrome-mcp.mjs");
 const [PANEL, USER, SITE, PANEL_TO_CLOSE, USER_TO_CLOSE] = [48240, 48241, 48242, 48245, 48246];
 const RESOLVE = "--host-resolver-rules=MAP myapp.test 127.0.0.1";
 
 let root: string;
+let chromeExe: string;
 let site: ReturnType<typeof Bun.serve>;
 const servers: Server[] = [];
 
 /** A windowless Chrome with remote debugging on a port of ours; `active` is what Chrome writes in `DevToolsActivePort` when started from chrome://inspect: the port and the WebSocket path. */
 async function chrome(port: number) {
   const profile = path.join(root, `profile-${port}`);
-  const child = spawn(CHROME, ["--headless=new", `--remote-debugging-port=${port}`, `--user-data-dir=${profile}`, "--no-first-run", RESOLVE, "about:blank"], { stdio: "ignore" });
+  const child = spawn(chromeExe, ["--headless=new", `--remote-debugging-port=${port}`, `--user-data-dir=${profile}`, "--no-first-run", RESOLVE, "about:blank"], { stdio: "ignore" });
   for (let i = 0; i < 100; i++) {
     try {
       const version: any = await (await fetch(`http://127.0.0.1:${port}/json/version`)).json();
@@ -94,7 +94,8 @@ async function userTab(url: string, title: string) {
 }
 
 beforeAll(async () => {
-  for (const f of [CHROME, RUNTIME_EXE]) if (!fs.existsSync(f)) throw new Error(`${f} is missing`);
+  chromeExe = installedChrome();
+  if (!fs.existsSync(RUNTIME_EXE)) throw new Error(`${RUNTIME_EXE} is missing`);
   root = fs.mkdtempSync(path.join(os.tmpdir(), "mango-browser-mcp-"));
   site = Bun.serve({
     port: SITE,

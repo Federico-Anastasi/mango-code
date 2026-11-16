@@ -11,7 +11,7 @@ import { Watcher } from "@opencode-ai/core/filesystem/watcher"
 import { Format } from "../format"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import { InstanceState } from "@/effect/instance-state"
-import { trimDiff } from "./edit"
+import { keepLineEndings, trimDiff } from "./edit"
 import { assertExternalDirectoryEffect } from "./external-directory"
 import { ProjectPath } from "./project-path"
 import * as Bom from "@/util/bom"
@@ -48,7 +48,7 @@ export const WriteTool = Tool.define(
           const next = Bom.split(params.content)
           const desiredBom = source.bom || next.bom
           const contentOld = source.text
-          const contentNew = next.text
+          const contentNew = keepLineEndings(contentOld, next.text)
 
           const diff = trimDiff(createTwoFilesPatch(filepath, filepath, contentOld, contentNew))
           yield* ctx.ask({

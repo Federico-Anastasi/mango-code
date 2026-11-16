@@ -33,6 +33,11 @@ Tests don't run from the repository root: run them from the folders above. On a 
 stops until the installer's resources folder exists (the build script creates it with the installer; for the tests an
 empty one is enough): `New-Item -ItemType Directory -Force app/scripts/staging/resources`.
 
+The end-to-end tests start the real app and the agent: they need the agent built (`app\scripts\build-agent.ps1`), the
+node packages of the resources (`npm ci` in `launcher` and in `launcher/opencode-home`) and
+`cargo build -p mango-code -p engine -p images` in `app`. They open the app's windows; the whole sequence, and how to
+keep the windows off the screen, is in [`app/README.md`](app/README.md), "Building and testing".
+
 ## License
 
 By contributing you agree that your contribution is licensed under the project's license, AGPL-3.0-or-later (see

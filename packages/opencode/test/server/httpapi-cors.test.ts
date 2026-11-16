@@ -71,14 +71,49 @@ describe("HttpApi CORS", () => {
       const response = yield* Effect.promise(() =>
         handler(
           new Request(new URL("/global/config", "http://localhost"), {
-            headers: { origin: "https://app.opencode.ai" },
+            headers: { origin: "tauri://localhost" },
           }),
           HttpApiApp.context,
         ),
       )
 
       expect(response.status).toBe(401)
-      expect(response.headers.get("access-control-allow-origin")).toBe("https://app.opencode.ai")
+      expect(response.headers.get("access-control-allow-origin")).toBe("tauri://localhost")
+    }),
+  )
+
+  it.live("gives no CORS headers to an origin the agent does not accept", () =>
+    Effect.gen(function* () {
+      const handler = HttpRouter.toWebHandler(
+        HttpApiApp.createRoutes().pipe(
+          Layer.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({ OPENCODE_SERVER_PASSWORD: "secret" }))),
+        ),
+        { disableLogger: true },
+      ).handler
+      const request = (origin: string) =>
+        Effect.promise(() =>
+          handler(
+            new Request(new URL("/global/config", "http://localhost"), { headers: { origin } }),
+            HttpApiApp.context,
+          ),
+        )
+
+      const response = yield* request("https://evil.example")
+      const hosted = yield* request("https://app.opencode.ai")
+      const preflight = yield* HttpClientRequest.options(InstancePaths.path).pipe(
+        HttpClientRequest.setHeaders({
+          origin: "https://evil.example",
+          "access-control-request-method": "GET",
+          "access-control-request-headers": "authorization",
+        }),
+        HttpClient.execute,
+      )
+
+      expect(response.status).toBe(403)
+      expect(response.headers.get("access-control-allow-origin")).toBeNull()
+      expect(hosted.status).toBe(403)
+      expect(hosted.headers.get("access-control-allow-origin")).toBeNull()
+      expect(preflight.headers["access-control-allow-origin"]).toBeUndefined()
     }),
   )
 

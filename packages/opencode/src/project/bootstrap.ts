@@ -3,6 +3,7 @@ import { Plugin } from "../plugin"
 import { Format } from "../format"
 import { LSP } from "@/lsp/lsp"
 import { Snapshot } from "../snapshot"
+import { Session } from "../session/session"
 import * as Project from "./project"
 import * as Vcs from "./vcs"
 import { InstanceState } from "@/effect/instance-state"
@@ -24,6 +25,7 @@ const layer = Layer.effect(
     const lsp = yield* LSP.Service
     const plugin = yield* Plugin.Service
     const project = yield* Project.Service
+    const session = yield* Session.Service
     const snapshot = yield* Snapshot.Service
     const vcs = yield* Vcs.Service
 
@@ -41,6 +43,9 @@ const layer = Layer.effect(
         (s) => s.init().pipe(Effect.catchCause((cause) => Effect.logWarning("init failed", { cause }))),
         { concurrency: "unbounded", discard: true },
       ).pipe(Effect.withSpan("InstanceBootstrap.init"))
+      yield* session
+        .interruptStale()
+        .pipe(Effect.catchCause((cause) => Effect.logWarning("closing interrupted tools failed", { cause })))
     }).pipe(Effect.withSpan("InstanceBootstrap"))
 
     return Service.of({ run })
@@ -50,7 +55,7 @@ const layer = Layer.effect(
 export const node = makeGlobalNode({
   service: Service,
   layer: layer,
-  deps: [Config.node, Format.node, LSP.node, Plugin.node, Project.node, Snapshot.node, Vcs.node],
+  deps: [Config.node, Format.node, LSP.node, Plugin.node, Project.node, Session.node, Snapshot.node, Vcs.node],
 })
 
 export * as InstanceBootstrap from "./bootstrap"

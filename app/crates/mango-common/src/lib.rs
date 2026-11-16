@@ -8,6 +8,7 @@ pub mod download;
 pub mod i18n;
 pub mod internet;
 pub mod network;
+pub mod stragglers;
 
 pub use engine_build::Build;
 
@@ -27,9 +28,13 @@ pub fn user_text(msg: &str, detail: impl std::fmt::Display) -> String {
 
 /// What the interface shows of an error: its sentence, without the technical detail (`user_text`), which goes to the log.
 pub fn user_phrase(e: &anyhow::Error) -> String {
-    let text = e.to_string();
+    without_detail(&e.to_string())
+}
+
+/// `text` up to the technical detail that `user_text` appends, if it has one.
+pub fn without_detail(text: &str) -> String {
     let cut = [" (dettaglio tecnico:", " (technical detail:"].iter().filter_map(|mark| text.find(mark)).min();
-    cut.map_or_else(|| text.clone(), |at| text[..at].to_string())
+    cut.map_or_else(|| text.to_string(), |at| text[..at].to_string())
 }
 
 /// One line at the end of `<data>\logs\startup.log`, with the local time. A log that can't be written stops nothing.

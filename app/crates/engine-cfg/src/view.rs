@@ -9,7 +9,7 @@
 use crate::catalog::{load_models, model_cfg, setup_for, ModelCfg, ModelsFile, Origin, Setup};
 use crate::choices::{self, Choices, ChoicesFile, SmallModels, WhereChoice};
 use crate::general::{self, Fit, Located, Placement};
-use crate::hardware::{choose_build, free_space, Gpu, Hardware, Vendor, MIN_GPU_MEMORY_MIB};
+use crate::hardware::{choose_build, free_space, Gpu, Hardware, Vendor};
 use crate::profiles::Profile;
 use crate::speed::{cpu_speed, Speed};
 use crate::split::MIN_CTX;
@@ -30,11 +30,13 @@ pub(crate) struct Assessed {
 pub(crate) fn assess(paths: &Paths, file: &ModelsFile, key: &str, cfg: &ModelCfg, hw: &Hardware, choices: &ChoicesFile, lent: &[u32]) -> Assessed {
     let scope = choices.scope(key);
     let setup = setup_for(paths, key, cfg, hw, &scope.choices);
-    let located = match &setup {
+    let mut located = match &setup {
         Err(e) => Located { fit: None, reason: format!("{e:#}") },
         Ok(Setup::General { build }) => general::evaluate(file, cfg, hw, *build, &scope, lent),
         Ok(Setup::Profile(p)) => profile_located(cfg, p, hw, &scope, lent),
     };
+    // The reason is shown to the user: the detail of an error is for the log.
+    located.reason = mango_common::without_detail(&located.reason);
     Assessed { setup, located }
 }
 
@@ -417,14 +419,17 @@ fn crowded(paths: &Paths, file: &ModelsFile, choices: &ChoicesFile, key: &str, c
 }
 
 /// The model to propose to whoever has none yet: the first of Mango Code's own that fits and is not on disk yet, on
-/// the cards if one fits there, otherwise on the processor. Never one that is only on request; a model for small cards
+/// the cards if one fits there, otherwise the first that writes on the processor at the speed of reading or faster
+/// (`Speed::Fair`), or the fastest if none does. Never one that is only on request; a model for small cards
 /// (`fallback`, one flag per view) only if no other fits on the cards, downloaded or not.
 pub(crate) fn mark_recommended(views: &mut [ModelView], fallback: &[bool]) {
     let ours = |v: &ModelView| !v.user && !v.on_request;
     let on_cards = |v: &ModelView| v.verdict.place.as_ref().is_some_and(|w| w.placement == Placement::Gpu);
     let others_on_cards = views.iter().zip(fallback).any(|(v, small)| ours(v) && !small && on_cards(v));
     let candidates: Vec<usize> = (0..views.len()).filter(|&i| ours(&views[i]) && views[i].verdict.fits && !views[i].present && !(fallback[i] && others_on_cards)).collect();
-    if let Some(&i) = candidates.iter().find(|&&i| on_cards(&views[i])).or(candidates.first()) {
+    let speed = |i: usize| views[i].verdict.speed;
+    let on_processor = || candidates.iter().copied().find(|&i| speed(i) >= Some(Speed::Fair)).or_else(|| candidates.iter().copied().reduce(|best, i| if speed(i) > speed(best) { i } else { best }));
+    if let Some(i) = candidates.iter().copied().find(|&i| on_cards(&views[i])).or_else(on_processor) {
         views[i].recommended = true;
     }
 }
@@ -556,7 +561,10 @@ pub fn engine_updates(paths: &Paths, hw: &Hardware) -> Result<Vec<EngineUpdate>>
 fn gpu_view(g: &crate::hardware::Gpu, hw: &Hardware, build: Build, choices: &ChoicesFile) -> GpuView {
     let (name, memory_mib) = (g.name.clone(), g.memory_mib);
     let off = |note: String| GpuView { name: name.clone(), memory_mib, used: false, note };
-    if g.memory_mib < MIN_GPU_MEMORY_MIB {
+    if g.is_integrated() && !g.counts() {
+        return off(tr!("È la grafica integrata del processore: i modelli non la usano.", "It is the processor's integrated graphics: the models don't use it."));
+    }
+    if !g.counts() {
         return off(tr!("Ha troppa poca memoria per far girare un modello.", "It has too little memory to run a model."));
     }
     if build != Build::Vulkan && g.vendor != Vendor::Nvidia {

@@ -507,6 +507,7 @@ describe("HttpApi workspace routing middleware", () => {
       const dir = yield* tmpdirScoped()
       const queryDir = path.join(dir, "query-target")
       const headerDir = path.join(dir, "header-target")
+      yield* Effect.promise(() => Promise.all([mkdir(queryDir), mkdir(headerDir)]))
       yield* serveProbe
 
       // Without a selected workspace, the middleware falls back to request

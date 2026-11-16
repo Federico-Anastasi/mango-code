@@ -58,6 +58,7 @@ pub fn start(app: &AppHandle, paths: &Paths) -> Result<Option<EngineUse>> {
             })
             .collect(),
         default_model,
+        default_waits: false,
     }))
 }
 

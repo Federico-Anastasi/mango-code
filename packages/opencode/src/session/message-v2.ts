@@ -33,6 +33,7 @@ import { engineIsRemote } from "@/provider/engine-timings"
 import { tr } from "@/util/mango-language"
 import { iife } from "@/util/iife"
 import { errorMessage } from "@/util/error"
+import { isRecord } from "@/util/record"
 import { isMedia } from "@/util/media"
 import type { SystemError } from "bun"
 import type { Provider } from "@/provider/provider"
@@ -883,6 +884,26 @@ function classifyError(
         }
       } catch {}
       return new NamedError.Unknown({ message: JSON.stringify(e) }, { cause: e }).toObject()
+  }
+}
+
+/** The error a message carries when its turn was stopped, which the conversation shows as interrupted. */
+export function abortedError(providerID: ProviderV2.ID) {
+  return fromError(new DOMException("Aborted", "AbortError"), { providerID, aborted: true })
+}
+
+/** A tool call that its turn left unfinished, closed with the mark the model and the interface read as interrupted. */
+export function interruptedTool(part: SessionV1.ToolPart, end: number): SessionV1.ToolPart {
+  const metadata = "metadata" in part.state && isRecord(part.state.metadata) ? part.state.metadata : {}
+  return {
+    ...part,
+    state: {
+      ...part.state,
+      status: "error",
+      error: "Tool execution aborted",
+      metadata: { ...metadata, interrupted: true },
+      time: { start: "time" in part.state ? part.state.time.start : end, end },
+    },
   }
 }
 

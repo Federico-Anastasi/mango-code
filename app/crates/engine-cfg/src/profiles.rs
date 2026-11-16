@@ -10,7 +10,7 @@ use crate::general::Placement;
 use crate::hardware::{choose_build, Hardware};
 use crate::user;
 use anyhow::Result;
-use mango_common::download::has_build;
+use mango_common::download::{has_build, needs_avx2};
 use mango_common::{tr, Build, Paths};
 use serde::Deserialize;
 use std::collections::BTreeMap;
@@ -92,11 +92,12 @@ pub fn profile_for(paths: &Paths, model: &str, hw: &Hardware) -> Result<Option<P
 }
 
 /// The profile of `model` that applies to `hw`, if any: first the one for the PC's GPUs, then the one for its build.
-/// An unreadable profile is an error (the distribution is damaged), not a reason to silently fall back on the general
-/// one. A CUDA 12 profile runs on its engine's build for the GTX 16 family where the PC's cards ask for it
-/// (`Hardware::turing_without_tensor_cores`) and the engine has one.
+/// A profile on an engine built for AVX2 (our forks) does not apply to a processor without it. An unreadable profile is
+/// an error (the distribution is damaged), not a reason to silently fall back on the general one. A CUDA 12 profile runs
+/// on its engine's build for the GTX 16 family where the PC's cards ask for it (`Hardware::turing_without_tensor_cores`)
+/// and the engine has one.
 pub(crate) fn lookup(paths: &Paths, model: &str, hw: &Hardware) -> Result<Option<Profile>> {
-    let profiles = for_model(paths, model)?;
+    let profiles: Vec<Profile> = for_model(paths, model)?.into_iter().filter(|p| hw.cpu.avx2 || !needs_avx2(paths, &p.engine)).collect();
     let build = choose_build(hw);
     Ok(profiles
         .iter()

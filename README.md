@@ -87,7 +87,8 @@ and on two engines of our own derived from it; the pictures are drawn by
 - **The engine of another PC.** A PC with graphics cards can share its models with your other PCs, at home or with
   Tailscale: off by default, with a random key in a code you copy ("Lend the engine to my PCs", in the settings under
   Connections). On the other PC, even a laptop without a graphics card, you paste the code in "Use the engine of
-  another PC of mine" (on the Home of the first start, or under Connections): no model and no engine to download, and
+  another PC" (under Connections; on the Home of the first start the button is "Use the engine of another PC of
+  mine"): no model and no engine to download, and
   the way back to the engine of that PC is one button.
 - **For other apps.** A documented HTTP contract and a TypeScript client let another app start conversations, follow
   their events, answer permissions and borrow the graphics cards from the model when they need them:
@@ -189,6 +190,7 @@ mango-code/
 ├── packages/     the agent: opencode with Mango Code's changes
 ├── integration/  the client for other apps (TypeScript), examples and end-to-end tests
 ├── optimize/     the tuning skill and its knowledge base
+├── suite/        the look shared by the Mango apps: colors, fonts, marks
 └── docs/         the integration contract
 ```
 

@@ -183,7 +183,7 @@ function stripHeredoc(input: string): string {
 }
 
 export function parsePatch(patchText: string): { hunks: Hunk[] } {
-  const cleaned = stripHeredoc(patchText.trim())
+  const cleaned = stripHeredoc(patchText.replaceAll("\r\n", "\n").trim())
   const lines = cleaned.split("\n")
   const hunks: Hunk[] = []
   let i = 0
