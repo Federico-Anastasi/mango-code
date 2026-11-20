@@ -16,6 +16,7 @@ import type { HomeSessionsController } from "./home-sessions-controller"
 import type { HomeProjectsController } from "./home-projects-controller"
 import { DialogDeleteSession, DialogRenameSession } from "./home-session-dialogs"
 import { filterHomeGroups } from "./home-mobile-filter"
+import { folderKey } from "@/utils/path-key"
 
 /**
  * The Home on a phone: one column made for the thumb. The way to start a conversation, the projects as a row of buttons that
@@ -86,9 +87,11 @@ export function HomeMobile(props: { projects: HomeProjectsController; sessions: 
                   <button
                     type="button"
                     data-component="home-project-chip"
-                    data-selected={selection().directory === project.worktree ? "" : undefined}
+                    data-selected={
+                      folderKey(selection().directory ?? "") === folderKey(project.worktree) ? "" : undefined
+                    }
                     class="flex h-11 shrink-0 items-center gap-2 rounded-full border border-v2-border-border-base bg-transparent pl-3 pr-4 text-[15px] text-v2-text-text-muted data-[selected]:bg-[var(--mango-raised)] data-[selected]:font-semibold data-[selected]:text-v2-text-text-base"
-                    aria-pressed={selection().directory === project.worktree}
+                    aria-pressed={folderKey(selection().directory ?? "") === folderKey(project.worktree)}
                     onClick={() => {
                       const conn = server()
                       if (conn) props.projects.project.select(conn, project.worktree)

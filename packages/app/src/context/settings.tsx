@@ -3,6 +3,7 @@ import { createEffect, createMemo, createSignal, onCleanup } from "solid-js"
 import { createSimpleContext } from "@opencode-ai/ui/context"
 import { persisted } from "@/utils/persist"
 import { usePlatform } from "@/context/platform"
+import { reloadPage } from "@/utils/ui-state"
 
 export interface NotificationSettings {
   agent: boolean
@@ -335,7 +336,7 @@ export const { use: useSettings, provider: SettingsProvider } = createSimpleCont
           const next = oldInterfaceRetired() ? true : value
           if (newLayoutDesigns() === next) return
           setStore("general", "newLayoutDesigns", next)
-          if (typeof window !== "undefined") setTimeout(() => window.location.reload())
+          if (typeof window !== "undefined") void reloadPage()
         },
         layoutTransitionClassified,
         setOldLayoutEligible(eligible: boolean) {

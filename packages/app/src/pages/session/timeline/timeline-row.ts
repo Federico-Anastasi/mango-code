@@ -50,6 +50,17 @@ export namespace TimelineRow {
   export class TurnStats extends Data.TaggedClass("TurnStats")<{
     userMessageID: string
   }> {}
+  /** An answer cut for its length that the turn took up again by itself: a line where it was cut. */
+  export class Resumed extends Data.TaggedClass("Resumed")<{
+    userMessageID: string
+    /** The message that was cut. */
+    messageID: string
+  }> {}
+  /** The turn ended cut for its length: a sentence, and the way to go on. `again`: it had already been taken up once. */
+  export class LengthStop extends Data.TaggedClass("LengthStop")<{
+    userMessageID: string
+    again: boolean
+  }> {}
   /** The model ended the turn without writing anything: a sentence says so instead of an empty space. */
   export class EmptyAnswer extends Data.TaggedClass("EmptyAnswer")<{
     userMessageID: string
@@ -66,6 +77,8 @@ export namespace TimelineRow {
     | Error
     | Retry
     | TurnStats
+    | Resumed
+    | LengthStop
     | EmptyAnswer
 
   export const key = (row: TimelineRow) => {
@@ -90,6 +103,10 @@ export namespace TimelineRow {
         return `retry:${row.userMessageID}`
       case "TurnStats":
         return `turn-stats:${row.userMessageID}`
+      case "Resumed":
+        return `resumed:${row.userMessageID}:${row.messageID}`
+      case "LengthStop":
+        return `length-stop:${row.userMessageID}`
       case "EmptyAnswer":
         return `empty-answer:${row.userMessageID}`
     }

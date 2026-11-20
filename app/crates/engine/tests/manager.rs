@@ -82,11 +82,12 @@ fn planner(log: PathBuf, save: bool, chunk_ms: u64, start_ms: u64, save_ms: u64)
             images: false,
             gpus_used: gpus.into_iter().map(gpu).collect(),
             gguf: format!(r"C:\fake\{key}.gguf").into(),
+            slots: None,
         })
     })
 }
 
-use support::{code_of, content_type, get, json_of, ok, post, text_of};
+use support::{code_of, content_type, get, json_of, ok, post, serve, text_of};
 
 struct Fixture {
     m: EngineManager,
@@ -125,8 +126,7 @@ fn fixture_full(chunk_ms: u64, start_ms: u64, save_ms: u64) -> Fixture {
         Box::new(|| vec![(0, 4000, 8192), (1, 10, 8192), (2, 3000, 8192)]),
         dir.path(),
     );
-    let port = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap().local_addr().unwrap().port();
-    http::serve(m.clone(), port, Some(std::sync::Arc::new(Echo))).unwrap();
+    let port = serve(&m, Some(std::sync::Arc::new(Echo)));
     Fixture { m, port, log, _dir: dir }
 }
 
@@ -598,18 +598,18 @@ fn events(b: &Fixture, event: &str) -> Vec<String> {
 #[test]
 fn the_memory_is_saved_and_restored_at_every_step() {
     let b = fixture();
-    b.text("a"); // the fake engine holds 100 tokens per request
+    b.text("a"); // the fake engine holds the prompt and the answer: 12 tokens
     b.text("a");
     b.control("/engine/release", json!({}));
-    assert_eq!(events(&b, "save"), ["a 200"]);
+    assert_eq!(events(&b, "save"), ["a 12"]);
     b.control("/engine/resume", json!({}));
-    assert_eq!(events(&b, "restore"), ["a 0", "a 200"], "at the first start the memory is empty, after resume it isn't");
+    assert_eq!(events(&b, "restore"), ["a 0", "a 12"], "at the first start the memory is empty, after resume it isn't");
     b.text("a");
     b.text("b"); // model switch
-    assert_eq!(events(&b, "save"), ["a 200", "a 300"]);
-    assert_eq!(events(&b, "restore"), ["a 0", "a 200", "b 0"]);
+    assert_eq!(events(&b, "save"), ["a 12", "a 12"]);
+    assert_eq!(events(&b, "restore"), ["a 0", "a 12", "b 0"]);
     b.m.stop(); // app shutdown
-    assert_eq!(events(&b, "save"), ["a 200", "a 300", "b 100"]);
+    assert_eq!(events(&b, "save"), ["a 12", "a 12", "b 12"]);
 }
 
 /// A slow start has two possible causes (the model loads slowly, the saved conversation comes back slowly): the
@@ -664,7 +664,7 @@ fn the_forwarded_reply_says_the_connection_closes() {
 #[test]
 fn a_new_request_does_not_restart_the_engine_while_the_old_one_saves() {
     let b = fixture_full(30, 300, 1500);
-    b.text("c"); // 100 tokens in memory
+    b.text("c"); // 12 tokens in memory
     std::thread::scope(|sc| {
         let release = sc.spawn(|| b.control("/engine/release", json!({ "gpus": [0], "pid": 0 })));
         std::thread::sleep(Duration::from_millis(400)); // the save is in progress
@@ -673,7 +673,7 @@ fn a_new_request_does_not_restart_the_engine_while_the_old_one_saves() {
         assert_eq!(status, 200, "{v}");
         assert_eq!(request.join().unwrap(), "I am the engine c");
     });
-    assert_eq!(events(&b, "restore"), ["c 0", "c 100"], "the new engine restarted before the old one finished saving");
+    assert_eq!(events(&b, "restore"), ["c 0", "c 12"], "the new engine restarted before the old one finished saving");
 }
 
 /// The same with `resume`: the engine restarted on the only GPUs left saves itself before a new one starts.
@@ -682,7 +682,7 @@ fn a_new_request_does_not_start_an_engine_while_resume_saves_the_old_one() {
     let b = fixture_full(30, 300, 1500);
     b.text("c");
     b.control("/engine/release", json!({ "gpus": [0], "pid": 0 }));
-    b.text("c"); // restarts on GPUs 1 and 2, with the earlier memory: it now has 200
+    b.text("c"); // restarts on GPUs 1 and 2, with the earlier memory
     std::thread::scope(|sc| {
         let resume = sc.spawn(|| b.control("/engine/resume", json!({})));
         std::thread::sleep(Duration::from_millis(400)); // the reduced engine is saving
@@ -691,7 +691,7 @@ fn a_new_request_does_not_start_an_engine_while_resume_saves_the_old_one() {
         assert_eq!(status, 200, "{v}");
         assert_eq!(request.join().unwrap(), "I am the engine c");
     });
-    assert_eq!(events(&b, "restore"), ["c 0", "c 100", "c 200"], "an engine started while the old one was saving");
+    assert_eq!(events(&b, "restore"), ["c 0", "c 12", "c 12"], "an engine started while the old one was saving");
     assert_eq!(b.m.state().gpus.iter().map(|x| x.index).collect::<Vec<_>>(), [0, 1, 2]);
 }
 
@@ -763,6 +763,7 @@ fn an_engine_that_runs_out_of_memory_says_so_in_a_sentence() {
                 images: false,
                 gpus_used: vec![gpu(0)],
                 gguf: r"C:\fake\a.gguf".into(),
+                slots: None,
             })
         }),
         Box::new(Vec::new),
@@ -1258,8 +1259,7 @@ fn fixture_with_cards(used: Cards, start_ms: u64) -> (Fixture, Count) {
         let held: Vec<u32> = used.iter().filter(|u| u.1 > 2048 && gpus.contains(&u.0)).map(|u| u.0).collect();
         Ok((!held.is_empty()).then(|| engine_cfg::CardsTaken { sentence: format!("Another program holds GPU {held:?}."), cards: held }))
     }));
-    let port = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap().local_addr().unwrap().port();
-    http::serve(m.clone(), port, Some(std::sync::Arc::new(Echo))).unwrap();
+    let port = serve(&m, Some(std::sync::Arc::new(Echo)));
     (Fixture { m, port, log, _dir: dir }, checks)
 }
 
@@ -1538,4 +1538,59 @@ fn a_side_request_that_does_not_start_changes_nothing() {
     assert!(!r.status().is_success());
     assert!(b.running("b"));
     assert_eq!(b.conversations().as_deref(), Some("a"));
+}
+
+/// The app tells a page it must not reach the engine's server: its port is known while it loads and while it runs, and is
+/// not the manager's own.
+#[test]
+fn the_port_of_the_engine_that_loads_or_runs_is_told() {
+    let b = fixture();
+    assert!(b.m.ports().is_empty());
+    assert_eq!(b.text("a"), "I am the engine a");
+    let ports = b.m.ports();
+    assert_eq!(ports.len(), 1);
+    assert!(ports[0] != b.port && mango_common::port_busy(ports[0]), "{ports:?}");
+    b.m.stop();
+    assert!(b.m.ports().is_empty());
+}
+
+/// The engine's port is told for as long as its process listens on it, also while the conversation is saved and the
+/// process stops (a page could otherwise reach the engine in that window).
+fn assert_told_while_listening(b: &Fixture, port: u16, until: &dyn Fn() -> bool) {
+    let begun = Instant::now();
+    while !until() && begun.elapsed() < Duration::from_secs(10) {
+        let listening = mango_common::port_busy(port);
+        let told = b.m.ports();
+        assert!(!listening || told.contains(&port), "the engine listens on {port} and {told:?} does not say so");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[test]
+fn the_port_of_an_engine_that_is_stopping_is_still_told() {
+    let b = fixture_full(30, 300, 1500);
+    b.text("a");
+    let port = b.m.ports()[0];
+    std::thread::scope(|sc| {
+        let stop = sc.spawn(|| b.m.stop());
+        assert_told_while_listening(&b, port, &|| stop.is_finished());
+        stop.join().unwrap();
+    });
+    assert!(b.m.ports().is_empty());
+    assert!(!mango_common::port_busy(port));
+}
+
+#[test]
+fn the_port_of_the_engine_that_leaves_is_told_while_the_next_one_loads() {
+    let b = fixture_full(30, 300, 1200);
+    b.text("a");
+    let old = b.m.ports()[0];
+    std::thread::scope(|sc| {
+        let next = sc.spawn(|| b.text("b"));
+        assert_told_while_listening(&b, old, &|| next.is_finished());
+        assert_eq!(next.join().unwrap(), "I am the engine b");
+    });
+    let told = b.m.ports();
+    assert_eq!(told.len(), 1);
+    assert_ne!(told[0], old);
 }

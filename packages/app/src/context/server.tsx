@@ -1,8 +1,8 @@
 import { createSimpleContext } from "@opencode-ai/ui/context"
 import { type Accessor, batch, createMemo } from "solid-js"
 import { createStore, type SetStoreFunction, type Store } from "solid-js/store"
-import { Persist, persisted } from "@/utils/persist"
-import { pathKey } from "@/utils/path-key"
+import { Persist, persisted, rememberSpellings } from "@/utils/persist"
+import { folderKey } from "@/utils/path-key"
 import { ServerScope } from "@/utils/server-scope"
 
 type StoredProject = { worktree: string; expanded: boolean }
@@ -55,12 +55,15 @@ export function migrateCanonicalLocalServerState(value: unknown, canonicalLocalS
   if (projects && Array.isArray(previousProjects)) {
     const local = Array.isArray(projects.local) ? projects.local : []
     const worktrees = new Set(
-      local.flatMap((project) => (isRecord(project) && typeof project.worktree === "string" ? [project.worktree] : [])),
+      local.flatMap((project) =>
+        isRecord(project) && typeof project.worktree === "string" ? [folderKey(project.worktree)] : [],
+      ),
     )
     const migrated = previousProjects.filter((project) => {
       if (!isRecord(project) || typeof project.worktree !== "string") return true
-      if (worktrees.has(project.worktree)) return false
-      worktrees.add(project.worktree)
+      const key = folderKey(project.worktree)
+      if (worktrees.has(key)) return false
+      worktrees.add(key)
       return true
     })
     const nextProjects: Record<string, unknown> = { ...projects, local: [...local, ...migrated] }
@@ -76,6 +79,79 @@ export function migrateCanonicalLocalServerState(value: unknown, canonicalLocalS
   return next
 }
 
+const worktreeKey = (project: unknown) =>
+  isRecord(project) && typeof project.worktree === "string" ? folderKey(project.worktree) : undefined
+
+// The same value for every scope that did not change, so that a state without duplicates comes back as it is.
+const mapScopes = (field: unknown, change: (scope: string, value: unknown) => unknown) => {
+  if (!isRecord(field)) return field
+  const entries = Object.entries(field).map(([scope, value]) => [scope, change(scope, value)] as const)
+  return entries.every(([scope, value]) => value === field[scope]) ? field : Object.fromEntries(entries)
+}
+
+const uniqueBy = (items: unknown[], key: (item: unknown) => string | undefined) => {
+  const seen = new Set<string>()
+  const unique = items.filter((item) => {
+    const k = key(item)
+    if (k === undefined) return true
+    if (seen.has(k)) return false
+    seen.add(k)
+    return true
+  })
+  return unique.length === items.length ? items : unique
+}
+
+// Projects saved before folders were compared by `folderKey` can be there twice, in two spellings of the same
+// folder: the first one stays, open if any of its copies was, and what refers to the folder by the other spelling (the
+// last project, the recently closed) follows the one that stays. `merged` is told the spellings of each folder that was
+// merged, the one that stays first. A state that has none comes back as it is.
+export function mergeDuplicateProjects(value: unknown, merged?: (spellings: string[]) => void) {
+  if (!isRecord(value)) return value
+  const kept = new Map<string, Map<string, string>>()
+  const projects = mapScopes(value.projects, (scope, list) => {
+    if (!Array.isArray(list)) return list
+    const spellings = new Map<string, string>()
+    kept.set(scope, spellings)
+    const opened = new Set<string>()
+    const written = new Map<string, string[]>()
+    for (const project of list) {
+      const key = worktreeKey(project)
+      if (key === undefined) continue
+      const worktree = (project as StoredProject).worktree
+      if (!spellings.has(key)) spellings.set(key, worktree)
+      if (!written.get(key)?.includes(worktree)) written.set(key, [...(written.get(key) ?? []), worktree])
+      if ((project as StoredProject).expanded === true) opened.add(key)
+    }
+    for (const spellingsOfFolder of written.values()) if (spellingsOfFolder.length > 1) merged?.(spellingsOfFolder)
+    const unique = uniqueBy(list, worktreeKey).map((project) => {
+      const key = worktreeKey(project)
+      return key !== undefined && opened.has(key) && (project as StoredProject).expanded !== true
+        ? { ...(project as StoredProject), expanded: true }
+        : project
+    })
+    return unique.length === list.length && unique.every((project, i) => project === list[i]) ? list : unique
+  })
+  const lastProject = mapScopes(value.lastProject, (scope, worktree) => {
+    if (typeof worktree !== "string") return worktree
+    return kept.get(scope)?.get(folderKey(worktree)) ?? worktree
+  })
+  const recentlyClosed = mapScopes(value.recentlyClosed, (scope, list) => {
+    if (!Array.isArray(list)) return list
+    const open = kept.get(scope)
+    const key = (worktree: unknown) => (typeof worktree === "string" ? folderKey(worktree) : undefined)
+    const closed = list.filter((worktree) => {
+      const k = key(worktree)
+      return k === undefined || !open?.has(k)
+    })
+    return uniqueBy(closed.length === list.length ? list : closed, key)
+  })
+  const next = { ...value }
+  if (projects !== value.projects) next.projects = projects
+  if (lastProject !== value.lastProject) next.lastProject = lastProject
+  if (recentlyClosed !== value.recentlyClosed) next.recentlyClosed = recentlyClosed
+  return Object.keys(next).every((field) => next[field] === value[field]) ? value : next
+}
+
 export function createServerProjects<T extends ServerProjectState>(input: {
   scope: Accessor<ServerScope>
   store: Store<T>
@@ -88,7 +164,7 @@ export function createServerProjects<T extends ServerProjectState>(input: {
     setStore(
       "projects",
       input.scope(),
-      current().filter((project) => project.worktree !== directory),
+      current().filter((project) => folderKey(project.worktree) !== folderKey(directory)),
     )
   }
   return {
@@ -97,39 +173,39 @@ export function createServerProjects<T extends ServerProjectState>(input: {
     remove,
     open(directory: string) {
       const scope = input.scope()
-      const key = pathKey(directory)
+      const key = folderKey(directory)
       const closed = currentClosed()
-      if (closed.some((worktree) => pathKey(worktree) === key)) {
+      if (closed.some((worktree) => folderKey(worktree) === key)) {
         setStore(
           "recentlyClosed",
           scope,
-          closed.filter((worktree) => pathKey(worktree) !== key),
+          closed.filter((worktree) => folderKey(worktree) !== key),
         )
       }
-      if (current().some((project) => project.worktree === directory)) return
+      if (current().some((project) => folderKey(project.worktree) === key)) return
       setStore("projects", scope, [{ worktree: directory, expanded: true }, ...current()])
     },
     // User-initiated close: removes the project and records it in recently closed.
     // Internal, non-user removals (e.g. sandbox/worktree normalization) should use remove().
     close(directory: string) {
       remove(directory)
-      const key = pathKey(directory)
-      const closed = [directory, ...currentClosed().filter((worktree) => pathKey(worktree) !== key)].slice(
+      const key = folderKey(directory)
+      const closed = [directory, ...currentClosed().filter((worktree) => folderKey(worktree) !== key)].slice(
         0,
         RECENTLY_CLOSED_HISTORY_LIMIT,
       )
       setStore("recentlyClosed", input.scope(), closed)
     },
     expand(directory: string) {
-      const index = current().findIndex((project) => project.worktree === directory)
+      const index = current().findIndex((project) => folderKey(project.worktree) === folderKey(directory))
       if (index !== -1) setStore("projects", input.scope(), index, "expanded", true)
     },
     collapse(directory: string) {
-      const index = current().findIndex((project) => project.worktree === directory)
+      const index = current().findIndex((project) => folderKey(project.worktree) === folderKey(directory))
       if (index !== -1) setStore("projects", input.scope(), index, "expanded", false)
     },
     move(directory: string, toIndex: number) {
-      const fromIndex = current().findIndex((project) => project.worktree === directory)
+      const fromIndex = current().findIndex((project) => folderKey(project.worktree) === folderKey(directory))
       if (fromIndex === -1 || fromIndex === toIndex) return
       const next = [...current()]
       const [item] = next.splice(fromIndex, 1)
@@ -263,7 +339,8 @@ export const { use: useServer, provider: ServerProvider } = createSimpleContext(
     const [store, setStore, _, ready] = persisted(
       {
         ...Persist.global("server", ["server.v3"]),
-        migrate: (value) => migrateCanonicalLocalServerState(value, props.canonicalLocalServer),
+        migrate: (value) =>
+          mergeDuplicateProjects(migrateCanonicalLocalServerState(value, props.canonicalLocalServer), rememberSpellings),
       },
       createStore({
         list: [] as StoredServer[],

@@ -131,11 +131,14 @@ pub(crate) fn take_off(
         }
     }
     let removed = mango_common::download::remove_model(paths, key, &model.engine, &queued);
+    // What the engine kept of the model: its conversations and system prompts, in the slots and in the profiles' memory.
+    let cleaned = engine_cfg::memory::forget(&paths.data, key);
     // Whatever happened to the files, a model that may be missing some of them is the default of nothing: it would be
     // started or asked for pictures, and fail.
     let forgotten = forget_defaults(paths, key);
     let kept = removed?;
     forgotten?;
+    cleaned?;
     let catalog = mango_common::catalog::read(paths)?;
     if catalog.user.iter().any(|k| k == key) {
         mango_common::catalog::remove_user(paths, key)?;

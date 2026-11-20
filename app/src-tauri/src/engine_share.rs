@@ -8,7 +8,7 @@ use tauri::{AppHandle, Manager};
 /// Port of the shared engine (off by default). Fixed: it is in the code the other PCs paste.
 const SHARE_PORT: u16 = 47098;
 
-fn share_port() -> u16 {
+pub(crate) fn share_port() -> u16 {
     std::env::var("MANGO_SHARE_PORT").ok().and_then(|v| v.parse().ok()).unwrap_or(SHARE_PORT)
 }
 
@@ -23,6 +23,7 @@ fn only_here() -> bool {
 pub fn install(app: &AppHandle, data: &std::path::Path, manager: engine::EngineManager) -> anyhow::Result<()> {
     let state = app.state::<crate::AppState>();
     if state.share.get().is_none() {
+        state.ports.add(share_port());
         let _ = state.share.set(Share::new(data, manager, share_port(), only_here())?);
     }
     Ok(())

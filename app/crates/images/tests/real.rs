@@ -167,8 +167,20 @@ fn a_model_that_writes_is_put_aside_for_a_picture_and_comes_back() {
     let pictures = ImageManager::new(Box::new(move |key, port| engine_cfg::image_plan_for(&p, key, port, &h)), images::lender(engine.clone()), &base);
     let (p, h) = (paths.clone(), hw.clone());
     let routes = images::routes::Routes::new(pictures, Box::new(move || Ok(serde_json::to_value(engine_cfg::image_models(&p, &h)?)?)));
-    let port = mango_common::random_port().unwrap();
-    engine::http::serve(engine.clone(), port, Some(std::sync::Arc::new(Pictures(routes)))).unwrap();
+    let control: std::sync::Arc<dyn engine::http::Control> = std::sync::Arc::new(Pictures(routes));
+    // A port that was free when picked can be taken before it is bound: then another one is picked.
+    let mut tries = 0;
+    let port = loop {
+        let port = mango_common::random_port().unwrap();
+        match engine::http::serve(engine.clone(), port, Some(control.clone())) {
+            Ok(()) => break port,
+            Err(e) if tries < 10 => {
+                eprintln!("port {port} was taken, another is tried: {e:#}");
+                tries += 1;
+            }
+            Err(e) => panic!("no port to serve on: {e:#}"),
+        }
+    };
     let url = format!("http://127.0.0.1:{port}");
     let _cleanup = Cleanup(engine.clone(), url.clone());
 

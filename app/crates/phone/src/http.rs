@@ -11,7 +11,9 @@
 //!
 //! The forwarding goes to `127.0.0.1:<agent port>` with the agent's `Host` and, if there was one, `Origin` (to the
 //! agent it is its own web UI) and without `Cookie`, `Referer`, `Authorization` or the proxy headers. To a page of the
-//! computer it goes the same way, to its own loopback address, with the page's cookies (not the phone's session). One request per
+//! computer it goes the same way, to its own loopback address, with the page's cookies (not the phone's session); the HTML of
+//! the page the panel shows, when a browser opens it, is read whole to put a script in it (`with_script`); a call a page makes
+//! through the script carries the `Origin` of the page the panel shows, as on the computer (`Upstream::call`). One request per
 //! connection (`Connection: close` on both sides): the reply returns as it arrives, piece by piece, so the events
 //! (`GET /event`) don't wait. An `Upgrade` (a WebSocket) passes both ways.
 
@@ -153,6 +155,20 @@ impl Head {
         self.url.split('?').next().unwrap_or("")
     }
 
+    /// The same request for another address on the server it is forwarded to.
+    pub(crate) fn with_url(&self, url: String) -> Head {
+        Head { method: self.method.clone(), url, headers: self.headers.clone() }
+    }
+
+    /// The browser is opening a page or a frame, not fetching something for a page: `Sec-Fetch-Dest` says so. A browser
+    /// that does not send it is taken at its `Accept`.
+    pub(crate) fn is_document(&self) -> bool {
+        match self.header("sec-fetch-dest") {
+            Some(dest) => matches!(dest, "document" | "iframe" | "frame"),
+            None => self.header("accept").is_some_and(|a| a.contains("text/html")),
+        }
+    }
+
     fn cookie(&self) -> Option<&str> {
         self.headers
             .iter()
@@ -271,7 +287,7 @@ fn handle(c: &TcpStream, d: &Inner, role: Role) {
     if site::is_file_route(head.path()) {
         return site::file_route(c, d, &head, &address);
     }
-    if let Err(e) = relay(c, &head, rest, length, &Upstream::agent(d.agent_port, frame_src(&head, d))) {
+    if let Err(e) = relay(c, &head, rest, length, &Upstream::agent(d.agent_port.load(Ordering::SeqCst), frame_src(&head, d))) {
         respond(c, 502, "application/json", &error(&tr!("l'agente non risponde: {e:#}", "the agent does not answer: {e:#}")), &[]);
     }
 }
@@ -437,22 +453,44 @@ pub(crate) struct Upstream {
     host: String,
     /// A page of the computer rather than the agent: the page's own cookies go to it and its redirects are brought back.
     site: bool,
+    /// The page the panel shows, whose HTML carries the script that sends its calls to the computer's addresses to the phone
+    /// port (`site::SCRIPT_TAG`).
+    page: bool,
+    /// A call a page makes to a server of the computer, through `site::LOOPBACK`: its redirects stay in the route.
+    call: bool,
+    /// The `Origin` the server is given in place of the phone's: the one the computer's browser would send. For a call, the
+    /// origin of the page the panel shows; none for a page that is a file, and the phone's goes on.
+    origin: Option<String>,
+    /// What the computer's browser would say in `Sec-Fetch-Site` for this call: the phone's browser says `same-origin`,
+    /// because it only talks to the phone's port.
+    fetch_site: Option<&'static str>,
     /// The origin the web UI may show in a frame, added to its content policy: the preview port of the phone's own address.
     frame: Option<String>,
 }
 
 impl Upstream {
     pub(crate) fn agent(port: u16, frame: Option<String>) -> Upstream {
-        Upstream { addrs: vec![SocketAddr::new(Ipv4Addr::LOCALHOST.into(), port)], host: format!("127.0.0.1:{port}"), site: false, frame }
+        Upstream { addrs: vec![SocketAddr::new(Ipv4Addr::LOCALHOST.into(), port)], host: format!("127.0.0.1:{port}"), site: false, page: false, call: false, origin: Some(format!("http://127.0.0.1:{port}")), fetch_site: None, frame }
     }
 
     /// `localhost` is tried on both loopback addresses (a server may listen on only one); no name is ever resolved.
-    pub(crate) fn site(host: &str, port: u16) -> Upstream {
+    fn site(host: &str, port: u16) -> Upstream {
         let mut addrs = vec![SocketAddr::new(Ipv4Addr::LOCALHOST.into(), port)];
         if host == "localhost" {
             addrs.push(SocketAddr::new(Ipv6Addr::LOCALHOST.into(), port));
         }
-        Upstream { addrs, host: format!("{host}:{port}"), site: true, frame: None }
+        Upstream { addrs, host: format!("{host}:{port}"), site: true, page: false, call: false, origin: Some(format!("http://{host}:{port}")), fetch_site: None, frame: None }
+    }
+
+    /// The page the panel shows: a site whose HTML is given the script.
+    pub(crate) fn page(host: &str, port: u16) -> Upstream {
+        Upstream { page: true, ..Upstream::site(host, port) }
+    }
+
+    /// A call of a page to a server of the computer; `fetch_site` is how that server sees the page's place, and `page_origin`
+    /// is the page's origin on the computer (none for a file).
+    pub(crate) fn call(host: &str, port: u16, fetch_site: &'static str, page_origin: Option<String>) -> Upstream {
+        Upstream { call: true, origin: page_origin, fetch_site: Some(fetch_site), ..Upstream::site(host, port) }
     }
 
     fn connect(&self) -> Result<TcpStream> {
@@ -487,20 +525,29 @@ pub(crate) fn relay(c: &TcpStream, head: &Head, rest: Vec<u8>, length: u64, up: 
         Some(u) => h.push_str(&format!("Connection: Upgrade\r\nUpgrade: {u}\r\n")),
         None => h.push_str("Connection: close\r\n"),
     }
-    if head.header("origin").is_some() {
-        h.push_str(&format!("Origin: http://{host}\r\n"));
+    if let Some(origin) = head.header("origin") {
+        h.push_str(&format!("Origin: {}\r\n", up.origin.as_deref().unwrap_or(origin)));
     }
     if length > 0 {
         h.push_str(&format!("Content-Length: {length}\r\n"));
     }
+    // A page is read to put the script in it, so it is asked for as it is, not compressed; its files keep their compression.
+    let document = up.page && head.is_document();
     for (k, v) in &head.headers {
         if up.site && k.eq_ignore_ascii_case("cookie") {
             if let Some(cookie) = without_session(v) {
                 h.push_str(&format!("Cookie: {cookie}\r\n"));
             }
+        } else if document && k.eq_ignore_ascii_case("accept-encoding") {
+            continue;
+        } else if let (true, Some(site)) = (k.eq_ignore_ascii_case("sec-fetch-site"), up.fetch_site) {
+            h.push_str(&format!("Sec-Fetch-Site: {site}\r\n"));
         } else if !STRIPPED.contains(&k.to_ascii_lowercase().as_str()) {
             h.push_str(&format!("{k}: {v}\r\n"));
         }
+    }
+    if document {
+        h.push_str("Accept-Encoding: identity\r\n");
     }
     h.push_str("\r\n");
     agent.write_all(h.as_bytes())?;
@@ -552,7 +599,8 @@ pub(crate) fn relay(c: &TcpStream, head: &Head, rest: Vec<u8>, length: u64, up: 
             buf[..n].to_vec()
         } else {
             reply_head.extend_from_slice(&buf[..n]);
-            match with_connection_close(&reply_head, up.site.then_some(up.host.as_str()), up.frame.as_deref()) {
+            match with_connection_close(&reply_head, up) {
+                Some(p) if document && head.method != "HEAD" => with_script(p, &mut agent),
                 Some(p) => p,
                 None => continue,
             }
@@ -572,10 +620,10 @@ pub(crate) fn relay(c: &TcpStream, head: &Head, rest: Vec<u8>, length: u64, up: 
 
 /// The reply head with `Connection: close` in place of its connection headers and, for a page (HTML), `Cache-Control: no-cache`:
 /// the phone asks again at every opening, so after an update it never shows the old version (the files with a hash in the name
-/// are other addresses and stay in its cache). For a page of the computer (`site` is its address) a redirect to its own address
-/// becomes a path, which the phone follows on the same port. For a page with a content policy, `frame` is added to what it may
-/// show in a frame, with `blob:` (the PDF the page itself holds in memory). `None` until the head is whole; beyond `MAX_HEAD` it passes as it is.
-fn with_connection_close(t: &[u8], site: Option<&str>, frame: Option<&str>) -> Option<Vec<u8>> {
+/// are other addresses and stay in its cache). For a page of the computer a redirect is brought back to the phone's port
+/// (`relocated`). For a page with a content policy, `frame` is added to what it may show in a frame, with `blob:` (the PDF
+/// the page itself holds in memory). `None` until the head is whole; beyond `MAX_HEAD` it passes as it is.
+fn with_connection_close(t: &[u8], up: &Upstream) -> Option<Vec<u8>> {
     let Some(end) = t.windows(4).position(|w| w == b"\r\n\r\n") else {
         return (t.len() > MAX_HEAD).then(|| t.to_vec());
     };
@@ -584,19 +632,19 @@ fn with_connection_close(t: &[u8], site: Option<&str>, frame: Option<&str>) -> O
         let r = r.to_ascii_lowercase();
         r.strip_prefix("content-type:").is_some_and(|v| v.trim_start().starts_with("text/html"))
     });
+    let frame = up.frame.as_deref();
     let mut out: Vec<u8> = text
         .split("\r\n")
         .filter(|r| {
-            let r = r.to_ascii_lowercase();
-            !r.starts_with("connection:") && !r.starts_with("keep-alive:") && !(page && r.starts_with("cache-control:"))
+            let lower = r.to_ascii_lowercase();
+            !lower.starts_with("connection:") && !lower.starts_with("keep-alive:") && !(page && lower.starts_with("cache-control:")) && !(up.site && sets_session(r))
         })
-        .map(|r| match (site, r.split_once(':')) {
-            (_, Some((name, value))) if page && frame.is_some() && name.eq_ignore_ascii_case("content-security-policy") => {
+        .map(|r| match r.split_once(':') {
+            Some((name, value)) if page && frame.is_some() && name.eq_ignore_ascii_case("content-security-policy") => {
                 format!("{name}: {}; frame-src 'self' blob: {}", value.trim().trim_end_matches(';'), frame.unwrap_or_default())
             }
-            (Some(host), Some((name, value))) if name.eq_ignore_ascii_case("location") => {
-                let own = value.trim().strip_prefix(&format!("http://{host}")).filter(|p| p.is_empty() || p.starts_with(['/', '?']));
-                own.map_or_else(|| r.to_string(), |path| format!("{name}: {}", if path.is_empty() { "/" } else { path }))
+            Some((name, value)) if up.site && name.eq_ignore_ascii_case("location") => {
+                relocated(value.trim(), up).map_or_else(|| r.to_string(), |path| format!("{name}: {path}"))
             }
             _ => r.to_string(),
         })
@@ -608,6 +656,123 @@ fn with_connection_close(t: &[u8], site: Option<&str>, frame: Option<&str>) -> O
     out.extend_from_slice(b"Connection: close\r\n\r\n");
     out.extend_from_slice(&t[end + 4..]);
     Some(out)
+}
+
+/// A `Set-Cookie` line for the phone's session cookie. Cookies belong to a host, not to a port, so a server of the computer
+/// that sets it would replace the phone's session in the phone's browser.
+fn sets_session(line: &str) -> bool {
+    let value = line.split_once(':').filter(|(name, _)| name.eq_ignore_ascii_case("set-cookie")).map(|(_, value)| value);
+    value.is_some_and(|v| v.trim_start().split_once('=').is_some_and(|(name, _)| name == COOKIE))
+}
+
+/// Where a `Location` of a server of the computer leads on the phone's port, `None` if it stays as it is. A browser resolves
+/// it against the phone's address, so an address of the computer would be the phone's own: the page's own address becomes
+/// a path, any other address of the computer (`localhost` or `127.0.0.1`, any port) goes through `site::LOOPBACK`, and so
+/// does a path in the reply to a call that came through it. Whatever else (another site, a relative reference) is not touched.
+fn relocated(location: &str, up: &Upstream) -> Option<String> {
+    let (target, fragment) = location.split_at(location.find('#').unwrap_or(location.len()));
+    let route = |name: &str, port: u16, path: &str| format!("{}/{name}/{port}{path}{fragment}", site::LOOPBACK);
+    if target.starts_with('/') && !target.starts_with("//") {
+        let (name, port) = up.host.rsplit_once(':')?;
+        return up.call.then(|| port.parse().ok().map(|port| route(name, port, target))).flatten();
+    }
+    let absolute = if target.starts_with("//") { format!("http:{target}") } else { target.to_string() };
+    let (host, to, path) = site::loopback_page(&absolute)?;
+    if up.page && format!("{host}:{to}") == up.host {
+        return Some(format!("{path}{fragment}"));
+    }
+    Some(route(host, to, &path))
+}
+
+/// The most of an HTML page that is held to put the script in it: a bigger one passes as it is.
+pub(crate) const MAX_PAGE: usize = 4 * 1024 * 1024;
+/// The most time a page is held for: a page that has not ended by then (a stream, a slow server) passes as it is.
+const PAGE_WAIT: Duration = if cfg!(test) { Duration::from_millis(800) } else { Duration::from_secs(3) };
+
+/// The start of a reply (`reply`: its head as `with_connection_close` left it and the body bytes that came with it) with
+/// `site::SCRIPT_TAG` in the page, if it is an HTML page that can be read: UTF-8 (or a byte-compatible set), not compressed,
+/// whole within `PAGE_WAIT` and not bigger than `MAX_PAGE`. The page is then one piece, with its `Content-Length`. Whatever
+/// else it is, the reply is left as it came, what was read of it to find out goes with it, and the rest follows as it arrives.
+fn with_script(reply: Vec<u8>, agent: &mut TcpStream) -> Vec<u8> {
+    let Some(end) = reply.windows(4).position(|w| w == b"\r\n\r\n") else { return reply };
+    let text = String::from_utf8_lossy(&reply[..end]).into_owned();
+    let mut lines = text.split("\r\n");
+    let status: u16 = lines.next().and_then(|l| l.split(' ').nth(1)).and_then(|s| s.parse().ok()).unwrap_or(0);
+    let header = |name: &str| lines.clone().find_map(|r| r.split_once(':').filter(|(k, _)| k.eq_ignore_ascii_case(name)).map(|(_, v)| v.trim().to_string()));
+    let content_type = header("content-type").map(|v| v.to_ascii_lowercase());
+    let html = content_type.as_deref().is_some_and(|v| v.starts_with("text/html"));
+    let plain = header("content-encoding").is_none_or(|v| v.eq_ignore_ascii_case("identity"));
+    let download = header("content-disposition").is_some_and(|v| v.trim_start().to_ascii_lowercase().starts_with("attachment"));
+    // The script is ASCII: it fits a page in UTF-8 and nothing else (UTF-16 would be torn).
+    let utf8 = content_type.as_deref().and_then(|v| v.split(';').skip(1).find_map(|p| p.trim().strip_prefix("charset="))).is_none_or(|c| matches!(c.trim_matches('"'), "utf-8" | "utf8"));
+    if !html || !plain || download || !utf8 || status < 200 || matches!(status, 204 | 205 | 206 | 304) {
+        return reply;
+    }
+    let chunked = header("transfer-encoding").is_some_and(|v| v.to_ascii_lowercase().contains("chunked"));
+    let length = header("content-length").and_then(|v| v.parse::<usize>().ok());
+
+    let mut raw = reply[end + 4..].to_vec();
+    let deadline = Instant::now() + PAGE_WAIT;
+    let mut buf = vec![0u8; 16 * 1024];
+    let whole = loop {
+        if length.is_some_and(|n| raw.len() >= n) || (chunked && raw.ends_with(b"0\r\n\r\n") && dechunk(&raw).is_some()) {
+            break true;
+        }
+        let left = deadline.saturating_duration_since(Instant::now());
+        if raw.len() > MAX_PAGE || left.is_zero() || agent.set_read_timeout(Some(left)).is_err() {
+            break false;
+        }
+        match agent.read(&mut buf) {
+            Ok(0) => break true,
+            Ok(n) => raw.extend_from_slice(&buf[..n]),
+            Err(_) => break false,
+        }
+    };
+    let _ = agent.set_read_timeout(None);
+    let unchanged = |raw: &[u8]| [&reply[..end + 4], raw].concat();
+    if !whole || raw.starts_with(&[0xFF, 0xFE]) || raw.starts_with(&[0xFE, 0xFF]) {
+        return unchanged(&raw);
+    }
+    let page = if chunked {
+        dechunk(&raw)
+    } else {
+        match length {
+            Some(n) => raw.get(..n).map(<[u8]>::to_vec),
+            None => Some(raw.clone()),
+        }
+    };
+    let Some(page) = page else { return unchanged(&raw) };
+    let at = site::script_position(&page);
+    let mut out: Vec<u8> = text
+        .split("\r\n")
+        .filter(|r| {
+            let r = r.to_ascii_lowercase();
+            !r.starts_with("content-length:") && !r.starts_with("transfer-encoding:")
+        })
+        .flat_map(|r| [r.as_bytes(), b"\r\n"].concat())
+        .collect();
+    out.extend_from_slice(format!("Content-Length: {}\r\n\r\n", page.len() + site::SCRIPT_TAG.len()).as_bytes());
+    out.extend_from_slice(&page[..at]);
+    out.extend_from_slice(site::SCRIPT_TAG.as_bytes());
+    out.extend_from_slice(&page[at..]);
+    out
+}
+
+/// The body of a chunked reply put together; `None` if it is not whole or not well formed.
+fn dechunk(raw: &[u8]) -> Option<Vec<u8>> {
+    let mut body = Vec::new();
+    let mut rest = raw;
+    loop {
+        let line_end = rest.windows(2).position(|w| w == b"\r\n")?;
+        let size = std::str::from_utf8(&rest[..line_end]).ok()?.split(';').next()?.trim();
+        let size = usize::from_str_radix(size, 16).ok()?;
+        rest = &rest[line_end + 2..];
+        if size == 0 {
+            return Some(body);
+        }
+        body.extend_from_slice(rest.get(..size)?);
+        rest = rest.get(size..)?.strip_prefix(b"\r\n")?;
+    }
 }
 
 pub(crate) fn error(msg: &str) -> String {
@@ -694,19 +859,19 @@ mod tests {
 
     #[test]
     fn the_reply_closes_the_connection() {
-        let r = with_connection_close(b"HTTP/1.1 200 OK\r\nConnection: keep-alive\r\nKeep-Alive: timeout=5\r\nX: y\r\n\r\nbody", None, None).unwrap();
+        let r = with_connection_close(b"HTTP/1.1 200 OK\r\nConnection: keep-alive\r\nKeep-Alive: timeout=5\r\nX: y\r\n\r\nbody", &Upstream::agent(4096, None)).unwrap();
         assert_eq!(String::from_utf8(r).unwrap(), "HTTP/1.1 200 OK\r\nX: y\r\nConnection: close\r\n\r\nbody");
-        assert!(with_connection_close(b"HTTP/1.1 200 OK\r\nX: y\r\n", None, None).is_none());
+        assert!(with_connection_close(b"HTTP/1.1 200 OK\r\nX: y\r\n", &Upstream::agent(4096, None)).is_none());
     }
 
     #[test]
     fn a_page_is_asked_for_again_every_time_and_a_file_keeps_its_own_cache_rule() {
-        let page = with_connection_close(b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nCache-Control: max-age=600\r\n\r\n<html>", None, None).unwrap();
+        let page = with_connection_close(b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nCache-Control: max-age=600\r\n\r\n<html>", &Upstream::agent(4096, None)).unwrap();
         assert_eq!(
             String::from_utf8(page).unwrap(),
             "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nCache-Control: no-cache\r\nConnection: close\r\n\r\n<html>"
         );
-        let file = with_connection_close(b"HTTP/1.1 200 OK\r\ncontent-type: text/javascript\r\ncache-control: max-age=600\r\n\r\nx", None, None).unwrap();
+        let file = with_connection_close(b"HTTP/1.1 200 OK\r\ncontent-type: text/javascript\r\ncache-control: max-age=600\r\n\r\nx", &Upstream::agent(4096, None)).unwrap();
         assert_eq!(
             String::from_utf8(file).unwrap(),
             "HTTP/1.1 200 OK\r\ncontent-type: text/javascript\r\ncache-control: max-age=600\r\nConnection: close\r\n\r\nx"
@@ -723,23 +888,36 @@ mod tests {
     }
 
     #[test]
-    fn a_redirect_to_the_pages_own_address_becomes_a_path() {
-        let reply = |location: &str| {
+    fn a_redirect_to_the_pages_own_address_becomes_a_path_and_any_other_address_of_the_computer_goes_through_the_route() {
+        let reply = |up: &Upstream, location: &str| {
             let head = format!("HTTP/1.1 302 Found\r\nlocation: {location}\r\nX: y\r\n\r\n");
-            String::from_utf8(with_connection_close(head.as_bytes(), Some("localhost:3000"), None).unwrap()).unwrap()
+            String::from_utf8(with_connection_close(head.as_bytes(), up).unwrap()).unwrap()
         };
-        assert!(reply("http://localhost:3000/a?b=1").contains("\r\nlocation: /a?b=1\r\n"));
-        assert!(reply("http://localhost:3000").contains("\r\nlocation: /\r\n"));
-        // another address, a relative one and a similar port stay as they are
-        for same in ["http://localhost:30001/a", "http://example.com/", "/a", "https://localhost:3000/"] {
-            let r = reply(same);
+        let page = Upstream::page("localhost", 3000);
+        assert!(reply(&page, "http://localhost:3000/a?b=1").contains("\r\nlocation: /a?b=1\r\n"));
+        assert!(reply(&page, "http://localhost:3000").contains("\r\nlocation: /\r\n"));
+        assert!(reply(&page, "http://localhost:3000/a#top").contains("\r\nlocation: /a#top\r\n"));
+        // the computer's other addresses, a similar port and the other name of the same port are other servers
+        assert!(reply(&page, "http://localhost:30001/a").contains("\r\nlocation: /__mango_loopback/localhost/30001/a\r\n"));
+        assert!(reply(&page, "http://127.0.0.1:3000/a").contains("\r\nlocation: /__mango_loopback/127.0.0.1/3000/a\r\n"));
+        // another site, a relative reference and https are left to the browser
+        for same in ["http://example.com/", "/a", "a", "https://localhost:3000/", "http://localhost.evil.com:3000/"] {
+            let r = reply(&page, same);
             assert!(r.contains(&format!("\r\nlocation: {same}\r\n")), "{same}: {r}");
         }
+        // the agent's replies are never touched
+        assert!(reply(&Upstream::agent(4096, None), "http://localhost:4000/a").contains("\r\nlocation: http://localhost:4000/a\r\n"));
+
+        let call = Upstream::call("127.0.0.1", 4000, "cross-site", None);
+        assert!(reply(&call, "http://127.0.0.1:4000/api/").contains("\r\nlocation: /__mango_loopback/127.0.0.1/4000/api/\r\n"));
+        assert!(reply(&call, "/login").contains("\r\nlocation: /__mango_loopback/127.0.0.1/4000/login\r\n"));
+        assert!(reply(&call, "//localhost:8080/x?y=1#z").contains("\r\nlocation: /__mango_loopback/localhost/8080/x?y=1#z\r\n"));
+        assert!(reply(&call, "login").contains("\r\nlocation: login\r\n"));
     }
 
     #[test]
     fn a_forwarding_never_leaves_the_loopback() {
-        for up in [Upstream::agent(4096, None), Upstream::site("localhost", 3000), Upstream::site("127.0.0.1", 3000)] {
+        for up in [Upstream::agent(4096, None), Upstream::page("localhost", 3000), Upstream::call("127.0.0.1", 3000, "cross-site", None)] {
             assert!(!up.addrs.is_empty() && up.addrs.iter().all(|a| a.ip().is_loopback()), "{}", up.host);
         }
     }
@@ -747,13 +925,13 @@ mod tests {
     #[test]
     fn the_web_ui_may_frame_the_preview_port_and_only_it() {
         let head = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Security-Policy: default-src 'self'; img-src data:\r\n\r\n<html>";
-        let page = String::from_utf8(with_connection_close(head.as_bytes(), None, Some("http://192.168.1.20:47097")).unwrap()).unwrap();
+        let page = String::from_utf8(with_connection_close(head.as_bytes(), &Upstream::agent(4096, Some("http://192.168.1.20:47097".into()))).unwrap()).unwrap();
         assert!(page.contains("\r\nContent-Security-Policy: default-src 'self'; img-src data:; frame-src 'self' blob: http://192.168.1.20:47097\r\n"), "{page}");
         // a file without the page's type, and a page without a policy, are left as they are
         let script = "HTTP/1.1 200 OK\r\nContent-Type: text/javascript\r\nContent-Security-Policy: default-src 'self'\r\n\r\n";
-        let r = String::from_utf8(with_connection_close(script.as_bytes(), None, Some("http://192.168.1.20:47097")).unwrap()).unwrap();
+        let r = String::from_utf8(with_connection_close(script.as_bytes(), &Upstream::agent(4096, Some("http://192.168.1.20:47097".into()))).unwrap()).unwrap();
         assert!(!r.contains("frame-src"));
-        let bare = String::from_utf8(with_connection_close(b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n", None, Some("http://x:1")).unwrap()).unwrap();
+        let bare = String::from_utf8(with_connection_close(b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n", &Upstream::agent(4096, Some("http://x:1".into()))).unwrap()).unwrap();
         assert!(!bare.contains("frame-src"));
     }
 }

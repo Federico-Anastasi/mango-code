@@ -2,5 +2,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
+    if let Some(code) = mango_code_lib::helper::run() {
+        std::process::exit(code);
+    }
     mango_code_lib::run()
 }

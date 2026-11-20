@@ -91,24 +91,24 @@ describe("Config", () => {
     Effect.sync(() => {
       const migrated = ConfigMigrateV1.migrate({
         provider: {
-          bedrock: {
-            npm: "@ai-sdk/amazon-bedrock",
+          local: {
+            npm: "@ai-sdk/openai-compatible",
             options: {
               headers: { "x-test": "1" },
               body: { trace: true },
-              region: "us-east-1",
-              profile: "dev",
+              includeUsage: true,
+              queryParams: { version: "1" },
             },
           },
         },
       })
 
-      expect(migrated.providers?.bedrock?.api).toEqual({
+      expect(migrated.providers?.local?.api).toEqual({
         type: "aisdk",
-        package: "@ai-sdk/amazon-bedrock",
-        settings: { region: "us-east-1", profile: "dev" },
+        package: "@ai-sdk/openai-compatible",
+        settings: { includeUsage: true, queryParams: { version: "1" } },
       })
-      expect(migrated.providers?.bedrock?.request).toEqual({
+      expect(migrated.providers?.local?.request).toEqual({
         headers: { "x-test": "1" },
         body: { trace: true },
       })

@@ -14,6 +14,7 @@
 pub mod tune;
 pub mod bench;
 pub mod http;
+pub mod prefix;
 pub mod share;
 pub mod remote;
 pub mod loan;
@@ -277,6 +278,7 @@ pub struct PublicGpu {
 struct Running {
     plan: EnginePlan,
     child: Child,
+    slot: Option<Arc<prefix::Slot>>,
 }
 
 #[derive(Default)]
@@ -330,6 +332,9 @@ struct Inner {
     /// The last engine of ours that closed (`close`), when, and its GPUs: its memory goes back to them with a delay. Apart
     /// from `st`, so that an engine closes also while the state is locked.
     freed: Mutex<Option<(Instant, Vec<u32>)>>,
+    /// The loopback ports of the engine processes alive, from their start until they have exited: apart from `st`, because a
+    /// process stops (and saves the conversation) after it has left the state.
+    ports: Mutex<Vec<u16>>,
     /// For each model, the last error reading its defaults: written in the log once, not at every request.
     defaults_errors: Mutex<std::collections::HashMap<String, String>>,
     logs: PathBuf,
@@ -346,6 +351,8 @@ pub struct Permit {
     m: EngineManager,
     pub url: String,
     pub key: String,
+    /// The running engine's slot, if the manager keeps its files (`EnginePlan::slots`).
+    pub(crate) slot: Option<Arc<prefix::Slot>>,
 }
 
 impl Drop for Permit {
@@ -381,6 +388,7 @@ impl EngineManager {
             request_defaults: std::sync::OnceLock::new(),
             room: std::sync::OnceLock::new(),
             freed: Mutex::new(None),
+            ports: Mutex::new(Vec::new()),
             defaults_errors: Mutex::new(std::collections::HashMap::new()),
             logs: logs.to_path_buf(),
             st: Mutex::new(State::default()),
@@ -636,7 +644,8 @@ impl EngineManager {
                     }
                     s.in_flight += 1;
                     let url = s.running.as_ref().map(|a| a.plan.url.clone()).unwrap_or_default();
-                    return Ok(Permit { m: self.clone(), url, key: want });
+                    let slot = s.running.as_ref().and_then(|a| a.slot.clone());
+                    return Ok(Permit { m: self.clone(), url, key: want, slot });
                 }
                 Phase::Starting => {
                     if !begun {
@@ -923,7 +932,14 @@ impl EngineManager {
         cmd.current_dir(plan.spec.cwd.as_ref().unwrap_or(&self.0.logs));
         let t0 = Instant::now();
         let child = cmd.spawn().with_context(|| tr!("avvio del motore ({})", "starting the engine ({})", plan.spec.exe.display()))?;
-        let mut a = Running { plan, child };
+        if let Some(port) = port_of(&plan.url) {
+            self.0.ports.lock().unwrap_or_else(|e| e.into_inner()).push(port);
+        }
+        if let Some(note) = plan.slots.as_ref().and_then(prefix::trim) {
+            self.log(serde_json::json!({ "event": "slot files", "model": plan.key, "note": note }));
+        }
+        let slot = plan.slots.clone().map(|c| Arc::new(prefix::Slot::new(c)));
+        let mut a = Running { plan, child, slot };
         match wait_healthy(&mut a, &log, tick, &|| self.lock().stop_load) {
             Ok(()) => {
                 let loaded = t0.elapsed();
@@ -931,12 +947,17 @@ impl EngineManager {
                 // the other engines restore it with the plan's startup call. If it fails the engine works anyway
                 // (it rereads everything) and the log says so.
                 let mut line = serde_json::json!({ "event": "restore", "model": a.plan.key });
-                match &a.plan.spec.startup_post {
-                    Some(c) => match c.send() {
+                match (&a.plan.spec.startup_post, &a.plan.slots) {
+                    (Some(c), _) => match c.send() {
                         Ok(v) => line["token"] = v["n_restored"].clone(),
                         Err(e) => line["error"] = format!("{e:#}").into(),
                     },
-                    None => line["token"] = cached_tokens(&a.plan.url).into(),
+                    (None, Some(cache)) => {
+                        for (k, v) in prefix::restore_last(cache, &a.plan.url).as_object().into_iter().flatten() {
+                            line[k] = v.clone();
+                        }
+                    }
+                    (None, None) => line["token"] = cached_tokens(&a.plan.url).into(),
                 }
                 // The start has two slow parts, told apart: the model loading (until the engine answers) and the conversation
                 // coming back.
@@ -1161,7 +1182,9 @@ impl EngineManager {
     /// Stops the engine: first the conversation is saved in the on-disk memory (`shutdown_post`), then the process.
     /// The save's outcome, tokens and time go in the log.
     fn stop_process(&self, mut a: Running) {
-        if let Some(c) = &a.plan.spec.shutdown_post {
+        if let (Some(slot), true) = (&a.slot, matches!(a.child.try_wait(), Ok(None))) {
+            self.log(prefix::save_last(slot, &a.plan.url));
+        } else if let Some(c) = &a.plan.spec.shutdown_post {
             if matches!(a.child.try_wait(), Ok(None)) {
                 let t0 = Instant::now();
                 let tokens = cached_tokens(&a.plan.url);
@@ -1186,6 +1209,9 @@ impl EngineManager {
     fn close(&self, mut a: Running) {
         let _ = a.child.kill();
         let _ = a.child.wait();
+        if let Some(port) = port_of(&a.plan.url) {
+            self.0.ports.lock().unwrap_or_else(|e| e.into_inner()).retain(|p| *p != port);
+        }
         *self.0.freed.lock().unwrap_or_else(|e| e.into_inner()) = Some((Instant::now(), a.plan.gpus_used.iter().map(|g| g.index).collect()));
     }
 
@@ -1202,6 +1228,12 @@ impl EngineManager {
     /// The running engine's plan (for whoever needs to know context, images, memory).
     pub fn running_plan(&self) -> Option<EnginePlan> {
         self.lock().running.as_ref().map(|a| a.plan.clone())
+    }
+
+    /// The loopback ports of the engine processes that are alive: the one that runs, the one that loads, and the one that is
+    /// leaving (still saving the conversation).
+    pub fn ports(&self) -> Vec<u16> {
+        self.0.ports.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
     /// The user's choices changed. If the running model would now run on other cards or with another context, it is
@@ -1585,4 +1617,8 @@ mod tests {
         let s = m.state();
         assert_eq!((s.phase, s.loans.len()), (Phase::Stopped, 0), "{s:?}");
     }
+}
+
+fn port_of(url: &str) -> Option<u16> {
+    url.rsplit(':').next()?.trim_end_matches('/').parse().ok()
 }

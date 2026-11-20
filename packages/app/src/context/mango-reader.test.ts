@@ -16,7 +16,7 @@ const entry = (label: string) => ({
   present: true,
   bytes: 1,
   verdict: { fits: true, where: null, reason: "", speed: null, fastest: false },
-  choices: { where: "auto", gpus: [], context: null, style: "recommended", reasoning: null },
+  choices: { where: "auto", gpus: [], context: null, style: "recommended", reasoning: null, sampling: {} },
   limits: { where: ["auto"], context: [32768], reasoning: false },
 })
 const computer = (cpu: string) => ({

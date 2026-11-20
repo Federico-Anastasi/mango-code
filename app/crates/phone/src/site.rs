@@ -5,6 +5,12 @@
 //!   `http://127.0.0.1:<port>`) is relayed to that loopback address; the path and query come from the phone, the host
 //!   and port never do. A local file (`file://`) is served read-only from its folder. With nothing to show, or with a
 //!   page of the internet, the reply is a page that says so.
+//! * **Calls of the page to the computer**: the page was written for the computer, where `localhost` is the computer; on the
+//!   phone it is the phone. Its HTML gets `loopback.js` first in the `<head>`, which sends `fetch`, `XMLHttpRequest`,
+//!   `WebSocket` and `EventSource` aimed at `localhost` or `127.0.0.1` to `/__mango_loopback/<host>/<port>/<path>` on this
+//!   port, answered by `loopback`: any port of the computer's loopback except the agent's and the app's own, and no other address,
+//!   with the `Origin` the page sent (the server's own for the one the panel shows), `Sec-Fetch-Site` as the computer's browser would
+//!   say it, and the checks of every request here. The pages of the app's own ports are not shown to the phone either.
 //! * **On the main port**: `/phone/preview` says what the panel shows and asks it to open a page, `/phone/file` hands a
 //!   document of a project to the phone.
 
@@ -18,6 +24,14 @@ use std::path::PathBuf;
 
 const PREVIEW: &str = "/phone/preview";
 const FILE: &str = "/phone/file";
+/// Where the preview port passes a call of a page to a port of the computer: `/__mango_loopback/<host>/<port>/<path>`, with
+/// `<host>` `localhost` or `127.0.0.1`.
+pub(crate) const LOOPBACK: &str = "/__mango_loopback";
+/// The script that sends the page's calls aimed at the computer's addresses to `LOOPBACK`.
+const SCRIPT: &str = "/__mango_loopback.js";
+/// What goes in the pages of the computer, before their own scripts.
+pub(crate) const SCRIPT_TAG: &str = "<script src=\"/__mango_loopback.js\"></script>";
+const SCRIPT_SOURCE: &str = include_str!("loopback.js");
 /// An order to open a page is a few lines of JSON.
 const MAX_OPEN: u64 = 16 * 1024;
 const NOTICE: &str = include_str!("notice.html");
@@ -67,18 +81,121 @@ pub(crate) fn target(shown: &Shown) -> Target {
     }
 }
 
+/// `/__mango_loopback/localhost/3000/api?x=1` (or `127.0.0.1`): the host, the port and the path with query of a call a page
+/// made to the computer's own address. Never another host, nor a port that is not one.
+fn loopback_call(url: &str) -> Option<(&'static str, u16, String)> {
+    let rest = url.strip_prefix(LOOPBACK)?.strip_prefix('/')?;
+    let (host, rest) = rest.split_once('/')?;
+    let host = match host {
+        "localhost" => "localhost",
+        "127.0.0.1" => "127.0.0.1",
+        _ => return None,
+    };
+    let (port, tail) = rest.split_at(rest.find(['/', '?']).unwrap_or(rest.len()));
+    if port.is_empty() || !port.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let port = port.parse::<u16>().ok().filter(|p| *p != 0)?;
+    Some((host, port, if tail.starts_with('/') { tail.to_string() } else { format!("/{tail}") }))
+}
+
+/// A call of a page to `localhost` or `127.0.0.1`, which the script in the page sent here: it goes to that port of the
+/// computer, with the same checks as the page itself had. A page is not the phone's user: the agent, the phone's own ports
+/// and every port of the app's services are shut (a page could otherwise drive the agent, which has the shell), and the
+/// server is given the `Origin` and `Sec-Fetch-Site` the computer's browser would send for the page the panel shows.
+fn loopback(c: &TcpStream, d: &Inner, head: &Head, rest: Vec<u8>, length: u64) {
+    let refuse = |status: u16, reason: &str, message: String| {
+        let address = c.peer_addr().map(|a| a.ip().to_string()).unwrap_or_default();
+        d.log(serde_json::json!({ "event": "refused", "outcome": status, "reason": reason, "address": address, "path": head.path() }));
+        respond(c, status, "application/json", &error(&message), &[]);
+    };
+    let Some((host, port, url)) = loopback_call(&head.url) else {
+        return refuse(400, "not the computer's own address", tr!("si raggiunge solo localhost o 127.0.0.1, con una porta", "only localhost or 127.0.0.1 with a port can be reached"));
+    };
+    if d.app_port(port) {
+        return refuse(403, "a port of the app", tr!("questa porta è di un servizio dell'app", "this port belongs to a service of the app"));
+    }
+    // What the computer's browser would say of the page and this server: the page is the one the panel shows (a phone tab
+    // left on another page has the same origin on the phone, and its relative requests go to the shown page too).
+    let shown = d.computer.shown().as_ref().map(target);
+    let fetch_site = match shown {
+        Some(Target::Http { host: h, port: p, .. }) if h == host && p == port => "same-origin",
+        Some(Target::Http { host: h, .. }) if h == host => "same-site",
+        _ => "cross-site",
+    };
+    let page_origin = match shown {
+        Some(Target::Http { host: h, port: p, .. }) => Some(format!("http://{h}:{p}")),
+        _ => None,
+    };
+    if let Err(e) = relay(c, &head.with_url(url), rest, length, &Upstream::call(host, port, fetch_site, page_origin)) {
+        respond(c, 502, "application/json", &error(&tr!("il computer non risponde su questa porta: {e:#}", "the computer does not answer on this port: {e:#}")), &[]);
+    }
+}
+
+/// Where the script goes in a page: first in its `<head>`, otherwise right after `<html>`, otherwise before the first thing
+/// that is not a byte order mark, a doctype or a comment, so that it runs before the page's own scripts.
+pub(crate) fn script_position(page: &[u8]) -> usize {
+    let tag_end = |from: usize| page[from..].iter().position(|b| *b == b'>').map(|i| from + i + 1);
+    let name_at = |from: usize| {
+        let name: String = page[from..].iter().skip(1).take_while(|b| b.is_ascii_alphanumeric()).map(|b| b.to_ascii_lowercase() as char).collect();
+        let named = page.get(from) == Some(&b'<') && page.get(from + 1 + name.len()).is_some_and(|b| b" \t\r\n/>".contains(b));
+        named.then_some(name)
+    };
+    let skip = |mut at: usize| loop {
+        at += page[at..].iter().take_while(|b| b.is_ascii_whitespace()).count();
+        let rest = &page[at..];
+        let next = if rest.starts_with(b"<!--") {
+            rest.windows(3).position(|w| w == b"-->").map(|i| at + i + 3)
+        } else if rest.starts_with(b"<!") || rest.starts_with(b"<?") {
+            tag_end(at)
+        } else {
+            None
+        };
+        match next {
+            Some(n) => at = n,
+            None => return at,
+        }
+    };
+    let first = skip(if page.starts_with(&[0xEF, 0xBB, 0xBF]) { 3 } else { 0 });
+    match name_at(first).as_deref() {
+        Some("head") => tag_end(first).unwrap_or(first),
+        Some("html") => {
+            let after = tag_end(first).unwrap_or(first);
+            let next = skip(after);
+            match name_at(next).as_deref() {
+                Some("head") => tag_end(next).unwrap_or(after),
+                _ => after,
+            }
+        }
+        _ => first,
+    }
+}
+
 /// A request on the preview port, already checked (address, origin, session, method, body).
 pub(crate) fn serve(c: &TcpStream, d: &Inner, head: &Head, rest: Vec<u8>, length: u64) {
+    if head.path() == SCRIPT {
+        if head.method != "GET" {
+            return respond(c, 405, "application/json", &error(&tr!("metodo non ammesso", "method not allowed")), &[]);
+        }
+        return respond(c, 200, "text/javascript; charset=utf-8", SCRIPT_SOURCE, &["Cache-Control: no-cache"]);
+    }
+    if head.path() == LOOPBACK || head.path().starts_with("/__mango_loopback/") {
+        return loopback(c, d, head, rest, length);
+    }
     let Some(shown) = d.computer.shown() else {
         return notice(c, 404, tr!("Nessuna pagina", "No page"), tr!("Il browser del computer non sta mostrando nessuna pagina. Per vederne una tocca «Apri» sulla scheda del file nella conversazione.", "The browser on the computer is not showing a page. To see one, tap “Open” on the file card in the conversation."));
     };
     match target(&shown) {
         Target::Http { host, port, .. } => {
-            if let Err(e) = relay(c, head, rest, length, &Upstream::site(host, port)) {
+            if d.app_port(port) {
+                d.log(serde_json::json!({ "event": "refused", "outcome": 403, "reason": "a page of the app", "path": head.path() }));
+                return notice(c, 403, tr!("Pagina non disponibile", "Page not available"), tr!("Questa pagina è di un servizio dell'app: dal telefono non si apre.", "This page belongs to a service of the app: it does not open from the phone."));
+            }
+            if let Err(e) = relay(c, head, rest, length, &Upstream::page(host, port)) {
                 notice(c, 502, tr!("La pagina non risponde", "The page does not answer"), tr!("Il server di questa pagina, sul computer, non risponde: {e:#}", "The server of this page, on the computer, does not answer: {e:#}"));
             }
         }
-        Target::Folder { root, entry } => folder(c, head, &root, &entry),
+        Target::Folder { root, entry } => folder(c, head, &root, &entry, true),
         Target::Other => notice(
             c,
             404,
@@ -103,20 +220,38 @@ pub fn serve_computer(c: &TcpStream, root: &std::path::Path) {
     if !head.header("host").is_some_and(mango_common::loopback_host) {
         return respond(c, 403, "application/json", &error(&tr!("questo sito si apre solo da questo computer", "this site opens only from this computer")), &[]);
     }
-    folder(c, &head, root, "index.html")
+    folder(c, &head, root, "index.html", false)
 }
 
-/// A local file's folder, read-only.
-fn folder(c: &TcpStream, head: &Head, root: &std::path::Path, entry: &str) {
+/// A local file's folder, read-only. With `script` (the phone's, not the computer's own browser), an HTML page that is read
+/// whole, as UTF-8, carries `SCRIPT_TAG` like the pages of a server.
+fn folder(c: &TcpStream, head: &Head, root: &std::path::Path, entry: &str, script: bool) {
     if !matches!(head.method.as_str(), "GET" | "HEAD") {
         return respond(c, 405, "application/json", &error(&tr!("la cartella si legge soltanto", "the folder is read-only")), &[]);
     }
     let asked = crate::http::decode(head.path());
     let relative = if asked == "/" { format!("/{entry}") } else { asked };
     match files::inside(root, &relative) {
-        Some(file) => files::send(c, head, &file, None),
+        Some(file) => match script.then(|| page_with_script(head, &file)).flatten() {
+            Some(page) => respond(c, 200, "text/html; charset=utf-8", &page, &["Cache-Control: no-cache", "X-Content-Type-Options: nosniff"]),
+            None => files::send(c, head, &file, None),
+        },
         None => notice(c, 404, tr!("File non trovato", "File not found"), tr!("Questo file non c'è nella cartella della pagina.", "This file is not in the page's folder.")),
     }
+}
+
+/// The HTML file as the whole page for a `GET` of all of it, with the script in; `None` for anything else (another type,
+/// a part of it, too big, not UTF-8), which is sent as the file it is.
+fn page_with_script(head: &Head, file: &std::path::Path) -> Option<String> {
+    if head.method != "GET" || head.header("range").is_some() || !head.is_document() || !files::mime(file).starts_with("text/html") {
+        return None;
+    }
+    if std::fs::metadata(file).ok()?.len() > crate::http::MAX_PAGE as u64 {
+        return None;
+    }
+    let page = String::from_utf8(std::fs::read(file).ok()?).ok()?;
+    let at = script_position(page.as_bytes());
+    Some(format!("{}{SCRIPT_TAG}{}", &page[..at], &page[at..]))
 }
 
 fn notice(c: &TcpStream, status: u16, title: String, text: String) {
@@ -135,9 +270,9 @@ fn html(s: &str) -> String {
 /// title and, for the moment it has none, a label (the server's address or the file's name).
 fn state(d: &Inner) -> serde_json::Value {
     let page = d.computer.shown().map(|shown| match target(&shown) {
-        Target::Http { host, port, path } => serde_json::json!({ "path": path, "title": shown.title, "label": format!("{host}:{port}{path}"), "local": true }),
+        Target::Http { host, port, path } if !d.app_port(port) => serde_json::json!({ "path": path, "title": shown.title, "label": format!("{host}:{port}{path}"), "local": true }),
         Target::Folder { entry, .. } => serde_json::json!({ "path": format!("/{}", files::percent(&entry)), "title": shown.title, "label": entry, "local": true }),
-        Target::Other => serde_json::json!({ "path": "/", "title": shown.title, "label": "", "local": false }),
+        Target::Http { .. } | Target::Other => serde_json::json!({ "path": "/", "title": shown.title, "label": "", "local": false }),
     });
     serde_json::json!({ "port": d.preview_port, "page": page })
 }
@@ -176,6 +311,7 @@ pub(crate) fn preview_route(c: &TcpStream, d: &Inner, head: &Head, rest: Vec<u8>
             };
             let page = match (order.url, order.directory, order.path) {
                 (Some(url), None, None) => match loopback_page(&url) {
+                    Some((_, port, _)) if d.app_port(port) => return fail(403, &tr!("questa porta è di un servizio dell'app", "this port belongs to a service of the app")),
                     Some(_) => Page::Url(url),
                     None => return fail(400, &tr!("si aprono solo le pagine del computer (localhost o 127.0.0.1)", "only the computer's own pages (localhost or 127.0.0.1) can be opened")),
                 },

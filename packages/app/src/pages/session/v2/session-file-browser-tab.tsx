@@ -12,7 +12,7 @@ import { displayName } from "@/pages/layout/helpers"
 import { useSessionLayout } from "@/pages/session/session-layout"
 import { SessionFileView } from "@/pages/session/file-tabs"
 import { applyFileListKeyDown, SessionFileListV2 } from "@/pages/session/v2/session-file-list-v2"
-import { pathKey } from "@/utils/path-key"
+import { folderKey } from "@/utils/path-key"
 
 const emptyFiles: string[] = []
 
@@ -66,12 +66,12 @@ export function SessionFileBrowserTab(props: {
   })
   const loading = createMemo(() => query().length > 0 && search.isPending)
   const project = createMemo(() => {
-    const directory = pathKey(sdk().directory)
+    const directory = folderKey(sdk().directory)
     return layout.projects
       .list()
       .find(
         (item) =>
-          pathKey(item.worktree) === directory || item.sandboxes?.some((sandbox) => pathKey(sandbox) === directory),
+          folderKey(item.worktree) === directory || item.sandboxes?.some((sandbox) => folderKey(sandbox) === directory),
       )
   })
   const title = createMemo(() => displayName(project() ?? { worktree: sdk().directory }))

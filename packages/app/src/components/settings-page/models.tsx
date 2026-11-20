@@ -14,7 +14,9 @@ import { useDialog } from "@opencode-ai/ui/context/dialog"
 import { useLanguage } from "@/context/language"
 import { useMango } from "@/context/mango"
 import { contextLabel, type CatalogEntry, type Download } from "@/utils/mango-state"
-import { arrivingRows, diskLabel, downloadLine, removeLines, styleTemperature } from "./lines"
+import { arrivingRows, diskLabel, downloadLine, removeLines } from "./lines"
+import { ContextField, StyleField } from "./model-choices"
+import { createModelMove, ModelMoveActions, ModelMoveBack, ModelMoveStatus, WithPaths } from "./models-folder"
 import { cardsText } from "@/components/mango-text"
 import type { MangoModelChoices } from "@/utils/mango-desktop"
 import { loadsDefaultNow, useAnswering } from "./answering"
@@ -29,19 +31,6 @@ const WHERE_LABELS = {
   all: "settings.models.where.all",
   cpu: "settings.models.where.cpu",
   pick: "settings.models.where.pick",
-} as const
-const STYLES = {
-  recommended: { label: "settings.models.style.recommended", line: "settings.models.style.recommended.description" },
-  precise: { label: "settings.models.style.precise", line: "settings.models.style.precise.description" },
-  creative: { label: "settings.models.style.creative", line: "settings.models.style.creative.description" },
-} as const
-const SAMPLING = {
-  temperature: "settings.models.sampling.temperature",
-  top_p: "settings.models.sampling.top_p",
-  top_k: "settings.models.sampling.top_k",
-  min_p: "settings.models.sampling.min_p",
-  presence_penalty: "settings.models.sampling.presence_penalty",
-  repeat_penalty: "settings.models.sampling.repeat_penalty",
 } as const
 
 /** The titles of a model's own choices: a search result for one of them opens the first model, where they are. */
@@ -304,7 +293,7 @@ type RowProps = {
 }
 
 /**
- * «2 schede · 128k · 18,2 GB»: where it runs with these choices, its context, its weight, and «memoria stimata» for a
+ * «2 schede · 128K · 18,2 GB»: where it runs with these choices, its context, its weight, and «memoria stimata» for a
  * model of the user that the count does not know.
  */
 function facts(model: CatalogEntry, language: ReturnType<typeof useLanguage>) {
@@ -336,17 +325,8 @@ const PresentModel: Component<
   const models = () => window.__MANGO_DESKTOP__?.models
   const choose = (patch: Partial<MangoModelChoices>) =>
     props.run(() => models()?.setChoices(props.model.key, { ...props.model.choices, ...patch }))
-  const contexts = () => props.model.limits.context
-  const context = () => props.model.choices.context ?? contexts().at(-1)
-  const temperature = () => styleTemperature(props.model.choices.style, props.model.sampling)
-  const values = () =>
-    (Object.keys(SAMPLING) as (keyof typeof SAMPLING)[])
-      .flatMap((name) => {
-        const value = name === "temperature" ? temperature() : props.model.sampling?.[name]
-        return value === undefined ? [] : [`${language.t(SAMPLING[name])} ${value.toLocaleString(language.locale())}`]
-      })
-      .join(" · ")
   const size = () => formatFileSize(props.model.bytes, language.locale())
+  const move = createModelMove(() => props.model, props.run)
   // The dialog asks about this model, by its key: what it names is what goes, whatever the list does meanwhile.
   const remove = () => {
     const { key, label, ownFiles } = props.model
@@ -382,6 +362,9 @@ const PresentModel: Component<
             <Show when={props.loading}>
               <Tag>{language.t("settings.models.loading")}</Tag>
             </Show>
+            <Show when={move.moving()}>
+              <Tag variant="accent">{language.t("settings.move.label")}</Tag>
+            </Show>
             <Show when={!props.model.verdict.fits}>
               <Tag variant="error" data-slot="settings-model-no-fit">
                 {language.t("settings.models.other.noFit")}
@@ -390,6 +373,13 @@ const PresentModel: Component<
           </span>
           <Show when={props.model.about}>
             <span class="settings-page-row-line">{props.model.about}</span>
+          </Show>
+          <Show when={props.model.placedIn}>
+            {(folder) => (
+              <span class="settings-page-row-line" data-slot="settings-model-placed">
+                <WithPaths text={language.t("settings.models.placedIn", { folder: folder() })} paths={[folder()]} />
+              </span>
+            )}
           </Show>
           <Show when={props.model.waitsEngine}>
             <span class="settings-page-row-line" data-slot="settings-model-waits-engine">
@@ -402,6 +392,8 @@ const PresentModel: Component<
           <IconV2 name="chevron-down" class={props.open ? "rotate-180" : ""} />
         </span>
       </button>
+
+      <ModelMoveStatus move={move} busy={props.busy} />
 
       <Show when={props.open}>
         <div class="settings-page-detail" data-slot="settings-model-detail">
@@ -456,60 +448,15 @@ const PresentModel: Component<
             </Show>
           </div>
 
-          <Show when={contexts().length}>
-            <div class="settings-page-field">
-              <b data-slot="settings-field-title">{language.t("settings.models.context.title")}</b>
-              <SegmentedControlV2
-                value={String(context())}
-                disabled={!models() || props.busy}
-                onChange={(value) => {
-                  if (!value) return
-                  // the largest offered is «as much as fits»: it follows the choices that change it
-                  const tokens = Number(value)
-                  void choose({ context: tokens === contexts().at(-1) ? null : tokens })
-                }}
-                data-action="settings-model-context"
-                aria-label={language.t("settings.models.context.title")}
-              >
-                <For each={contexts()}>
-                  {(tokens) => (
-                    <SegmentedControlItemV2 value={String(tokens)}>{contextLabel(tokens)}</SegmentedControlItemV2>
-                  )}
-                </For>
-              </SegmentedControlV2>
-              <small>{language.t("settings.models.context.description")}</small>
-            </div>
-          </Show>
+          <ContextField model={props.model} disabled={!models() || props.busy} choose={choose} />
 
-          <div class="settings-page-field">
-            <b data-slot="settings-field-title">{language.t("settings.models.style.title")}</b>
-            <SegmentedControlV2
-              value={props.model.choices.style}
-              disabled={!models() || props.busy}
-              onChange={(value) => value && void choose({ style: value as MangoModelChoices["style"] })}
-              data-action="settings-model-style"
-              aria-label={language.t("settings.models.style.title")}
-            >
-              <For each={Object.keys(STYLES) as MangoModelChoices["style"][]}>
-                {(style) => (
-                  <SegmentedControlItemV2 value={style}>{language.t(STYLES[style].label)}</SegmentedControlItemV2>
-                )}
-              </For>
-            </SegmentedControlV2>
-            <small>
-              {language.t(STYLES[props.model.choices.style].line)}{" "}
-              <Show when={values()}>
-                <button type="button" class="settings-page-link" onClick={() => props.onShowValues(!props.showValues)}>
-                  {language.t(
-                    props.showValues ? "settings.models.style.hideValues" : "settings.models.style.showValues",
-                  )}
-                </button>
-              </Show>
-            </small>
-            <Show when={props.showValues}>
-              <small data-slot="settings-model-values">{values()}</small>
-            </Show>
-          </div>
+          <StyleField
+            model={props.model}
+            disabled={!models() || props.busy}
+            choose={choose}
+            showValues={props.showValues}
+            onShowValues={props.onShowValues}
+          />
 
           <Show when={props.model.limits.reasoning}>
             <div class="settings-page-field">
@@ -538,6 +485,8 @@ const PresentModel: Component<
                 {language.t("settings.models.default.action")}
               </ButtonV2>
             </Show>
+            <ModelMoveActions move={move} busy={props.busy} />
+            <ModelMoveBack move={move} busy={props.busy} placed={!!props.model.placedIn} />
             <ButtonV2
               variant="danger"
               disabled={!models() || props.busy}

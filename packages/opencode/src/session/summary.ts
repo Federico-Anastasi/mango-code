@@ -116,14 +116,12 @@ const layer = Layer.effect(
       const all = yield* sessions.messages({ sessionID: input.sessionID }).pipe(Effect.orDie)
       if (!all.length) return
 
-      const messages = all.filter(
-        (m) => m.info.id === input.messageID || (m.info.role === "assistant" && m.info.parentID === input.messageID),
-      )
-      const target = messages.find((m) => m.info.id === input.messageID)
-      if (!target || target.info.role !== "user") return
+      const turn = turnOf(all, input.messageID)
+      if (!turn) return
+      const { target, messages } = turn
       const msgDiffs = yield* computeDiff({ messages })
-      target.info.summary = { ...target.info.summary, diffs: msgDiffs }
-      yield* sessions.updateMessage(target.info)
+      target.summary = { ...target.summary, diffs: msgDiffs }
+      yield* sessions.updateMessage(target)
     })
 
     const diff = Effect.fn("SessionSummary.diff")(function* (input: { sessionID: SessionID; messageID?: MessageID }) {
@@ -144,6 +142,30 @@ const layer = Layer.effect(
     return Service.of({ summarize, diff, computeDiff })
   }),
 )
+
+/** A message the loop writes to take up a cut answer (a synthetic text marked `resume`): not a turn of the user. */
+export const isResume = (message: SessionV1.WithParts) =>
+  message.info.role === "user" && message.parts.some((part) => part.type === "text" && part.synthetic && part.metadata?.resume)
+
+/**
+ * The user's message a turn belongs to and the messages of that turn. The resume messages are not turns: they and their
+ * answers count for the user's message before.
+ */
+export function turnOf(all: SessionV1.WithParts[], messageID: string) {
+  const index = all.findIndex((message) => message.info.id === messageID)
+  if (index < 0 || all[index].info.role !== "user") return
+  const start = all.findLastIndex((message, at) => at <= index && message.info.role === "user" && !isResume(message))
+  const target = all[start]?.info
+  if (target?.role !== "user") return
+  const next = all.findIndex((message, at) => at > start && message.info.role === "user" && !isResume(message))
+  const ids = new Set(
+    all.slice(start, next < 0 ? undefined : next).flatMap((message) => (message.info.role === "user" ? [message.info.id] : [])),
+  )
+  const messages = all.filter(
+    (message) => ids.has(message.info.id) || (message.info.role === "assistant" && ids.has(message.info.parentID)),
+  )
+  return { target, messages }
+}
 
 export const DiffInput = Schema.Struct({
   sessionID: SessionID,

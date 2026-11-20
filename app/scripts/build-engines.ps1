@@ -3,7 +3,7 @@
 #
 #   .\build-engines.ps1 prism    # PrismML's fork (3.6, 3.8, Bonsai 2, LFM): 15-30 minutes
 #   .\build-engines.ps1 toq      # ik_llama.cpp with trellis weights (TOQ): 30-90 minutes
-#   .\build-engines.ps1 prism -Llama D:\ai\llama-cpp
+#   .\build-engines.ps1 prism -Llama D:\src\llama.cpp
 #
 # The fork's source is cloned at the tag whose release mango-engines.json downloads, and built with the fork's own
 # mango-ci\build.ps1 (the one its GitHub Actions run) for the CUDA architectures of the GPUs in this PC, into

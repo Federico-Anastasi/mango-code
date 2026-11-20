@@ -10,10 +10,11 @@ export type ColorScheme = "light" | "dark" | "system"
 const COLOR_SCHEME_KEY = "opencode-color-scheme"
 const STYLE_ID = "oc-theme"
 
-function saved(): ColorScheme {
-  if (typeof localStorage !== "object") return "system"
+type SchemeStorage = Pick<Storage, "getItem" | "setItem">
+
+function saved(storage: SchemeStorage | undefined): ColorScheme {
   try {
-    const value = localStorage.getItem(COLOR_SCHEME_KEY)
+    const value = storage?.getItem(COLOR_SCHEME_KEY)
     return value === "light" || value === "dark" ? value : "system"
   } catch {
     return "system"
@@ -46,8 +47,13 @@ function apply(mode: "light" | "dark") {
 
 export const { use: useTheme, provider: ThemeProvider } = createSimpleContext({
   name: "Theme",
-  init: (props: { onThemeApplied?: (mode: "light" | "dark", scheme: ColorScheme) => void }) => {
-    const colorScheme = saved()
+  init: (props: {
+    onThemeApplied?: (mode: "light" | "dark", scheme: ColorScheme) => void
+    /** Where the choice is kept; the browser's own storage when it is not given. */
+    storage?: SchemeStorage
+  }) => {
+    const storage = props.storage ?? (typeof localStorage === "object" ? localStorage : undefined)
+    const colorScheme = saved(storage)
     const [store, setStore] = createStore({ colorScheme, mode: modeOf(colorScheme) })
 
     const follow = (scheme: ColorScheme) => {
@@ -58,7 +64,7 @@ export const { use: useTheme, provider: ThemeProvider } = createSimpleContext({
     onMount(() => {
       // another window of the app changed the choice
       makeEventListener(window, "storage", (event: StorageEvent) => {
-        if (event.key === COLOR_SCHEME_KEY) follow(saved())
+        if (event.key === COLOR_SCHEME_KEY) follow(saved(storage))
       })
       makeEventListener(window.matchMedia("(prefers-color-scheme: dark)"), "change", () => {
         if (store.colorScheme === "system") setStore("mode", systemMode())
@@ -77,7 +83,7 @@ export const { use: useTheme, provider: ThemeProvider } = createSimpleContext({
         follow(scheme)
         // a page that may not keep anything still changes theme: the choice lasts as long as the page
         try {
-          localStorage.setItem(COLOR_SCHEME_KEY, scheme)
+          storage?.setItem(COLOR_SCHEME_KEY, scheme)
         } catch {}
       },
     }

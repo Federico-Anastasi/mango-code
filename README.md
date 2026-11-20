@@ -40,9 +40,8 @@ and on two engines of our own derived from it; the pictures are drawn by
 
 **Local models, set up for your PC**
 - At first run the Home tells you what it found (graphics cards, processor, memory, free space) and recommends one
-  model with one button, or a list to choose more than one: for each it says whether it fits, where it runs, how much
-  conversation it remembers and, for those that would run on the processor, how slow in words ("a word or two a
-  second"). It downloads the right engine (CUDA for NVIDIA, Vulkan for AMD and Intel, or the processor alone) and the
+  model with one button, or a list to choose more than one: for each it says whether it fits, where it runs and how
+  many tokens of conversation it remembers. It downloads the right engine (CUDA for NVIDIA, Vulkan for AMD and Intel, or the processor alone) and the
   models you choose, with resume and checksum, and the app can be used meanwhile. A model runs entirely on the
   graphics cards, with the largest context that fits, or entirely on the processor.
 - **No waiting at start.** The app opens on the Home at once and loads the default model in the background; its name
@@ -59,14 +58,17 @@ and on two engines of our own derived from it; the pictures are drawn by
   one), in three formats and two sizes. A model that writes turns your words into the description the image model
   draws best, which you can read and correct; the agent can also make a picture by itself while it works.
 - **Conversations that resume instantly.** Before the engine stops or switches model, it saves the conversation's
-  state to disk; when you come back, it rereads only the new tokens instead of the whole conversation.
+  state to disk; when you come back, it rereads only the new tokens instead of the whole conversation. The system
+  prompt a model reads is kept on disk too: a new conversation, in any project and on any day, starts from it in about
+  a second instead of reading it again.
 
 **An agent you can see into**
 - **You decide what goes in the prompt.** Every built-in tool, MCP server, skill, instruction file and plugin can be
   turned on or off, for all folders or for one, and the settings page shows how many tokens each one costs.
 - **Settings in one page**: six sections (Models, Computer, Agent, Connections, General, Help) and a search that finds
-  every setting. For each model you choose where it runs, how much it remembers, the style of its answers and whether
-  it reasons; for the computer, which graphics cards the models leave alone.
+  every setting. For each model you choose where it runs, how many tokens it remembers, the style of its answers (or
+  its six sampling values) and whether it reasons, and you can put its files in another folder; for the computer,
+  which graphics cards the models leave alone and the folder the models are kept in.
 - **Projects are git repositories**: a folder you open becomes one if it isn't (with an empty first commit), so every
   change the agent makes can be seen and undone. Never in a folder too broad to be a project (your user folder,
   Desktop, Documents, Downloads, OneDrive, a drive root: the app says so and offers a subfolder), nor in a folder that

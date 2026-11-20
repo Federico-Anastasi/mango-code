@@ -16,7 +16,7 @@ import { ProjectAvatar } from "@opencode-ai/ui/v2/project-avatar-v2"
 import { projectFruit } from "@/context/project-fruit"
 import { useLanguage } from "@/context/language"
 import { displayName, getProjectAvatarSource } from "@/pages/layout/helpers"
-import { pathKey } from "@/utils/path-key"
+import { folderKey } from "@/utils/path-key"
 import { handleDocumentSearchKeydown } from "@/utils/search-keydown"
 import { createMenuDismissController } from "@/utils/menu-dismiss-controller"
 
@@ -60,13 +60,13 @@ export function createPromptProjectController(input: {
   let searchRef: HTMLInputElement | undefined
 
   const current = () => {
-    const key = pathKey(input.controls().directory)
+    const key = folderKey(input.controls().directory)
     return input
       .controls()
       .available.find(
         (project) =>
           (!project.server || project.server.key === input.controls().server) &&
-          (pathKey(project.worktree) === key || project.sandboxes?.some((sandbox) => pathKey(sandbox) === key)),
+          (folderKey(project.worktree) === key || project.sandboxes?.some((sandbox) => folderKey(sandbox) === key)),
       )
   }
   const selected = () => current() ?? input.controls().available[0]
@@ -106,7 +106,7 @@ export function createPromptProjectController(input: {
   }
   const select = (project: PromptProject) => {
     if (
-      pathKey(project.worktree) !== pathKey(current()?.worktree ?? "") ||
+      folderKey(project.worktree) !== folderKey(current()?.worktree ?? "") ||
       project.server?.key !== current()?.server?.key
     ) {
       input.controls().select(project.worktree, project.server?.key)

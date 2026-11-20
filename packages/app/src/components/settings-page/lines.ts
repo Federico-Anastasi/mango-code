@@ -3,7 +3,7 @@
 import { formatFileSize } from "@opencode-ai/session-ui/project-file"
 import { cardsText, downloadParts } from "@/components/mango-text"
 import type { useLanguage } from "@/context/language"
-import type { MangoFit, MangoModelChoices, MangoVariant } from "@/utils/mango-desktop"
+import type { MangoFit, MangoVariant } from "@/utils/mango-desktop"
 import {
   contextLabel,
   diskDrive,
@@ -70,12 +70,58 @@ export function removeLines(model: { label: string; size: string; ownFiles: stri
   }
 }
 
-/** The temperature a style gives, from the catalog's: «precise» never warmer than the catalog (`choices.rs`). */
-export function styleTemperature(style: MangoModelChoices["style"], sampling: Sampling | null) {
-  const own = sampling?.temperature
-  if (style === "precise") return own === undefined ? 0.3 : Math.min(own, 0.3)
-  if (style === "creative") return 1.1
-  return own
+const CONTEXT_STEP = 4096
+
+/** A context typed as tokens («100000», «100.000») or as K of 1024 tokens («96k»); undefined for anything else. */
+export function parseContext(text: string) {
+  const match = /^\s*(?:(\d+)\s*k|(\d[\d.,\s]*))\s*$/i.exec(text)
+  if (!match) return
+  return match[1] ? Number(match[1]) * 1024 : Number(match[2].replace(/[.,\s]/g, ""))
+}
+
+/** The plus and the minus of a personal context: to the next multiple of 4096 tokens, within the limits. */
+export function stepContext(tokens: number, direction: 1 | -1, min: number, max: number) {
+  const next =
+    direction > 0
+      ? (Math.floor(tokens / CONTEXT_STEP) + 1) * CONTEXT_STEP
+      : (Math.ceil(tokens / CONTEXT_STEP) - 1) * CONTEXT_STEP
+  return Math.min(max, Math.max(min, next))
+}
+
+/** Which limit a context is outside of, if any. */
+export function contextIssue(tokens: number, min: number, max: number) {
+  if (tokens < min) return "min"
+  if (tokens > max) return "max"
+}
+
+/** The interval of each sampling value, as the app checks it (`choices.rs`): the label of its sentence, and its limits. */
+export const SAMPLING_RANGES = {
+  temperature: { range: "settings.models.sampling.range.zeroTo2", min: 0, max: 2 },
+  top_p: { range: "settings.models.sampling.range.zeroTo1", min: 0, max: 1 },
+  top_k: { range: "settings.models.sampling.range.whole", min: 0, max: 4_294_967_295, whole: true },
+  min_p: { range: "settings.models.sampling.range.zeroTo1", min: 0, max: 1 },
+  presence_penalty: { range: "settings.models.sampling.range.minus2To2", min: -2, max: 2 },
+  repeat_penalty: { range: "settings.models.sampling.range.above0", min: 0, max: Infinity, above: true },
+} as const satisfies Record<keyof Sampling, unknown>
+
+/** A sampling value typed with a point or a comma; undefined if it is not a number (or not a whole one for top_k). */
+export function parseSamplingValue(name: keyof Sampling, text: string) {
+  const range = SAMPLING_RANGES[name]
+  const pattern = "whole" in range ? /^\s*\d+\s*$/ : /^\s*-?\d+([.,]\d+)?\s*$/
+  if (!pattern.test(text)) return
+  return Number(text.replace(",", "."))
+}
+
+/** A sampling value as its box shows it: the decimal mark of the language, every digit, no grouping. */
+export function samplingText(value: number, locale: string) {
+  return value.toLocaleString(locale, { useGrouping: false, maximumFractionDigits: 20 })
+}
+
+/** A sampling value outside its interval. */
+export function samplingIssue(name: keyof Sampling, value: number) {
+  const range = SAMPLING_RANGES[name]
+  if ("above" in range) return value <= range.min
+  return value < range.min || value > range.max
 }
 
 /**

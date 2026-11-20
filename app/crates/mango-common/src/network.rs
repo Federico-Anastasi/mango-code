@@ -198,11 +198,13 @@ mod tests {
 
     #[test]
     fn ports_open_only_on_the_wanted_addresses_and_follow_them() {
-        let port = crate::random_port().unwrap();
         let (here, other): (Ipv4Addr, Ipv4Addr) = ("127.0.0.1".parse().unwrap(), "127.0.0.2".parse().unwrap());
         let mut listeners = Vec::new();
-
-        assert_eq!(reconcile(&mut listeners, &[here], port), None);
+        // A port that was free when picked can be taken by a test that runs at the same moment before it is bound: another one is picked.
+        let port = (0..10)
+            .map(|_| crate::random_port().unwrap())
+            .find(|port| reconcile(&mut listeners, &[here], *port).is_none())
+            .expect("every port picked was taken before it was bound");
         assert!(std::net::TcpStream::connect((here, port)).is_ok());
         // a port on all the networks would answer on every address of the computer
         assert!(std::net::TcpStream::connect((other, port)).is_err(), "the port must not be open on the other addresses");

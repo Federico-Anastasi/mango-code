@@ -1,6 +1,6 @@
 import { getFilename } from "@opencode-ai/core/util/path"
 import { type Session } from "@opencode-ai/sdk/v2/client"
-import { pathKey } from "@/utils/path-key"
+import { folderKey } from "@/utils/path-key"
 import type { ServerConnection } from "@/context/server"
 import type { HomeProjectSelection } from "@/context/layout"
 
@@ -16,7 +16,7 @@ export function compareSessionTime(a: Session, b: Session) {
 }
 
 const isRootVisibleSession = (session: Session, directory: string) =>
-  pathKey(session.directory) === pathKey(directory) && !session.parentID && !session.time?.archived
+  folderKey(session.directory) === folderKey(directory) && !session.parentID && !session.time?.archived
 
 export const roots = (store: SessionStore) =>
   (store.session ?? []).filter((session) => isRootVisibleSession(session, store.path.directory))
@@ -54,7 +54,7 @@ export function toggleHomeProjectSelection(
   server: ServerConnection.Key,
   directory: string,
 ): HomeProjectSelection {
-  if (current?.server === server && current.directory === directory) return { server }
+  if (current?.server === server && folderKey(current.directory ?? "") === folderKey(directory)) return { server }
   return { server, directory }
 }
 
@@ -65,7 +65,7 @@ export function closeHomeProject(
   directory: string,
 ) {
   projects.close(directory)
-  if (selected?.server === server && selected.directory === directory) return { server }
+  if (selected?.server === server && folderKey(selected.directory ?? "") === folderKey(directory)) return { server }
   return selected
 }
 
@@ -96,10 +96,11 @@ export function projectForSession<T extends { id?: string; worktree: string; san
 ) {
   const direct = byID.get(session.projectID)
   if (direct) return direct
-  const directory = pathKey(session.directory)
+  const directory = folderKey(session.directory)
   return projects.find(
     (project) =>
-      pathKey(project.worktree) === directory || project.sandboxes?.some((sandbox) => pathKey(sandbox) === directory),
+      folderKey(project.worktree) === directory ||
+      project.sandboxes?.some((sandbox) => folderKey(sandbox) === directory),
   )
 }
 
@@ -113,11 +114,11 @@ export const errorMessage = (err: unknown, fallback: string) => {
 }
 
 export const effectiveWorkspaceOrder = (local: string, dirs: string[], persisted?: string[]) => {
-  const root = pathKey(local)
+  const root = folderKey(local)
   const live = new Map<string, string>()
 
   for (const dir of dirs) {
-    const key = pathKey(dir)
+    const key = folderKey(dir)
     if (key === root) continue
     if (!live.has(key)) live.set(key, dir)
   }
@@ -126,7 +127,7 @@ export const effectiveWorkspaceOrder = (local: string, dirs: string[], persisted
 
   const result = [local]
   for (const dir of persisted) {
-    const key = pathKey(dir)
+    const key = folderKey(dir)
     if (key === root) continue
     const match = live.get(key)
     if (!match) continue

@@ -14,6 +14,7 @@ import { useSDK } from "./sdk"
 import { useSync } from "./sync"
 import { useServerSDK } from "./server-sdk"
 import { ScopedKey, type ServerScope } from "@/utils/server-scope"
+import { folderKey } from "@/utils/path-key"
 
 export type ModelKey = { providerID: string; modelID: string; variant?: string }
 
@@ -379,7 +380,7 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
           const key = handoffKey(serverSDK().scope, dir, session)
           handoff.set(key, next)
 
-          if (dir === sdk().directory) {
+          if (folderKey(dir) === folderKey(sdk().directory)) {
             setSaved("session", session, next)
           }
 

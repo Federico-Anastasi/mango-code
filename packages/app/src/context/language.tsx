@@ -7,6 +7,7 @@ import { Persist, persisted } from "@/utils/persist"
 import { authHeaders } from "@/utils/server"
 import { showToast } from "@/utils/toast"
 import { dict as en } from "@/i18n/en"
+import { uiStorage } from "@/utils/ui-storage"
 import { dict as uiEn } from "@opencode-ai/ui/i18n/en"
 import {
   createDesktopNativeBundle,
@@ -32,6 +33,7 @@ type PluralKey =
   | "session.followupDock.summary"
   | "session.revertDock.summary"
   | "settings.computer.tailored.models"
+  | "settings.move.models"
   | "settings.agent.count.tools"
   | "settings.agent.count.mcp"
   | "settings.agent.count.skills"
@@ -81,9 +83,8 @@ export function normalizeLocale(value: string): Locale {
 }
 
 function readStoredLocale() {
-  if (typeof localStorage !== "object") return
   try {
-    const raw = localStorage.getItem("opencode.global.dat:language")
+    const raw = uiStorage.getItem("opencode.global.dat:language")
     if (!raw) return
     const next = JSON.parse(raw) as { locale?: string }
     if (typeof next?.locale !== "string") return

@@ -27,7 +27,7 @@ const it = testEffect(
     [Account.node, AccountTest.empty],
     [Npm.node, NpmTest.noop],
     [InstanceStore.bootstrapNode, noopBootstrapLayer],
-    [RuntimeFlags.node, RuntimeFlags.layer({ disableDefaultPlugins: true, experimentalWorkspaces: true })],
+    [RuntimeFlags.node, RuntimeFlags.layer({ experimentalWorkspaces: true })],
   ]),
 )
 

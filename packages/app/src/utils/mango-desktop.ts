@@ -2,6 +2,7 @@ import { createSignal } from "solid-js"
 import { previewKind } from "@opencode-ai/session-ui/project-file"
 import type { Platform } from "@/context/platform"
 import type { UpdaterPlatform, UpdaterState } from "@/updater"
+import type { Sampling } from "@/utils/mango-state"
 
 /** The user's choices for one model. */
 export type MangoModelChoices = {
@@ -13,6 +14,8 @@ export type MangoModelChoices = {
   style: "recommended" | "precise" | "creative"
   /** `null`: as the model wants. */
   reasoning: boolean | null
+  /** The values the user chose one by one, over the style's; a missing one is the style's. */
+  sampling: Sampling
 }
 
 /** Bridge to the Mango Code desktop app: the app (Tauri) defines it in every page, a normal browser does not. */
@@ -87,6 +90,29 @@ export type MangoDesktop = {
     openFolder(): Promise<void>
   }
   /**
+   * Where the models are kept. They reject like `models`. `move` and `use` start the app again on the new folder (the page
+   * is reloaded), `moveModel` does not. The progress and the end of a move arrive as `mango-models-dir` on window, with a
+   * `MangoModelsDirMove` as `detail`; the end of the last move stays in `state()` until the next one begins. A move that left
+   * something in the old folder, or whose app could not start again by itself (`reason`), waits in `moved` until `restart`.
+   */
+  modelsDir?: {
+    state(): Promise<MangoModelsDir>
+    /** What moving the models to `dir` would do; nothing changes. */
+    preview(dir: string): Promise<MangoMovePreview>
+    /** Moves the models and starts the app again. Answers as soon as it has begun. */
+    move(dir: string): Promise<void>
+    /** Uses a folder that has files of its own as it is (nothing moves) and starts the app again. */
+    use(dir: string): Promise<void>
+    /** Stops a move that has not written the choice yet. */
+    cancel(): Promise<void>
+    /** Starts the app again after a move that is `moved`, once the user has seen what stayed behind. */
+    restart(): Promise<void>
+    /** What putting one model's files in `dir` (without it: back in the models folder) would do. */
+    previewModel(key: string, dir?: string): Promise<MangoPlacePreview>
+    /** Puts one model's files there; the app goes on, and the model starts, downloads and is removed there. */
+    moveModel(key: string, dir?: string): Promise<void>
+  }
+  /**
    * «Another model»: a model from Hugging Face or a GGUF on the computer, added to the user's list. They reject like
    * `models`: `code` `"token"` when the user's token answers the refusal.
    */
@@ -100,8 +126,11 @@ export type MangoDesktop = {
     analyze(what: { file: string }): Promise<MangoAnalysis>
     /** The Windows file picker for a GGUF; `null` if the user cancels. */
     pickFile(): Promise<string | null>
-    /** Puts a quantization of an analysis in the user's list: the models list shows it, to download or ready. */
-    add(candidate: { key: string; entry: unknown }): Promise<void>
+    /**
+     * Puts a quantization of an analysis in the user's list: the models list shows it, to download or ready. Answers the key of
+     * the catalog's model instead when the files chosen are that model's own: nothing is added, the model runs from them.
+     */
+    add(candidate: { key: string; entry: unknown }): Promise<string | null>
     /** Takes a model that is not on the computer out of the user's list (`models.remove` takes one that is there). */
     remove(key: string): Promise<void>
   }
@@ -140,6 +169,44 @@ export type MangoDesktop = {
   phone?: MangoPhone
   /** Dictation (the microphone in the chat), a choice of the user: its models download in the background when it is turned on. */
   dictation?: MangoDictation
+  /** What the interface remembers, kept by the app on disk (`ui-state.ts` reads and writes it). */
+  uiState?: MangoUiState
+}
+
+/**
+ * One change of the interface's state: `value` set, or the key removed when there is none. `superseded` holds the old
+ * values that the copy of the browser's storage found replaced by the app's own (`entries/<key>`, `drafts/<key>`).
+ */
+export type MangoUiStateOp = { area: "entries" | "drafts" | "superseded"; key: string; value?: string }
+
+/**
+ * `preferred`: the page is served from the port the app prefers, the one the browser's old storage belongs to, and
+ * `oldOrigin` is the address of that origin.
+ * `imported`: that old storage was already copied. `old`: that storage as the app read it, while it is not copied.
+ * `restored`: the state file could not be read and this is the copy kept before the last write.
+ */
+export type MangoUiStateSnapshot = {
+  entries: Record<string, string>
+  drafts: Record<string, string>
+  imported: boolean
+  preferred: boolean
+  oldOrigin: string
+  restored: boolean
+  old: { entries: Record<string, string>; drafts: Record<string, string> } | null
+}
+
+/**
+ * They reject with { code, message }: `unreadable` is a state file the app cannot read (`message` says which, and what to
+ * do). The attachments of the drafts are named by the hex SHA-256 of their bytes.
+ */
+export type MangoUiState = {
+  load(): Promise<MangoUiStateSnapshot>
+  apply(ops: MangoUiStateOp[]): Promise<void>
+  markImported(): Promise<void>
+  putBlob(id: string, bytes: ArrayBuffer): Promise<void>
+  getBlob(id: string): Promise<ArrayBuffer | null>
+  /** The answer to the app's request to write what the page holds (the window event `mango-ui-state-flush`): `written` is false when it could not. */
+  flushed(token: number, written: boolean): Promise<void>
 }
 
 /**
@@ -279,6 +346,8 @@ export type MangoPreview = {
   go(url: string): Promise<void>
   nav(action: "back" | "forward" | "reload" | "stop"): Promise<void>
   state(): Promise<MangoPreviewState>
+  /** The page as it is, a PNG of the panel's size; rejects with { code, message } when it cannot be taken. */
+  capture(): Promise<ArrayBuffer>
   /** The panel's page in the default Windows browser. */
   openExternal(): Promise<void>
   /** A PDF, a picture or a web page the agent wrote, by absolute path; rejects with { code, message } (not_found, blocked_type, too_large, ...). */
@@ -409,4 +478,59 @@ function mangoUpdater(updates: NonNullable<MangoDesktop["updates"]>): UpdaterPla
         setState({ status: "error", message: mangoDesktopError(cause).message })
       }),
   }
+}
+
+/** `modelsDir.state()`. */
+export type MangoModelsDir = { path: string; default_path: string; chosen: boolean; pinned: boolean; moving: MangoModelsDirMove }
+
+/** The state of a move of the models, as the `mango-models-dir` event tells it. */
+export type MangoModelsDirMove =
+  | { status: "idle" | "restarting" | "cancelled" }
+  | { status: "moving"; to: string; model: string | null; progress: MangoMoveProgress | null }
+  | { status: "done"; model: string }
+  | { status: "moved"; left: string[]; reason?: string }
+  | { status: "failed"; message: string }
+
+export type MangoMoveProgress = {
+  stage: "moving" | "copying" | "verifying" | "saving" | "removing"
+  done_bytes: number
+  total_bytes: number
+  done_files: number
+  total_files: number
+  current: string | null
+}
+
+/** What moving the models to a folder would do (`mango_common::models_dir::relocate::Preview`). */
+export type MangoMovePreview = {
+  from: string
+  to: string
+  files: number
+  bytes: number
+  free_bytes: number
+  same_volume: boolean
+  links: string[]
+  /** The links among them that hold files of the models: those models stay behind the link. */
+  model_links: string[]
+  hard_links: string[]
+  partial_files: number
+  /** Files in the folder that are not Mango Code's: they stay where they are. */
+  foreign_files: number
+  staying: string | null
+  destination: "empty" | "continues" | "has_files"
+  warning: string | null
+  refusal: string | null
+  move_refusal: string | null
+}
+
+/** What putting one model's files in a folder would do (`mango_common::models_dir::place::Preview`). */
+export type MangoPlacePreview = {
+  model: string
+  files: number
+  bytes: number
+  free_bytes: number
+  same_volume: boolean
+  staying: string[]
+  warning: string | null
+  refusal: string | null
+  move_refusal: string | null
 }

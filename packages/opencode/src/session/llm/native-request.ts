@@ -1,14 +1,6 @@
 import type { JsonSchema, LLMRequest, ProviderMetadata } from "@opencode-ai/llm"
 import { LLM, Message, SystemPart, ToolCallPart, ToolDefinition, ToolResultPart } from "@opencode-ai/llm"
-import {
-  AmazonBedrock,
-  Anthropic,
-  Azure,
-  Google,
-  OpenAI,
-  OpenAICompatible,
-  OpenRouter,
-} from "@opencode-ai/llm/providers"
+import { Anthropic, OpenAI, OpenAICompatible, OpenRouter } from "@opencode-ai/llm/providers"
 import type { ModelMessage } from "ai"
 import type { Provider } from "@/provider/provider"
 import { isRecord } from "@/util/record"
@@ -163,11 +155,7 @@ export const model = (input: Provider.Model | RequestInput, headers?: Record<str
     },
   }
   if (model.api.npm === "@ai-sdk/openai") return OpenAI.configure(options).responses(model.api.id)
-  if (model.api.npm === "@ai-sdk/azure")
-    return Azure.configure({ ...options, baseURL: requireBaseURL(model, url) }).responses(model.api.id)
   if (model.api.npm === "@ai-sdk/anthropic") return Anthropic.configure(options).model(model.api.id)
-  if (model.api.npm === "@ai-sdk/google") return Google.configure(options).model(model.api.id)
-  if (model.api.npm === "@ai-sdk/amazon-bedrock") return AmazonBedrock.configure(options).model(model.api.id)
   if (model.api.npm === "@ai-sdk/openai-compatible")
     return OpenAICompatible.configure({
       ...options,

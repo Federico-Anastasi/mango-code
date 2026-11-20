@@ -148,6 +148,8 @@ struct Inner {
     left: Mutex<Option<Left>>,
     /// How many times `unload` was called: a picture being made meanwhile does not leave its server on.
     unloads: AtomicU64,
+    /// The ports of the engines alive: the app tells them to whoever must keep a page away from them.
+    ports: Arc<Mutex<Vec<u16>>>,
     /// Which models are being taken off the computer and which one the picture being made uses.
     using: Mutex<Using>,
 }
@@ -214,6 +216,7 @@ impl ImageManager {
             kept: Mutex::new(None),
             left: Mutex::new(None),
             unloads: AtomicU64::new(0),
+            ports: Arc::default(),
             using: Mutex::new(Using::default()),
         }))
     }
@@ -270,6 +273,12 @@ impl ImageManager {
 
     fn left(&self) -> std::sync::MutexGuard<'_, Option<Left>> {
         self.0.left.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// The loopback ports of the image engines that are alive: the one making a picture, the one that stayed on, the one left
+    /// for the picture that waits.
+    pub fn ports(&self) -> Vec<u16> {
+        self.0.ports.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
     /// The model of the engine that stayed on after a picture, if one did.
@@ -345,7 +354,7 @@ impl ImageManager {
         let mut server = match kept.and_then(|mut on| on.still_running().is_ok().then_some(on)) {
             Some(on) => on,
             None => {
-                let mut new = Server::start(&plan, &self.0.logs)?;
+                let mut new = Server::start(&plan, &self.0.logs, &self.0.ports)?;
                 new.wait_ready(&plan, &|| stop.load(Ordering::SeqCst))?;
                 new
             }
@@ -456,17 +465,22 @@ struct Server {
     key: String,
     exe: PathBuf,
     env: Vec<(String, String)>,
+    port: Option<u16>,
+    ports: Arc<Mutex<Vec<u16>>>,
 }
 
 impl Drop for Server {
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
+        if let Some(port) = self.port {
+            self.ports.lock().unwrap_or_else(|e| e.into_inner()).retain(|p| *p != port);
+        }
     }
 }
 
 impl Server {
-    fn start(plan: &ImagePlan, logs: &Path) -> Result<Server> {
+    fn start(plan: &ImagePlan, logs: &Path, ports: &Arc<Mutex<Vec<u16>>>) -> Result<Server> {
         let log = logs.join(format!("{}.log", plan.spec.name));
         let out = File::create(&log).with_context(|| format!("log {}", log.display()))?;
         let mut cmd = Command::new(&plan.spec.exe);
@@ -485,7 +499,11 @@ impl Server {
             )
         })?;
         let agent = mango_common::internet::agent_with_replies(&plan.url, Duration::from_secs(30));
-        Ok(Server { child, url: plan.url.clone(), log, agent, key: plan.key.clone(), exe: plan.spec.exe.clone(), env: plan.spec.env.clone() })
+        let port = plan.url.rsplit(':').next().and_then(|p| p.trim_end_matches('/').parse::<u16>().ok());
+        if let Some(port) = port {
+            ports.lock().unwrap_or_else(|e| e.into_inner()).push(port);
+        }
+        Ok(Server { child, url: plan.url.clone(), log, agent, key: plan.key.clone(), exe: plan.spec.exe.clone(), env: plan.spec.env.clone(), port, ports: ports.clone() })
     }
 
     /// It is the server this plan would start, apart from the port.

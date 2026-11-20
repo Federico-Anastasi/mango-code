@@ -73,7 +73,7 @@ Environment variables an app can set when it starts Mango Code (tests, a second 
 | variable | meaning |
 |---|---|
 | `MANGO_DATA` | the data folder (default `%LOCALAPPDATA%\MangoCode`); `service.json` is written there, and the client reads it from there |
-| `MANGO_AGENT_PORT` | port of the agent server (default 4096) |
+| `MANGO_AGENT_PORT` | the agent server's preferred port (default 4096); when another program holds it the app takes a free one, and the app can take another when it restarts the agent, so read `agent` in `service.json` each time rather than assuming the port |
 | `MANGO_ENGINE_PORT` | port of the engine manager (default 47080) |
 | `MANGO_PHONE_PORT` | port of the phone service (default 47096) |
 | `MANGO_SHARE_PORT` | port of the shared engine (default 47098) |
@@ -141,7 +141,7 @@ folder; each event has `type` and `properties.sessionID`. Open it **before** sen
 
 | `type` | what it carries |
 |---|---|
-| `message.updated` | a message was born or changed: `info` with `id`, `role` (`user` or `assistant`) and, for the assistant, `finish` (`tool-calls` when the turn continues with the tool, `stop` at the end) and `time.completed`, `tokens` (see "Context used"). It tells **whose** a part is: parts carry `messageID`, and the text of the user's message also arrives as a `message.part.updated` of type `text`: without looking at `role` it is mistaken for the model's answer. The same message arrives several times |
+| `message.updated` | a message was born or changed: `info` with `id`, `role` (`user` or `assistant`) and, for the assistant, `finish` (`tool-calls` when the turn continues with the tool, `stop` at the end, `length` when the answer was cut at the output limit: the agent then takes it up once, with a user message of its own whose only part is a `text` with `synthetic: true` and `metadata.resume: "length"`, and the answers to it belong to the turn of the user's message before it) and `time.completed`, `tokens` (see "Context used"). It tells **whose** a part is: parts carry `messageID`, and the text of the user's message also arrives as a `message.part.updated` of type `text`: without looking at `role` it is mistaken for the model's answer. The same message arrives several times |
 | `message.part.delta` | a piece of text: `messageID`, `partID`, `field: "text"`, `delta`. The part is text or reasoning: the `message.part.updated` with the same id says which (`type: "text"` / `"reasoning"`) |
 | `message.part.updated` | a whole part, also several times (`step-start`, `step-finish`, text, reasoning). For tools `part.type: "tool"`, `part.tool` (name), `part.state.status` = `pending` → `running` → `completed` (or `error`): the first `pending` arrives as soon as the model starts naming the tool, with an **empty** `input` (`{}`, sometimes twice); `running` carries the full `input`; `completed` adds `output` (`error` if it fails) |
 | `permission.asked` | the agent asks for a permission: `id`, `permission` (e.g. `bash`, `edit`, `skill`, the name of an MCP tool), `patterns` |
@@ -207,6 +207,12 @@ contains `.claude/`, e.g. `src/**/*.ts`) is not in the prompt: it is appended to
 matching file, once per session (again after a summary of the session that wipes its text). A rule without `paths:` is always
 in the prompt. This also holds for extra folders. A frontmatter that does not read as YAML leaves the rule always loaded (the
 log says so). Test: `integration/tests/rules.test.ts`.
+
+**A skill added while it runs.** A skill put in `.claude/skills` while Mango Code is open needs no restart. A new
+conversation lists it in its system prompt. A conversation already open keeps the list it started with, so the engine
+keeps its cache of the prompt, and is told of the new skill once, in a part added to the next user message; from then on
+the model can load it. `GET /command` (the «/» menu) and the settings page read the skills from disk when they are asked.
+Test: `integration/tests/skills-added.test.ts`.
 
 ### MCP servers, hot
 
@@ -409,12 +415,22 @@ sending (without the memory: 6-8 minutes of rereading).
 folder of its own under the data folder; an engine that restarts (after `release`, a model change, closing) reloads the
 conversation used last, and a new conversation in the same folder starts from the system prompt already read. Cap of 6 GiB
 and age of 24 hours for all models together: the files used longest ago go out first. A model on the general plan
-(official llama.cpp) keeps only the conversation that was open when the engine stopped, and reloads it at the next start.
+(official llama.cpp) is kept the same way by the manager, in `<data>\slots\`, within the same cap and age (those files and the
+profiles' folders count together): the system prompt of a new conversation is read once and saved as
+`<model>.prefix-<key>.bin`, and a new conversation, a restart or a return to the model restores it and reads only what is its
+own; the conversation that was open when the engine stopped is saved as `<model>.bin` (only if one ran since the engine
+started) and reloaded at the next start. A client that sends the header `X-Mango-Stable-Prompt: <n>` with its chat request, `n`
+being the number of bytes of its last system message that come before what changes from one conversation to the next (the
+working folder, the date), gets the same for its prompt; without the header the request goes through as it is. One conversation
+at a time uses the engine's slot: the requests wait their turn in the manager.
 
 **Log**: every `POST /engine/…` leaves a JSON line in `<data>\logs\manager.log` (`time` local, `route`, `body`, `status`,
 `duration_ms`, `error` if not 200, `address` and `user_agent` of the caller): to know who released or resumed and when, a
 client sends a `User-Agent` of its own. The manager also writes the engine's events there, with `event`: `save` (before every
-stop: `model`, `token` in memory, `written`, `bytes`, `ms`, `error`), `restore` (at every start: `model`, `token` reloaded,
+stop: `model`, `token` in memory, `written`, `bytes`, `ms`, `error`, and `reason` when nothing was saved), `prefix` (a new conversation's system
+prompt, restored from its file or read and saved: `model`, `action` `restored`, `read` or `too short`, `token`, `bytes`, `ms`,
+`restore_error`, `error`, `removed` files and `trim_error` of the space budget), `slot files` (the files too old or over the
+budget removed as an engine starts: `model`, `note`), `restore` (at every start: `model`, `token` reloaded,
 `ms` of the start, of which `load_ms` until the engine answered and `restore_ms` for the conversation), `crash` (the engine closed on its own: `model`, `code`, last lines of its log; the next request restarts
 it), `loan_ended` (the process of a loan exited: `pid`, `who`, `since`, `reason`) and `resume_after_loan` (the automatic
 restart that follows, with `error` if it failed). Next to it sit the engine's log and TOQ's.

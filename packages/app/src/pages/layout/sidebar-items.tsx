@@ -10,6 +10,7 @@ import { A, useParams } from "@solidjs/router"
 import { type Accessor, createMemo, For, type JSX, Match, Show, Switch } from "solid-js"
 import { useServerSync } from "@/context/server-sync"
 import { useLanguage } from "@/context/language"
+import { folderKey } from "@/utils/path-key"
 import { getAvatarColors, type LocalProject, useLayout } from "@/context/layout"
 import { useNotification } from "@/context/notification"
 import { messageAgentColor } from "@/utils/agent"
@@ -34,7 +35,7 @@ export const ProjectIcon = (props: {
     dirs().some((directory) => {
       return hasProjectPermissions(
         serverSync().session.data.permission,
-        (item) => serverSync().session.get(item.sessionID)?.directory === directory,
+        (item) => folderKey(serverSync().session.get(item.sessionID)?.directory ?? "") === folderKey(directory),
       )
     }),
   )
@@ -170,13 +171,15 @@ export const SessionItem = (props: SessionItemProps): JSX.Element => {
 
   const warm = (span: number, priority: "high" | "low") => {
     const nav = props.navList?.()
-    const list = nav?.some((item) => item.id === props.session.id && item.directory === props.session.directory)
+    const same = (item: { id: string; directory: string }) =>
+      item.id === props.session.id && folderKey(item.directory) === folderKey(props.session.directory)
+    const list = nav?.some(same)
       ? nav
       : props.list
 
     props.prefetchSession(props.session, priority)
 
-    const idx = list.findIndex((item) => item.id === props.session.id && item.directory === props.session.directory)
+    const idx = list.findIndex(same)
     if (idx === -1) return
 
     for (let step = 1; step <= span; step++) {

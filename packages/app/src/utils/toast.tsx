@@ -7,17 +7,38 @@ import {
   type ToastVariant,
 } from "@opencode-ai/ui/toast"
 import { ToastV2, showToastV2, toasterV2 } from "@opencode-ai/ui/v2/toast-v2"
+import { createComponent, onCleanup, onMount } from "solid-js"
 import { missingDirectoryIn, reportMissingDirectory } from "./missing-directory"
 
 let v2 = false
+let regions = 0
+let ready = false
+const waiting: (() => void)[] = []
 
-export function setV2Toast(value: boolean) {
-  v2 = value
+/**
+ * Runs `run` once a toast region is on the page and listening: a toast made before that is lost, and the region listens a
+ * moment after it mounts (it sits in a portal and subscribes when that has mounted), which no call made in the same tick sees.
+ */
+export function whenToastsReady(run: () => void) {
+  if (ready) run()
+  else waiting.push(run)
 }
 
+/** The region on screen decides which toasts are made: a toast made for the other one would have nowhere to show. */
 export function ToastRegion(props: { v2: boolean }) {
-  if (props.v2) return <ToastV2.Region />
-  return <Toast.Region />
+  v2 = props.v2
+  onMount(() => {
+    regions += 1
+    queueMicrotask(() => {
+      ready = regions > 0
+      if (ready) waiting.splice(0).forEach((run) => run())
+    })
+    onCleanup(() => {
+      regions -= 1
+      if (!regions) ready = false
+    })
+  })
+  return createComponent(props.v2 ? ToastV2.Region : Toast.Region, {})
 }
 
 export function showToast(options: ToastOptions | string) {

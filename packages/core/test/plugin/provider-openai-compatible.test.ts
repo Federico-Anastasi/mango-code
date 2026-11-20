@@ -95,11 +95,11 @@ describe("OpenAICompatiblePlugin", () => {
       yield* addPlugin()
       const result = yield* aisdk.runSDK({
         model: ModelV2.Info.make({
-          ...ModelV2.Info.empty(ProviderV2.ID.make("cloudflare-workers-ai"), ModelV2.ID.make("model")),
+          ...ModelV2.Info.empty(ProviderV2.ID.make("custom-provider"), ModelV2.ID.make("model")),
           api: { id: ModelV2.ID.make("model"), type: "aisdk", package: "test-provider" },
         }),
         package: "@ai-sdk/openai-compatible",
-        options: { name: "cloudflare-workers-ai" },
+        options: { name: "custom-provider" },
       })
       expect(result.sdk).toBe(sentinel)
     }),

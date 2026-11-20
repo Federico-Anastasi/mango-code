@@ -20,7 +20,7 @@ use std::path::Path;
 #[derive(Debug, Deserialize)]
 pub(crate) struct ModelsFile {
     pub default: String,
-    /// Target context of all models: it lives here so that it isn't lowered out of laziness.
+    /// The maximum context of a model that does not say its own.
     pub ctx: u32,
     /// The recommended local models that write, in the order they are listed everywhere: each of them appears only
     /// once. Cloud ones and the ones that make images aren't there.
@@ -119,6 +119,9 @@ pub(crate) struct ModelFile {
     pub sha256: String,
     /// The only engine that reads the file (`mango_common::catalog::file_for_engine`).
     pub engine: Option<String>,
+    /// Mango Code's own file, moved by the user to another folder: `path` is where it is (`mango_common::model_files`).
+    #[serde(default)]
+    pub relocated: bool,
 }
 
 /// The model's shape to split it across the GPUs before downloading it, from the GGUF header like `memory`:
@@ -193,6 +196,11 @@ const ENCODER_COMPUTE_MIB: u64 = 640;
 const MIB: u64 = 1 << 20;
 
 impl ModelCfg {
+    /// The most context the model holds: its own, or the catalog's for a model that does not say it.
+    pub(crate) fn max_context(&self, file: &ModelsFile) -> u32 {
+        self.ctx.unwrap_or(file.ctx)
+    }
+
     /// The engine the model would run with: the setup's or, if this PC has none, the one it requires.
     pub fn engine_with<'a>(&'a self, setup: &'a Result<Setup>) -> &'a str {
         match setup {
@@ -327,6 +335,22 @@ impl Setup {
             Setup::General { build } => *build,
         }
     }
+
+    /// The model runs on the processor: official llama.cpp's processor-only build, never the cards' with no card seen
+    /// (the CUDA build used that way closes at random).
+    pub fn on_processor(&mut self) {
+        if let Setup::General { build } = self {
+            *build = Build::Cpu;
+        }
+    }
+
+    /// The engine is not on the disk and the app brings it by itself: a new version of one it has (an update), or the
+    /// small processor-only build of official llama.cpp on a PC that already has the engine for its cards.
+    pub fn arrives(&self, paths: &Paths) -> bool {
+        let processor = matches!(self, Setup::General { build: Build::Cpu });
+        mango_common::download::older_engine(paths, self.engine(), self.build())
+            || (processor && mango_common::download::other_build_installed(paths, self.engine(), Build::Cpu))
+    }
 }
 
 /// A model that requires an engine of its own doesn't run with the general one: without a profile for this hardware
@@ -409,7 +433,7 @@ pub fn catalog_for(paths: &Paths, hw: &Hardware) -> Result<(Vec<ModelEntry>, Str
         }
         let weights = missing.is_none();
         let (bytes, read_per_token) = (cfg.weights_bytes(engine), cfg.read_per_token(engine));
-        let target = cfg.ctx.unwrap_or(file.ctx).min(file.ctx);
+        let target = cfg.max_context(&file);
         // Without a fit the context is the nominal one: the profile's or the model's target.
         let nominal = match &assessed.setup {
             Ok(Setup::Profile(p)) => p.ctx,
@@ -419,7 +443,7 @@ pub fn catalog_for(paths: &Paths, hw: &Hardware) -> Result<(Vec<ModelEntry>, Str
         let used_engine = assessed.setup.as_ref().ok().map(|a| (a.engine().to_string(), a.build()));
         match &assessed.setup {
             Ok(a) if installed_engine(paths, a.engine(), a.build()).is_none() => {
-                waits_engine = weights && mango_common::download::older_engine(paths, a.engine(), a.build());
+                waits_engine = weights && a.arrives(paths);
                 missing.get_or_insert(tr!("manca il motore {} ({})", "the engine {} ({}) is missing", a.engine(), a.build().as_str()));
             }
             Err(e) => {

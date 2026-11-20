@@ -337,7 +337,7 @@ mod tests {
     use crate::i18n::{lang, Lang};
     use std::collections::HashMap;
     use std::io::{Read, Write};
-    use std::net::{SocketAddr, TcpListener};
+    use std::net::{SocketAddr, TcpListener, TcpStream};
 
     fn vars<'a>(map: &'a HashMap<&'a str, &'a str>) -> impl Fn(&str) -> Option<String> + 'a {
         move |n| map.get(n).map(|v| (*v).to_owned())
@@ -533,7 +533,11 @@ mod tests {
 
     #[test]
     fn an_unreachable_proxy_is_not_taken_for_a_site_that_does_not_answer() {
-        let port = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+        // A port that was free when picked can be bound by a test that runs at the same moment: one that refuses is used.
+        let port = (0..10)
+            .map(|_| TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port())
+            .find(|port| TcpStream::connect(("127.0.0.1", *port)).is_err())
+            .expect("every port picked was in use");
         let proxy = format!("http://127.0.0.1:{port}");
         let url = "http://downloads.example.test/file";
         let error = get_with(url, &[], Some(&proxy)).unwrap_err();

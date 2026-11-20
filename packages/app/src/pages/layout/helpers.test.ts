@@ -275,6 +275,23 @@ describe("layout workspace helpers", () => {
     ).toEqual({ server: serverKey("https://debian.example") })
   })
 
+  test("a home project is the same one whichever way its Windows path is written", () => {
+    const server = serverKey("https://windows.example")
+    expect(toggleHomeProjectSelection({ server, directory: "C:\\Work\\Site" }, server, "c:/work/site/")).toEqual({
+      server,
+    })
+    const closed: string[] = []
+    expect(
+      closeHomeProject(
+        { server, directory: "C:\\Work\\Site" },
+        server,
+        { close: (directory) => closed.push(directory) },
+        "c:/work/site",
+      ),
+    ).toEqual({ server })
+    expect(closed).toEqual(["c:/work/site"])
+  })
+
   test("closes a home project through its server context", () => {
     const closed: string[] = []
 

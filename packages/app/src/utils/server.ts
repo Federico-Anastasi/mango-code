@@ -66,3 +66,20 @@ export function createApiForServer(input: {
 }
 
 export type ServerApi = OpenCodeClient
+
+/**
+ * The default server saved by the user, if it is still to be used. In the Mango Code window an address on this computer is
+ * the agent of some earlier run, on a port that may be taken by now: the page is served by the agent it is open on, so that
+ * one is used. A normal browser keeps the user's choice, a server on their own computer included.
+ */
+export function defaultServerToUse(stored: string | null, inDesktopWindow: boolean) {
+  if (!stored) return null
+  return inDesktopWindow && isLocalServerUrl(stored) ? null : stored
+}
+
+/** An address on this computer: the agent of Mango Code lives at one, and its port is not always the same. */
+export function isLocalServerUrl(url: string) {
+  if (!URL.canParse(url)) return false
+  const host = new URL(url).hostname
+  return host === "localhost" || host === "127.0.0.1" || host === "[::1]"
+}

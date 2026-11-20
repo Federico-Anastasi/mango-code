@@ -17,7 +17,7 @@ export const SkillTool = Tool.define(
     const ripgrep = yield* Ripgrep.Service
     const fs = yield* FSUtil.Service
 
-    // The list of skills is read when the instance starts: a skill whose folder is removed afterwards is still in it.
+    // The list of skills is read again at the start of a turn: a skill whose folder is removed during the turn is still in it.
     // The built-in skill has no file ("<built-in>").
     const exists = (info: Skill.Info) => (path.isAbsolute(info.location) ? fs.existsSafe(info.location) : Effect.succeed(true))
 

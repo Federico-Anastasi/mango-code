@@ -2,11 +2,14 @@
 //! (`ProcSpec`). The configuration crates produce `ProcSpec`; only the supervisor (src-tauri) really starts them.
 
 mod engine_build;
+pub mod model_files;
 pub mod catalog;
 pub mod credentials;
 pub mod download;
 pub mod i18n;
 pub mod internet;
+pub mod listener;
+pub mod models_dir;
 pub mod network;
 pub mod stragglers;
 
@@ -39,9 +42,20 @@ pub fn without_detail(text: &str) -> String {
 
 /// One line at the end of `<data>\logs\startup.log`, with the local time. A log that can't be written stops nothing.
 pub fn startup_log(paths: &Paths, line: &str) {
+    append_log(&paths.logs(), line);
+}
+
+/// A line in the startup log of the data folder, for the small jobs of the app that have no `Paths` (`--relaunch`, `--reap`).
+pub fn data_log(line: &str) {
+    if let Ok(data) = data_dir() {
+        append_log(&data.join("logs"), line);
+    }
+}
+
+fn append_log(logs: &Path, line: &str) {
     use std::io::Write;
-    let _ = std::fs::create_dir_all(paths.logs());
-    if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(paths.logs().join("startup.log")) {
+    let _ = std::fs::create_dir_all(logs);
+    if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(logs.join("startup.log")) {
         let _ = writeln!(file, "{} {line}", chrono::Local::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, false));
     }
 }
@@ -116,10 +130,20 @@ pub struct Paths {
 }
 
 #[derive(Deserialize)]
-struct PathsFile {
+pub(crate) struct PathsFile {
     llama: Option<PathBuf>,
     models: Option<PathBuf>,
     opencode: Option<PathBuf>,
+}
+
+/// `<dist>/mango-paths.json`, which only the development PC has; without it nothing is moved.
+pub(crate) fn paths_file(dist: &Path) -> Result<PathsFile> {
+    let f = dist.join("mango-paths.json");
+    if !f.is_file() {
+        return Ok(PathsFile { llama: None, models: None, opencode: None });
+    }
+    let txt = std::fs::read_to_string(&f)?;
+    serde_json::from_str(txt.trim_start_matches('\u{feff}')).with_context(|| tr!("{} non è JSON valido", "{} is not valid JSON", f.display()))
 }
 
 impl Paths {
@@ -129,23 +153,25 @@ impl Paths {
     /// in `resources/` (installed app).
     /// `<dist>/mango-paths.json` (optional: it exists on the development PC) moves engines, models and opencode;
     /// without it the installed app's paths apply: `<dist>/opencode` and, among the user's data (an app update
-    /// doesn't touch them), `%LOCALAPPDATA%\MangoCode\engine` for downloaded engines and
-    /// `%LOCALAPPDATA%\MangoCode\models` for models.
+    /// doesn't touch them), `%LOCALAPPDATA%\MangoCode\engine` for downloaded engines and, for models, the folder the
+    /// user chose (`models_dir`) or `%LOCALAPPDATA%\MangoCode\models`.
     pub fn discover() -> Result<Paths> {
         let dist = find_dist()?;
         let data = data_dir()?;
         std::fs::create_dir_all(data.join("logs"))?;
-        let f = dist.join("mango-paths.json");
-        let pf: PathsFile = if f.is_file() {
-            let txt = std::fs::read_to_string(&f)?;
-            serde_json::from_str(txt.trim_start_matches('\u{feff}'))
-                .with_context(|| tr!("{} non è JSON valido", "{} is not valid JSON", f.display()))?
-        } else {
-            PathsFile { llama: None, models: None, opencode: None }
+        Paths::from_dirs(dist, data)
+    }
+
+    /// The paths of the distribution `dist` and the data folder `data`, by the rules of `discover`.
+    pub fn from_dirs(dist: PathBuf, data: PathBuf) -> Result<Paths> {
+        let pf = paths_file(&dist)?;
+        let models = match pf.models {
+            Some(models) => models,
+            None => models_dir::chosen(&data)?.unwrap_or_else(|| models_dir::default_dir(&data)),
         };
         Ok(Paths {
             engines: pf.llama.unwrap_or_else(|| data.join("engine")),
-            models: pf.models.unwrap_or_else(|| data.join("models")),
+            models,
             opencode: pf.opencode.unwrap_or_else(|| dist.join("opencode")),
             dist,
             data,
@@ -241,13 +267,49 @@ pub fn engine_path(p: &Path) -> String {
     }
 }
 
+/// The free bytes on the disk that holds `dir` for this user, also if the folder is not there yet (the nearest one that
+/// is, is asked).
+pub fn free_space(dir: &Path) -> Result<u64> {
+    use std::os::windows::ffi::OsStrExt;
+    let cannot = |e: &dyn std::fmt::Display| {
+        user_error(&tr!("Non riesco a leggere lo spazio libero sul disco.", "I can't read the free space on the disk."), format!("{}: {e}", dir.display()))
+    };
+    let full = std::path::absolute(dir).map_err(|e| cannot(&e))?;
+    let existing = full.ancestors().find(|p| p.is_dir()).ok_or_else(|| cannot(&"no folder of the path exists"))?;
+    let wide: Vec<u16> = existing.as_os_str().encode_wide().chain([0]).collect();
+    let mut free = 0u64;
+    // SAFETY: `wide` ends with 0 and `free` is a valid pointer for the call.
+    let ok = unsafe { windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW(wide.as_ptr(), &mut free, std::ptr::null_mut(), std::ptr::null_mut()) };
+    if ok == 0 {
+        return Err(cannot(&std::io::Error::last_os_error()));
+    }
+    Ok(free)
+}
+
 /// Writes a file whole or not at all: to `<file>.tmp` first, then renamed over the old one. A write cut short (power,
 /// disk full) leaves the old file, not a broken one that the next start refuses.
 pub fn write_atomic(file: &Path, contents: impl AsRef<[u8]>) -> std::io::Result<()> {
+    write_through(file, contents.as_ref(), false)
+}
+
+/// `write_atomic` that also waits for the bytes to reach the disk before the rename, so that a crash or a power cut right
+/// after it cannot leave an empty or short file where the old one was. It takes as long as the disk takes: not for the
+/// thread of a window.
+pub fn write_durable(file: &Path, contents: impl AsRef<[u8]>) -> std::io::Result<()> {
+    write_through(file, contents.as_ref(), true)
+}
+
+fn write_through(file: &Path, contents: &[u8], durable: bool) -> std::io::Result<()> {
+    use std::io::Write;
     let mut tmp = file.as_os_str().to_owned();
     tmp.push(".tmp");
     let tmp = PathBuf::from(tmp);
-    std::fs::write(&tmp, contents)?;
+    let mut written = std::fs::File::create(&tmp)?;
+    written.write_all(contents)?;
+    if durable {
+        written.sync_all()?;
+    }
+    drop(written);
     std::fs::rename(&tmp, file)
 }
 
@@ -305,6 +367,12 @@ pub fn hex(b: &[u8]) -> String {
     b.iter().map(|x| format!("{x:02x}")).collect()
 }
 
+/// The SHA-256 of `data`, in lowercase hexadecimal.
+pub fn sha256_hex(data: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    hex(&Sha256::digest(data))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -342,6 +410,20 @@ mod tests {
         std::fs::create_dir(dir.path().join("b.json.tmp")).unwrap();
         std::fs::write(dir.path().join("b.json"), "old").unwrap();
         assert!(write_atomic(&dir.path().join("b.json"), "new").is_err());
+        assert_eq!(std::fs::read_to_string(dir.path().join("b.json")).unwrap(), "old");
+    }
+
+    #[test]
+    fn write_durable_replaces_the_file_whole_and_leaves_no_temporary() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = dir.path().join("a.json");
+        write_durable(&f, "one").unwrap();
+        write_durable(&f, "two").unwrap();
+        assert_eq!(std::fs::read_to_string(&f).unwrap(), "two");
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+        std::fs::create_dir(dir.path().join("b.json.tmp")).unwrap();
+        std::fs::write(dir.path().join("b.json"), "old").unwrap();
+        assert!(write_durable(&dir.path().join("b.json"), "new").is_err());
         assert_eq!(std::fs::read_to_string(dir.path().join("b.json")).unwrap(), "old");
     }
 

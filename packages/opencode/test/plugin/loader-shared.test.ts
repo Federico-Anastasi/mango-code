@@ -60,7 +60,7 @@ function load(dir: string, flags?: Parameters<typeof RuntimeFlags.layer>[0]) {
               directories: () => Effect.succeed([dir]),
             }),
           ],
-          [RuntimeFlags.node, RuntimeFlags.layer({ disableDefaultPlugins: true, ...flags })],
+          [RuntimeFlags.node, RuntimeFlags.layer(flags)],
         ]),
       ),
       provideInstance(dir),
@@ -585,38 +585,6 @@ describe("plugin.loader.shared", () => {
                 .catch(() => false),
             )
             expect(called).toBe(false)
-          } finally {
-            install.mockRestore()
-          }
-        }),
-    ),
-  )
-
-  it.live("skips legacy codex and copilot auth plugin specs", () =>
-    withTmp(
-      async (dir) => {
-        await Bun.write(
-          path.join(dir, "opencode.json"),
-          JSON.stringify(
-            {
-              plugin: ["opencode-openai-codex-auth@1.0.0", "opencode-copilot-auth@1.0.0", "regular-plugin@1.0.0"],
-            },
-            null,
-            2,
-          ),
-        )
-      },
-      (_tmp) =>
-        Effect.gen(function* () {
-          const install = spyOn(Npm, "add").mockResolvedValue({ directory: "", entrypoint: undefined })
-
-          try {
-            yield* load(_tmp.path)
-
-            const pkgs = install.mock.calls.map((call) => call[0])
-            expect(pkgs).toContain("regular-plugin@1.0.0")
-            expect(pkgs).not.toContain("opencode-openai-codex-auth@1.0.0")
-            expect(pkgs).not.toContain("opencode-copilot-auth@1.0.0")
           } finally {
             install.mockRestore()
           }

@@ -33,7 +33,7 @@ const it = testEffect(
     [Npm.node, NpmTest.noop],
     [Provider.node, provider.layer],
     [Skill.node, SkillTest.empty],
-    [RuntimeFlags.node, RuntimeFlags.layer({ disableDefaultPlugins: true })],
+    [RuntimeFlags.node, RuntimeFlags.layer()],
   ]),
 )
 

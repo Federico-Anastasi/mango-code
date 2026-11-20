@@ -3,7 +3,6 @@ import { formatFileSize } from "@opencode-ai/session-ui/project-file"
 import type { useLanguage } from "@/context/language"
 import {
   contextLabel,
-  contextWords,
   etaParts,
   etaSeconds,
   mainDownload,
@@ -24,7 +23,7 @@ export function cardsText(where: Pick<Where, "placement" | "gpus"> & { context?:
     : language.t("mango.where.cards.other", { count: where.gpus.length })
 }
 
-/** The line under a model in the menus: «2 schede · 128k». */
+/** The line under a model in the menus: «2 schede · 128K». */
 export function whereLine(where: Where | null, language: Language) {
   if (!where) return
   return `${cardsText(where, language)} · ${contextLabel(where.context)}`
@@ -173,11 +172,15 @@ export function statusLine(
     }
   }
   if (model.phase !== "ready" || !input.justReady) return
-  const words = contextWords(model.where.context)
+  const context = contextLabel(model.where.context)
   if (model.where.placement === "cpu" || model.where.gpus.length === 0)
-    return { kind: "ready", text: language.t("mango.status.ready.cpu", { model: model.label, words }) }
+    return { kind: "ready", text: language.t("mango.status.ready.cpu", { model: model.label, context }) }
   return {
     kind: "ready",
-    text: language.t("mango.status.ready.gpu", { model: model.label, cards: cardsText(model.where, language), words }),
+    text: language.t("mango.status.ready.gpu", {
+      model: model.label,
+      cards: cardsText(model.where, language),
+      context,
+    }),
   }
 }

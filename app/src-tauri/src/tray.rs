@@ -85,11 +85,18 @@ pub fn show(app: &AppHandle) {
     }
 }
 
+/// Closes the app: the agent stops, then the interface writes the changes it still holds. That wait runs on a thread of its
+/// own, because the thread that gets here also delivers the interface's answer.
 pub(crate) fn quit(app: &AppHandle) {
-    if let Some(supervisor) = app.state::<crate::AppState>().sup.get() {
-        supervisor.shutdown();
-    }
-    app.exit(0);
+    let app = app.clone();
+    std::thread::spawn(move || {
+        // The agent takes up to a minute to stop and the user may still change things meanwhile: the page is asked last.
+        if let Some(supervisor) = app.state::<crate::AppState>().sup.get() {
+            supervisor.shutdown();
+        }
+        crate::ui_state::flush_page(&app);
+        app.exit(0);
+    });
 }
 
 #[cfg(test)]

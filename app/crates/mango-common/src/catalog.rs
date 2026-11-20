@@ -12,6 +12,7 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::collections::BTreeMap;
+use std::path::Path;
 
 /// The user's models file, in the app's data dir.
 pub const USER_FILE: &str = "user-models.json";
@@ -92,6 +93,16 @@ pub fn file_for_engine(file_engine: Option<&str>, engine: &str) -> bool {
 }
 
 pub fn read(paths: &Paths) -> Result<ModelCatalog> {
+    read_with(paths, true)
+}
+
+/// The catalog with the paths its files have in `mango-models.json`, whatever `model-files.json` says: what a file chosen
+/// on the computer is compared with.
+pub(crate) fn read_unplaced(paths: &Paths) -> Result<ModelCatalog> {
+    read_with(paths, false)
+}
+
+fn read_with(paths: &Paths, placed: bool) -> Result<ModelCatalog> {
     let f = paths.dist.join("mango-models.json");
     let txt = std::fs::read_to_string(&f).map_err(|e| {
         user_error(
@@ -105,6 +116,13 @@ pub fn read(paths: &Paths) -> Result<ModelCatalog> {
             format!("{}: {e}", f.display()),
         )
     })?;
+
+    if placed {
+        let places = crate::model_files::read(&paths.data)?;
+        if !places.is_empty() {
+            root.get_mut("models").and_then(Value::as_object_mut).into_iter().flat_map(|m| m.values_mut()).for_each(|m| crate::model_files::apply(m, &places));
+        }
+    }
 
     let fu = paths.data.join(USER_FILE);
     let Some(txt) = (match std::fs::read_to_string(&fu) {
@@ -125,7 +143,9 @@ pub fn read(paths: &Paths) -> Result<ModelCatalog> {
     let ours: Vec<String> = models.keys().cloned().collect();
     let mut keys = Vec::new();
     let mut same = BTreeMap::new();
-    for (key, entry) in user.models {
+    for (key, mut entry) in user.models {
+        // Only `model-files.json` says a file is Mango Code's own wherever it is: a list written by hand cannot.
+        entry.get_mut("files").and_then(Value::as_array_mut).into_iter().flatten().filter_map(Value::as_object_mut).for_each(|f| drop(f.remove("relocated")));
         if models.contains_key(&key) {
             return Err(user_error(&key_taken(&key), format!("{}: key «{key}» already in the catalog", fu.display())));
         }
@@ -152,7 +172,7 @@ fn file_name(path: &str) -> &str {
 /// user's disk: an entry made from a file chosen on the computer whose files have the names and the sizes of all the
 /// model's. Not a model that draws or runs in the cloud, nor one with files for an engine of its own.
 fn own_copy<'a>(models: &Map<String, Value>, ours: impl Iterator<Item = &'a String>, entry: &Value) -> Option<(String, Vec<(String, String)>)> {
-    if entry.get("origin").and_then(Value::as_str) != Some("local") {
+    if entry.get("origin").and_then(Value::as_str) != Some("local") || entry.get("distinct").and_then(Value::as_bool) == Some(true) {
         return None;
     }
     let file = |f: &Value| Some((f.get("path")?.as_str()?.to_string(), f.get("size")?.as_u64()?));
@@ -178,6 +198,58 @@ fn own_copy<'a>(models: &Map<String, Value>, ours: impl Iterator<Item = &'a Stri
     None
 }
 
+/// A Mango Code model whose files the user's files are.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Recognized {
+    pub model: String,
+    /// Each file of the model: its path in the catalog and where it is on the user's disk.
+    pub files: Vec<(String, std::path::PathBuf)>,
+}
+
+/// What `recognize_local` found.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Recognition {
+    Is(Recognized),
+    /// The names and the sizes are a Mango Code model's, the content is not: it is a model of the user's, and says so
+    /// (`distinct`), so that it is not taken for the catalog's.
+    Lookalike,
+    No,
+}
+
+/// Whether `entry`, a model made from files chosen on the computer, is a model of Mango Code's: the names and the sizes of
+/// all its files are those of the model's, and each file is the very file of the catalog, which is told by the hash the
+/// catalog knows (the one noted when it was verified, or computed: it can take a while). A file with the right name and
+/// size and another content is not. A model that is not there (a catalog model without files, an image model, a cloud
+/// one) is not recognized.
+pub fn recognize_local(paths: &Paths, entry: &Value) -> Result<Recognition> {
+    let catalog = read_unplaced(paths)?;
+    let Some(models) = catalog.root.get("models").and_then(Value::as_object) else { return Ok(Recognition::No) };
+    let ours = models.keys().filter(|k| !catalog.user.contains(k));
+    let Some((model, files)) = own_copy(models, ours, entry) else { return Ok(Recognition::No) };
+    let known: BTreeMap<&str, &str> = models[&model]["files"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|f| Some((f.get("path")?.as_str()?, f.get("sha256").and_then(Value::as_str).unwrap_or(""))))
+        .collect();
+    let mut found = Vec::new();
+    for (path, own) in files {
+        let own = std::path::PathBuf::from(own);
+        let expected = known.get(path.as_str()).copied().unwrap_or("");
+        if !expected.is_empty() {
+            let actual = match crate::download::recorded_hash(&own) {
+                Some(hash) => hash,
+                None => crate::download::sha256_file(&own)?,
+            };
+            if !actual.eq_ignore_ascii_case(expected) {
+                return Ok(Recognition::Lookalike);
+            }
+        }
+        found.push((path, own));
+    }
+    Ok(Recognition::Is(Recognized { model, files: found }))
+}
+
 /// Points `model` at the user's files: each (`path` in the catalog, where it is on the user's disk). A file without a
 /// hash is one Mango Code never downloads or deletes.
 fn run_from(model: &mut Value, files: &[(String, String)]) {
@@ -198,29 +270,45 @@ fn run_from(model: &mut Value, files: &[(String, String)]) {
 /// Adds (or replaces) the entry `key` in the user's list. A key that is already a Mango Code model is an error,
 /// and a list that can't be read is not overwritten.
 pub fn add_user(paths: &Paths, key: &str, entry: Value) -> Result<()> {
-    let mut list = read_user_list(paths)?;
+    let _one = USER_LIST.lock().unwrap_or_else(|e| e.into_inner());
+    let mut list = read_user_list(&paths.data)?;
     let root = read(paths)?.root;
     if root["models"].get(key).is_some() && !list.contains_key(key) {
         return Err(user_error(&key_taken(key), format!("key «{key}» already in the catalog")));
     }
     list.insert(key.to_string(), entry);
-    write_user_list(paths, list)
+    write_user_list(&paths.data, list)
 }
 
 /// Removes the entry `key` from the user's list (the weights on disk stay where they are).
 pub fn remove_user(paths: &Paths, key: &str) -> Result<()> {
-    let mut list = read_user_list(paths)?;
+    let _one = USER_LIST.lock().unwrap_or_else(|e| e.into_inner());
+    let mut list = read_user_list(&paths.data)?;
     if list.remove(key).is_none() {
         return Err(user_error(
             &tr!("«{key}» non è nel tuo elenco di modelli.", "«{key}» is not in your model list."),
             format!("{}: missing «{key}»", paths.data.join(USER_FILE).display()),
         ));
     }
-    write_user_list(paths, list)
+    write_user_list(&paths.data, list)
 }
 
-fn read_user_list(paths: &Paths) -> Result<BTreeMap<String, Value>> {
-    let f = paths.data.join(USER_FILE);
+/// Changes the entries of the user's list under the lock that keeps two writers from interleaving, and saves them if `change`
+/// says it changed something. A list that cannot be read is not written over.
+pub(crate) fn update_user_list(data: &Path, change: impl FnOnce(&mut BTreeMap<String, Value>) -> bool) -> Result<()> {
+    let _one = USER_LIST.lock().unwrap_or_else(|e| e.into_inner());
+    let mut list = read_user_list(data)?;
+    match change(&mut list) {
+        true => write_user_list(data, list),
+        false => Ok(()),
+    }
+}
+
+/// One writer of the user's list at a time: the file is written through a temporary name, which two writers would share.
+static USER_LIST: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn read_user_list(data: &Path) -> Result<BTreeMap<String, Value>> {
+    let f = data.join(USER_FILE);
     let txt = match std::fs::read_to_string(&f) {
         Ok(t) => t,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(BTreeMap::new()),
@@ -232,16 +320,16 @@ fn read_user_list(paths: &Paths) -> Result<BTreeMap<String, Value>> {
 }
 
 /// Writes the list to a file next to it and renames it: either the old one is there, or the whole new one.
-fn write_user_list(paths: &Paths, models: BTreeMap<String, Value>) -> Result<()> {
-    let f = paths.data.join(USER_FILE);
+fn write_user_list(data: &Path, models: BTreeMap<String, Value>) -> Result<()> {
+    let f = data.join(USER_FILE);
     let error = |e: &dyn std::fmt::Display| {
         user_error(
             &tr!("Non riesco a salvare il tuo elenco di modelli ({USER_FILE}).", "I can't save your model list ({USER_FILE})."),
             format!("{}: {e}", f.display()),
         )
     };
-    std::fs::create_dir_all(&paths.data).map_err(|e| error(&e))?;
-    crate::write_atomic(&f, serde_json::to_string_pretty(&serde_json::json!({ "models": models }))?).map_err(|e| error(&e))
+    std::fs::create_dir_all(data).map_err(|e| error(&e))?;
+    crate::write_durable(&f, serde_json::to_string_pretty(&serde_json::json!({ "models": models }))?).map_err(|e| error(&e))
 }
 
 fn cannot_read_user_list() -> String {
@@ -407,5 +495,74 @@ mod tests {
     fn a_damaged_public_catalog_says_to_reinstall() {
         let (_d, p) = paths("{ not json", None);
         assert!(read(&p).unwrap_err().to_string().contains(&tr!("Reinstalla", "Reinstall")));
+    }
+
+    /// A model made from files on the computer is recognized as the catalog's model when every file has the catalog's name,
+    /// size and hash; the hash is the one noted when the file was verified, or computed. A file with the right name and size
+    /// and another content, a missing file and a model of the user's own are not.
+    #[test]
+    fn a_file_chosen_on_the_computer_is_recognized_by_name_size_and_hash() {
+        use sha2::{Digest, Sha256};
+        let hash = |bytes: &[u8]| crate::hex(&Sha256::digest(bytes));
+        let (weights, encoder) = (vec![7u8; 100], vec![9u8; 40]);
+        let dist = serde_json::json!({ "default": "ling", "models": {
+            "ling": { "label": "Ling", "gguf": "L/ling-q4.gguf", "mmproj": "L/mm.gguf", "files": [
+                { "path": "L/ling-q4.gguf", "size": 100, "sha256": hash(&weights) },
+                { "path": "L/mm.gguf", "size": 40, "sha256": hash(&encoder) } ] },
+            "unpublished": { "label": "U", "gguf": "u.gguf", "files": [ { "path": "u.gguf", "size": 5 } ] }
+        } });
+        let (dir, p) = paths(&dist.to_string(), None);
+        let mine = dir.path().join("my downloads");
+        std::fs::create_dir_all(&mine).unwrap();
+        let entry = |files: &[(&std::path::Path, u64)]| {
+            serde_json::json!({ "label": "x", "origin": "local", "gguf": files[0].0.display().to_string(),
+                "files": files.iter().map(|(path, size)| serde_json::json!({ "path": path.display().to_string(), "size": size })).collect::<Vec<_>>() })
+        };
+        let (w, e) = (mine.join("ling-q4.gguf"), mine.join("mm.gguf"));
+        std::fs::write(&w, &weights).unwrap();
+        std::fs::write(&e, &encoder).unwrap();
+
+        let Recognition::Is(found) = recognize_local(&p, &entry(&[(&w, 100), (&e, 40)])).unwrap() else { panic!("not recognized") };
+        assert_eq!(found, Recognized { model: "ling".into(), files: vec![("L/ling-q4.gguf".into(), w.clone()), ("L/mm.gguf".into(), e.clone())] });
+
+        // The same name and size, another content: a model of the user's.
+        std::fs::write(&w, vec![8u8; 100]).unwrap();
+        assert_eq!(recognize_local(&p, &entry(&[(&w, 100), (&e, 40)])).unwrap(), Recognition::Lookalike);
+
+        // The note of the hash is believed while it holds: the file is not read again.
+        std::fs::write(&w, &weights).unwrap();
+        let meta = std::fs::metadata(&w).unwrap();
+        let modified_ms = meta.modified().unwrap().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64;
+        std::fs::write(mine.join("ling-q4.gguf.verified"), serde_json::json!({ "sha256": hash(&weights), "size": 100, "modified_ms": modified_ms }).to_string()).unwrap();
+        assert!(matches!(recognize_local(&p, &entry(&[(&w, 100), (&e, 40)])).unwrap(), Recognition::Is(_)));
+
+        // Not the sizes of the catalog, only one of the two files, or not from a file on the computer.
+        assert_eq!(recognize_local(&p, &entry(&[(&w, 99), (&e, 40)])).unwrap(), Recognition::No);
+        assert_eq!(recognize_local(&p, &entry(&[(&w, 100)])).unwrap(), Recognition::No);
+        let mut downloaded = entry(&[(&w, 100), (&e, 40)]);
+        downloaded["origin"] = "hugging-face".into();
+        assert_eq!(recognize_local(&p, &downloaded).unwrap(), Recognition::No);
+
+        // A file the catalog gives no hash for is recognized by name and size alone.
+        let u = mine.join("u.gguf");
+        std::fs::write(&u, b"12345").unwrap();
+        assert!(matches!(recognize_local(&p, &entry(&[(&u, 5)])).unwrap(), Recognition::Is(r) if r.model == "unpublished"));
+    }
+
+    /// The catalog says where the files are: a model's own file moved elsewhere keeps its hash and is marked, the user's
+    /// file loses the hash; a list written by hand cannot mark its own file as Mango Code's.
+    #[test]
+    fn the_catalog_reads_where_the_files_are() {
+        let dist = r#"{ "models": { "a": { "label": "A", "gguf": "A/a.gguf", "files": [ { "path": "A/a.gguf", "size": 3, "sha256": "aa" } ] } } }"#;
+        let user = r#"{ "models": { "mine": { "label": "M", "gguf": "m.gguf", "files": [ { "path": "m.gguf", "size": 1, "sha256": "bb", "relocated": true } ] } } }"#;
+        let (_d, p) = paths(dist, Some(user));
+        crate::model_files::update(&p.data, |places| drop(places.insert("A/a.gguf".into(), crate::model_files::Place { at: r"D:\fast\a.gguf".into(), own: true }))).unwrap();
+
+        let c = read(&p).unwrap();
+
+        assert_eq!(c.root["models"]["a"]["gguf"], r"D:\fast\a.gguf");
+        assert_eq!(c.root["models"]["a"]["files"][0]["relocated"], true);
+        assert!(c.root["models"]["mine"]["files"][0].get("relocated").is_none(), "only the map marks a file as Mango Code's own");
+        assert_eq!(read_unplaced(&p).unwrap().root["models"]["a"]["gguf"], "A/a.gguf");
     }
 }

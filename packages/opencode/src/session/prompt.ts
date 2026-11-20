@@ -86,6 +86,12 @@ const BLANK_RESTARTS = 2
 const BLANK_WAKE =
   "Your answer stopped: after its last sentence it went on with blank lines only, and it was cut there. Go on from where you were: make the tool call you were about to make, or tell the user what is done and what is left."
 
+// An answer cut at the output limit is taken up once in a turn: the model goes on shorter. The interface folds what
+// follows into the turn it belongs to by the `resume` mark of the message's text.
+const LENGTH_RESUMES = 1
+const LENGTH_WAKE =
+  "Your answer was cut because it reached the length limit. Go on from where you stopped, with less thinking: make the tool call you were about to make, or tell the user what is done and what is left."
+
 const STRUCTURED_OUTPUT_DESCRIPTION =`Use this tool to return your final response in the requested structured format.
 
 IMPORTANT:
@@ -1369,15 +1375,18 @@ const layer = Layer.effect(
         instruction.system().pipe(Effect.orDie),
         sys.mcp(agent, session.permission, enabled("mcp")),
       ])
-      return [
-        ...env,
-        ...instructions.filter((text) => {
-          const file = PromptSettings.instructionsFile(text)
-          return !file || enabled("instructions")(PromptSettings.instructionName(file, directory))
-        }),
-        ...(mcpInstructions ? [mcpInstructions] : []),
-        ...(skills ? [skills] : []),
-      ]
+      // The working folder and the date go apart: the request puts them last (`LLMRequestPrep.prepare`).
+      return {
+        system: [
+          ...instructions.filter((text) => {
+            const file = PromptSettings.instructionsFile(text)
+            return !file || enabled("instructions")(PromptSettings.instructionName(file, directory))
+          }),
+          ...(mcpInstructions ? [mcpInstructions] : []),
+          ...(skills ? [skills] : []),
+        ],
+        env,
+      }
     })
 
     const runLoop: (sessionID: SessionID) => Effect.Effect<SessionV1.WithParts> = Effect.fn("SessionPrompt.run")(
@@ -1386,7 +1395,34 @@ const layer = Layer.effect(
         let structured: unknown
         let step = 0
         let blanks = 0
+        let resumes = 0
         const session = yield* sessions.get(sessionID).pipe(Effect.orDie)
+
+        // A message of the user's turn that the loop writes itself, to tell the model what happened and ask it to go on
+        // with what the user asked for the turn (format, tools, system text).
+        const wake = Effect.fn("SessionPrompt.wake")(function* (lastUser: SessionV1.User, text: string, resume?: "length") {
+          const message = yield* sessions.updateMessage({
+            id: MessageID.ascending(),
+            role: "user",
+            sessionID,
+            time: { created: Date.now() },
+            agent: lastUser.agent,
+            model: lastUser.model,
+            tools: lastUser.tools,
+            system: lastUser.system,
+            format: lastUser.format,
+          })
+          yield* sessions.updatePart({
+            id: PartID.ascending(),
+            messageID: message.id,
+            sessionID,
+            type: "text",
+            synthetic: true,
+            text,
+            ...(resume ? { metadata: { resume } } : {}),
+            time: { start: Date.now(), end: Date.now() },
+          })
+        })
 
         while (true) {
           yield* status.set(sessionID, { type: "busy" })
@@ -1427,6 +1463,11 @@ const layer = Layer.effect(
                 tool: orphan.tool,
                 callID: orphan.callID,
               })
+            }
+            if (lastAssistant.finish === "length" && !lastAssistant.error && resumes < LENGTH_RESUMES) {
+              resumes++
+              yield* wake(lastUser, LENGTH_WAKE, "length")
+              continue
             }
             yield* Effect.logInfo("exiting loop", { "session.id": sessionID })
             break
@@ -1480,6 +1521,29 @@ const layer = Layer.effect(
           }
           const maxSteps = agent.steps ?? Infinity
           const isLastStep = step >= maxSteps
+          // mango-code: the skills put on disk since the conversation began are announced once, in the user's message:
+          // the list in the system prompt stays as it was, so the engine keeps its cache of it.
+          if (step === 1 && !Permission.disabled(["skill"], agent.permission).has("skill")) {
+            const valid = PromptSettings.load(ctx.directory)
+            const fresh = (yield* skill.added(sessionID, agent)).filter(
+              (item) => item.description !== undefined && PromptSettings.enabled(valid, "skills", item.name),
+            )
+            if (fresh.length > 0) {
+              const part = yield* sessions.updatePart({
+                id: PartID.ascending(),
+                messageID: lastUser.id,
+                sessionID,
+                type: "text",
+                synthetic: true,
+                text: [
+                  "Skills added since this conversation began:",
+                  Skill.fmt(fresh, { verbose: true }),
+                  "Use the skill tool to load one when a task matches its description.",
+                ].join("\n"),
+              })
+              msgs.findLast((item) => item.info.id === lastUser.id)?.parts.push(part)
+            }
+          }
           msgs = yield* SessionReminders.apply({ messages: msgs, agent, session }).pipe(
             Effect.provideService(RuntimeFlags.Service, flags),
             Effect.provideService(FSUtil.Service, fsys),
@@ -1547,7 +1611,7 @@ const layer = Layer.effect(
 
             yield* plugin.trigger("experimental.chat.messages.transform", {}, { messages: msgs })
 
-            const [system, modelMsgs] = yield* Effect.all([
+            const [{ system, env }, modelMsgs] = yield* Effect.all([
               systemPrompt(agent, session, model),
               MessageV2.toModelMessagesEffect(msgs, model),
             ])
@@ -1560,6 +1624,7 @@ const layer = Layer.effect(
               sessionID,
               parentSessionID: session.parentID,
               system,
+              env,
               messages: [
                 ...modelMsgs,
                 ...(isLastStep ? [{ role: "assistant" as const, content: MAX_STEPS_PROMPT }] : []),
@@ -1619,23 +1684,7 @@ const layer = Layer.effect(
                 return "break" as const
               }
               // The model is told what happened and asked to go on: it had a call to make.
-              const wake = yield* sessions.updateMessage({
-                id: MessageID.ascending(),
-                role: "user",
-                sessionID,
-                time: { created: Date.now() },
-                agent: lastUser.agent,
-                model: lastUser.model,
-              })
-              yield* sessions.updatePart({
-                id: PartID.ascending(),
-                messageID: wake.id,
-                sessionID,
-                type: "text",
-                synthetic: true,
-                text: BLANK_WAKE,
-                time: { start: Date.now(), end: Date.now() },
-              })
+              yield* wake(lastUser, BLANK_WAKE)
             }
             if (result === "compact") {
               yield* compaction.create({
@@ -1984,6 +2033,8 @@ const layer = Layer.effect(
     const pageItems = Effect.fn("SessionPrompt.items")(function* (modelID?: string) {
       const ctx = yield* InstanceState.context
       const agent = yield* agents.defaultInfo()
+      // the page lists the skills on disk now, also those added while the agent runs
+      yield* skill.refresh()
       const measured = modelID
         ? yield* provider.getModel(ProviderV2.ID.make("mango"), ModelV2.ID.make(modelID)).pipe(Effect.option)
         : Option.none()

@@ -57,6 +57,57 @@ pub struct EnginePlan {
     pub gpus_used: Vec<Gpu>,
     /// Path of the loaded GGUF (to recognize an engine already running the same model).
     pub gguf: PathBuf,
+    /// The slot files the manager keeps for an official llama.cpp engine; `None` for the profiles' engines, which keep
+    /// their own on-disk memory.
+    pub slots: Option<SlotCache>,
+}
+
+/// Where and for whom the manager keeps the official engine's slot files (`memory.rs`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SlotCache {
+    /// The folder the engine saves into and restores from (`--slot-save-path`).
+    pub folder: PathBuf,
+    /// The profiles' memory, which shares the space budget with the slot files.
+    pub memory: PathBuf,
+    /// The model's key: the start of the names of its files.
+    pub model: String,
+    /// What a saved state depends on besides the text it was made from: the model file, the engine and the arguments that
+    /// shape the cache. A state saved under another signature is of no use.
+    pub signature: String,
+}
+
+/// The arguments (each with its value) that change what a saved state holds: the type of the cache and how attention and
+/// positions are computed. Any other argument (where the engine listens and keeps files, its context, its threads, how
+/// it places the layers) leaves a state usable.
+const STATE_ARGS: [&str; 12] = [
+    "-ctk", "--cache-type-k", "-ctv", "--cache-type-v", "-fa", "--flash-attn", "--rope-scaling", "--rope-scale", "--rope-freq-base",
+    "--rope-freq-scale", "--yarn-orig-ctx", "--override-kv",
+];
+/// The same, without a value.
+const STATE_FLAGS: [&str; 2] = ["--swa-full", "--jinja"];
+
+/// What a saved state of the slot depends on besides the prompt's text: the engine program (its folder names version and
+/// build), the model file, the chat template file (it decides the tokens) and `STATE_ARGS`.
+fn slot_signature(exe: &Path, gguf: &Path, args: &[String]) -> String {
+    let stamp = |file: &Path| {
+        std::fs::metadata(file).map_or((0, 0), |m| {
+            (m.len(), m.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map_or(0, |d| d.as_nanos()))
+        })
+    };
+    let mut kept: Vec<String> = Vec::new();
+    let mut rest = args.iter();
+    while let Some(a) = rest.next() {
+        if STATE_ARGS.contains(&a.as_str()) {
+            kept.push(format!("{a} {}", rest.next().map_or("", String::as_str)));
+        } else if STATE_FLAGS.contains(&a.as_str()) {
+            kept.push(a.clone());
+        } else if a == "--chat-template-file" {
+            let (len, modified) = rest.next().map_or((0, 0), |t| stamp(Path::new(t)));
+            kept.push(format!("template {len} {modified}"));
+        }
+    }
+    let (len, modified) = stamp(gguf);
+    mango_common::sha256_hex(format!("{}\n{len}\n{modified}\n{}", exe.display(), kept.join("\n")).as_bytes())[..16].to_string()
 }
 
 impl EnginePlan {
@@ -73,7 +124,7 @@ impl EnginePlan {
 /// Loading the 27B takes 20-60 s on an RTX 3060 Ti + GTX 1080 + GTX 1660 SUPER; the rest is margin for slow disks.
 const READY_TIMEOUT_S: u64 = 300;
 
-/// Before stopping, the engine saves the open conversation: a couple of seconds for 100 thousand tokens, the rest is
+/// Before stopping, the profiles' engines save the open conversation: a couple of seconds for 100 thousand tokens, the rest is
 /// margin for slow disks.
 const MEMORY_SAVE_S: u64 = 60;
 
@@ -141,7 +192,7 @@ fn build_plan(
     }
     let scope = choices::read(paths)?.scope(key);
 
-    let setup = setup_for(paths, key, &cfg, hw, &scope.choices)?;
+    let mut setup = setup_for(paths, key, &cfg, hw, &scope.choices)?;
     let gguf_rel = cfg.gguf_for(setup.engine()).ok_or_else(|| {
         user(
             &tr!("La configurazione del modello è incompleta. Reinstalla l'applicazione.", "The model configuration is incomplete. Reinstall the application."),
@@ -175,14 +226,6 @@ fn build_plan(
         None => None,
     };
 
-    let dir = installed_engine(paths, setup.engine(), setup.build()).ok_or_else(|| {
-        user(
-            &tr!("Manca il motore che esegue il modello. Reinstalla l'applicazione.", "The engine that runs the model is missing. Reinstall the application."),
-            format!("no llama-server.exe for «{}» ({}) in {}", setup.engine(), setup.build().as_str(), paths.engines.join(setup.engine()).display()),
-        )
-    })?;
-    let exe = dir.join("llama-server.exe");
-
     // The cards the plan leaves out: those lent to another job and those the user doesn't use.
     let unused = general::unused_indexes(hw, &scope);
     let parts = match &setup {
@@ -197,6 +240,17 @@ fn build_plan(
     };
     let Parts { ctx, gpus_used, env, args: setup_args, args_after, disk_memory } = parts;
     check_left(&cfg.label, &gpus_used, excluded, &unused)?;
+    if matches!(setup, Setup::General { .. }) && gpus_used.is_empty() {
+        setup.on_processor();
+    }
+    let dir = installed_engine(paths, setup.engine(), setup.build()).ok_or_else(|| {
+        user(
+            &tr!("Manca il motore che esegue il modello. Reinstalla l'applicazione.", "The engine that runs the model is missing. Reinstall the application."),
+            format!("no llama-server.exe for «{}» ({}) in {}", setup.engine(), setup.build().as_str(), paths.engines.join(setup.engine()).display()),
+        )
+    })?;
+    let exe = dir.join("llama-server.exe");
+
     let slots = paths.data.join("slots");
     std::fs::create_dir_all(&slots).map_err(|e| {
         user(&tr!("Non riesco a preparare la cartella di lavoro di Mango Code.", "I can't prepare Mango Code's working folder."), format!("{}: {e}", slots.display()))
@@ -221,7 +275,7 @@ fn build_plan(
     // On-disk memory (the profiles' engines): conversations and system prompts stay ready between one stop and the
     // next (GPUs lent, model switch, shutdown) and when moving from one conversation to another.
     if disk_memory {
-        let (dir, mib) = memory::prepare(&paths.data.join("memory"), key).map_err(|e| {
+        let (dir, mib) = memory::prepare(&paths.data.join("memory"), &slots, key).map_err(|e| {
             user(&tr!("Non riesco a preparare la cartella di lavoro di Mango Code.", "I can't prepare Mango Code's working folder."), format!("{e:#}"))
         })?;
         args.extend([
@@ -243,17 +297,16 @@ fn build_plan(
     args.extend(args_after);
 
     let url = format!("http://127.0.0.1:{port}");
-    // The open conversation is saved before stopping and restored on restart, with every engine: the profiles'
-    // ones with the on-disk memory (which restores itself), official llama.cpp with the slot saved in
-    // `slots/<model>.bin`.
-    let (shutdown_post, startup_post) = if disk_memory {
-        (Some(PostCall { url: format!("{url}/slots/0?action=persist"), body: String::new(), timeout_s: MEMORY_SAVE_S }), None)
-    } else {
-        let file = format!("{key}.bin");
-        let body = serde_json::json!({ "filename": file }).to_string();
-        let restore = slots.join(&file).is_file().then(|| PostCall { url: format!("{url}/slots/0?action=restore"), body: body.clone(), timeout_s: MEMORY_SAVE_S });
-        (Some(PostCall { url: format!("{url}/slots/0?action=save"), body, timeout_s: MEMORY_SAVE_S }), restore)
-    };
+    // The profiles' engines save the open conversation before stopping with their on-disk memory (which restores itself).
+    // For official llama.cpp the manager keeps the slot files itself (`slots`): the last conversation and the system
+    // prompt of the new ones.
+    let shutdown_post = disk_memory.then(|| PostCall { url: format!("{url}/slots/0?action=persist"), body: String::new(), timeout_s: MEMORY_SAVE_S });
+    let slot_cache = (!disk_memory).then(|| SlotCache {
+        folder: slots.clone(),
+        memory: paths.data.join("memory"),
+        model: key.to_string(),
+        signature: slot_signature(&exe, &gguf, &args),
+    });
     Ok(EnginePlan {
         key: key.to_string(),
         spec: ProcSpec {
@@ -266,7 +319,7 @@ fn build_plan(
             health_url: Some(format!("{url}/health")),
             ready_timeout_s: READY_TIMEOUT_S,
             shutdown_post,
-            startup_post,
+            startup_post: None,
         },
         url,
         label: cfg.label,
@@ -274,6 +327,7 @@ fn build_plan(
         images: mmproj.is_some(),
         gpus_used,
         gguf,
+        slots: slot_cache,
     })
 }
 

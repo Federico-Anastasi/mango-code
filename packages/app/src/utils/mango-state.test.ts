@@ -3,6 +3,7 @@ import {
   becameReady,
   canSend,
   chosenBytes,
+  contextLabel,
   diskDrive,
   conversationModel,
   etaParts,
@@ -40,7 +41,7 @@ const entry = (key: string, present: boolean, fits: boolean, extra: Record<strin
   present,
   bytes: 100,
   verdict: { fits, where: fits ? where : null, reason: fits ? "" : "Non ci sta.", speed: null, fastest: false },
-  choices: { where: "auto", gpus: [], context: null, style: "recommended", reasoning: null },
+  choices: { where: "auto", gpus: [], context: null, style: "recommended", reasoning: null, sampling: {} },
   limits: { where: ["auto", "one", "cpu"], context: [32768, 65536, 131072], reasoning: true },
   ...extra,
 })
@@ -75,6 +76,21 @@ describe("the app's state, as the agent tells it", () => {
       models: [entry("mine", true, true, { user: true, own_files: ["D:\\m.gguf"] }), entry("a", true, true)],
     })!
     expect(own.map((model) => model.ownFiles)).toEqual([["D:\\m.gguf"], []])
+    // the folder of the files the user moved out of the models folder; none for a model that is in it
+    const placed = parseCatalog({
+      models: [entry("moved", true, true, { placed_in: "D:\\Fast" }), entry("a", true, true)],
+    })!
+    expect(placed.map((model) => model.placedIn)).toEqual(["D:\\Fast", undefined])
+  })
+
+  test("the values chosen for a model's style are read with their known names; a model whose choices have none does not read", () => {
+    const choices = { where: "auto" as const, gpus: [], context: 100000, style: "precise" as const, reasoning: null }
+    const [model] = parseCatalog({
+      models: [entry("a", true, true, { choices: { ...choices, sampling: { temperature: 0.4, top_k: 10, junk: 1, top_p: "x" } } })],
+    })!
+    expect(model.choices).toEqual({ ...choices, sampling: { temperature: 0.4, top_k: 10 } })
+    expect(parseCatalog({ models: [entry("a", true, true, { choices })] })).toBeUndefined()
+    expect(parseCatalog({ models: [entry("a", true, true, { choices: { ...choices, sampling: 3 } })] })).toBeUndefined()
   })
 
   test("a catalog whose models are all left out, or no list at all, does not read: it is not a computer without models", () => {
@@ -418,6 +434,13 @@ describe("the Home", () => {
 })
 
 describe("the words", () => {
+  test("a context is told in K of 1024 tokens, with a capital K", () => {
+    expect(contextLabel(32768)).toBe("32K")
+    expect(contextLabel(131072)).toBe("128K")
+    expect(contextLabel(262144)).toBe("256K")
+    expect(contextLabel(100000)).toBe("98K")
+  })
+
   test("a wait: under a minute, minutes rounded up, whole hours, hours and minutes", () => {
     expect(etaParts(30)).toEqual({ kind: "lessThanMinute" })
     expect(etaParts(61)).toEqual({ kind: "minutes", count: 2 })

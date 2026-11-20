@@ -153,6 +153,6 @@ test("the GPUs are released and resumed, and the conversation continues", async 
   expect(calls.map((r) => [r.route, r.status])).toEqual([["/engine/release", 200], ["/engine/resume", 200]]);
   expect(calls.every((r) => r.address.startsWith("127.0.0.1:") && r.user_agent.length > 0)).toBe(true);
   // Before releasing, the conversation is saved; on resume it is reloaded (on-disk memory events).
-  const events = log.filter((r) => r.event).map((r) => r.event);
+  const events = log.filter((r) => r.event && r.event !== "prefix").map((r) => r.event);
   expect(events.slice(-2)).toEqual(["save", "restore"]);
 }, 120_000);

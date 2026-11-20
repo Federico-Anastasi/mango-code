@@ -120,7 +120,7 @@ describe("prompt settings", () => {
   test("a plugin is named like its file", () => {
     expect(PromptSettings.pluginName("file:///C:/Users/Alice/data/opencode-home/plugin/mango-discipline.js")).toBe("mango-discipline")
     expect(PromptSettings.pluginName("file:///C:/Users/Alice/My%20plugin.mjs")).toBe("My plugin")
-    expect(PromptSettings.pluginName("opencode-poe-auth@1.2.0")).toBe("opencode-poe-auth@1.2.0")
+    expect(PromptSettings.pluginName("example-plugin@1.2.0")).toBe("example-plugin@1.2.0")
   })
 
   test("the instructions file of a system text is recognized from the first line", () => {

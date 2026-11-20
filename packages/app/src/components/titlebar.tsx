@@ -46,6 +46,7 @@ import { sessionTitle } from "@/utils/session-title"
 import { useServerSync } from "@/context/server-sync"
 import { phoneBarActions, phoneChanges } from "@/utils/phone-changes"
 import { phonePreview, previewFailed } from "@/utils/phone-preview"
+import { folderKey } from "@/utils/path-key"
 import { Logo } from "@opencode-ai/ui/logo"
 
 const legacyTitlebarHeight = 40
@@ -303,7 +304,7 @@ export function Titlebar(props: {
                   ? global
                       .ensureServerCtx(conn)
                       .projects.list()
-                      .find((item) => item.worktree === selection.directory)
+                      .find((item) => folderKey(item.worktree) === folderKey(selection.directory ?? ""))
                   : undefined
                 if (conn && project) {
                   tabs.newDraft({ server: ServerConnection.key(conn), directory: project.worktree }, "")

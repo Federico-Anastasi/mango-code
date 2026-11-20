@@ -125,6 +125,15 @@ impl Dictation {
         };
         drop(server);
     }
+
+    /// After `shutdown`, when the app goes on (a move of the models folder that did not happen): the service starts again
+    /// if the user wants it, from the files that are there.
+    pub fn resume(&self) {
+        let mut inner = self.shared.inner.lock().unwrap();
+        if inner.enabled && inner.armed {
+            self.shared.begin(&mut inner);
+        }
+    }
 }
 
 impl Shared {
@@ -431,11 +440,19 @@ mod tests {
         Dictation::new(backend.clone(), data, "http://127.0.0.1:4097".into(), |_| {})
     }
 
-    fn data(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("mango-dictation-{name}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+    /// The data folder of a test: it is removed with `close`, which fails the test if it cannot be removed.
+    fn data() -> tempfile::TempDir {
+        tempfile::tempdir().unwrap()
+    }
+
+    /// Stops the manager and waits for its last thread before the folder goes, so that nothing is still working in it.
+    fn finish(d: Dictation, dir: tempfile::TempDir) {
+        d.shutdown();
+        let worker = d.shared.inner.lock().unwrap().worker.take();
+        if let Some(worker) = worker {
+            worker.join().unwrap();
+        }
+        dir.close().unwrap();
     }
 
     fn until(what: &str, mut condition: impl FnMut() -> bool) {
@@ -449,22 +466,27 @@ mod tests {
     #[test]
     fn it_is_off_until_the_user_turns_it_on_and_who_updates_with_the_models_finds_it_on() {
         let none = Arc::new(Test::default());
-        assert!(!manager(&none, &data("fresh")).state().enabled, "a new installation does not download the dictation");
+        let fresh = data();
+        assert!(!manager(&none, fresh.path()).state().enabled, "a new installation does not download the dictation");
+        fresh.close().unwrap();
 
         let updated = Arc::new(Test::default());
         updated.have.store(true, Ordering::SeqCst);
-        let d = manager(&updated, &data("updated"));
+        let dir = data();
+        let d = manager(&updated, dir.path());
         assert!(d.state().enabled, "the update that already had the models keeps the dictation");
         d.arm();
         until("starts without downloading", || d.state().status == "ready");
         assert_eq!(updated.downloads.load(Ordering::SeqCst), 0);
+        finish(d, dir);
     }
 
     #[test]
     fn turned_on_it_downloads_in_the_background_once_the_app_is_ready_then_starts() {
         let test = Arc::new(Test::default());
         test.hold.store(true, Ordering::SeqCst);
-        let d = manager(&test, &data("on"));
+        let dir = data();
+        let d = manager(&test, dir.path());
 
         let state = d.set_enabled(true).unwrap();
         assert_eq!((state.enabled, state.status), (true, "waiting"));
@@ -476,13 +498,15 @@ mod tests {
         test.hold.store(false, Ordering::SeqCst);
         until("ready", || d.state().status == "ready");
         assert_eq!((test.downloads.load(Ordering::SeqCst), test.running.load(Ordering::SeqCst)), (1, 1));
+        finish(d, dir);
     }
 
     #[test]
     fn turned_off_while_downloading_it_stops_at_once_and_deletes_what_was_downloaded() {
         let test = Arc::new(Test::default());
         test.hold.store(true, Ordering::SeqCst);
-        let d = manager(&test, &data("off-downloading"));
+        let dir = data();
+        let d = manager(&test, dir.path());
         d.arm();
         d.set_enabled(true).unwrap();
         until("downloading", || d.state().status == "downloading");
@@ -494,12 +518,14 @@ mod tests {
         test.hold.store(false, Ordering::SeqCst);
         d.set_enabled(true).unwrap();
         until("ready again", || d.state().status == "ready");
+        finish(d, dir);
     }
 
     #[test]
     fn turned_off_when_ready_the_service_stops_and_the_space_comes_back() {
         let test = Arc::new(Test::default());
-        let d = manager(&test, &data("off-ready"));
+        let dir = data();
+        let d = manager(&test, dir.path());
         d.arm();
         d.set_enabled(true).unwrap();
         until("ready", || d.state().status == "ready");
@@ -507,28 +533,31 @@ mod tests {
         d.set_enabled(false).unwrap();
         until("deleted", || test.removals.load(Ordering::SeqCst) == 1);
         assert_eq!((test.running.load(Ordering::SeqCst), test.complete()), (0, false));
+        finish(d, dir);
     }
 
     #[test]
     fn the_choice_survives_a_restart_of_the_app() {
         let test = Arc::new(Test::default());
-        let dir = data("restart");
-        manager(&test, &dir).set_enabled(true).unwrap();
-        assert!(manager(&test, &dir).state().enabled);
+        let dir = data();
+        manager(&test, dir.path()).set_enabled(true).unwrap();
+        assert!(manager(&test, dir.path()).state().enabled);
 
         test.have.store(true, Ordering::SeqCst);
-        manager(&test, &dir).set_enabled(false).unwrap();
-        let d = manager(&test, &dir);
+        manager(&test, dir.path()).set_enabled(false).unwrap();
+        let d = manager(&test, dir.path());
         d.arm();
         assert!(!d.state().enabled, "off stays off even if the models are still there");
         assert_eq!(test.running.load(Ordering::SeqCst), 0);
+        finish(d, dir);
     }
 
     #[test]
     fn an_error_is_told_and_turning_it_on_again_tries_again() {
         let test = Arc::new(Test::default());
         *test.fail.lock().unwrap() = Some("no network".into());
-        let d = manager(&test, &data("error"));
+        let dir = data();
+        let d = manager(&test, dir.path());
         d.arm();
         d.set_enabled(true).unwrap();
         until("error", || d.state().status == "error");
@@ -538,5 +567,24 @@ mod tests {
         d.set_enabled(true).unwrap();
         until("ready", || d.state().status == "ready");
         assert_eq!(d.state().error, None);
+        finish(d, dir);
+    }
+
+    #[test]
+    fn a_service_stopped_for_a_move_that_did_not_happen_starts_again() {
+        let test = Arc::new(Test::default());
+        let dir = data();
+        let d = manager(&test, dir.path());
+        d.arm();
+        d.set_enabled(true).unwrap();
+        until("ready", || d.state().status == "ready");
+
+        d.shutdown();
+        assert_eq!(test.running.load(Ordering::SeqCst), 0);
+        d.resume();
+
+        until("ready again", || d.state().status == "ready" && test.running.load(Ordering::SeqCst) == 1);
+        assert_eq!(test.downloads.load(Ordering::SeqCst), 1, "the files were there: nothing downloaded again");
+        finish(d, dir);
     }
 }

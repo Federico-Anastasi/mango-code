@@ -49,7 +49,7 @@ const catalog = {
         label: "Qwen",
         present: true,
         verdict: { fits: true },
-        choices: { where: "auto", gpus: [], context: null, style: "recommended", reasoning: null },
+        choices: { where: "auto", gpus: [], context: null, style: "recommended", reasoning: null, sampling: {} },
         limits: { where: ["auto"], context: [], reasoning: false },
       },
     ],

@@ -77,6 +77,15 @@ describe("assignment of fruits to projects", () => {
     expect(projectFruitSeed({ id: "abc123", worktree: "C:/anything" })).toBe("abc123")
   })
 
+  test("the colour of a folder does not change with the way its path is written", () => {
+    const seed = projectFruitSeed({ worktree: "C:\\Users\\Alice\\Repo" })
+    expect(projectFruitSeed({ worktree: "c:/users/alice/repo/" })).toBe(seed)
+    expect(projectFruitSeed({ worktree: "\\\\?\\C:\\Users\\Alice\\Repo" })).toBe(seed)
+    expect(projectFruitSeed({ worktree: "/Users/Alice/Repo" })).not.toBe(
+      projectFruitSeed({ worktree: "/users/alice/repo" }),
+    )
+  })
+
   test("the same copy seen twice counts once", () => {
     const [project] = make(1)
     expect(assignProjectFruits([project, { ...project }]).size).toBe(1)

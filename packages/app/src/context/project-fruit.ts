@@ -5,7 +5,7 @@ import {
   isProjectFruit,
   type ProjectFruit,
 } from "@opencode-ai/ui/v2/project-fruits"
-import { pathKey } from "@/utils/path-key"
+import { folderKey } from "@/utils/path-key"
 
 export type FruitProject = {
   id?: string
@@ -25,7 +25,7 @@ export const fruitColor = (fruit: ProjectFruit) => `${PROJECT_FRUIT_PREFIX}${fru
 
 /** Stable key of the project: the id (the same for all working copies of the same repo), for projects without a git id the path. */
 export function projectFruitSeed(project: { id?: string; worktree: string }) {
-  return project.id && project.id !== "global" ? project.id : pathKey(project.worktree)
+  return project.id && project.id !== "global" ? project.id : folderKey(project.worktree)
 }
 
 // 32-bit FNV-1a: fast and well mixed even on ids that differ by a few digits.

@@ -23,6 +23,7 @@ import { ServerRowMenuView, serverMenuLabels } from "@/components/server/server-
 import { ServerHealthIndicator } from "@/components/server/server-row"
 import { type ServerHealth } from "@/utils/server-health"
 import { fileManagerApp } from "@/utils/file-manager"
+import { folderKey } from "@/utils/path-key"
 
 const HOME_PROJECT_NAV_LABEL = "min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap"
 
@@ -407,7 +408,7 @@ function HomeProjectSlot(
       serverSelected={props.selection().server === ServerConnection.key(props.server)}
       selected={
         props.selection().server === ServerConnection.key(props.server) &&
-        props.selection().directory === props.worktree
+        folderKey(props.selection().directory ?? "") === folderKey(props.worktree)
       }
       unseen={props.unseenCount(props.server, project())}
     />

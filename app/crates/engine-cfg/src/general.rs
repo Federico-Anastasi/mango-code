@@ -10,8 +10,8 @@
 //! `common/fit.cpp`): `-fit off` (by default `-fit` is on and, if the cards' memory isn't enough, moves layers or
 //! experts to RAM), `-ngl all` (every layer on the cards), `-dev none` (nothing on the cards, image encoder
 //! included), `-c`, `-ctk`/`-ctv`, `-fa`, `-t`, `-np`, `--slot-save-path`, `--mmproj`, `--chat-template-file`. With
-//! more cards llama.cpp splits the layers by itself (`-sm layer` is the default). On-disk memory and MTP belong to
-//! the profiles' engines: they aren't here.
+//! more cards llama.cpp splits the layers by itself (`-sm layer` is the default). `--cache-disk` and MTP belong to
+//! the profiles' engines; the slot files of this plan are kept by the manager (`engine::prefix`).
 //!
 //! **Which cards** depends on the model's choice (`choices.rs`), with the cards the user leaves out removed:
 //! - `auto`: the fewest cards that give `AUTO_CTX` tokens of context (65,536 in practice), the fastest first (`by_speed`); cards are
@@ -120,7 +120,7 @@ fn needs(file: &ModelsFile, cfg: &ModelCfg, chosen: Option<u32>) -> Result<Needs
         weights_mib: bytes.div_ceil(MIB),
         kv_f16_bytes_per_token: m.kv_kib_token * 1024,
         state_mib: m.state_mib,
-        target: cfg.ctx.unwrap_or(file.ctx).min(file.ctx).min(chosen.unwrap_or(u32::MAX)),
+        target: cfg.max_context(file).min(chosen.unwrap_or(u32::MAX)),
     })
 }
 

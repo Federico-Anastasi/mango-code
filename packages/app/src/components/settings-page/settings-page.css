@@ -297,6 +297,63 @@
   margin-top: 8px;
 }
 
+/* the question before moving the models and the progress of a move, inside a card of rows */
+.settings-page-ask {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 13px 16px;
+}
+
+.settings-page-model > .settings-page-ask {
+  border-top: 1px solid var(--mango-line);
+}
+
+.settings-page-ask-title {
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 18px;
+  color: var(--mango-text);
+}
+
+.settings-page-ask p {
+  margin: 0;
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--mango-text-muted);
+}
+
+.settings-page-ask-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.settings-page-ask--run {
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+}
+
+.settings-page-ask-copy {
+  display: flex;
+  flex: 1 1 200px;
+  flex-direction: column;
+  min-width: 0;
+}
+
+/* a folder in a sentence */
+.settings-page-path {
+  font-family: var(--mango-font-code);
+  font-size: 12px;
+  font-variant-ligatures: none;
+  overflow-wrap: anywhere;
+}
+
 /* what a model's row opens on: its choices, one to a row, in the same card */
 .settings-page-detail {
   display: flex;
@@ -353,6 +410,43 @@
   align-items: center;
   gap: 8px;
   font-size: 13px;
+}
+
+/* «Personale» of the context: the minus, the number, the plus, and what it can be */
+.settings-page-context-custom {
+  display: flex;
+  flex: 1 1 100%;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--mango-text-muted);
+}
+
+.settings-page-context-custom [data-component="text-input-v2"] {
+  width: 112px;
+}
+
+/* the six values of the style, written one by one */
+.settings-page-values {
+  display: grid;
+  flex: 1 1 100%;
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  gap: 10px 16px;
+}
+
+.settings-page-value {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--mango-text-muted);
+}
+
+.settings-page-value [data-component="text-input-v2"] {
+  width: 86px;
+  flex: none;
 }
 
 .settings-page-actions {

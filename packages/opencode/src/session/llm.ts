@@ -19,7 +19,6 @@ import { EventV2Bridge } from "@/event-v2-bridge"
 import { EventV2 } from "@opencode-ai/core/event"
 import { Wildcard } from "@/util/wildcard"
 import { SessionID } from "@/session/schema"
-import { Auth } from "@/auth"
 import { EffectBridge } from "@/effect/bridge"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import * as Option from "effect/Option"
@@ -40,6 +39,8 @@ export type StreamInput = {
   agent: Agent.Info
   permission?: PermissionV1.Ruleset
   system: string[]
+  /** The working folder and the date: they end the system prompt (`LLMRequestPrep.prepare`). */
+  env?: string[]
   messages: ModelMessage[]
   small?: boolean
   tools: Record<string, Tool>
@@ -62,7 +63,6 @@ export const use = serviceUse(Service)
 const live: Layer.Layer<
   Service,
   never,
-  | Auth.Service
   | Config.Service
   | Provider.Service
   | Plugin.Service
@@ -73,7 +73,6 @@ const live: Layer.Layer<
 > = Layer.effect(
   Service,
   Effect.gen(function* () {
-    const auth = yield* Auth.Service
     const config = yield* Config.Service
     const provider = yield* Provider.Service
     const plugin = yield* Plugin.Service
@@ -92,20 +91,14 @@ const live: Layer.Layer<
         mode: input.agent.mode,
       })
 
-      const [language, cfg, item, info] = yield* Effect.all(
-        [
-          provider.getLanguage(input.model),
-          config.get(),
-          provider.getProvider(input.model.providerID),
-          auth.get(input.model.providerID),
-        ],
+      const [language, cfg, item] = yield* Effect.all(
+        [provider.getLanguage(input.model), config.get(), provider.getProvider(input.model.providerID)],
         { concurrency: "unbounded" },
       )
 
       const prepared = yield* LLMRequestPrep.prepare({
         ...input,
         provider: item,
-        auth: info,
         plugin,
         flags,
       })
@@ -133,7 +126,6 @@ const live: Layer.Layer<
         const native = LLMNativeRuntime.stream({
           model: input.model,
           provider: item,
-          auth: info,
           llmClient,
           messages: prepared.messages,
           tools: prepared.tools,
@@ -197,8 +189,6 @@ const live: Layer.Layer<
               }),
             )
           },
-          // Copilot returns the authoritative billed amount only in provider-specific response fields.
-          includeRawChunks: input.model.providerID.includes("github-copilot"),
           async experimental_repairToolCall(failed) {
             const lower = failed.toolCall.toolName.toLowerCase()
             if (lower !== failed.toolCall.toolName && prepared.tools[lower]) {
@@ -304,21 +294,10 @@ const live: Layer.Layer<
   }),
 )
 
-export const hasToolCalls = LLMRequestPrep.hasToolCalls
-
 export const node = LayerNode.make({
   service: Service,
   layer: live,
-  deps: [
-    Auth.node,
-    Config.node,
-    Provider.node,
-    Plugin.node,
-    Permission.node,
-    EventV2Bridge.node,
-    llmClient,
-    RuntimeFlags.node,
-  ],
+  deps: [Config.node, Provider.node, Plugin.node, Permission.node, EventV2Bridge.node, llmClient, RuntimeFlags.node],
 })
 
 export * as LLM from "./llm"

@@ -41,6 +41,7 @@ export const SETTINGS_INDEX: IndexEntry[] = [
   },
   { section: "models", title: "settings.models.default.action" },
   { section: "models", title: "settings.models.remove.search", words: "settings.words.remove" },
+  { section: "models", title: "settings.move.model.action" },
   {
     section: "models",
     title: "settings.models.other.title",
@@ -78,6 +79,11 @@ export const SETTINGS_INDEX: IndexEntry[] = [
     title: "settings.computer.engine",
     description: "settings.computer.updateEngine",
     words: "settings.words.engine",
+  },
+  {
+    section: "computer",
+    title: "settings.computer.modelsFolder",
+    description: "settings.computer.modelsFolder.change",
   },
   { section: "computer", title: "settings.computer.tailored", description: "settings.computer.optimize" },
   {

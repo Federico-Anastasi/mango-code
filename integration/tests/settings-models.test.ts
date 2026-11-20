@@ -157,9 +157,10 @@ test("where a model runs, how much it remembers and whether it reasons are its o
   await waitUntil(() => (saved().models?.fake?.where ?? "auto") === "auto", "automatic saved");
   await settled("fake");
 
-  // the context: the last one offered is «as much as fits», saved as no number
+  // the context: the last size offered (before «Personale») is «as much as fits», saved as no number
   const context = `${row("fake")} [data-action="settings-model-context"] button`;
-  const offered = (await p.evaluate(`[...document.querySelectorAll(${JSON.stringify(context)})].map((b) => b.innerText.trim())`)) as string[];
+  const buttons = (await p.evaluate(`[...document.querySelectorAll(${JSON.stringify(context)})].map((b) => b.innerText.trim())`)) as string[];
+  const offered = buttons.filter((label) => /^\d+K$/.test(label));
   expect(offered.length).toBeGreaterThan(1);
   await mouseClick(context, offered[0]);
   await waitUntil(() => typeof saved().models?.fake?.context === "number", "a context saved");

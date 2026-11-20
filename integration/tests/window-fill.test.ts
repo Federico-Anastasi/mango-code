@@ -83,14 +83,14 @@ async function measure(env: Environment, p: Page, label: string, action = "") {
 const key = (name: string) => `$s = New-Object -ComObject WScript.Shell; [N]::SetForegroundWindow($h) | Out-Null; ${name}`;
 
 test("the app's own page, the Home and a conversation fill the window, also after zoom and maximizing", async () => {
-  // The page of the app itself (not the agent's): it stays in the window when the start fails, here on a port of the agent
-  // that another program holds.
+  // The page of the app itself (not the agent's): it stays in the window when the start fails, here on the engine's port,
+  // which another program holds.
   const busy = net.createServer();
   await new Promise<void>((ok) => busy.listen(0, "127.0.0.1", ok));
   const first = await start([{ text: "ok" }], {
     window: true,
     noModels: true,
-    env: { MANGO_AGENT_PORT: String((busy.address() as net.AddressInfo).port), MANGO_ENGINE_PORT: String(ENGINE), WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${DEBUG}` },
+    env: { MANGO_AGENT_PORT: String(AGENT), MANGO_ENGINE_PORT: String((busy.address() as net.AddressInfo).port), WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${DEBUG}` },
   });
   envs.push(first);
   let p = await page(DEBUG, (t) => t.url.includes("tauri.localhost"), 90_000);

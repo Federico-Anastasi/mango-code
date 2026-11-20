@@ -24,6 +24,13 @@ pub fn install(app: &AppHandle) {
     app.manage(Service(service));
 }
 
+/// The agent is going to listen on `port`: the phone service sends its requests there.
+pub fn agent_port_changed(app: &AppHandle, port: u16) {
+    if let Some(Service(Ok(phone))) = app.try_state::<Service>().as_deref() {
+        phone.set_agent_port(port);
+    }
+}
+
 /// In development builds `MANGO_PHONE_PC_ONLY` keeps it on 127.0.0.1: the tests drive the phone page from the PC without
 /// Windows asking to open the port.
 fn only_here() -> bool {
@@ -66,6 +73,14 @@ impl Computer for PhoneComputer {
                 .map_err(|()| (400, tr!("{} non è un percorso valido", "{} is not a valid path", path.display())))?,
         };
         crate::preview::open_for_phone(&self.0, url).map_err(|e| (503, e.message))
+    }
+
+    fn owned_ports(&self) -> Vec<u16> {
+        let state = self.0.state::<crate::AppState>();
+        let engines = state.engine.get().map(|m| m.ports()).unwrap_or_default();
+        let images = state.images.get().map(|i| i.manager().ports()).unwrap_or_default();
+        let shown = crate::preview::shown(&self.0).map(|(url, _)| url);
+        crate::ports::owned(state.ports.all(), engines, images, state.sites.ports(), shown.as_deref())
     }
 
     fn project_folders(&self) -> Result<Vec<std::path::PathBuf>, String> {

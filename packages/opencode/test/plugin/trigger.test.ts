@@ -24,7 +24,7 @@ const it = testEffect(
     [Auth.node, AuthTest.empty],
     [Account.node, AccountTest.empty],
     [Npm.node, NpmTest.noop],
-    [RuntimeFlags.node, RuntimeFlags.layer({ disableDefaultPlugins: true })],
+    [RuntimeFlags.node, RuntimeFlags.layer()],
   ]),
 )
 const systemHook = "experimental.chat.system.transform"

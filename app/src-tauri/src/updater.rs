@@ -250,11 +250,20 @@ pub async fn update_install(app: AppHandle) -> Result<(), BridgeError> {
         .and_then(|_| std::fs::write(&installer, &bytes))
         .map_err(|e| fail(&app, format!("{}: {e}", installer.display())))?;
     set(&app, State::Installing { version });
-    // First agent and engine, as with "Quit": the engine saves the conversation before the installer can close the app.
+    // A move of the models stops, the interface writes what it holds, then agent and engine, as with "Quit": the engine
+    // saves the conversation before the installer can close the app. The waits are not for a thread of the runtime.
+    let waiting = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        waiting.state::<crate::AppState>().models_move.quit();
+        crate::ui_state::flush_page(&waiting);
+    })
+    .await
+    .map_err(|e| err("io", e.to_string()))?;
     crate::stop_children(&app);
     let started = std::process::Command::new(&installer).args(["/P", "/UPDATE", "/R"]).creation_flags(CREATE_BREAKAWAY_FROM_JOB).spawn();
     if let Err(e) = started {
         // an antivirus or a locked file: the app goes on as it was
+        app.state::<crate::AppState>().models_move.resume();
         crate::restart(&app);
         return Err(fail(&app, format!("{}: {e}", installer.display())));
     }

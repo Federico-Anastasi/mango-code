@@ -12,19 +12,25 @@ mod other_models;
 mod bridge;
 mod close_notice;
 mod folder;
+pub mod helper;
 mod chrome;
 mod control;
 mod downloads;
 mod dictation;
 mod model_choices;
+mod models_move;
 mod models_watch;
 mod preview;
 mod supervisor;
 mod team;
 mod phone;
+mod ports;
 mod engine_share;
 mod engine_remote;
 mod tray;
+mod old_origin;
+mod seed;
+mod ui_state;
 mod report;
 mod sites;
 mod updater;
@@ -34,12 +40,14 @@ use anyhow::{Context, Result};
 use mango_common::{port_busy, free_port, tr, Paths};
 use engine::EngineManager;
 use serde::Serialize;
+use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 use supervisor::Supervisor;
 use tauri::{AppHandle, Emitter, Manager, RunEvent, WebviewUrl, WebviewWindowBuilder};
 
-/// Port of the agent server. Fixed on purpose: the web UI saves projects and preferences
-/// per origin (http://127.0.0.1:<port>), a different port at every start would lose them.
+/// The agent server's preferred port. What the web UI remembers lives on disk (`ui_state.rs`), not in the origin it is
+/// served from, so another program holding this port does not keep the app from starting: a free one is used.
 const AGENT_PORT: u16 = 4096;
 const VOICE_PORT: u16 = 4097;
 /// Port of the phone service (off by default, see `phone.rs`). Fixed: it is in the link and the QR.
@@ -51,10 +59,79 @@ const PHONE_PREVIEW_PORT: u16 = 47097;
 fn port_from_env(var: &str, default: u16) -> u16 {
     std::env::var(var).ok().and_then(|v| v.parse().ok()).unwrap_or(default)
 }
-pub(crate) fn agent_port() -> u16 {
+pub(crate) fn preferred_agent_port() -> u16 {
     port_from_env("MANGO_AGENT_PORT", AGENT_PORT)
 }
-fn engine_port() -> u16 {
+static AGENT_PORT_NOW: AtomicU16 = AtomicU16::new(0);
+/// The port the agent listens on, or will try first: chosen when first asked and again at every start of the agent
+/// (`use_agent_port`), so what depends on it follows the port the agent really bound.
+pub(crate) fn agent_port() -> u16 {
+    match AGENT_PORT_NOW.load(Ordering::SeqCst) {
+        0 => {
+            let port = choose_port(preferred_agent_port(), None);
+            AGENT_PORT_NOW.store(port, Ordering::SeqCst);
+            port
+        }
+        port => port,
+    }
+}
+/// The agent is going to start on `port`: the window and the phone service follow it.
+fn use_agent_port(app: &AppHandle, port: u16) {
+    AGENT_PORT_NOW.store(port, Ordering::SeqCst);
+    phone::agent_port_changed(app, port);
+}
+/// The first of `preferred` and `previous` (the port of the agent that just ran, so that a restart keeps its address
+/// while it can) that nothing listens on, otherwise a free port. When no port can be bound `preferred` stays, and the
+/// start fails on it.
+fn choose_port(preferred: u16, previous: Option<u16>) -> u16 {
+    [Some(preferred), previous]
+        .into_iter()
+        .flatten()
+        .find(|port| !port_busy(*port))
+        .or_else(|| mango_common::random_port().ok())
+        .unwrap_or(preferred)
+}
+/// How long the first start after an update waits for the preferred port to be released by the agent of the old version.
+const PREFERRED_PORT_WAIT: Duration = Duration::from_secs(6);
+/// How many ports are tried for the agent when another program takes each one before the agent binds it.
+const PORT_ATTEMPTS: usize = 3;
+
+/// Waits until nothing listens on `port` or `limit` passes; whether it is free.
+fn wait_until_free(port: u16, limit: Duration) -> bool {
+    let start = Instant::now();
+    while port_busy(port) {
+        if start.elapsed() >= limit {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    true
+}
+
+/// Starts the agent with `start` on the port `choose` gives. When it fails and another program holds that port the agent
+/// is stopped (`stop`) and another port is chosen: a port taken between the choice and the bind is not an error of the app.
+fn start_on_a_free_port<T>(
+    mut choose: impl FnMut() -> u16,
+    mut start: impl FnMut(u16) -> Result<T>,
+    mut stop: impl FnMut(),
+    mut taken: impl FnMut(u16, usize),
+) -> Result<T> {
+    for attempt in 1..=PORT_ATTEMPTS {
+        let port = choose();
+        match start(port) {
+            Ok(started) => return Ok(started),
+            Err(e) => {
+                stop();
+                if attempt == PORT_ATTEMPTS || !port_busy(port) {
+                    return Err(e);
+                }
+                taken(port, attempt);
+            }
+        }
+    }
+    unreachable!("the last attempt returns")
+}
+pub(crate) fn engine_port() -> u16 {
     port_from_env("MANGO_ENGINE_PORT", mango_common::ENGINE_PORT)
 }
 pub(crate) fn phone_port() -> u16 {
@@ -135,10 +212,14 @@ struct AppState {
     control: control::Shared,
     /// The folders served to the browser panel as sites (`sites.rs`).
     sites: sites::Sites,
+    /// The ports of the app's own listeners, which no page of the phone reaches (`ports.rs`).
+    ports: ports::Ports,
     /// The models being downloaded (`downloads.rs`), born at the first startup.
     downloads: OnceLock<downloads::Downloads>,
     /// The models folder is watched from the first startup on (`models_watch.rs`).
-    models_watched: OnceLock<()>,
+    models_watch: Mutex<models_watch::Slot>,
+    /// Choosing where the models are kept, and moving them (`models_move.rs`).
+    models_move: models_move::Mover,
     /// The default model whose engine the app is waiting for (`load_default`): a start of it that fails meanwhile, for the
     /// missing engine, does not stop it from loading when the engine arrives.
     awaited: Mutex<Option<String>>,
@@ -245,6 +326,8 @@ pub(crate) fn restart(app: &AppHandle) {
     let st = app.state::<AppState>();
     // From the web UI of the agent about to stop, back to the loading page: it says what is happening.
     if st.status.lock().unwrap().stage == "ready" {
+        // The interface writes what it holds before the window leaves it.
+        ui_state::flush_page(app);
         if let (Some(window), Some(page)) = (st.main.get(), st.app_page.get()) {
             set_status(app, "startup", tr!("Preparazione", "Preparing"));
             let _ = window.navigate(page.clone());
@@ -267,31 +350,53 @@ fn open_logs(app: AppHandle, state: tauri::State<'_, AppState>) -> Result<(), St
     app.opener().open_path(p.display().to_string(), None::<&str>).map_err(|e| e.to_string())
 }
 
+/// Watches the models folder, if it is not watched already and no move of it has the watch (`models_watch.rs`).
+pub(crate) fn watch_models(app: &AppHandle, paths: &Paths) {
+    let st = app.state::<AppState>();
+    let (changed, logs) = (app.clone(), paths.clone());
+    let trouble = move |why: String| startup_log(&logs, &format!("models folder watch: {why}"));
+    let started = st.models_watch.lock().unwrap().fill(|| models_watch::watch(&paths.models, models_watch::QUIET, move || changed.state::<AppState>().control.catalog_changed(), trouble));
+    if let Err(e) = started {
+        startup_log(paths, &format!("the models folder is not watched: {e:#}"));
+    }
+}
+
 fn startup(app: &AppHandle) -> Result<()> {
     let st = app.state::<AppState>();
     let t0 = std::time::Instant::now();
     set_status(app, "startup", tr!("Preparazione", "Preparing"));
     let paths = Paths::discover().with_context(|| tr!("Impossibile trovare i file di Mango Code", "Cannot find the Mango Code files"))?;
     let paths = st.paths.get_or_init(|| paths).clone();
+    let ui = app.state::<ui_state::UiState>();
     // One line per phase, with the time since the start: where a slow startup spends its time.
     let phase = |name: &str| startup_log(&paths, &format!("startup: {name} (+{} ms)", t0.elapsed().as_millis()));
     phase("begins");
-    st.models_watched.get_or_init(|| {
-        let (app, logs) = (app.clone(), paths.clone());
-        let lost = move |why: String| startup_log(&logs, &format!("the models folder is no longer watched: {why}"));
-        if let Err(e) = models_watch::watch(&paths.models, models_watch::QUIET, move || app.state::<AppState>().control.catalog_changed(), lost) {
-            startup_log(&paths, &format!("the models folder is not watched: {e:#}"));
-        }
-    });
+    if agent_port() != preferred_agent_port() {
+        phase(&format!("port {} is busy, the agent uses {}", preferred_agent_port(), agent_port()));
+    }
+    if let Some(done) = models_move::recover_interrupted(app, &paths).with_context(|| tr!("Uno spostamento della cartella dei modelli rimasto a metà non si è concluso. Chiudi i programmi che usano i modelli e riprova.", "A move of the models folder that stopped half way could not be finished. Close the programs that use the models and try again."))? {
+        startup_log(&paths, &format!("models folder: {done}"));
+    }
+    if let Err(e) = std::fs::create_dir_all(&paths.models) {
+        startup_log(&paths, &format!("the models folder cannot be made: {}: {e}", paths.models.display()));
+    }
+    watch_models(app, &paths);
     // Dictation, the microphone in the chat: off until the user turns it on, then it downloads and starts by itself once the
     // app is ready (`dictation.rs`). The agent only needs to know where the service will be.
     if st.dictation.get().is_none() {
-        dictation::install(app, &paths, free_port(VOICE_PORT).unwrap_or(VOICE_PORT));
+        let voice_port = free_port(VOICE_PORT).unwrap_or(VOICE_PORT);
+        st.ports.add(voice_port);
+        dictation::install(app, &paths, voice_port);
     }
     let sup = match st.sup.get() {
         Some(s) => s,
         None => {
             let s = Supervisor::new(&paths.logs())?;
+            match s.start_guardian() {
+                Ok(helper::Placement::Outside) => {}
+                Ok(helper::Placement::InTheJob) => startup_log(&paths, "the guardian of the programs the agent starts is in the app's job (an outer job does not let it leave): it ends with the app, and what the agent left running is stopped at the next start"),
+                Err(e) => startup_log(&paths, &format!("the guardian of the programs the agent starts did not start: {e}")),
+            }
             let _ = st.sup.set(s);
             let logs = paths.clone();
             std::thread::spawn(move || {
@@ -347,44 +452,54 @@ fn startup(app: &AppHandle) -> Result<()> {
         preview_port: app.try_state::<preview::Panel>().map(|p| p.cdp_port).unwrap_or(0),
         choice: chrome::choice_file().with_context(|| tr!("Percorso della scelta del browser", "Browser choice path"))?,
     };
-    let port = agent_port();
-    if port_busy(port) {
-        anyhow::bail!(
-            "{}",
-            tr!(
-                "La porta {port} è occupata: probabilmente un altro programma la sta usando. \
-                 Chiudilo e riapri l'app.",
-                "Port {port} is busy: another program is probably using it. \
-                 Close it and reopen the app."
-            )
-        );
+    let inputs = agent_cfg::AgentInputs {
+        engine_url: used.url.clone(),
+        control_url: format!("http://127.0.0.1:{}", engine_port()),
+        engine_key: used.key.clone(),
+        models: used.models.clone(),
+        default_model: used.default_model.clone(),
+        port: 0,
+        voice_url: st.dictation.get().map(|d| d.url.clone()),
+        tools: tools.join().unwrap_or_else(|_| {
+            // It should not happen (every check has its own time limit): the agent starts
+            // with an empty list, which is better than not starting.
+            eprintln!("PC tools: detection failed");
+            Default::default()
+        }),
+        browser,
+        team: agent_cfg::team::team_inputs(&paths, team_key())
+            .with_context(|| tr!("Configurazione del Team", "Team configuration"))?,
+    };
+    // The agent's address is the preferred port while it is free; the interface keeps its state in the app, not in the
+    // origin of that address, so another port is no loss. While the state of that origin is not copied yet the start waits
+    // a moment for the port (an agent that is closing may still hold it); the copy is read (below) whichever port is taken.
+    let preferred = preferred_agent_port();
+    if ui.needs_import().unwrap_or(false) && port_busy(preferred) && !wait_until_free(preferred, PREFERRED_PORT_WAIT) {
+        startup_log(&paths, &format!("port {preferred} is still busy after {} s", PREFERRED_PORT_WAIT.as_secs()));
     }
-    let mut agent_plan = agent_cfg::plan(
-        &paths,
-        &agent_cfg::AgentInputs {
-            engine_url: used.url.clone(),
-            control_url: format!("http://127.0.0.1:{}", engine_port()),
-            engine_key: used.key.clone(),
-            models: used.models.clone(),
-            default_model: used.default_model.clone(),
-            port,
-            voice_url: st.dictation.get().map(|d| d.url.clone()),
-            tools: tools.join().unwrap_or_else(|_| {
-                // It should not happen (every check has its own time limit): the agent starts
-                // with an empty list, which is better than not starting.
-                eprintln!("PC tools: detection failed");
-                Default::default()
-            }),
-            browser,
-            team: agent_cfg::team::team_inputs(&paths, team_key())
-                .with_context(|| tr!("Configurazione del Team", "Team configuration"))?,
+    let previous = Some(AGENT_PORT_NOW.load(Ordering::SeqCst)).filter(|port| *port != 0);
+    let agent_plan = start_on_a_free_port(
+        || {
+            let port = choose_port(preferred, previous);
+            use_agent_port(app, port);
+            port
         },
-    )
-    .with_context(|| tr!("Configurazione dell'agente", "Agent configuration"))?;
-    // Bun and the servers the agent starts do not read Windows' proxy: they get it as variables, with the engine left out of it.
-    agent_plan.spec.env.extend(mango_common::internet::child_proxy_env(&used.url));
-    sup.spawn(&agent_plan.spec)?;
-    sup.wait_ready(&agent_plan.spec, |_| {}).with_context(|| tr!("L'agente non è partito", "The agent did not start"))?;
+        |port| {
+            let mut plan = agent_cfg::plan(&paths, &agent_cfg::AgentInputs { port, ..inputs.clone() })
+                .with_context(|| tr!("Configurazione dell'agente", "Agent configuration"))?;
+            // Bun and the servers the agent starts do not read Windows' proxy: they get it as variables, with the engine left out of it.
+            plan.spec.env.extend(mango_common::internet::child_proxy_env(&used.url));
+            sup.spawn(&plan.spec)?;
+            sup.wait_ready(&plan.spec, |_| {}).with_context(|| tr!("L'agente non è partito", "The agent did not start"))?;
+            Ok(plan)
+        },
+        || sup.shutdown(),
+        |port, attempt| startup_log(&paths, &format!("port {port} was taken before the agent could use it (attempt {attempt}); trying another")),
+    )?;
+    if agent_port() != preferred {
+        startup_log(&paths, &format!("port {preferred} is busy, the agent uses {}", agent_port()));
+    }
+    bridge::allow_agent_page(app, agent_port())?;
     phase("agent");
     // From now on a change of this computer's models is told to the agent; another PC's are read at the start.
     match remote {
@@ -428,6 +543,18 @@ fn startup(app: &AppHandle) -> Result<()> {
     if let Err(e) = downloads.restore() {
         startup_log(&paths, &format!("downloads not resumed: {e:#}"));
     }
+    // What the window's browser kept for the preferred port's origin (where older releases kept the interface's state) is read
+    // now, while the window still shows the app's own page, and handed to the interface when it opens.
+    if ui.needs_import().unwrap_or(false) {
+        match old_origin::read(app, preferred) {
+            Ok(old) => ui.keep_old(old),
+            Err(e) => startup_log(&paths, &format!("the old storage of the interface was not read: {e:#}")),
+        }
+        phase("old storage");
+    }
+    // The color scheme the page last saved, for the page's own script to find before anything else runs. Here and not when the
+    // window is built: reading the state is a read of the disk, and the thread that builds the window is the window's.
+    seed::refresh_before_load(app);
     win.navigate(page)?;
     phase("window on the home");
     // Then the engine the app came with, if models on the disk wait for it: it reads the hardware and the models (about
@@ -451,6 +578,7 @@ fn control_server(app: &AppHandle, paths: &Paths) -> Result<EngineManager> {
         return Ok(m.clone());
     }
     let manager_port = engine_port();
+    st.ports.add(manager_port);
     if port_busy(manager_port) {
         anyhow::bail!(
             "{}",
@@ -767,6 +895,9 @@ pub fn run() {
             if cfg!(debug_assertions) && argv.iter().any(|a| a == "--test-tray-settings") {
                 return tray::open_settings(app, "models");
             }
+            if cfg!(debug_assertions) && argv.iter().any(|a| a == "--test-tray-quit") {
+                return tray::quit(app);
+            }
             match folder::requested_folder(&argv) {
                 Some(path) => folder::open(app, path),
                 None => tray::show(app),
@@ -775,6 +906,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .manage(AppState::default())
+        .manage(ui_state::UiState::new())
         .invoke_handler(bridge::handlers!(
             startup_status,
             language,
@@ -784,7 +916,7 @@ pub fn run() {
         .setup(|app| {
             bridge::install(app)?;
             updater::install(app)?;
-            let mut window = WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
+            let window = WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
                 .title("Mango Code")
                 .inner_size(1360.0, 880.0)
                 .min_inner_size(900.0, 600.0)
@@ -793,20 +925,10 @@ pub fn run() {
                 // Shown after `paint_ground` below: the system's theme is known only once the window exists, and
                 // the window must not appear in the wrong ground first.
                 .visible(false);
-            // An instance with its own data (MANGO_DATA) keeps its own WebView2 data too: two WebView2 with
-            // different options (the remote debugging of the tests) on the same folder do not start.
-            if let Some(d) = std::env::var_os("MANGO_DATA") {
-                window = window.data_directory(std::path::PathBuf::from(d).join("finestra"));
+            if let Some(port) = window_cdp_port() {
+                app.state::<AppState>().ports.add(port);
             }
-            // For tests that click in the window: remote debugging on the main window only. Through
-            // WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS it would apply to the Preview panel too and replace its port, and
-            // the agent would have no panel.
-            if let Some(port) = std::env::var("MANGO_WINDOW_CDP").ok().and_then(|p| p.parse::<u16>().ok()) {
-                window = window.additional_browser_args(&format!(
-                    "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --remote-debugging-port={port} --remote-debugging-address=127.0.0.1"
-                ));
-            }
-            let main = bridge::window(window, app.handle()).build()?;
+            let main = bridge::window(window_profile(window), app.handle()).build()?;
             // No theme is forced on the window: the title bar and the ground follow the system's.
             paint_ground(&main, main.theme().unwrap_or(tauri::Theme::Dark));
             if !service_mode() {
@@ -852,7 +974,19 @@ pub fn run() {
                     paint_ground(&w, theme);
                 }
             }
+            // The end of the app waits for a move under way to stop, in a thread: the window goes on answering meanwhile.
+            RunEvent::ExitRequested { api, code, .. } => {
+                if app.state::<AppState>().models_move.ask_to_quit() {
+                    api.prevent_exit();
+                    let app = app.clone();
+                    std::thread::spawn(move || {
+                        app.state::<AppState>().models_move.wait_stopped();
+                        app.exit(code.unwrap_or(0));
+                    });
+                }
+            }
             RunEvent::Exit => {
+                ui_state::settle(app);
                 if let Ok(f) = mango_common::service_file() {
                     let _ = std::fs::remove_file(f);
                 }
@@ -860,6 +994,34 @@ pub fn run() {
             }
             _ => {}
         });
+}
+
+/// The WebView2 profile every window of the app opens: two windows on the same folder with different options do not start,
+/// so the one that reads the old storage (`old_origin.rs`) is built with the same.
+pub(crate) fn window_profile<'a, M: Manager<tauri::Wry>>(mut window: WebviewWindowBuilder<'a, tauri::Wry, M>) -> WebviewWindowBuilder<'a, tauri::Wry, M> {
+    // An instance with its own data (MANGO_DATA) keeps its own WebView2 data too, next to the real app's.
+    if let Some(d) = std::env::var_os("MANGO_DATA") {
+        window = window.data_directory(std::path::PathBuf::from(d).join("finestra"));
+    }
+    // For tests that click in the window: remote debugging on the main window only. Through
+    // WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS it would apply to the Preview panel too and replace its port, and
+    // the agent would have no panel.
+    if let Some(port) = window_cdp_port() {
+        window = window.additional_browser_args(&format!(
+            "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --remote-debugging-port={port} --remote-debugging-address=127.0.0.1"
+        ));
+    }
+    window
+}
+
+/// The remote debugging port of the window, for the tests that drive it (`MANGO_WINDOW_CDP`).
+fn window_cdp_port() -> Option<u16> {
+    std::env::var("MANGO_WINDOW_CDP").ok().and_then(|p| p.parse().ok())
+}
+
+/// The page of the window is the agent's web interface (not the app's own loading or error page).
+pub(crate) fn on_agent_page(window: &tauri::WebviewWindow) -> bool {
+    window.url().is_ok_and(|url| url.host_str() == Some("127.0.0.1") && url.port() == Some(agent_port()))
 }
 
 /// What shows where the page does not reach (a window being resized, a page changing): the ground of the page for the
@@ -905,7 +1067,8 @@ fn allow_microphone(window: &tauri::WebviewWindow) {
 
 #[cfg(test)]
 mod tests {
-    use super::progress;
+    use super::{choose_port, progress, start_on_a_free_port, wait_until_free, PORT_ATTEMPTS};
+    use std::time::{Duration, Instant};
 
     /// The bar of each stage of a start, in order: every stage is told how many stages the one before had.
     fn bar(stages: &[&str]) -> Vec<(u8, u8)> {
@@ -936,5 +1099,106 @@ mod tests {
     #[test]
     fn the_next_start_begins_again_from_the_stages_of_this_pc() {
         assert_eq!(bar(&["startup", "engine", "agent", "ready", "startup", "agent"])[4..], [(1, 3), (2, 3)]);
+    }
+
+    fn free() -> u16 {
+        std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap().local_addr().unwrap().port()
+    }
+
+    #[test]
+    fn a_free_preferred_port_is_kept() {
+        let preferred = free();
+        assert_eq!(choose_port(preferred, None), preferred);
+        assert_eq!(choose_port(preferred, Some(free())), preferred);
+    }
+
+    #[test]
+    fn a_busy_preferred_port_gives_the_last_one_while_it_is_free_and_otherwise_another_that_is_free() {
+        let held = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let busy = held.local_addr().unwrap().port();
+        let previous = free();
+        assert_eq!(choose_port(busy, Some(previous)), previous);
+        let chosen = choose_port(busy, None);
+        assert_ne!(chosen, busy);
+        assert!(std::net::TcpListener::bind(("127.0.0.1", chosen)).is_ok());
+        let also_busy = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let other = choose_port(busy, Some(also_busy.local_addr().unwrap().port()));
+        assert!(other != busy && other != also_busy.local_addr().unwrap().port());
+    }
+
+    #[test]
+    fn a_port_taken_between_the_choice_and_the_bind_gives_another_start() {
+        let preferred = free();
+        let thief = std::cell::RefCell::new(None);
+        let (mut stops, mut told) = (0, Vec::new());
+        let port = start_on_a_free_port(
+            || choose_port(preferred, None),
+            |port| {
+                // another program binds the port the app has just chosen, before the agent does
+                if thief.borrow().is_none() {
+                    *thief.borrow_mut() = Some(std::net::TcpListener::bind(("127.0.0.1", port)).unwrap());
+                    anyhow::bail!("address in use");
+                }
+                Ok(port)
+            },
+            || stops += 1,
+            |port, attempt| told.push((port, attempt)),
+        )
+        .unwrap();
+        assert_ne!(port, preferred);
+        assert!(std::net::TcpListener::bind(("127.0.0.1", port)).is_ok(), "the port of the second start is free");
+        assert_eq!((stops, told), (1, vec![(preferred, 1)]));
+    }
+
+    #[test]
+    fn a_start_that_fails_for_another_reason_is_not_tried_again() {
+        let (mut starts, mut stops) = (0, 0);
+        let error = start_on_a_free_port(
+            || free(),
+            |_| -> anyhow::Result<()> {
+                starts += 1;
+                anyhow::bail!("the agent crashed")
+            },
+            || stops += 1,
+            |_, _| panic!("the port was not taken"),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("crashed"));
+        assert_eq!((starts, stops), (1, 1));
+    }
+
+    #[test]
+    fn a_port_taken_every_time_ends_in_the_error_after_a_few_attempts() {
+        let mut thieves = Vec::new();
+        let mut starts = 0;
+        let error = start_on_a_free_port(
+            || free(),
+            |port| -> anyhow::Result<()> {
+                starts += 1;
+                thieves.push(std::net::TcpListener::bind(("127.0.0.1", port)).unwrap());
+                anyhow::bail!("address in use")
+            },
+            || {},
+            |_, _| {},
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("address in use"));
+        assert_eq!(starts, PORT_ATTEMPTS);
+    }
+
+    #[test]
+    fn the_wait_for_the_preferred_port_ends_when_it_is_released_or_when_the_time_is_up() {
+        let held = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = held.local_addr().unwrap().port();
+        assert!(!wait_until_free(port, Duration::from_millis(250)));
+        let releaser = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(300));
+            drop(held);
+        });
+        let start = Instant::now();
+        assert!(wait_until_free(port, Duration::from_secs(10)));
+        assert!(start.elapsed() < Duration::from_secs(5));
+        releaser.join().unwrap();
+        assert!(wait_until_free(free(), Duration::ZERO), "a free port does not wait");
     }
 }

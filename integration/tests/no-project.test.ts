@@ -126,7 +126,8 @@ test("one click from the home to the first question, in a Conversazioni folder t
   await Bun.sleep(300);
   await p.send("Input.dispatchKeyEvent", { type: "keyDown", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, text: "\r" });
   await p.send("Input.dispatchKeyEvent", { type: "keyUp", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 });
-  expect(await waitUntil(async () => (await text()).includes("ok"), 60_000)).toBe(true);
+  // the answer is a line of its own: «ok» is also inside words of the page, such as «token»
+  expect(await waitUntil(async () => (await p.evaluate("location.pathname")).includes("/session/") && (await text()).split("\n").includes("ok"), 60_000)).toBe(true);
 }, 180_000);
 
 test("the conversations with no project are found in the home under one name", async () => {

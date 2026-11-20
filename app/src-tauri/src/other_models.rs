@@ -86,16 +86,20 @@ pub mod bridge {
     }
 
     /// Puts a quantization of the analysis (`key`, its `entry`) in the user's list. A file on the computer is there at
-    /// once: it arrived, and without a default saved it can become it (`keep_default`).
+    /// once: it arrived, and without a default saved it can become it (`keep_default`). Files that are those of a model of
+    /// Mango Code's are not added: that model runs from them, and the answer is its key (otherwise `null`).
     #[tauri::command]
-    pub async fn user_models_add(app: AppHandle, key: String, entry: Value) -> Result<(), BridgeError> {
+    pub async fn user_models_add(app: AppHandle, key: String, entry: Value) -> Result<Option<String>, BridgeError> {
         blocking(app, move |app| {
             let paths = paths(app)?;
-            other_models::add(&paths, &key, entry)?;
+            let (model, recognized) = match other_models::add(&paths, &key, entry)? {
+                other_models::Added::User => (key, None),
+                other_models::Added::Catalog { model } => (model.clone(), Some(model)),
+            };
             if let Some(catalog) = crate::choices_changed(app) {
-                crate::keep_default(app, &paths, &catalog, crate::Keep::Arrived(&key));
+                crate::keep_default(app, &paths, &catalog, crate::Keep::Arrived(&model));
             }
-            Ok(())
+            Ok(recognized)
         })
         .await
     }

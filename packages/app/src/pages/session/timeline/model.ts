@@ -1,8 +1,9 @@
-import type { Message, UserMessage } from "@opencode-ai/sdk/v2"
+import type { Message, Part, UserMessage } from "@opencode-ai/sdk/v2"
 import { createMemo, createResource, onCleanup, untrack, type Accessor } from "solid-js"
 import { useServerSync } from "@/context/server-sync"
 import { useSync } from "@/context/sync"
 import { same } from "@/utils/same"
+import { foldResumes } from "./resumes"
 
 const emptyUserMessages: UserMessage[] = []
 const sessionFreshness = 15_000
@@ -47,10 +48,14 @@ export function createTimelineModel(input: {
     const id = input.sessionID()
     return !id || isTimelineReady(sync().data.message[id], serverSync().session.history.loading(id))
   })
-  const userMessages = createMemo(() => selectUserMessages(messages()), emptyUserMessages, { equals: same })
+  const userMessages = createMemo(
+    () => selectUserMessages(messages(), (id) => sync().data.part[id] ?? []),
+    emptyUserMessages,
+    { equals: same },
+  )
   const visibleUserMessages = createMemo(
     () => {
-      return selectVisibleUserMessages(userMessages(), input.revertMessageID())
+      return beforeRevert(userMessages(), input.revertMessageID())
     },
     emptyUserMessages,
     { equals: same },
@@ -94,15 +99,18 @@ export function createTimelineModel(input: {
   }
 }
 
-export function selectUserMessages(messages: Message[]) {
-  return messages.filter((message): message is UserMessage => message.role === "user")
+/** The user's messages: not the ones the agent wrote itself to take up a cut answer, which belong to the turn before. */
+export function selectUserMessages(messages: Message[], parts: (messageID: string) => Part[]) {
+  const { resumes } = foldResumes(messages, parts)
+  return messages.filter((message): message is UserMessage => message.role === "user" && !resumes.has(message.id))
 }
 
 export function isTimelineReady(messages: Message[] | undefined, loading: boolean) {
   return messages !== undefined && (messages.some((message) => message.role === "user") || !loading)
 }
 
-export function selectVisibleUserMessages(messages: UserMessage[], revertMessageID?: string) {
+/** What comes before the message the conversation was taken back to: a revert point is a message of the user's, never a resume. */
+export function beforeRevert<T extends { id: string }>(messages: T[], revertMessageID?: string) {
   if (!revertMessageID) return messages
   const boundary = messages.findIndex((message) => message.id === revertMessageID)
   return boundary < 0 ? messages : messages.slice(0, boundary)

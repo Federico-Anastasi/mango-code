@@ -329,8 +329,6 @@ describe("HttpApi Server.listen", () => {
         return { initialized, completed }
       },
     })
-    const previous = process.env.OPENCODE_DISABLE_DEFAULT_PLUGINS
-    process.env.OPENCODE_DISABLE_DEFAULT_PLUGINS = "1"
     let listener: Awaited<ReturnType<typeof startListener>> | undefined
     try {
       listener = await startListener()
@@ -348,8 +346,6 @@ describe("HttpApi Server.listen", () => {
       expect(await Bun.file(tmp.extra.initialized).text()).toBe("initialized\n")
     } finally {
       if (listener) await stop(listener, "timed out cleaning up plugin client listener").catch(() => undefined)
-      if (previous === undefined) delete process.env.OPENCODE_DISABLE_DEFAULT_PLUGINS
-      else process.env.OPENCODE_DISABLE_DEFAULT_PLUGINS = previous
     }
   })
 

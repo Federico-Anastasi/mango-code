@@ -369,13 +369,8 @@ export const ProvidersLoginCommand = effectCmd({
     const hooks = yield* pluginSvc.list()
 
     const priority: Record<string, number> = {
-      opencode: 0,
-      openai: 1,
-      "github-copilot": 2,
-      google: 3,
-      anthropic: 4,
-      openrouter: 5,
-      vercel: 6,
+      anthropic: 0,
+      openrouter: 1,
     }
     const pluginProviders = resolvePluginProviders({
       hooks,
@@ -395,10 +390,6 @@ export const ProvidersLoginCommand = effectCmd({
         map((x) => ({
           label: x.name,
           value: x.id,
-          hint: {
-            opencode: "recommended",
-            openai: "ChatGPT Plus/Pro or API key",
-          }[x.id],
         })),
       ),
       ...pluginProviders.map((x) => ({
@@ -450,30 +441,6 @@ export const ProvidersLoginCommand = effectCmd({
 
       yield* Prompt.log.warn(
         `This only stores a credential for ${provider} - you will need configure it in opencode.json, check the docs for examples.`,
-      )
-    }
-
-    if (provider === "amazon-bedrock") {
-      yield* Prompt.log.info(
-        "Amazon Bedrock authentication priority:\n" +
-          "  1. Bearer token (AWS_BEARER_TOKEN_BEDROCK or /connect)\n" +
-          "  2. AWS credential chain (profile, access keys, IAM roles, EKS IRSA)\n\n" +
-          "Configure via opencode.json options (profile, region, endpoint) or\n" +
-          "AWS environment variables (AWS_PROFILE, AWS_REGION, AWS_ACCESS_KEY_ID, AWS_WEB_IDENTITY_TOKEN_FILE).",
-      )
-    }
-
-    if (provider === "opencode") {
-      yield* Prompt.log.info("Create an api key at https://opencode.ai/auth")
-    }
-
-    if (provider === "vercel") {
-      yield* Prompt.log.info("You can create an api key at https://vercel.link/ai-gateway-token")
-    }
-
-    if (["cloudflare", "cloudflare-ai-gateway"].includes(provider)) {
-      yield* Prompt.log.info(
-        "Cloudflare AI Gateway can be configured with CLOUDFLARE_GATEWAY_ID, CLOUDFLARE_ACCOUNT_ID, and CLOUDFLARE_API_TOKEN environment variables. Read more: https://opencode.ai/docs/providers/#cloudflare-ai-gateway",
       )
     }
 

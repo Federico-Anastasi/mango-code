@@ -2,7 +2,7 @@ import type { AsyncStorage } from "@solid-primitives/storage"
 
 export type BlobReference = { id: string; url: string }
 
-type Driver = {
+export type DraftDriver = {
   get(key: string): Promise<string | null>
   set(key: string, value: string): Promise<void>
   remove(key: string): Promise<void>
@@ -21,7 +21,7 @@ function blobUrl(id: string, blob: Blob) {
   return url
 }
 
-async function blobID(blob: Blob) {
+export async function blobID(blob: Blob) {
   const id = Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", await blob.arrayBuffer())))
     .map((byte) => byte.toString(16).padStart(2, "0"))
     .join("")
@@ -33,7 +33,7 @@ export async function createBlobReference(blob: Blob): Promise<BlobReference> {
   return { id, url: blobUrl(id, blob) }
 }
 
-export function createDraftStore(driver: Driver): DraftStore {
+export function createDraftStore(driver: DraftDriver): DraftStore {
   const versions = new Map<string, number>()
   const putBlob = async (blob: Blob) => {
     const id = await driver.putBlob(blob)
@@ -151,6 +151,36 @@ export function createBrowserDraftStore(): DraftStore {
     },
     getBlob: async (id) => ((await get("blobs", id)) as Blob | undefined) ?? null,
   })
+}
+
+/**
+ * The drafts this origin's IndexedDB holds, for the copy to the app's own store: the documents and a way to read their
+ * attachments. It only reads: the database stays as it is, for a return to an older version.
+ */
+export async function readBrowserDrafts() {
+  const request = indexedDB.open("opencode-drafts", 1)
+  request.addEventListener("upgradeneeded", () => {
+    request.result.createObjectStore("documents")
+    request.result.createObjectStore("blobs")
+  })
+  const db = await new Promise<IDBDatabase>((resolve, reject) => {
+    request.addEventListener("success", () => resolve(request.result))
+    request.addEventListener("error", () => reject(request.error))
+  })
+  const ask = <T>(make: (stores: { documents: IDBObjectStore; blobs: IDBObjectStore }) => IDBRequest<T>) =>
+    new Promise<T>((resolve, reject) => {
+      const transaction = db.transaction(["documents", "blobs"])
+      const result = make({ documents: transaction.objectStore("documents"), blobs: transaction.objectStore("blobs") })
+      result.addEventListener("success", () => resolve(result.result))
+      result.addEventListener("error", () => reject(result.error))
+    })
+  const keys = await ask(({ documents }) => documents.getAllKeys())
+  const values = await ask(({ documents }) => documents.getAll())
+  return {
+    documents: Object.fromEntries(keys.flatMap((key, index) => (typeof values[index] === "string" ? [[String(key), values[index] as string]] : []))),
+    blob: async (id: string) => ((await ask(({ blobs }) => blobs.get(id))) as Blob | undefined) ?? null,
+    close: () => db.close(),
+  }
 }
 
 export async function blobDataUrl(blob: BlobReference, mime: string) {

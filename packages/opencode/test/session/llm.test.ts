@@ -86,93 +86,6 @@ function llmLayerWithExecutor(
   ])
 }
 
-describe("session.llm.hasToolCalls", () => {
-  test("returns false for empty messages array", () => {
-    expect(LLM.hasToolCalls([])).toBe(false)
-  })
-
-  test("returns false for messages with only text content", () => {
-    const messages: ModelMessage[] = [
-      {
-        role: "user",
-        content: [{ type: "text", text: "Hello" }],
-      },
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "Hi there" }],
-      },
-    ]
-    expect(LLM.hasToolCalls(messages)).toBe(false)
-  })
-
-  test("returns true when messages contain tool-call", () => {
-    const messages = [
-      {
-        role: "user",
-        content: [{ type: "text", text: "Run a command" }],
-      },
-      {
-        role: "assistant",
-        content: [
-          {
-            type: "tool-call",
-            toolCallId: "call-123",
-            toolName: "bash",
-          },
-        ],
-      },
-    ] as ModelMessage[]
-    expect(LLM.hasToolCalls(messages)).toBe(true)
-  })
-
-  test("returns true when messages contain tool-result", () => {
-    const messages = [
-      {
-        role: "tool",
-        content: [
-          {
-            type: "tool-result",
-            toolCallId: "call-123",
-            toolName: "bash",
-          },
-        ],
-      },
-    ] as ModelMessage[]
-    expect(LLM.hasToolCalls(messages)).toBe(true)
-  })
-
-  test("returns false for messages with string content", () => {
-    const messages: ModelMessage[] = [
-      {
-        role: "user",
-        content: "Hello world",
-      },
-      {
-        role: "assistant",
-        content: "Hi there",
-      },
-    ]
-    expect(LLM.hasToolCalls(messages)).toBe(false)
-  })
-
-  test("returns true when tool-call is mixed with text content", () => {
-    const messages = [
-      {
-        role: "assistant",
-        content: [
-          { type: "text", text: "Let me run that command" },
-          {
-            type: "tool-call",
-            toolCallId: "call-456",
-            toolName: "read",
-          },
-        ],
-      },
-    ] as ModelMessage[]
-    expect(LLM.hasToolCalls(messages)).toBe(true)
-  })
-})
-
 describe("session.llm.ai-sdk adapter", () => {
   type AISDKAdapterEvent = Parameters<typeof LLMAISDK.toLLMEvents>[1]
 
@@ -503,57 +416,6 @@ describe("session.llm.ai-sdk adapter", () => {
     expect(result.tokens.cache.write).toBe(300)
     expect(result.tokens.cache.read).toBe(200)
   })
-
-  test("captures Copilot billed usage from raw Anthropic message deltas per step", async () => {
-    const events = await adapt([
-      uncheckedAdapterEvent({
-        type: "raw",
-        rawValue: {
-          type: "message_delta",
-          copilot_usage: { total_nano_aiu: 4_473_525_000 },
-        },
-      }),
-      {
-        type: "finish-step",
-        response: { id: "msg_test", timestamp: new Date(0), modelId: "claude-sonnet-4.6" },
-        finishReason: "stop",
-        rawFinishReason: "end_turn",
-        usage: {
-          inputTokens: 11_774,
-          outputTokens: 39,
-          totalTokens: 11_813,
-          inputTokenDetails: { noCacheTokens: 3, cacheReadTokens: 0, cacheWriteTokens: 11_771 },
-          outputTokenDetails: { textTokens: 39, reasoningTokens: undefined },
-        },
-        providerMetadata: { anthropic: { cacheCreationInputTokens: 11_771 } },
-      },
-      {
-        type: "finish-step",
-        response: { id: "msg_follow_up", timestamp: new Date(0), modelId: "claude-sonnet-4.6" },
-        finishReason: "stop",
-        rawFinishReason: "end_turn",
-        usage: {
-          inputTokens: 1,
-          outputTokens: 1,
-          totalTokens: 2,
-          inputTokenDetails: { noCacheTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 },
-          outputTokenDetails: { textTokens: 1, reasoningTokens: undefined },
-        },
-        providerMetadata: { anthropic: {} },
-      },
-    ])
-
-    expect(events[0]).toMatchObject({
-      type: "step-finish",
-      providerMetadata: {
-        anthropic: { cacheCreationInputTokens: 11_771 },
-        copilot: { totalNanoAiu: 4_473_525_000 },
-      },
-    })
-    expect(events[1]).toMatchObject({ type: "step-finish", providerMetadata: { anthropic: {} } })
-    if (events[1].type !== "step-finish") throw new Error("expected step-finish")
-    expect(events[1].providerMetadata?.copilot).toBeUndefined()
-  })
 })
 
 type Capture = {
@@ -754,11 +616,8 @@ function createEventResponse(chunks: unknown[], includeDone = false) {
 
 describe("session.llm.stream", () => {
   const vivgridFixture = { providerID: "vivgrid", modelID: "gemini-3.1-pro-preview" }
-  const opencodeFixture = { providerID: "opencode-test", modelID: vivgridFixture.modelID }
 
   const headerCases = [
-    { providerID: opencodeFixture.providerID, child: false },
-    { providerID: opencodeFixture.providerID, child: true },
     { providerID: "custom-test", child: false },
     { providerID: "custom-test", child: true },
   ]
@@ -777,7 +636,7 @@ describe("session.llm.stream", () => {
           )
           const resolved = yield* Provider.use.getModel(
             ProviderV2.ID.make(input.providerID),
-            ModelV2.ID.make(opencodeFixture.modelID),
+            ModelV2.ID.make(vivgridFixture.modelID),
           )
           const sessionID = SessionID.make("session-child")
           const parentSessionID = input.child ? SessionID.make("session-parent") : undefined
@@ -815,10 +674,6 @@ describe("session.llm.stream", () => {
           expect(headers.get("x-opencode-parent-session-id")).toBe(parentSessionID ?? null)
           expect(headers.get("x-parent-session-id")).toBe(parentSessionID ?? null)
           expect(headers.get("x-mango-side-request")).toBeNull()
-          if (input.providerID.startsWith("opencode")) {
-            expect(headers.get("x-opencode-session")).toBe(sessionID)
-            return
-          }
           expect(headers.get("x-session-affinity")).toBe(sessionID)
           expect(headers.get("X-Session-Id")).toBe(sessionID)
         }),
@@ -829,7 +684,7 @@ describe("session.llm.stream", () => {
             enabled_providers: [input.providerID],
             provider: {
               [input.providerID]: {
-                name: "OpenCode Test",
+                name: "Custom Test",
                 npm: "@ai-sdk/openai-compatible",
                 models: { [fixture.model.id]: configModel(fixture.model) as ConfigModel },
                 options: { apiKey: "test-key", baseURL: `${state.server!.url.origin}/v1` },
@@ -984,82 +839,6 @@ describe("session.llm.stream", () => {
     },
   )
 
-  const cerebrasFixture = { providerID: "cerebras", modelID: "gpt-oss-120b" }
-  it.instance(
-    "replays Cerebras assistant reasoning using the provider-supported field",
-    () =>
-      Effect.gen(function* () {
-        const fixture = loadFixture(cerebrasFixture.providerID, cerebrasFixture.modelID)
-        const request = waitRequest(
-          "/chat/completions",
-          new Response(createChatStream("Hello"), {
-            status: 200,
-            headers: { "Content-Type": "text/event-stream" },
-          }),
-        )
-
-        const resolved = yield* Provider.use.getModel(
-          ProviderV2.ID.make(cerebrasFixture.providerID),
-          ModelV2.ID.make(fixture.model.id),
-        )
-        const sessionID = SessionID.make("session-test-cerebras-reasoning")
-        const agent = {
-          name: "test",
-          mode: "primary",
-          options: {},
-          permission: [{ permission: "*", pattern: "*", action: "allow" }],
-        } satisfies Agent.Info
-
-        const user = {
-          id: MessageID.make("msg_user-cerebras-reasoning"),
-          sessionID,
-          role: "user",
-          time: { created: Date.now() },
-          agent: agent.name,
-          model: { providerID: ProviderV2.ID.make(cerebrasFixture.providerID), modelID: resolved.id },
-        } satisfies SessionV1.User
-
-        yield* drain({
-          user,
-          sessionID,
-          model: resolved,
-          agent,
-          system: ["You are a helpful assistant."],
-          messages: [
-            { role: "user", content: "Hello" },
-            {
-              role: "assistant",
-              content: [
-                { type: "reasoning", text: "thinking" },
-                { type: "text", text: "Previous answer" },
-              ],
-            },
-            { role: "user", content: "Continue" },
-          ] satisfies ModelMessage[],
-          tools: {},
-        })
-
-        const capture = yield* Effect.promise(() => request)
-        const messages = capture.body.messages as Array<Record<string, unknown>>
-        const assistant = messages.find((msg) => msg.role === "assistant")
-
-        expect(assistant?.reasoning).toBe("thinking")
-        expect(assistant && "reasoning_content" in assistant).toBe(false)
-      }),
-    {
-      config: () => ({
-        enabled_providers: [cerebrasFixture.providerID],
-        provider: {
-          [cerebrasFixture.providerID]: {
-            options: { apiKey: "test-key", baseURL: `${state.server!.url.origin}/v1` },
-          },
-        },
-      }),
-    },
-  )
-
-  const mistralFixture = { providerID: "mistral", modelID: "mistral-small-latest" }
-
   const alibabaQwenFixture = { providerID: "alibaba", modelID: "qwen-plus" }
   it.instance(
     "service stream cancellation cancels provider response body promptly",
@@ -1189,100 +968,6 @@ describe("session.llm.stream", () => {
         },
       }),
     },
-  )
-
-  it.instance(
-    "sends responses API payload for OpenAI models",
-    () =>
-      Effect.gen(function* () {
-        const model = loadFixture("openai", "gpt-5.2").model
-
-        const responseChunks = [
-          {
-            type: "response.created",
-            response: {
-              id: "resp-1",
-              created_at: Math.floor(Date.now() / 1000),
-              model: model.id,
-              service_tier: null,
-            },
-          },
-          {
-            type: "response.output_item.added",
-            output_index: 0,
-            item: { type: "message", id: "item-1", status: "in_progress", role: "assistant", content: [] },
-          },
-          {
-            type: "response.content_part.added",
-            item_id: "item-1",
-            output_index: 0,
-            content_index: 0,
-            part: { type: "output_text", text: "", annotations: [] },
-          },
-          {
-            type: "response.output_text.delta",
-            item_id: "item-1",
-            delta: "Hello",
-            logprobs: null,
-          },
-          {
-            type: "response.completed",
-            response: {
-              incomplete_details: null,
-              usage: {
-                input_tokens: 1,
-                input_tokens_details: null,
-                output_tokens: 1,
-                output_tokens_details: null,
-              },
-              service_tier: null,
-            },
-          },
-        ]
-        const request = waitRequest("/responses", createEventResponse(responseChunks, true))
-
-        const resolved = yield* Provider.use.getModel(ProviderV2.ID.openai, ModelV2.ID.make(model.id))
-        const sessionID = SessionID.make("session-test-2")
-        const agent = {
-          name: "test",
-          mode: "primary",
-          options: { reasoningMode: "pro" },
-          permission: [{ permission: "*", pattern: "*", action: "allow" }],
-          temperature: 0.2,
-        } satisfies Agent.Info
-
-        const user = {
-          id: MessageID.make("msg_user-2"),
-          sessionID,
-          role: "user",
-          time: { created: Date.now() },
-          agent: agent.name,
-          model: { providerID: ProviderV2.ID.make("openai"), modelID: resolved.id, variant: "high" },
-        } satisfies SessionV1.User
-
-        yield* drain({
-          user,
-          sessionID,
-          model: resolved,
-          agent,
-          system: ["You are a helpful assistant."],
-          messages: [{ role: "user", content: "Hello" }],
-          tools: {},
-        })
-
-        const capture = yield* Effect.promise(() => request)
-        const body = capture.body
-
-        expect(capture.url.pathname.endsWith("/responses")).toBe(true)
-        expect(body.model).toBe(resolved.api.id)
-        expect(body.stream).toBe(true)
-        expect((body.reasoning as { effort?: string } | undefined)?.effort).toBe("high")
-        expect((body.reasoning as { mode?: string } | undefined)?.mode).toBe("pro")
-
-        const maxTokens = body.max_output_tokens as number | undefined
-        expect(maxTokens).toBe(undefined) // match codex cli behavior
-      }),
-    { config: () => openAIConfig(loadFixture("openai", "gpt-5.2").model, `${state.server!.url.origin}/v1`) },
   )
 
   it.instance(
@@ -2079,6 +1764,4 @@ describe("session.llm.stream", () => {
       },
     },
   )
-
-  const geminiFixture = { providerID: "google", modelID: "gemini-2.5-flash" }
 })

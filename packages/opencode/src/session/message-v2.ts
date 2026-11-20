@@ -147,28 +147,11 @@ export const toModelMessagesEffect = Effect.fnUntraced(function* (
   // for providers that don't support that media type in tool results.
   //
   // OpenAI-compatible APIs only support string content in tool results, so we need
-  // to extract media and inject as user messages. Some SDKs only support a subset
-  // of media in tool results; e.g. Bedrock supports images but not PDFs there.
+  // to extract media and inject as user messages.
   //
   // Only apply this workaround if the model actually supports that media input -
   // otherwise unsupportedParts() will turn it into a user-visible error.
-  const supportsMediaInToolResult = (attachment: { mime: string }) => {
-    if (model.api.npm === "@ai-sdk/anthropic") return true
-    if (model.api.npm === "@ai-sdk/openai") return true
-    if (model.api.npm === "@ai-sdk/amazon-bedrock/mantle") return true
-    if (model.api.npm === "@ai-sdk/amazon-bedrock") {
-      if (!attachment.mime.startsWith("image/")) return false
-      const id = model.api.id.toLowerCase()
-      return id.includes("anthropic.") || id.includes("nova") || id.includes("llama4") || id.includes("llama-4")
-    }
-    if (model.api.npm === "@ai-sdk/xai") return attachment.mime.startsWith("image/")
-    if (model.api.npm === "@ai-sdk/google-vertex/anthropic") return true
-    if (model.api.npm === "@ai-sdk/google") {
-      const id = model.api.id.toLowerCase()
-      return id.includes("gemini-3") && !id.includes("gemini-2")
-    }
-    return false
-  }
+  const supportsMediaInToolResult = model.api.npm === "@ai-sdk/anthropic"
 
   // Can the model read this kind of file? An image to a text-only model, or an office document to any
   // model, must not be sent: the provider would reject it or turn it into an error that pushes the model
@@ -185,12 +168,6 @@ export const toModelMessagesEffect = Effect.fnUntraced(function* (
             : undefined
     return modality ? model.capabilities.input[modality] : false
   }
-
-  // xAI rejects any other image format (e.g. GIF) with invalid_image, failing the whole request.
-  const rejectedByProvider = (attachment: { mime: string }) =>
-    model.api.npm === "@ai-sdk/xai" &&
-    attachment.mime.startsWith("image/") &&
-    !["image/png", "image/jpeg", "image/webp"].includes(attachment.mime)
 
   const toModelOutput = (options: { toolCallId: string; input: unknown; output: unknown }) => {
     const output = options.output
@@ -328,9 +305,7 @@ export const toModelMessagesEffect = Effect.fnUntraced(function* (
           toolNames.add(part.tool)
           if (part.state.status === "completed") {
             const allAttachments =
-              part.state.time.compacted || options?.stripMedia
-                ? []
-                : (part.state.attachments ?? []).filter((a) => !rejectedByProvider(a))
+              part.state.time.compacted || options?.stripMedia ? [] : (part.state.attachments ?? [])
             // Images the model cannot see (a screenshot for a text-only model): they stay in the part,
             // and so in the chat for the user, but the model gets a note in their place.
             const unreadable = allAttachments.filter((a) => isMedia(a.mime) && !modelReads(a.mime))
@@ -346,11 +321,11 @@ export const toModelMessagesEffect = Effect.fnUntraced(function* (
             // For providers that don't support media in tool results, extract media files
             // (images, PDFs) to be sent as a separate user message
             const mediaAttachments = attachments.filter((a) => isMedia(a.mime))
-            const extractedMedia = mediaAttachments.filter((a) => !supportsMediaInToolResult(a))
+            const extractedMedia = supportsMediaInToolResult ? [] : mediaAttachments
             if (extractedMedia.length > 0) {
               media.push(...extractedMedia)
             }
-            const finalAttachments = attachments.filter((a) => !isMedia(a.mime) || supportsMediaInToolResult(a))
+            const finalAttachments = attachments.filter((a) => !isMedia(a.mime) || supportsMediaInToolResult)
 
             const output =
               finalAttachments.length > 0
@@ -747,10 +722,7 @@ export function fromError(
       ...error,
       data: {
         ...error.data,
-        message: tr(
-          "Il modello si è chiuso a metà risposta.",
-          "The model closed in the middle of the answer.",
-        ),
+        message: tr("Il modello si è chiuso a metà risposta.", "The model closed in the middle of the answer."),
         metadata: { ...error.data.metadata, engine: "closed" },
       },
     }

@@ -15,6 +15,7 @@ import { SettingsListV2 } from "../settings-v2/parts/list"
 import { SettingsRowV2 } from "../settings-v2/parts/row"
 import { createCommands, useControl } from "./control"
 import { PaneHeader } from "./header"
+import { ModelsFolder } from "./models-folder"
 
 const MIB = 1024 * 1024
 
@@ -184,6 +185,7 @@ export const SettingsComputer: Component = () => {
                     </ButtonV2>
                   </Show>
                 </SettingsRowV2>
+                <ModelsFolder disk={found().disk} />
                 <Show when={found().tailored}>
                   {(tailored) => (
                     <SettingsRowV2

@@ -12,6 +12,7 @@ import { useLanguage } from "@/context/language"
 import { useNotification } from "@/context/notification"
 import { ProjectIcon, SessionItem, type SessionItemProps } from "./sidebar-items"
 import { displayName, sortedRootSessions } from "./helpers"
+import { folderKey } from "@/utils/path-key"
 
 export type ProjectSidebarContext = {
   currentDir: Accessor<string>
@@ -277,7 +278,9 @@ export const SortableProject = (props: {
   const serverSync = useServerSync()
   const language = useLanguage()
   const sortable = createSortable(props.project.worktree)
-  const selected = createMemo(() => props.ctx.currentProject()?.worktree === props.project.worktree)
+  const selected = createMemo(
+    () => folderKey(props.ctx.currentProject()?.worktree ?? "") === folderKey(props.project.worktree),
+  )
   const workspaces = createMemo(() => props.ctx.workspaceIds(props.project).slice(0, 2))
   const workspaceEnabled = createMemo(() => props.ctx.workspacesEnabled(props.project))
   const dirs = createMemo(() => props.ctx.workspaceIds(props.project))
@@ -286,7 +289,7 @@ export const SortableProject = (props: {
     suppressHover: false,
   })
 
-  const isHoverProject = () => props.ctx.hoverProject() === props.project.worktree
+  const isHoverProject = () => folderKey(props.ctx.hoverProject() ?? "") === folderKey(props.project.worktree)
   const preview = createMemo(() => !props.mobile && props.ctx.sidebarOpened())
   const overlay = createMemo(() => !props.mobile && !props.ctx.sidebarOpened())
   const active = createMemo(() => state.menu || (preview() ? isHoverProject() : overlay() && isHoverProject()))
@@ -296,7 +299,9 @@ export const SortableProject = (props: {
   const label = (directory: string) => {
     const [data] = serverSync().child(directory, { bootstrap: false })
     const kind =
-      directory === props.project.worktree ? language.t("workspace.type.local") : language.t("workspace.type.sandbox")
+      folderKey(directory) === folderKey(props.project.worktree)
+        ? language.t("workspace.type.local")
+        : language.t("workspace.type.sandbox")
     const name = props.ctx.workspaceLabel(directory, data.vcs?.branch, props.project.id)
     return `${kind} : ${name}`
   }
@@ -305,7 +310,7 @@ export const SortableProject = (props: {
   const isWorking = createMemo(() =>
     dirs().some((directory) => {
       return Object.keys(serverSync().session.data.session_status).some((id) => {
-        if (serverSync().session.get(id)?.directory !== directory) return false
+        if (folderKey(serverSync().session.get(id)?.directory ?? "") !== folderKey(directory)) return false
         return serverSync().session.data.session_working(id)
       })
     }),

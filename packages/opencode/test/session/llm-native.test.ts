@@ -8,7 +8,6 @@ import { LLMNative } from "@/session/llm/native-request"
 import { LLMNativeRuntime } from "@/session/llm/native-runtime"
 import type { Provider } from "@/provider/provider"
 
-import { OAUTH_DUMMY_KEY } from "@/auth"
 import { testEffect } from "../lib/effect"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { ModelV2 } from "@opencode-ai/core/model"
@@ -80,13 +79,6 @@ const it = testEffect(
     ),
   ),
 )
-
-function responsesStream(chunks: unknown[]) {
-  return new Response(chunks.map((chunk) => `data: ${JSON.stringify(chunk)}`).join("\n\n") + "\n\n", {
-    status: 200,
-    headers: { "Content-Type": "text/event-stream" },
-  })
-}
 
 type NativeRequestInput = Parameters<typeof LLMNative.request>[0]
 
@@ -349,18 +341,10 @@ describe("session.llm-native.request", () => {
     expect(anthropic.route.id).toBe("anthropic-messages")
     expect(anthropic.route.endpoint.baseURL).toBe("https://api.anthropic.com/v1")
 
-    const google = LLMNative.model({
-      model: { ...baseModel, api: { ...baseModel.api, url: "", npm: "@ai-sdk/google" } },
-      apiKey: "test-key",
-      messages: [],
-    })
-    expect(google.route.id).toBe("gemini")
-    expect(google.route.endpoint.baseURL).toBe("https://generativelanguage.googleapis.com/v1beta")
-
     const compatible = LLMNative.model({
       model: {
         ...baseModel,
-        providerID: ProviderV2.ID.make("opencode"),
+        providerID: ProviderV2.ID.make("custom"),
         api: { ...baseModel.api, url: "https://ai.example.test/v1", npm: "@ai-sdk/openai-compatible" },
       },
       apiKey: "test-key",
@@ -388,61 +372,21 @@ describe("session.llm-native.request", () => {
   })
 
   test("only enables native runtime for supported OpenAI API-key models", () => {
-    expect(LLMNativeRuntime.status({ model: baseModel, provider: providerInfo, auth: undefined })).toMatchObject({
+    expect(LLMNativeRuntime.status({ model: baseModel, provider: providerInfo })).toMatchObject({
       type: "supported",
       apiKey: "test-openai-key",
     })
     expect(
       LLMNativeRuntime.status({
-        model: { ...baseModel, providerID: ProviderV2.ID.make("opencode") },
-        provider: { ...providerInfo, id: ProviderV2.ID.make("opencode") },
-        auth: undefined,
+        model: { ...baseModel, providerID: ProviderV2.ID.make("custom") },
+        provider: { ...providerInfo, id: ProviderV2.ID.make("custom") },
       }),
-    ).toMatchObject({
-      type: "supported",
-      apiKey: "test-openai-key",
-    })
-    expect(
-      LLMNativeRuntime.status({
-        model: {
-          ...baseModel,
-          providerID: ProviderV2.ID.make("opencode"),
-          api: { ...baseModel.api, npm: "@ai-sdk/openai-compatible" },
-        },
-        provider: { ...providerInfo, id: ProviderV2.ID.make("opencode") },
-        auth: undefined,
-      }),
-    ).toMatchObject({
-      type: "supported",
-      apiKey: "test-openai-key",
-    })
-    expect(
-      LLMNativeRuntime.status({
-        model: { ...baseModel, providerID: ProviderV2.ID.make("google") },
-        provider: { ...providerInfo, id: ProviderV2.ID.make("google") },
-        auth: undefined,
-      }),
-    ).toEqual({ type: "unsupported", reason: "provider is not openai, opencode, or anthropic" })
-    expect(
-      LLMNativeRuntime.status({
-        model: baseModel,
-        provider: providerInfo,
-        auth: { type: "oauth", refresh: "refresh", access: "access", expires: 1 },
-      }),
-    ).toEqual({ type: "unsupported", reason: "OAuth auth requires a provider fetch override" })
-    expect(
-      LLMNativeRuntime.status({
-        model: baseModel,
-        provider: { ...providerInfo, options: { apiKey: OAUTH_DUMMY_KEY, fetch: async () => new Response() } },
-        auth: { type: "oauth", refresh: "refresh", access: "access", expires: 1 },
-      }),
-    ).toMatchObject({ type: "supported", apiKey: OAUTH_DUMMY_KEY })
+    ).toEqual({ type: "unsupported", reason: "provider is not openai or anthropic" })
 
     expect(
       LLMNativeRuntime.status({
-        model: { ...baseModel, api: { ...baseModel.api, npm: "@ai-sdk/google" } },
+        model: { ...baseModel, api: { ...baseModel.api, npm: "unknown-provider" } },
         provider: providerInfo,
-        auth: undefined,
       }),
     ).toEqual({ type: "unsupported", reason: "provider package is not OpenAI, OpenAI-compatible, or Anthropic" })
 
@@ -450,7 +394,6 @@ describe("session.llm-native.request", () => {
       LLMNativeRuntime.status({
         model: baseModel,
         provider: { ...providerInfo, options: {} },
-        auth: undefined,
       }),
     ).toEqual({ type: "unsupported", reason: "API key is not configured" })
   })
@@ -470,32 +413,15 @@ describe("session.llm-native.request", () => {
           env: ["ANTHROPIC_API_KEY"],
           options: { apiKey: "test-anthropic-key" },
         },
-        auth: undefined,
       }),
     ).toMatchObject({ type: "supported", apiKey: "test-anthropic-key" })
   })
 
-  test("prefers console provider api key over stored opencode auth", () => {
-    expect(
-      LLMNativeRuntime.status({
-        model: { ...baseModel, providerID: ProviderV2.ID.make("opencode") },
-        provider: {
-          ...providerInfo,
-          id: ProviderV2.ID.make("opencode"),
-          options: { apiKey: "console-token" },
-          key: "zen-token",
-        },
-        auth: { type: "api", key: "zen-token" },
-      }),
-    ).toMatchObject({
-      type: "supported",
-      apiKey: "console-token",
-    })
+  test("falls back to the provider key when no api key option is set", () => {
     expect(
       LLMNativeRuntime.status({
         model: baseModel,
         provider: { ...providerInfo, options: {}, key: "provider-key" },
-        auth: undefined,
       }),
     ).toMatchObject({
       type: "supported",
@@ -575,7 +501,6 @@ describe("session.llm-native.request", () => {
       const native = LLMNativeRuntime.stream({
         model: baseModel,
         provider: providerInfo,
-        auth: undefined,
         llmClient,
         messages: [],
         tools: { lookup },
@@ -707,55 +632,6 @@ describe("session.llm-native.request", () => {
         input: [{ type: "item_reference", id: "rs_1" }],
         store: true,
       },
-    }),
-  )
-
-  it.effect("uses provider fetch override for native OpenAI OAuth requests", () =>
-    Effect.gen(function* () {
-      const captures: Array<{ url: string; body: unknown }> = []
-      const customFetch = Object.assign(
-        async (input: Parameters<typeof fetch>[0], init: Parameters<typeof fetch>[1]) => {
-          const request = input instanceof Request ? input : new Request(input, init)
-          captures.push({ url: request.url, body: await request.clone().json() })
-          return responsesStream([
-            { type: "response.output_text.delta", item_id: "msg_1", delta: "Hello" },
-            { type: "response.completed", response: { usage: { input_tokens: 1, output_tokens: 1 } } },
-          ])
-        },
-        { preconnect: () => undefined },
-      ) satisfies typeof fetch
-
-      const llmClient = yield* LLMClient.Service
-      const native = LLMNativeRuntime.stream({
-        model: baseModel,
-        provider: { ...providerInfo, options: { apiKey: OAUTH_DUMMY_KEY, fetch: customFetch } },
-        auth: { type: "oauth", refresh: "refresh", access: "access", expires: Date.now() + 60_000 },
-        llmClient,
-        messages: [{ role: "user", content: "hello" }],
-        tools: {},
-        providerOptions: { instructions: "You are concise." },
-        headers: {},
-        abort: new AbortController().signal,
-      })
-      expect(native.type).toBe("supported")
-      if (native.type === "unsupported") throw new Error(native.reason)
-      const events = Array.from(yield* native.stream.pipe(Stream.runCollect))
-
-      expect(captures).toHaveLength(1)
-      expect(captures[0]).toMatchObject({
-        url: "https://api.openai.com/v1/responses",
-        body: {
-          model: "gpt-5-mini",
-          instructions: "You are concise.",
-          input: [{ role: "user", content: [{ type: "input_text", text: "hello" }] }],
-        },
-      })
-      expect(events).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ type: "text-delta", text: "Hello" }),
-          expect.objectContaining({ type: "finish" }),
-        ]),
-      )
     }),
   )
 })

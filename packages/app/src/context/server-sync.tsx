@@ -528,6 +528,21 @@ export function createServerSyncContextInner(serverSDK: ServerSDK) {
     })
   }
 
+  // The skills are commands too: one put on disk while the app is open enters the «/» menu when the user comes back to
+  // the window, or when a turn ends (the model may have written it). If the reload fails the menu keeps the list it has.
+  const reloadCommands = (directory: string) => {
+    const existing = children.children[directoryKey(directory)]
+    if (!existing || !children.mcp(directory)) return
+    void loadCommands(directory, serverSDK.api.command, sdkFor(directory), serverSDK.protocol)
+      .then((commands) => existing[1]("command", commands))
+      .catch(() => {})
+  }
+  const reloadAllCommands = () => {
+    for (const directory of Object.keys(children.children)) if (children.active(directory)) reloadCommands(directory)
+  }
+  window.addEventListener("focus", reloadAllCommands)
+  onCleanup(() => window.removeEventListener("focus", reloadAllCommands))
+
   const unsub = serverSDK.event.listen((e) => {
     const directory = e.name
     const key = directoryKey(directory)
@@ -594,6 +609,8 @@ export function createServerSyncContextInner(serverSDK: ServerSDK) {
       eventType === "agent.updated"
     )
       queue.push(key)
+    if (eventType === "session.status" && (event.properties as { status?: { type?: string } }).status?.type === "idle")
+      reloadCommands(directory)
     if (eventType === "mcp.status.changed") void queryClient.invalidateQueries(queryOptionsApi.mcp(key))
     if (eventType === "mcp.resources.changed") void queryClient.invalidateQueries(queryOptionsApi.mcpResources(key))
     const [store, setStore] = existing

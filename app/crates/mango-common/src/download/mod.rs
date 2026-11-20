@@ -9,9 +9,10 @@ mod engine;
 mod fake_server;
 
 pub use model::{discard_partial, install_model, remove_model, users_file};
-pub use engine::{engine_size, has_build, install_engine, installed_engine, installed_program, needs_avx2, older_engine, remove_old_engines, EngineUnusable};
+pub(crate) use model::{recorded_hash, write_verified};
+pub use engine::{engine_size, has_build, install_engine, installed_engine, installed_program, needs_avx2, older_engine, other_build_installed, remove_old_engines, EngineUnusable};
 
-use crate::{tr, user_text};
+use crate::{free_space, tr, user_text};
 use anyhow::{bail, Context, Result};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
@@ -41,7 +42,7 @@ const MAX_WAIT: Duration = Duration::from_secs(60);
 const MARGIN: u64 = 1 << 30;
 
 /// A clear error, before starting, if the disk of `dir` can't hold `needed` bytes (plus the margin).
-fn enough_space(needed: u64, free: u64, dir: &Path) -> Result<()> {
+pub(crate) fn enough_space(needed: u64, free: u64, dir: &Path) -> Result<()> {
     if free < needed + MARGIN {
         return Err(NoSpace { needed: needed + MARGIN, free, dir: dir.to_path_buf() }.into());
     }
@@ -92,26 +93,6 @@ impl std::fmt::Display for NoSpace {
 }
 
 impl std::error::Error for NoSpace {}
-
-/// The free bytes on the disk of `dir` for this user.
-fn free_space(dir: &Path) -> Result<u64> {
-    use std::os::windows::ffi::OsStrExt;
-    let w: Vec<u16> = dir.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
-    let mut free = 0u64;
-    let ok = unsafe { windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW(w.as_ptr(), &mut free, std::ptr::null_mut(), std::ptr::null_mut()) };
-    if ok == 0 {
-        bail!(
-            "{}",
-            tr!(
-                "non riesco a sapere quanto spazio c'è sul disco di {}: {}",
-                "can't tell how much space there is on the disk of {}: {}",
-                dir.display(),
-                std::io::Error::last_os_error()
-            )
-        );
-    }
-    Ok(free)
-}
 
 /// The error of a download that `stop` ended: the `.part` stays, for whoever stopped it to resume or delete.
 #[derive(Debug)]

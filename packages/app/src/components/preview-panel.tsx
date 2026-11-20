@@ -5,9 +5,12 @@ import { Icon } from "@opencode-ai/ui/v2/icon"
 import { IconButtonV2 } from "@opencode-ai/ui/v2/icon-button-v2"
 import { TooltipV2 } from "@opencode-ai/ui/v2/tooltip-v2"
 import { useLanguage } from "@/context/language"
+import { useServerSDK } from "@/context/server-sdk"
 import { PREVIEW_MIN_WIDTH, type PreviewDevice } from "@/context/preview"
 import { mangoDesktopError } from "@/utils/mango-desktop"
+import { pageChangedBy } from "@/utils/preview-reload"
 import { showToast } from "@/utils/toast"
+import { LAYERS, layerOver } from "./preview-layers"
 
 /**
  * The "Preview" panel: the agent's browser inside the window.
@@ -34,25 +37,12 @@ const DEVICE_MIN_SCALE = 0.25
 
 /** The most of the window the panel takes, for the CSS limit and for how far the handle goes: the same figure. */
 const MAX_SHARE = 0.55
+/** How long the picture of the page stays under the live panel once it is shown again: the native window needs a moment to draw. */
+const SETTLE_MS = 150
 /** How often the panel is asked which page it is showing (back/forward included). */
 const SYNC_MS = 700
-
-/**
- * Whether something opened above the page (a dialog, a menu, a list, a popover) is in the way of the native panel,
- * which is drawn above all the page: then it has to step aside. While a modal layer is open (dialogs, menus, lists)
- * Kobalte blocks the pointer on the whole body; its toasts carry `data-kb-top-layer`; a menu that is not modal (the
- * model's in the top bar) is only a positioned popup, found by its role.
- */
-const LAYERS = "[data-kb-top-layer], [data-popper-positioner] [role='menu']"
-
-function layerOver(rect: DOMRect, own: HTMLElement | undefined) {
-  if (document.body.style.pointerEvents === "none") return true
-  return [...document.querySelectorAll<HTMLElement>(LAYERS)].some((layer) => {
-    if (own?.contains(layer)) return false
-    const box = layer.getBoundingClientRect()
-    return box.width > 0 && box.height > 0 && box.left < rect.right && box.right > rect.left && box.top < rect.bottom && box.bottom > rect.top
-  })
-}
+/** A model writes a page in a few files one after the other: the panel reloads once, after the last. */
+const RELOAD_AFTER_MS = 300
 
 export function PreviewPanel(props: {
   width: number
@@ -62,6 +52,7 @@ export function PreviewPanel(props: {
   onClose: () => void
 }) {
   const language = useLanguage()
+  const server = useServerSDK()
   const api = () => window.__MANGO_DESKTOP__?.preview
   const [address, setAddress] = createSignal("")
   const [editing, setEditing] = createSignal(false)
@@ -85,12 +76,56 @@ export function PreviewPanel(props: {
     return { scale, width: screen.width * scale, height: screen.height * scale, radius: screen.radius * scale, bezel: screen.bezel * scale }
   })
 
+  // The native panel cannot be drawn under the page: when a layer of the page reaches it, it steps aside and a picture of
+  // the page, taken the moment before, takes its place under the layer.
+  const [still, setStill] = createSignal("")
+  // the native panel is shown, as the last placing left it
+  let live = false
+  let taking = false
+  // the picture of the layer that is open could not be taken: it is not tried again until the layer closes
+  let refused = false
+  let placed = 0
+  // the panel left the page while a picture was being taken
+  let gone = false
+
+  const forget = () => {
+    URL.revokeObjectURL(still())
+    setStill("")
+  }
+
+  const take = async () => {
+    const bridge = api()
+    if (!bridge) return
+    taking = true
+    let src = ""
+    try {
+      src = URL.createObjectURL(new Blob([await bridge.capture()], { type: "image/png" }))
+      const picture = new Image()
+      picture.src = src
+      await picture.decode()
+      if (gone) return URL.revokeObjectURL(src)
+      setStill(src)
+    } catch (error) {
+      URL.revokeObjectURL(src)
+      if (gone) return
+      refused = true
+      console.error("preview: no picture of the page:", mangoDesktopError(error).message)
+    }
+    taking = false
+    place()
+  }
+
   const place = () => {
     const el = placeholder
     const bridge = api()
-    if (!el || !bridge) return
+    if (!el || !bridge || taking) return
     const rect = el.getBoundingClientRect()
     const shown = shownDevice()
+    const room = !!url() && rect.width >= 1 && rect.height >= 1
+    const covered = room && layerOver(rect, document, panel)
+    if (!covered) refused = false
+    if (covered && live && !still() && !refused) return void take()
+    const turn = ++placed
     void bridge
       .place({
         x: rect.x,
@@ -103,7 +138,15 @@ export function PreviewPanel(props: {
         // card's two bottom corners, which it reaches
         radius: shown?.radius ?? (card ? parseFloat(getComputedStyle(card).borderBottomLeftRadius) || 0 : 0),
         roundTop: !!shown,
-        visible: !!url() && rect.width >= 1 && rect.height >= 1 && !layerOver(rect, panel),
+        visible: room && !covered,
+      })
+      .then(() => {
+        if (turn !== placed) return
+        live = room && !covered
+        if (covered || !still()) return
+        // the picture stays until the live page has been drawn over it: no empty space shows in between
+        if (live) window.setTimeout(() => turn === placed && forget(), SETTLE_MS)
+        else forget()
       })
       .catch(() => {})
   }
@@ -136,25 +179,52 @@ export function PreviewPanel(props: {
     observer.observe(el)
     observer.observe(stage)
     // Layers open and close in portals under the body: the panel steps aside and comes back with them. A popup gets
-    // its place a frame after it is added.
+    // its place a frame after it is added, and a list can grow while it is open (filtered by typing, a submenu).
+    const layers = new ResizeObserver(() => place())
     const portals = new MutationObserver(() => {
+      document.querySelectorAll(LAYERS).forEach((layer) => layers.observe(layer))
       place()
       requestAnimationFrame(place)
     })
-    portals.observe(document.body, { childList: true, attributes: true, attributeFilter: ["style"] })
+    portals.observe(document.body, { childList: true })
     const topLayer = new MutationObserver(() => place())
     topLayer.observe(document.body, { subtree: true, attributes: true, attributeFilter: ["data-kb-top-layer"] })
     const timer = window.setInterval(() => void sync(), SYNC_MS)
     void sync()
     onCleanup(() => {
+      gone = true
       observer.disconnect()
+      layers.disconnect()
       portals.disconnect()
       topLayer.disconnect()
       window.clearInterval(timer)
+      forget()
       void api()
         ?.place({ x: 0, y: 0, width: 0, height: 0, dpr: 1, zoom: 1, radius: 0, roundTop: false, visible: false })
         .catch(() => {})
     })
+  })
+
+  // The model has written or changed a file of the page shown: the panel shows the new version without «Reload». Its file
+  // tools say each file at once; what a command of its shell changed in the project comes with the end of the step (the
+  // step's `patch` part).
+  let reload: number | undefined
+  const stopReload = server().event.listen((event) => {
+    const details = event.details as { type: string; properties?: { file?: unknown; part?: { type?: string; files?: unknown } } }
+    const part = details.properties?.part
+    const files =
+      details.type === "file.watcher.updated"
+        ? [details.properties?.file]
+        : details.type === "message.part.updated" && part?.type === "patch" && Array.isArray(part.files)
+          ? part.files
+          : []
+    if (!files.some((file) => typeof file === "string" && pageChangedBy(url(), file))) return
+    window.clearTimeout(reload)
+    reload = window.setTimeout(() => nav("reload"), RELOAD_AFTER_MS)
+  })
+  onCleanup(() => {
+    stopReload()
+    window.clearTimeout(reload)
   })
 
   // Changing the format changes the rectangle: the webview is repositioned right away.
@@ -305,6 +375,9 @@ export function PreviewPanel(props: {
               classList={{ "size-full": !shownDevice() }}
               style={shownDevice() ? { width: `${shownDevice()!.width}px`, height: `${shownDevice()!.height}px`, "border-radius": `${shownDevice()!.radius}px` } : undefined}
             >
+              <Show when={still()}>
+                <img data-slot="preview-still" src={still()} alt="" draggable={false} class="block size-full object-cover object-left-top" />
+              </Show>
               <Show when={!url()}>
                 <div class="flex h-full flex-col items-center justify-center gap-3 px-8 text-center text-text-weak">
                   <Icon name="globe" size="large" />

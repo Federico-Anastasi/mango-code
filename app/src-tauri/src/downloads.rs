@@ -208,6 +208,8 @@ struct Queue {
     working: bool,
     /// Models being taken off the computer (`stop_for_removal`): they cannot be downloaded again until it is done.
     removing: Vec<String>,
+    /// The models folder is moving (`Downloads::hold`): nothing downloads.
+    holding: bool,
 }
 
 impl Queue {
@@ -271,6 +273,19 @@ pub struct Removal {
 impl Drop for Removal {
     fn drop(&mut self) {
         self.downloads.0.queue.lock().unwrap().removing.retain(|m| m != &self.model);
+    }
+}
+
+/// The downloads held for a move of the models folder (`Downloads::hold`): they go on when this is dropped.
+pub struct Hold {
+    downloads: Downloads,
+}
+
+impl Drop for Hold {
+    fn drop(&mut self) {
+        let mut q = self.downloads.0.queue.lock().unwrap();
+        q.holding = false;
+        self.downloads.work(q);
     }
 }
 
@@ -398,6 +413,28 @@ impl Downloads {
         Ok(removal)
     }
 
+    /// Before the models folder moves: from now until the answer is dropped no download runs or starts. The one in
+    /// progress stops where it is and what has arrived stays; it is not paused, so the queue is kept as it is and the next
+    /// start (or the end of the hold) goes on with it. Returns once nothing of the downloads is running or deleting files.
+    pub fn hold(&self) -> Result<Hold> {
+        let mut q = self.0.queue.lock().unwrap();
+        q.holding = true;
+        q.entries.iter().filter(|e| e.running).for_each(|e| e.stop.store(true, Ordering::SeqCst));
+        let hold = Hold { downloads: self.clone() };
+        let busy = |q: &mut Queue| q.entries.iter().any(|e| e.running || e.discarding);
+        let (_q, waited) = self.0.settled.wait_timeout_while(q, self.0.stop_wait, busy).unwrap();
+        if waited.timed_out() {
+            bail!(
+                "{}",
+                tr!(
+                    "Uno scaricamento non si è ancora fermato. Riprova tra un minuto.",
+                    "A download has not stopped yet. Try again in a minute."
+                )
+            );
+        }
+        Ok(hold)
+    }
+
     /// Cancels `model` if it is in the queue and not cancelled already.
     fn cancel_queued(&self, mut q: MutexGuard<'_, Queue>, model: &str) -> Result<()> {
         let Some(e) = q.entries.iter_mut().find(|e| e.model == model && !e.cancelled) else { return Ok(()) };
@@ -514,6 +551,10 @@ impl Downloads {
         std::thread::spawn(move || loop {
             let (model, stop) = {
                 let mut q = this.0.queue.lock().unwrap();
+                if q.holding {
+                    q.working = false;
+                    return;
+                }
                 let Some(e) = q.entries.iter_mut().find(|e| e.state == Status::Waiting && !e.cancelled && !e.discarding) else {
                     q.working = false;
                     return;
@@ -589,7 +630,13 @@ impl Downloads {
                 arrived = matches!(not, NotNeeded::Present(_));
             }
             // Paused, or asked again meanwhile: the state is already the one to keep.
-            Err(Ended::Stopped) => {}
+            // Paused, or asked again meanwhile: the state is already the one to keep. One stopped by a hold was not paused:
+            // it waits for its turn again.
+            Err(Ended::Stopped) => {
+                if q.entries[i].state == Status::Active {
+                    q.entries[i].state = Status::Waiting;
+                }
+            }
             // A pause stays a pause, also when the download failed before it stopped.
             Err(Ended::Failed(_, e)) if q.entries[i].state == Status::Paused => (self.0.log)(&format!("download of {model}, paused: {e:#}")),
             Err(Ended::Failed(sentence, e)) => {
@@ -1117,6 +1164,45 @@ mod tests {
         assert!(f.fake.discarded.lock().unwrap().is_empty(), "a pause deletes nothing");
     }
 
+    /// While the models folder moves, a download in progress stops where it is and nothing starts; it is not a pause (the
+    /// next start goes on with it), and when the hold ends the queue goes on from where it was.
+    #[test]
+    fn a_hold_stops_the_downloads_without_pausing_them_and_lets_them_go_on_after() {
+        let f = fixture();
+        f.ask(&["a", "b"]).unwrap();
+        f.go();
+        until("some of «a» arrived", || f.downloads.list()[0].done >= 300);
+
+        let hold = f.downloads.hold().unwrap();
+        let kept = f.fake.arrived.lock().unwrap()["a"];
+        assert!((300..SIZE).contains(&kept), "{kept}");
+        assert_eq!(f.saved(), r#"[{"model":"a","paused":false},{"model":"b","paused":false}]"#, "no pause was written");
+        f.ask(&["c"]).unwrap();
+        std::thread::sleep(Duration::from_millis(100));
+        assert_eq!(f.fake.arrived.lock().unwrap()["a"], kept, "nothing downloads while it is held");
+        assert!(f.arrived().is_empty());
+
+        drop(hold);
+        f.arrives(&["a", "b", "c"]);
+        assert!(f.fake.discarded.lock().unwrap().is_empty(), "a hold deletes nothing");
+    }
+
+    /// A download that does not see the stop in time keeps the hold from being taken; nothing stays held.
+    #[test]
+    fn a_hold_that_cannot_stop_a_download_is_refused_and_leaves_the_queue_going() {
+        let f = fixture_waiting(Fake::default(), tempfile::tempdir().unwrap(), Duration::from_millis(100));
+        f.downloads.restore().unwrap();
+        f.fake.stubborn.store(true, Ordering::SeqCst);
+        f.ask(&["a"]).unwrap();
+        until("«a» active", || f.states() == states(&[("a", Status::Active)]));
+
+        assert!(f.downloads.hold().is_err());
+
+        f.fake.stubborn.store(false, Ordering::SeqCst);
+        f.go();
+        f.arrives(&["a"]);
+    }
+
     /// Whoever waits for a download is told when it is no more: paused or cancelled while it was queued or in progress.
     /// A download that was not live (a paused one, cancelled) says nothing, and `live` lists only the queued and running.
     #[test]
@@ -1341,6 +1427,26 @@ mod tests {
         crate::model_choices::take_off(paths, &hw, None, None, None, "hf-mine").unwrap();
         assert!(mango_common::catalog::read(paths).unwrap().user.is_empty());
         assert!(!paths.models.join("owner").exists(), "the downloaded file goes, and its empty folders");
+    }
+
+    /// What the engine kept of a model, its last conversation, its system prompts and its on-disk memory, goes with it;
+    /// the other models' stays.
+    #[test]
+    fn a_model_taken_off_takes_its_slot_files_with_it() {
+        let w = real_world();
+        let hw = (w.real.hardware)().unwrap();
+        let paths = &w.real.paths;
+        let (slots, memory) = (paths.data.join("slots"), paths.data.join("memory"));
+        std::fs::create_dir_all(&slots).unwrap();
+        std::fs::create_dir_all(memory.join("3.5-4b")).unwrap();
+        for name in ["3.5-4b.bin", "3.5-4b.prefix-0123456789abcdef.bin", "ling.bin"] {
+            std::fs::write(slots.join(name), b"x").unwrap();
+        }
+        std::fs::write(memory.join("3.5-4b").join("a.slot"), b"x").unwrap();
+        crate::model_choices::take_off(paths, &hw, None, None, None, "3.5-4b").unwrap();
+        let left: Vec<String> = std::fs::read_dir(&slots).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+        assert_eq!(left, ["ling.bin"]);
+        assert!(!memory.join("3.5-4b").exists());
     }
 
     /// A file the user chose on the computer that is a Mango Code model's own file is that model, listed once: what was

@@ -87,17 +87,10 @@ async function write(message: string) {
   await p.send("Input.dispatchKeyEvent", { type: "keyUp", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 });
 }
 
-/** Closes WebView2 in the window (its browser, through remote debugging) the way it closes when the app quits. */
-async function closeWindowBrowser() {
-  const ws = new WebSocket((await (await fetch(`http://127.0.0.1:${env.cdp}/json/version`)).json()).webSocketDebuggerUrl);
-  await new Promise((ok, ko) => ((ws.onopen = ok), (ws.onerror = ko)));
-  ws.send(JSON.stringify({ id: 1, method: "Browser.close" }));
-}
-
-/** The window's storage (WebView2's, in the app data) has `key` on the disk. */
+/** The interface's state, as the app keeps it on disk (`ui-state.json`), has `key`. */
 function onDisk(key: string) {
-  const dir = path.join(env.data, "finestra", "EBWebView", "Default", "Local Storage", "leveldb");
-  return fs.existsSync(dir) && fs.readdirSync(dir).some((f) => /\.(log|ldb)$/.test(f) && fs.readFileSync(path.join(dir, f)).includes(key));
+  const file = path.join(env.data, "ui-state.json");
+  return fs.existsSync(file) && key in JSON.parse(fs.readFileSync(file, "utf8")).entries;
 }
 
 const chats = () =>
@@ -333,10 +326,8 @@ test("«è pronto» is the explanation of the first time: after «Ho capito» it
   await mouseClick('[data-action="mango-ready-dismiss"]');
   await waitUntil(async () => !(await exists(ready)), "the line closed");
   const conversation = (await p.evaluate("location.href")) as string;
-  // The restart here kills the app, and the window keeps the last changes of its storage in memory for a while: it is
-  // closed first as «Quit» closes it, which writes them to the disk.
-  await closeWindowBrowser();
-  await waitUntil(() => onDisk("mango.readyHint.seen"), "«Ho capito» kept by the window", 10_000);
+  // The restart here kills the app: the answer has to be on the disk by then.
+  await waitUntil(() => onDisk("mango.readyHint.seen"), "«Ho capito» kept by the app", 10_000);
   p.close();
   await env.restart();
   p = await page(env.cdp!, (t) => t.url.startsWith(env.agent), 120_000);

@@ -1,4 +1,4 @@
-import { pathKey } from "@/utils/path-key"
+import { folderKey } from "@/utils/path-key"
 
 type ServerProject = { worktree: string; time: { updated: number } }
 
@@ -9,9 +9,9 @@ type ServerProject = { worktree: string; time: { updated: number } }
  * a folder.
  */
 export function projectsToOpen(known: ServerProject[], listed: string[], closed: string[]) {
-  const skip = new Set([...listed, ...closed].map(pathKey))
+  const skip = new Set([...listed, ...closed].map(folderKey))
   return known
-    .filter((project) => project.worktree !== "/" && !skip.has(pathKey(project.worktree)))
+    .filter((project) => project.worktree !== "/" && !skip.has(folderKey(project.worktree)))
     .toSorted((a, b) => a.time.updated - b.time.updated)
     .map((project) => project.worktree)
 }

@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test"
-import { mkdir, unlink } from "fs/promises"
+import { mkdir } from "fs/promises"
 import path from "path"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { AppNodeBuilder } from "@opencode-ai/core/effect/app-node-builder"
@@ -17,7 +17,6 @@ import { Plugin } from "../../src/plugin/index"
 import { Provider } from "@/provider/provider"
 
 import { RuntimeFlags } from "@/effect/runtime-flags"
-import { Filesystem } from "@/util/filesystem"
 import { InstanceBootstrap } from "@/project/bootstrap"
 import { InstanceStore } from "@/project/instance-store"
 import { testEffect } from "../lib/effect"
@@ -75,14 +74,6 @@ const providerLayer = (flags: Partial<RuntimeFlags.Info> = {}) =>
   )
 
 const list = Provider.use.list()
-
-const paid = (providers: Record<string, { models: Record<string, { cost: { input: number } }> }>) => {
-  const item = providers[ProviderV2.ID.make("opencode")]
-  expect(item).toBeDefined()
-  return Object.values(item.models).filter((model) => model.cost.input > 0).length
-}
-
-const languageBaseURL = (language: unknown) => (language as { config: { baseURL: string } }).config.baseURL
 
 const it = testEffect(LayerNode.compile(LayerNode.group([Provider.node, Env.node, Plugin.node])))
 const experimentalModels = testEffect(providerLayer({ enableExperimentalModels: true }))
@@ -740,15 +731,6 @@ it.instance("getSmallModel returns appropriate small model", () =>
   }),
 )
 
-it.instance("getSmallModel prefers Gemini for Google Vertex", () =>
-  Effect.gen(function* () {
-    yield* set("GOOGLE_VERTEX_PROJECT", "test-project")
-    const model = yield* Provider.use.getSmallModel(ProviderV2.ID.googleVertex)
-    expect(model).toBeDefined()
-    expect(model?.id).toContain("gemini")
-  }),
-)
-
 it.instance(
   "getSmallModel selects the latest model in the preferred family",
   Effect.gen(function* () {
@@ -816,24 +798,6 @@ it.instance(
       },
     },
   },
-)
-
-it.instance("getSmallModel skips inferred models for Azure", () =>
-  Effect.gen(function* () {
-    yield* set("AZURE_RESOURCE_NAME", "test-resource")
-    yield* set("AZURE_API_KEY", "test-key")
-    const model = yield* Provider.use.getSmallModel(ProviderV2.ID.azure)
-    expect(model).toBeUndefined()
-  }),
-)
-
-it.instance("getSmallModel skips inferred models for Azure Cognitive Services", () =>
-  Effect.gen(function* () {
-    yield* set("AZURE_COGNITIVE_SERVICES_RESOURCE_NAME", "test-resource")
-    yield* set("AZURE_COGNITIVE_SERVICES_API_KEY", "test-key")
-    const model = yield* Provider.use.getSmallModel(ProviderV2.ID.make("azure-cognitive-services"))
-    expect(model).toBeUndefined()
-  }),
 )
 
 it.instance(
@@ -1054,7 +1018,7 @@ it.instance(
     // openai: in enabled, but also in disabled = NOT allowed
     expect(providers[ProviderV2.ID.openai]).toBeUndefined()
     // google: not in enabled = NOT allowed (even though not disabled)
-    expect(providers[ProviderV2.ID.google]).toBeUndefined()
+    expect(providers[ProviderV2.ID.make("google")]).toBeUndefined()
   }),
   {
     // enabled_providers takes precedence — only these are considered
@@ -1220,7 +1184,7 @@ it.instance("ModelNotFoundError suggests catalog models for unloaded providers",
   Effect.gen(function* () {
     yield* remove("OPENCODE_API_KEY")
     const error = yield* Provider.use
-      .getModel(ProviderV2.ID.opencode, ModelV2.ID.make("claude-haiku-fake-model"))
+      .getModel(ProviderV2.ID.make("opencode"), ModelV2.ID.make("claude-haiku-fake-model"))
       .pipe(Effect.flip)
     if (!Provider.ModelNotFoundError.isInstance(error)) throw error
     expect(error.suggestions ?? []).toContain("claude-haiku-4-5")
@@ -1298,53 +1262,6 @@ it.instance(
   {
     config: {
       provider: { anthropic: { options: { headers: { "X-Custom": "custom-value" }, timeout: 30000 } } },
-    },
-  },
-)
-
-it.instance(
-  "hosted nvidia provider adds billing origin header",
-  Effect.gen(function* () {
-    const providers = yield* list
-    expect(providers[ProviderV2.ID.make("nvidia")].options.headers).toEqual({
-      "HTTP-Referer": "https://opencode.ai/",
-      "X-Title": "opencode",
-      "X-BILLING-INVOKE-ORIGIN": "OpenCode",
-    })
-  }),
-  { config: { provider: { nvidia: { options: { apiKey: "test-api-key" } } } } },
-)
-
-it.instance(
-  "custom nvidia baseURL adds billing origin header",
-  Effect.gen(function* () {
-    const providers = yield* list
-    expect(providers[ProviderV2.ID.make("nvidia")].options.headers).toEqual({
-      "HTTP-Referer": "https://opencode.ai/",
-      "X-Title": "opencode",
-      "X-BILLING-INVOKE-ORIGIN": "OpenCode",
-    })
-  }),
-  { config: { provider: { nvidia: { options: { apiKey: "test-api-key", baseURL: "http://localhost:8000/v1" } } } } },
-)
-
-it.instance(
-  "explicit nvidia billing origin header is preserved",
-  Effect.gen(function* () {
-    const providers = yield* list
-    expect(providers[ProviderV2.ID.make("nvidia")].options.headers["X-BILLING-INVOKE-ORIGIN"]).toBe("CustomOrigin")
-  }),
-  {
-    config: {
-      provider: {
-        nvidia: {
-          options: {
-            apiKey: "test-api-key",
-            baseURL: "http://localhost:8000/v1",
-            headers: { "X-BILLING-INVOKE-ORIGIN": "CustomOrigin" },
-          },
-        },
-      },
     },
   },
 )
@@ -1475,7 +1392,7 @@ test("mode options and cost are derived from the base model", () => {
   expect(model.options["serviceTier"]).toEqual("priority")
   const pro = Provider.fromModelsDevProvider(provider).models["gpt-5.6-sol-pro"]
   expect(pro.api.id).toEqual("gpt-5.6-sol")
-  expect(pro.options).toEqual({ reasoningMode: "pro", serviceTier: "priority" })
+  expect(pro.options).toEqual({ reasoning: { mode: "pro" }, serviceTier: "priority" })
   expect(model.cost.experimentalOver200K).toEqual({
     input: 5,
     output: 22.5,
@@ -1543,7 +1460,7 @@ test("models.dev reasoning options replace generated variants and unsupported to
         name: "Override",
         reasoning: true,
         reasoning_options: [{ type: "effort", values: ["high"] }],
-        provider: { npm: "@ai-sdk/google" },
+        provider: { npm: "@ai-sdk/openai-compatible" },
         limit: { context: 128_000, output: 64_000 },
         experimental: { modes: { fast: {} } },
       },
@@ -1568,38 +1485,9 @@ test("models.dev reasoning options replace generated variants and unsupported to
   })
   expect(models.empty.variants).toEqual({})
   expect(Object.keys(models.fallback.variants ?? {})).toEqual(["none", "low", "medium", "high", "xhigh"])
-  expect(models.override.variants).toEqual({
-    high: { thinkingConfig: { includeThoughts: true, thinkingLevel: "high" } },
-  })
+  expect(models.override.variants).toEqual({ high: { reasoningEffort: "high" } })
   expect(models.anthropicCompatible.variants).toEqual({ max: { effort: "max" } })
   expect(models["gemini-3-pro-fast"].variants).toEqual(models.override.variants)
-})
-
-test("MERGE Gateway exposes declared effort variants without model-specific handling", () => {
-  const provider = {
-    id: "merge-gateway",
-    name: "MERGE Gateway",
-    env: ["MERGE_GATEWAY_API_KEY"],
-    npm: "merge-gateway-ai-sdk-provider",
-    models: {
-      "openai/gpt-5.6-sol": {
-        id: "openai/gpt-5.6-sol",
-        name: "GPT-5.6 Sol",
-        reasoning: true,
-        reasoning_options: [{ type: "effort", values: ["none", "low", "medium", "high", "xhigh", "max"] }],
-        limit: { context: 128_000, output: 64_000 },
-      },
-    },
-  } as unknown as ModelsDev.Provider
-
-  expect(Provider.fromModelsDevProvider(provider).models["openai/gpt-5.6-sol"].variants).toEqual({
-    none: { reasoningEffort: "none" },
-    low: { reasoningEffort: "low" },
-    medium: { reasoningEffort: "medium" },
-    high: { reasoningEffort: "high" },
-    xhigh: { reasoningEffort: "xhigh" },
-    max: { reasoningEffort: "max" },
-  })
 })
 
 test("public provider info omits invalid models", () => {
@@ -1629,9 +1517,18 @@ test("public provider info omits invalid models", () => {
 })
 
 test("what a client of the server is told about a provider never carries its key", () => {
-  const provider = Provider.fromModelsDevProvider({ id: "test", name: "Test", env: [], models: {} } as unknown as ModelsDev.Provider)
+  const provider = Provider.fromModelsDevProvider({
+    id: "test",
+    name: "Test",
+    env: [],
+    models: {},
+  } as unknown as ModelsDev.Provider)
   provider.key = "secret-key-of-the-provider"
-  provider.options = { apiKey: "secret-key-of-the-provider", baseURL: "http://192.168.1.20:47098/v1", headerTimeout: 900000 }
+  provider.options = {
+    apiKey: "secret-key-of-the-provider",
+    baseURL: "http://192.168.1.20:47098/v1",
+    headerTimeout: 900000,
+  }
 
   const result = Provider.toClientInfo(provider)
 
@@ -1846,19 +1743,19 @@ it.instance(
 )
 
 it.instance(
-  "Google Vertex: retains baseURL for custom proxy",
+  "custom provider retains baseURL from options",
   Effect.gen(function* () {
     yield* set("GOOGLE_APPLICATION_CREDENTIALS", "test-creds")
     const providers = yield* list
-    expect(providers[ProviderV2.ID.make("vertex-proxy")]).toBeDefined()
-    expect(providers[ProviderV2.ID.make("vertex-proxy")].options.baseURL).toBe("https://my-proxy.com/v1")
+    expect(providers[ProviderV2.ID.make("proxy-provider")]).toBeDefined()
+    expect(providers[ProviderV2.ID.make("proxy-provider")].options.baseURL).toBe("https://my-proxy.com/v1")
   }),
   {
     config: {
       provider: {
-        "vertex-proxy": {
-          name: "Vertex Proxy",
-          npm: "@ai-sdk/google-vertex",
+        "proxy-provider": {
+          name: "Proxy Provider",
+          npm: "@ai-sdk/openai-compatible",
           api: "https://my-proxy.com/v1",
           env: ["GOOGLE_APPLICATION_CREDENTIALS"],
           models: { "gemini-pro": { name: "Gemini Pro", tool_call: true } },
@@ -1874,20 +1771,20 @@ it.instance(
 )
 
 it.instance(
-  "Google Vertex: supports OpenAI compatible models",
+  "model npm override on a custom provider",
   Effect.gen(function* () {
     yield* set("GOOGLE_APPLICATION_CREDENTIALS", "test-creds")
     const providers = yield* list
-    const model = providers[ProviderV2.ID.make("vertex-openai")].models["gpt-4"]
+    const model = providers[ProviderV2.ID.make("mixed-provider")].models["gpt-4"]
     expect(model).toBeDefined()
     expect(model.api.npm).toBe("@ai-sdk/openai-compatible")
   }),
   {
     config: {
       provider: {
-        "vertex-openai": {
-          name: "Vertex OpenAI",
-          npm: "@ai-sdk/google-vertex",
+        "mixed-provider": {
+          name: "Mixed Provider",
+          npm: "@ai-sdk/openai-compatible",
           env: ["GOOGLE_APPLICATION_CREDENTIALS"],
           models: {
             "gpt-4": {
@@ -1898,36 +1795,6 @@ it.instance(
           options: { project: "test-project", location: "us-central1" },
         },
       },
-    },
-  },
-)
-
-it.instance("cloudflare-ai-gateway loads with env variables", () =>
-  Effect.gen(function* () {
-    yield* set("CLOUDFLARE_ACCOUNT_ID", "test-account")
-    yield* set("CLOUDFLARE_GATEWAY_ID", "test-gateway")
-    yield* set("CLOUDFLARE_API_TOKEN", "test-token")
-    const providers = yield* list
-    expect(providers[ProviderV2.ID.make("cloudflare-ai-gateway")]).toBeDefined()
-  }),
-)
-
-it.instance(
-  "cloudflare-ai-gateway forwards config metadata options",
-  Effect.gen(function* () {
-    yield* set("CLOUDFLARE_ACCOUNT_ID", "test-account")
-    yield* set("CLOUDFLARE_GATEWAY_ID", "test-gateway")
-    yield* set("CLOUDFLARE_API_TOKEN", "test-token")
-    const providers = yield* list
-    expect(providers[ProviderV2.ID.make("cloudflare-ai-gateway")]).toBeDefined()
-    expect(providers[ProviderV2.ID.make("cloudflare-ai-gateway")].options.metadata).toEqual({
-      invoked_by: "test",
-      project: "opencode",
-    })
-  }),
-  {
-    config: {
-      provider: { "cloudflare-ai-gateway": { options: { metadata: { invoked_by: "test", project: "opencode" } } } },
     },
   },
 )
@@ -2029,57 +1896,4 @@ it.instance(
     expect(providers[ProviderV2.ID.anthropic]).toBeDefined()
     expect(providers[ProviderV2.ID.openai]).toBeUndefined()
   }),
-)
-
-it.effect("opencode loader keeps paid models when config apiKey is present", () =>
-  Effect.gen(function* () {
-    const noneDir = yield* tmpdirScoped()
-    const keyedDir = yield* tmpdirScoped({
-      config: { provider: { opencode: { options: { apiKey: "test-key" } } } },
-    })
-
-    const listIn = (directory: string) =>
-      Provider.use
-        .list()
-        .pipe(provideInstanceEffect(directory))
-        .pipe(Effect.provide(instanceStoreLayer), Effect.provide(AppNodeBuilder.build(CrossSpawnSpawner.node)))
-
-    const none = paid(yield* listIn(noneDir))
-    const keyedCount = paid(yield* listIn(keyedDir))
-
-    expect(none).toBe(0)
-    expect(keyedCount).toBeGreaterThan(0)
-  }).pipe(provideMultiInstance),
-)
-
-it.effect("opencode loader keeps paid models when auth exists", () =>
-  Effect.gen(function* () {
-    const noneDir = yield* tmpdirScoped()
-    const keyedDir = yield* tmpdirScoped()
-
-    const listIn = (directory: string) =>
-      Provider.use
-        .list()
-        .pipe(provideInstanceEffect(directory))
-        .pipe(Effect.provide(instanceStoreLayer), Effect.provide(AppNodeBuilder.build(CrossSpawnSpawner.node)))
-
-    const none = paid(yield* listIn(noneDir))
-
-    const authPath = path.join(Global.Path.data, "auth.json")
-    const original = yield* Effect.promise(() => Filesystem.readText(authPath).catch(() => undefined))
-
-    yield* Effect.acquireRelease(
-      Effect.promise(() => Filesystem.write(authPath, JSON.stringify({ opencode: { type: "api", key: "test-key" } }))),
-      () =>
-        Effect.promise(async () => {
-          if (original !== undefined) await Filesystem.write(authPath, original)
-          else await unlink(authPath).catch(() => undefined)
-        }),
-    )
-
-    const keyedCount = paid(yield* listIn(keyedDir))
-
-    expect(none).toBe(0)
-    expect(keyedCount).toBeGreaterThan(0)
-  }).pipe(provideMultiInstance),
 )

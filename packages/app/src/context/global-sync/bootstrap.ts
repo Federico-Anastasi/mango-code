@@ -44,6 +44,7 @@ import { NormalizedProviderListResponse } from "@opencode-ai/session-ui/context"
 import { ScopedKey, type ServerScope } from "@/utils/server-scope"
 import { normalizeSessionInfo } from "@/utils/session"
 import type { ServerProtocol } from "@/utils/server-protocol"
+import { folderKey } from "@/utils/path-key"
 import type { ServerApi } from "@/utils/server"
 
 type GlobalStore = {
@@ -182,8 +183,14 @@ function groupBySession<T extends { id: string; sessionID: string }>(input: T[])
   }, {})
 }
 
+const sameFolder = (a: string | undefined, b: string) => a !== undefined && folderKey(a) === folderKey(b)
+
 function projectID(directory: string, projects: Project[]) {
-  return projects.find((project) => project.worktree === directory || project.sandboxes?.includes(directory))?.id
+  const key = folderKey(directory)
+  return projects.find(
+    (project) =>
+      folderKey(project.worktree) === key || project.sandboxes?.some((sandbox) => folderKey(sandbox) === key),
+  )?.id
 }
 
 function mergeSession(setStore: SetStoreFunction<State>, session: Session) {
@@ -360,7 +367,8 @@ export async function bootstrapDirectory(input: {
 }) {
   const loading = input.store.status !== "complete"
   const seededProject = projectID(input.directory, input.global.project)
-  const seededPath = input.global.path.directory === input.directory ? input.global.path : undefined
+  const seededPath =
+    folderKey(input.global.path.directory) === folderKey(input.directory) ? input.global.path : undefined
   if (seededProject) input.setStore("project", seededProject)
   if (seededPath) input.setStore("path", seededPath)
   if (Object.keys(input.store.config).length === 0 && Object.keys(input.global.config).length > 0) {
@@ -398,7 +406,7 @@ export async function bootstrapDirectory(input: {
               produce((draft) => {
                 for (const sessionID of Object.keys(draft)) {
                   if (statuses[sessionID]) continue
-                  if (input.session?.get(sessionID)?.directory === input.directory) delete draft[sessionID]
+                  if (sameFolder(input.session?.get(sessionID)?.directory, input.directory)) delete draft[sessionID]
                 }
               }),
             )
@@ -461,7 +469,7 @@ export async function bootstrapDirectory(input: {
                 const current = input.session?.data.permission ?? input.store.permission
                 for (const sessionID of Object.keys(current)) {
                   if (grouped[sessionID]) continue
-                  if (input.session?.get(sessionID)?.directory !== input.directory) continue
+                  if (!sameFolder(input.session?.get(sessionID)?.directory, input.directory)) continue
                   if (input.session) input.session.set("permission", sessionID, [])
                   if (!input.session) input.setStore("permission", sessionID, [])
                 }
@@ -497,7 +505,7 @@ export async function bootstrapDirectory(input: {
                 const current = input.session?.data.question ?? input.store.question
                 for (const sessionID of Object.keys(current)) {
                   if (grouped[sessionID]) continue
-                  if (input.session?.get(sessionID)?.directory !== input.directory) continue
+                  if (!sameFolder(input.session?.get(sessionID)?.directory, input.directory)) continue
                   if (input.session) input.session.set("question", sessionID, [])
                   if (!input.session) input.setStore("question", sessionID, [])
                 }

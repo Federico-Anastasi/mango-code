@@ -60,7 +60,7 @@ pub struct AgentInputs {
     pub models: Vec<AgentModel>,
     /// Key of the model of new conversations; `None` while no model is on the computer.
     pub default_model: Option<String>,
-    /// Port of the agent's web server (stable: the web UI saves state per origin).
+    /// Port of the agent's web server: the one the app chose for this start.
     pub port: u16,
     /// URL of the dictation service, if running.
     pub voice_url: Option<String>,

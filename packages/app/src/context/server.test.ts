@@ -3,6 +3,7 @@ import { createRoot, createSignal } from "solid-js"
 import { createStore } from "solid-js/store"
 import {
   createServerProjects,
+  mergeDuplicateProjects,
   migrateCanonicalLocalServerState,
   nextServerAfterRemoval,
   resolveServerList,
@@ -196,6 +197,153 @@ describe("createServerProjects", () => {
       expect(projects.recentlyClosed()).toEqual(["/repo/"])
       dispose()
     })
+  })
+
+  test("opens one project for a Windows folder however its path is written", () => {
+    createRoot((dispose) => {
+      const [scope] = createSignal(ServerScope.local)
+      const [store, setStore] = createStore({ projects: {}, lastProject: {}, recentlyClosed: {} })
+      const projects = createServerProjects({ scope, store, setStore })
+
+      projects.open("C:\\x")
+      projects.open("c:/x/")
+      projects.open("C:/X")
+      expect(projects.list()).toEqual([{ worktree: "C:\\x", expanded: true }])
+
+      projects.open("/Repo")
+      projects.open("/repo")
+      expect(projects.list().map((project) => project.worktree)).toEqual(["/repo", "/Repo", "C:\\x"])
+      dispose()
+    })
+  })
+
+  test("expand, collapse, move and remove find the project by the folder, not by its spelling", () => {
+    createRoot((dispose) => {
+      const [scope] = createSignal(ServerScope.local)
+      const [store, setStore] = createStore({ projects: {}, lastProject: {}, recentlyClosed: {} })
+      const projects = createServerProjects({ scope, store, setStore })
+
+      projects.open("C:\\x")
+      projects.open("C:\\y")
+      projects.collapse("c:/x/")
+      expect(projects.list().find((project) => project.worktree === "C:\\x")?.expanded).toBe(false)
+      projects.expand("C:/X")
+      expect(projects.list().find((project) => project.worktree === "C:\\x")?.expanded).toBe(true)
+      projects.move("c:/x", 0)
+      expect(projects.list().map((project) => project.worktree)).toEqual(["C:\\x", "C:\\y"])
+      projects.remove("c:/y/")
+      expect(projects.list().map((project) => project.worktree)).toEqual(["C:\\x"])
+      dispose()
+    })
+  })
+
+  test("closing by another spelling lists the folder once, and reopening takes it off the closed ones", () => {
+    createRoot((dispose) => {
+      const [scope] = createSignal(ServerScope.local)
+      const [store, setStore] = createStore({ projects: {}, lastProject: {}, recentlyClosed: {} })
+      const projects = createServerProjects({ scope, store, setStore })
+
+      projects.open("C:\\x")
+      projects.close("c:/x")
+      expect(projects.list()).toEqual([])
+      expect(projects.recentlyClosed()).toEqual(["c:/x"])
+      projects.close("C:\\X\\")
+      expect(projects.recentlyClosed()).toEqual(["C:\\X\\"])
+      projects.open("C:\\x")
+      expect(projects.recentlyClosed()).toEqual([])
+      dispose()
+    })
+  })
+})
+
+describe("mergeDuplicateProjects", () => {
+  test("keeps the first of the projects saved twice, in its own spelling, and the rest as they are", () => {
+    const merged = mergeDuplicateProjects({
+      list: [],
+      projects: {
+        local: [
+          { worktree: "C:\\x", expanded: false },
+          { worktree: "/Repo", expanded: true },
+          { worktree: "c:/x/", expanded: true },
+          { worktree: "/repo", expanded: true },
+          { worktree: "D:\\y", expanded: true },
+          { worktree: "d:/Y", expanded: false },
+        ],
+        "https://other.example": [{ worktree: "/a", expanded: true }],
+      },
+      lastProject: { local: "d:/Y", "https://other.example": "/a" },
+      recentlyClosed: { local: ["c:/z", "C:\\Z\\", "/q"] },
+    })
+    expect(merged).toEqual({
+      list: [],
+      projects: {
+        local: [
+          { worktree: "C:\\x", expanded: true },
+          { worktree: "/Repo", expanded: true },
+          { worktree: "/repo", expanded: true },
+          { worktree: "D:\\y", expanded: true },
+        ],
+        "https://other.example": [{ worktree: "/a", expanded: true }],
+      },
+      lastProject: { local: "D:\\y", "https://other.example": "/a" },
+      recentlyClosed: { local: ["c:/z", "/q"] },
+    })
+  })
+
+  test("the kept project is open if any of its copies was, and the last project follows the spelling that stays", () => {
+    const merged = mergeDuplicateProjects({
+      projects: {
+        local: [
+          { worktree: "C:\\x", expanded: false },
+          { worktree: "c:/X", expanded: true },
+        ],
+      },
+      lastProject: { local: "C:/X/" },
+    }) as { projects: { local: Array<{ worktree: string; expanded: boolean }> }; lastProject: { local: string } }
+    expect(merged.projects.local).toEqual([{ worktree: "C:\\x", expanded: true }])
+    expect(merged.lastProject.local).toBe("C:\\x")
+  })
+
+  test("a folder that is open is not also among the recently closed, whichever way it is written", () => {
+    const merged = mergeDuplicateProjects({
+      projects: { local: [{ worktree: "C:\\x", expanded: true }], other: [{ worktree: "C:\\y", expanded: true }] },
+      recentlyClosed: { local: ["c:/X/", "C:\\gone", "c:/y"], other: ["c:/Y", "C:\\x"] },
+    })
+    expect(merged).toEqual({
+      projects: { local: [{ worktree: "C:\\x", expanded: true }], other: [{ worktree: "C:\\y", expanded: true }] },
+      recentlyClosed: { local: ["C:\\gone", "c:/y"], other: ["C:\\x"] },
+    })
+  })
+
+  test("tells the spellings of each folder that was merged, the one that stays first, so that what was kept under the others is not lost", () => {
+    const merged: string[][] = []
+    mergeDuplicateProjects(
+      {
+        projects: {
+          local: [
+            { worktree: "C:\\x", expanded: false },
+            { worktree: "C:\\y", expanded: false },
+            { worktree: "c:/X/", expanded: true },
+            { worktree: "C:\\X", expanded: true },
+            { worktree: "/Repo", expanded: true },
+            { worktree: "/repo", expanded: true },
+          ],
+        },
+      },
+      (spellings) => merged.push(spellings),
+    )
+    expect(merged).toEqual([["C:\\x", "c:/X/", "C:\\X"]])
+    const none: string[][] = []
+    mergeDuplicateProjects({ projects: { local: [{ worktree: "C:\\x", expanded: true }] } }, (spellings) => none.push(spellings))
+    expect(none).toEqual([])
+  })
+
+  test("returns a state without duplicates, or one it does not know, as it is", () => {
+    const clean = { projects: { local: [{ worktree: "C:\\x", expanded: true }] }, recentlyClosed: { local: [] } }
+    expect(mergeDuplicateProjects(clean)).toBe(clean)
+    expect(mergeDuplicateProjects(undefined)).toBeUndefined()
+    expect(mergeDuplicateProjects("text")).toBe("text")
+    expect(mergeDuplicateProjects({ projects: { local: "broken" } })).toEqual({ projects: { local: "broken" } })
   })
 })
 

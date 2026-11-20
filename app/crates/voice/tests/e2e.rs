@@ -29,11 +29,19 @@ fn dictates_a_clip_like_the_agents_server_does() {
     let audio = std::fs::read(env("VOICE_TEST_AUDIO")).unwrap();
     let words: Vec<String> = env("VOICE_TEST_WORDS").split(',').map(|w| w.trim().to_lowercase()).collect();
 
-    let port = {
-        let l = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
-        l.local_addr().unwrap().port()
+    // A port that was free when picked can be taken before the service binds it: then another one is picked.
+    let mut tries = 0;
+    let server = loop {
+        let port = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap().local_addr().unwrap().port();
+        match voice::start(std::path::Path::new(&model), port) {
+            Ok(server) => break server,
+            Err(e) if tries < 10 => {
+                eprintln!("the dictation service did not start on port {port}, another port is tried: {e:?}");
+                tries += 1;
+            }
+            Err(e) => panic!("the dictation service did not start: {e:?}"),
+        }
     };
-    let server = voice::start(std::path::Path::new(&model), port).unwrap();
     let agent: ureq::Agent = ureq::Agent::config_builder().http_status_as_error(false).build().into();
 
     // the first dictation waits for the model to load, as in production

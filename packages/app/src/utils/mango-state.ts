@@ -49,9 +49,9 @@ export type Verdict = {
   estimated: boolean
 }
 
-export type Sampling = Partial<
-  Record<"temperature" | "top_p" | "top_k" | "min_p" | "presence_penalty" | "repeat_penalty", number>
->
+export const SAMPLING_KEYS = ["temperature", "top_p", "top_k", "min_p", "presence_penalty", "repeat_penalty"] as const
+
+export type Sampling = Partial<Record<(typeof SAMPLING_KEYS)[number], number>>
 
 export type CatalogEntry = {
   key: string
@@ -62,6 +62,8 @@ export type CatalogEntry = {
   user: boolean
   /** Its files that the user chose on the computer, where they are: «Togli» takes it off the list and leaves them. */
   ownFiles: string[]
+  /** The folder that holds its downloaded files when the user moved them out of the models folder. */
+  placedIn?: string
   present: boolean
   /** On the computer, waiting for the new version of its engine, which the update brings: it stays in its row. */
   waitsEngine: boolean
@@ -200,7 +202,6 @@ export function parseState(value: unknown): MangoState | undefined {
 const SPEEDS = new Set(["very_slow", "slow", "fair", "quick"])
 const WHERE_CHOICES = new Set(["auto", "one", "all", "cpu", "pick"])
 const STYLES = new Set(["recommended", "precise", "creative"])
-const SAMPLING_KEYS = ["temperature", "top_p", "top_k", "min_p", "presence_penalty", "repeat_penalty"] as const
 
 /**
  * The models that read: one without its verdict, its choices or its limits is left out (the settings could not show it
@@ -225,6 +226,7 @@ export function parseCatalog(value: unknown): CatalogEntry[] | undefined {
         images: m.images === true,
         user: m.user === true,
         ownFiles: strings(m.own_files),
+        placedIn: text(m.placed_in),
         present: m.present,
         waitsEngine: m.waits_engine === true,
         bytes: count(m.bytes) ?? 0,
@@ -288,12 +290,15 @@ function parseChoices(value: unknown): MangoModelChoices | undefined {
   if (!raw || !WHERE_CHOICES.has(raw.where as string) || !STYLES.has(raw.style as string)) return
   if (raw.context !== null && count(raw.context) === undefined) return
   if (raw.reasoning !== null && typeof raw.reasoning !== "boolean") return
+  const sampling = parseSampling(raw.sampling)
+  if (!sampling) return
   return {
     where: raw.where as MangoModelChoices["where"],
     gpus: strings(raw.gpus),
     context: raw.context as number | null,
     style: raw.style as MangoModelChoices["style"],
     reasoning: raw.reasoning as boolean | null,
+    sampling,
   }
 }
 
@@ -426,14 +431,11 @@ export function etaSeconds(download: Pick<Download, "done" | "total" | "bytes_pe
   return Math.ceil((download.total - download.done) / download.bytes_per_second)
 }
 
-/** Context tokens as the user reads them: «128k». */
-export const contextLabel = (tokens: number) => `${Math.round(tokens / 1024)}k`
+/** Context tokens as the user reads them: «128K», K being 1024 tokens. */
+export const contextLabel = (tokens: number) => `${Math.round(tokens / 1024)}K`
 
 /** The disk of the models' folder as the user names it: its drive («C:»), or the folder where it has none. */
 export const diskDrive = (path: string) => /^[a-z]:/i.exec(path)?.[0].toUpperCase() ?? path
-
-/** About how many words a context holds (0.65 words a token), in thousands: «85». */
-export const contextWords = (tokens: number) => Math.round((tokens * 0.65) / 1000)
 
 /** Where a model runs, as a line says it: the cards by name, or the processor. */
 export const whereCards = (where: Where) => (where.placement === "cpu" ? undefined : where.gpus.join(" + "))

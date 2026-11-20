@@ -2,12 +2,17 @@ import { describe, expect, test } from "bun:test"
 import { parseState } from "@/utils/mango-state"
 import {
   arrivingRows,
+  contextIssue,
   diskLabel,
   downloadLine,
+  parseContext,
+  parseSamplingValue,
   remoteEngine,
   removeLines,
+  samplingIssue,
+  samplingText,
   sizeTiers,
-  styleTemperature,
+  stepContext,
   variantLine,
 } from "./lines"
 
@@ -48,11 +53,72 @@ describe("the lines of the models", () => {
     expect(downloadLine({ ...download, state: "waiting", engine_only: true }, language)).toStartWith(
       "mango.engine.updating · ",
     )
-    expect(styleTemperature("precise", { temperature: 0.1 })).toBe(0.1)
-    expect(styleTemperature("precise", { temperature: 1 })).toBe(0.3)
-    expect(styleTemperature("precise", null)).toBe(0.3)
-    expect(styleTemperature("creative", { temperature: 0.1 })).toBe(1.1)
-    expect(styleTemperature("recommended", { temperature: 0.7 })).toBe(0.7)
+  })
+
+  test("a context typed: tokens, with or without separators, or a number of K (1024 tokens); nothing else", () => {
+    expect(parseContext("100000")).toBe(100000)
+    expect(parseContext(" 100.000 ")).toBe(100000)
+    expect(parseContext("100,000")).toBe(100000)
+    expect(parseContext("100 000")).toBe(100000)
+    expect(parseContext("96k")).toBe(98304)
+    expect(parseContext("96 K")).toBe(98304)
+    for (const text of ["", "k", "-5", "1.5k", "abc", "12e3", "100000 tokens"]) expect(parseContext(text)).toBeUndefined()
+  })
+
+  test("the plus and the minus go in steps of 4096 tokens, from a number between two steps to the next one, within the limits", () => {
+    expect(stepContext(65536, 1, 32768, 262144)).toBe(69632)
+    expect(stepContext(65536, -1, 32768, 262144)).toBe(61440)
+    expect(stepContext(100000, 1, 32768, 262144)).toBe(102400)
+    expect(stepContext(100000, -1, 32768, 262144)).toBe(98304)
+    expect(stepContext(32768, -1, 32768, 262144)).toBe(32768)
+    expect(stepContext(262144, 1, 32768, 262144)).toBe(262144)
+    expect(stepContext(90112, 1, 32768, 92160)).toBe(92160)
+    // a choice left over from a larger computer comes back to the largest
+    expect(stepContext(300000, -1, 32768, 262144)).toBe(262144)
+  })
+
+  test("a context under the minimum or over the maximum is told which, within them nothing", () => {
+    expect(contextIssue(32767, 32768, 262144)).toBe("min")
+    expect(contextIssue(262145, 32768, 262144)).toBe("max")
+    expect(contextIssue(32768, 32768, 262144)).toBeUndefined()
+    expect(contextIssue(262144, 32768, 262144)).toBeUndefined()
+  })
+
+  test("a value of the style is written as it is, so that leaving the box unchanged keeps it: no grouping, no rounding", () => {
+    expect(samplingText(1000, "it")).toBe("1000")
+    expect(samplingText(0.123456, "it")).toBe("0,123456")
+    expect(samplingText(1.05, "en")).toBe("1.05")
+    expect(parseSamplingValue("top_k", samplingText(1000, "it"))).toBe(1000)
+    expect(parseSamplingValue("min_p", samplingText(0.123456, "it"))).toBe(0.123456)
+  })
+
+  test("the values of the style: a number with a point or a comma, whole for top_k, inside the interval of each", () => {
+    expect(parseSamplingValue("temperature", "0,3")).toBe(0.3)
+    expect(parseSamplingValue("temperature", " 1.05 ")).toBe(1.05)
+    expect(parseSamplingValue("presence_penalty", "-1,5")).toBe(-1.5)
+    expect(parseSamplingValue("top_k", "20")).toBe(20)
+    for (const [name, text] of [
+      ["top_k", "20.5"],
+      ["top_k", "-1"],
+      ["temperature", "abc"],
+      ["temperature", ""],
+      ["temperature", "1,"],
+    ] as const)
+      expect(parseSamplingValue(name, text)).toBeUndefined()
+    // top_k is a 32-bit whole number in the app: a bigger one is outside its interval, not an error of the bridge
+    expect(samplingIssue("top_k", 4_294_967_295)).toBe(false)
+    expect(samplingIssue("top_k", 5_000_000_000)).toBe(true)
+    expect(samplingIssue("temperature", 2)).toBe(false)
+    expect(samplingIssue("temperature", 2.01)).toBe(true)
+    expect(samplingIssue("temperature", -0.1)).toBe(true)
+    expect(samplingIssue("top_p", 1)).toBe(false)
+    expect(samplingIssue("top_p", 1.1)).toBe(true)
+    expect(samplingIssue("min_p", 0)).toBe(false)
+    expect(samplingIssue("presence_penalty", -2)).toBe(false)
+    expect(samplingIssue("presence_penalty", 2.5)).toBe(true)
+    expect(samplingIssue("repeat_penalty", 0)).toBe(true)
+    expect(samplingIssue("repeat_penalty", 0.01)).toBe(false)
+    expect(samplingIssue("top_k", 0)).toBe(false)
   })
 
   test("the engine of another PC with its models; none with this PC's engine", () => {
@@ -93,8 +159,8 @@ describe("the lines of the models", () => {
       with_images: { ...fit, bytes: 2 ** 31, context: 32768, gpus: ["RTX 3060 Ti", "GTX 1080"] },
     }
     // how many cards, as the catalog's rows say it: the context of a larger one on two cards does not look random
-    expect(variantLine(variant, false, true, language)).toEndWith(" · mango.where.cards.one · 40k")
-    expect(variantLine(variant, true, true, language)).toEndWith(' · mango.where.cards.other {"count":2} · 32k')
+    expect(variantLine(variant, false, true, language)).toEndWith(" · mango.where.cards.one · 40K")
+    expect(variantLine(variant, true, true, language)).toEndWith(' · mango.where.cards.other {"count":2} · 32K')
     expect(variantLine(variant, true, false, language)).not.toContain("Q4_K_M")
     // with images it does not fit: no context
     const tight = { ...variant, with_images: { ...fit, placement: null, context: null } }
@@ -102,10 +168,10 @@ describe("the lines of the models", () => {
     // on the processor: no cards, how fast it writes when it is known, and the context
     const cpu = { ...variant, placement: "cpu" as const, gpus: [], speed: "slow" as const }
     expect(variantLine(cpu, false, true, language)).toEndWith(
-      " · settings.models.other.onCpu · settings.models.other.speed.slow · 40k",
+      " · settings.models.other.onCpu · settings.models.other.speed.slow · 40K",
     )
     expect(variantLine({ ...cpu, speed: null }, false, true, language)).toEndWith(
-      " · settings.models.other.onCpu · 40k",
+      " · settings.models.other.onCpu · 40K",
     )
   })
 

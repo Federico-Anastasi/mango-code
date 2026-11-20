@@ -52,8 +52,11 @@ export interface Environment {
   enginesDir: string;
   /** Another start of the app with the same data and these arguments: if the app is already open it hands the work over and exits. */
   launch: (args: string[]) => ChildProcess;
-  /** Closes the app (only the process started here) and starts it again on the same folders: to test resumes. */
-  restart: () => Promise<void>;
+  /**
+   * Closes the app (only the process started here) and starts it again on the same folders: to test resumes. `between` runs
+   * once the app is closed and before the new one starts.
+   */
+  restart: (between?: () => Promise<void>) => Promise<void>;
   close: () => void;
 }
 
@@ -68,6 +71,11 @@ function stopTree(app: ChildProcess) {
     }
     Bun.sleepSync(100);
   }
+}
+
+/** Stops every process launched in an environment that is still running, with its tree. */
+function stopAll(launched: ChildProcess[]) {
+  launched.filter((p) => p.exitCode === null && p.signalCode === null).forEach(stopTree);
 }
 
 /** Waits until nothing listens on the port any more: the processes of a closed app (WebView2's above all) can hold it for a few seconds, longer on a busy computer. */
@@ -117,6 +125,7 @@ export function writeLanguage(data: string, language = "it") {
  * environment (the paths are born with the environment). `window`: the app with its window and WebView2 remote
  * debugging, to drive the web UI; without it, --service. `noDebug`: the window without that debugging. `env`: extra
  * variables for the app and what it starts. `context`: the context tokens of the fake model (default 16384).
+ * `freeModelsFolder`: the distribution does not fix the models folder, which is then `<data>/models` and can be chosen.
  * `otherModels`: other catalog models after the fake one, in the given order, already on disk; `bytes` says how much
  * one of them declares to weigh (1000 bytes by default: it fits any computer); `onRequest` marks some of them `on_request`
  * (the catalog does not trust them as agents). `args`: the arguments of the first
@@ -130,18 +139,18 @@ export function writeLanguage(data: string, language = "it") {
  * `start` returns when the app is in use: the agent answers (`service.json`) and, if a model is on disk, it is loaded,
  * so a test talks to it at once. `modelLoading`: it returns as soon as the agent answers, while the model still loads.
  */
-type Options = { onRequest?: string[]; window?: boolean; args?: string[]; otherModels?: string[]; bytes?: Record<string, number>; chunkMs?: number; noDebug?: boolean; env?: Record<string, string>; context?: number; noModels?: boolean; modelLoading?: boolean; files?: Record<string, { size: number; sha256: string }>; imageModels?: string[]; imagePresent?: string[] };
+type Options = { freeModelsFolder?: boolean; onRequest?: string[]; window?: boolean; args?: string[]; otherModels?: string[]; bytes?: Record<string, number>; chunkMs?: number; noDebug?: boolean; env?: Record<string, string>; context?: number; noModels?: boolean; modelLoading?: boolean; files?: Record<string, { size: number; sha256: string }>; imageModels?: string[]; imagePresent?: string[] };
 
 /**
  * Removes the environment's folder (hundreds of MB). Its files (WebView2's above all) stay locked for a few seconds after
- * the app exits: it retries for 30 s, then says what it could not remove instead of failing the test that is closing.
+ * the app exits: it retries every half second for `attempts` times (30 s), then fails with what it could not remove.
  */
-function removeRoot(root: string) {
+export function removeRoot(root: string, attempts = 60) {
   for (let attempt = 1; ; attempt++) {
     try {
       return fs.rmSync(root, { recursive: true, force: true });
     } catch (error) {
-      if (attempt === 60) return console.warn(`the test environment ${root} could not be removed: ${error}`);
+      if (attempt === attempts) throw new Error(`the test environment ${root} could not be removed`, { cause: error });
       Bun.sleepSync(500);
     }
   }
@@ -149,16 +158,23 @@ function removeRoot(root: string) {
 
 export async function start(script: unknown[] | ((folders: { project: string; method: string }) => unknown[]), options: Options = {}): Promise<Environment> {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "mango-integration-"));
+  const launched: ChildProcess[] = [];
   try {
-    return await startIn(root, script, options);
+    return await startIn(root, launched, script, options);
   } catch (error) {
-    removeRoot(root);
+    stopAll(launched);
+    try {
+      removeRoot(root);
+    } catch (removal) {
+      throw new AggregateError([error, removal], `the start failed and its folder could not be removed: ${error}`);
+    }
     throw error;
   }
 }
 
 async function startIn(
   root: string,
+  launched: ChildProcess[],
   script: unknown[] | ((folders: { project: string; method: string }) => unknown[]),
   options: Options,
 ): Promise<Environment> {
@@ -171,9 +187,10 @@ async function startIn(
     fs.symlinkSync(path.join(LAUNCHER, nm), path.join(dist, nm), "junction");
   }
   const engines = path.join(root, "engines");
-  const models = path.join(root, "models");
+  // The models folder is the distribution's (`mango-paths.json`), which the user cannot change, unless the test wants to choose it.
+  const models = path.join(root, options.freeModelsFolder ? path.join("data", "models") : "models");
   fs.mkdirSync(engines, { recursive: true });
-  fs.mkdirSync(models);
+  fs.mkdirSync(models, { recursive: true });
   // The fake general engine sits where the download puts it (`<engines>/llamacpp/<version>-<build>/`), for every
   // build: the test does not depend on the PC's GPUs.
   const pictures = options.imageModels ?? [];
@@ -234,7 +251,7 @@ async function startIn(
       },
     }),
   );
-  fs.writeFileSync(path.join(dist, "mango-paths.json"), JSON.stringify({ llama: engines, models, opencode: agent }));
+  fs.writeFileSync(path.join(dist, "mango-paths.json"), JSON.stringify({ llama: engines, ...(options.freeModelsFolder ? {} : { models }), opencode: agent }));
 
   const data = path.join(root, "data");
   writeLanguage(data);
@@ -266,19 +283,24 @@ async function startIn(
     ...(cdp ? { WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${cdp}` } : {}),
     ...options.env,
   } as Record<string, string>;
-  const launch = (args: string[] = []) => spawn(APP_EXE, [...(options.window ? [] : ["--service"]), ...args], { env: appEnv, stdio: "ignore" });
+  const launch = (args: string[] = []) => {
+    const app = spawn(APP_EXE, [...(options.window ? [] : ["--service"]), ...args], { env: appEnv, stdio: "ignore" });
+    launched.push(app);
+    return app;
+  };
   const env: Environment = {
     root, data, project, method, engineLog, agent: "", engine: "", app: launch(options.args), appEnv, cdp, modelsDir: models, enginesDir: engines,
     launch,
-    restart: async () => {
+    restart: async (between) => {
       // With the tree of its processes (WebView2's too): the new start takes the same debugging port again.
       stopTree(env.app);
       // A new app that finds the debugging port still taken shows no page at all.
       if (cdp) await portReleased(cdp);
+      await between?.();
       env.app = launch();
     },
     close: () => {
-      stopTree(env.app);
+      stopAll(launched);
       removeRoot(root);
     },
   };

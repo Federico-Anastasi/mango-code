@@ -5,19 +5,21 @@
 //! PowerShell, however the job is set: when the job closes, it kills the shell but not those (measured with
 //! `off-screen`: the same commands under Windows PowerShell 5.1 end with the job). They do inherit the environment, so
 //! whoever owns a job gives its command a variable that names this run and, when the run ends, stops the processes that
-//! carry it. A run that ended without the chance (the app closed by `taskkill /T /F`) is cleaned up by the next one
+//! carry it. A run that ended without the chance (the app closed by `taskkill /T /F`) is cleaned up at once by its guardian
+//! (`reap_when_gone`, run by a copy of the app that is not its child) and, failing that, by the next run
 //! (`stale_runs`), which leaves the programs that have a window: the user may be working in them.
 
 use std::collections::{HashMap, HashSet};
+use std::time::Duration;
 use std::mem::size_of;
 use windows::core::PCWSTR;
 use windows::Wdk::System::Threading::{NtQueryInformationProcess, ProcessBasicInformation};
-use windows::Win32::Foundation::{CloseHandle, BOOL, HANDLE, HWND, LPARAM};
+use windows::Win32::Foundation::{CloseHandle, BOOL, HANDLE, HWND, LPARAM, WAIT_OBJECT_0, WAIT_TIMEOUT};
 use windows::Win32::System::Diagnostics::Debug::ReadProcessMemory;
 use windows::Win32::System::Diagnostics::ToolHelp::{CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS};
 use windows::Win32::System::StationsAndDesktops::{CloseDesktop, EnumDesktopWindows, EnumDesktopsW, GetProcessWindowStation, OpenDesktopW, DESKTOP_CONTROL_FLAGS, DESKTOP_READOBJECTS};
 use windows::Win32::System::Threading::{
-    GetExitCodeProcess, OpenProcess, TerminateProcess, PROCESS_BASIC_INFORMATION, PROCESS_QUERY_INFORMATION, PROCESS_QUERY_LIMITED_INFORMATION,
+    GetExitCodeProcess, OpenProcess, TerminateProcess, WaitForSingleObject, INFINITE, PROCESS_BASIC_INFORMATION, PROCESS_QUERY_INFORMATION, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE,
     PROCESS_TERMINATE, PROCESS_VM_READ,
 };
 use windows::Win32::UI::WindowsAndMessaging::{GetWindowThreadProcessId, IsWindowVisible};
@@ -123,8 +125,55 @@ fn is_running(pid: u32) -> bool {
     }
 }
 
+/// How waiting for a process ended.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Waited {
+    /// The process has ended, or is not there.
+    Ended,
+    /// The time ran out first.
+    TimedOut,
+    /// It could not be waited for: the process cannot be opened although it runs, or the wait itself failed. Nothing is known
+    /// about whether it ended.
+    Failed(String),
+}
+
+/// Waits for the process `pid` to end, for `timeout` or without limit.
+pub fn wait_for_exit(pid: u32, timeout: Option<Duration>) -> Waited {
+    unsafe {
+        // Access denied: it exists and is not ours; any other refusal: it is gone.
+        let process = match OpenProcess(PROCESS_SYNCHRONIZE, false, pid) {
+            Ok(process) => process,
+            Err(e) if is_running(pid) => return Waited::Failed(format!("process {pid} cannot be opened to wait for it: {e}")),
+            Err(_) => return Waited::Ended,
+        };
+        let answer = WaitForSingleObject(process, timeout.map_or(INFINITE, |t| t.as_millis().min(u128::from(INFINITE - 1)) as u32));
+        let _ = CloseHandle(process);
+        match answer {
+            WAIT_OBJECT_0 => Waited::Ended,
+            WAIT_TIMEOUT => Waited::TimedOut,
+            other => Waited::Failed(format!("waiting for process {pid} failed ({})", other.0)),
+        }
+    }
+}
+
+/// What a guardian does for a run: waits for its owner (the app) to end, however it ends, and then stops the processes of
+/// the run, as the cleanup at the next start would (`kill_background_where_env`: the ones with a visible window stay).
+/// Says how many it stopped. If the owner cannot be waited for, nothing is stopped: the owner may well be running, and the
+/// answer says why.
+pub fn reap_when_gone(owner: u32, var: &str, run: &str) -> Result<usize, String> {
+    reap_after(wait_for_exit(owner, None), var, run)
+}
+
+fn reap_after(waited: Waited, var: &str, run: &str) -> Result<usize, String> {
+    match waited {
+        Waited::Ended => Ok(kill_background_where_env(var, |value| value == run)),
+        Waited::TimedOut => Err("the wait for the owner ended with no owner gone".to_string()),
+        Waited::Failed(why) => Err(why),
+    }
+}
+
 /// Every process: its id and its parent's.
-fn processes() -> Vec<(u32, u32)> {
+pub(crate) fn processes() -> Vec<(u32, u32)> {
     let mut all = Vec::new();
     unsafe {
         let Ok(snapshot) = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) else { return all };
@@ -324,5 +373,59 @@ mod tests {
         let _ = (left_behind.kill(), live.kill());
         assert!(left_behind_gone, "the process of a closed run is still running");
         assert!(live_stays, "the process of a run that goes on was stopped");
+    }
+
+    /// Waiting for a process says when it ended, not when the time ran out first, and a process that is not there has ended.
+    #[test]
+    fn waiting_for_a_process_says_whether_it_ended() {
+        let mut owner = ping(None);
+        assert_eq!(wait_for_exit(owner.id(), Some(Duration::from_millis(300))), Waited::TimedOut, "it runs");
+        let id = owner.id();
+        owner.kill().unwrap();
+        owner.wait().unwrap();
+        assert_eq!(wait_for_exit(id, Some(Duration::from_secs(5))), Waited::Ended);
+        assert_eq!(wait_for_exit(id, None), Waited::Ended, "gone for good");
+    }
+
+    /// The guardian of a run waits while its owner lives, and when the owner dies (however) it stops the programs of the
+    /// run that have no window, and only those: another run's, an unmarked one and a program with a window stay.
+    #[test]
+    fn the_guardian_stops_the_runs_programs_when_the_owner_dies() {
+        let mut owner = ping(None);
+        // The other run's owner is this process, alive: a run named after `owner` would be stale once `owner` dies, and the
+        // cleanup test running beside this one would stop its program.
+        let (run, other_run) = (format!("{}-guarded", owner.id()), format!("{}-another", std::process::id()));
+        let (mut ours, mut other, mut nobody, mut with_window) = (ping_with(WINDOWS_RUN, Some(&run)), ping_with(WINDOWS_RUN, Some(&other_run)), ping(None), a_window_holder(&run));
+        let owner_id = owner.id();
+        let guardian = std::thread::spawn(move || reap_when_gone(owner_id, WINDOWS_RUN, &run).unwrap());
+
+        std::thread::sleep(Duration::from_millis(800));
+        assert!(!guardian.is_finished(), "the owner lives: the guardian waits");
+        assert!(ours.try_wait().unwrap().is_none());
+
+        owner.kill().unwrap();
+        owner.wait().unwrap();
+        let stopped = guardian.join().unwrap();
+
+        let (ours_gone, others_stay) = (gone(&mut ours), other.try_wait().unwrap().is_none() && nobody.try_wait().unwrap().is_none() && with_window.try_wait().unwrap().is_none());
+        let _ = (ours.kill(), other.kill(), nobody.kill(), with_window.kill());
+        assert!(ours_gone, "the program of the run is still running");
+        assert!(others_stay, "a program of another run, one without the mark or one with a window was stopped");
+        assert!(stopped >= 1);
+    }
+
+    /// A guardian that could not wait for its owner stops nothing: the owner may be running, and its programs are in use.
+    #[test]
+    fn a_guardian_that_cannot_wait_for_its_owner_stops_nothing() {
+        let mut ours = ping_with(WINDOWS_RUN, Some("guard-failed"));
+        for waited in [Waited::Failed("process 4 cannot be opened to wait for it".into()), Waited::TimedOut] {
+            let said = reap_after(waited, WINDOWS_RUN, "guard-failed");
+            assert!(said.is_err());
+            assert!(ours.try_wait().unwrap().is_none(), "the program of the run was stopped");
+        }
+        assert!(reap_after(Waited::Ended, WINDOWS_RUN, "guard-failed").unwrap() >= 1);
+        let stopped = gone(&mut ours);
+        let _ = ours.kill();
+        assert!(stopped);
     }
 }

@@ -338,3 +338,17 @@ fn the_cards_come_from_the_manager_of_the_models_that_write_and_go_back_to_it() 
     let s = engine.state();
     assert_eq!((s.phase, s.loans.iter().map(|l| l.who.as_str()).collect::<Vec<_>>(), s.released.as_slice()), (Phase::Released, vec!["another program"], &[2][..]), "{s:?}");
 }
+
+/// The app tells a page it must not reach its engines: the port of every image engine alive is known, from the moment it
+/// starts to the moment it stops.
+#[test]
+fn the_ports_of_the_engines_that_are_alive_are_told() {
+    let f = fixture("", 5);
+    assert!(f.m.ports().is_empty());
+    let one = f.m.generate(&staying_on("img"), &never(), &mut |_| {}).unwrap();
+    assert_eq!(f.m.ports(), [port_of(&one) as u16]);
+    f.m.unload();
+    assert!(f.m.ports().is_empty());
+    let single = f.m.generate(&request(None), &never(), &mut |_| {}).unwrap();
+    assert!(f.m.ports().is_empty() && engine_is_gone(port_of(&single)));
+}

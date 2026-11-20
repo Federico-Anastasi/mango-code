@@ -8,13 +8,14 @@ import { ProgressBarV2 } from "@opencode-ai/ui/v2/progress-bar-v2"
 import { useLanguage } from "@/context/language"
 import { failureText, useMango } from "@/context/mango"
 import { noModel } from "@/utils/mango-state"
+import { uiStorage } from "@/utils/ui-storage"
 import { showToast } from "@/utils/toast"
 import { statusLine } from "./mango-text"
 
 const SEEN_KEY = "mango.readyHint.seen"
 const storedSeen = () => {
   try {
-    return localStorage.getItem(SEEN_KEY) === "1"
+    return uiStorage.getItem(SEEN_KEY) === "1"
   } catch {
     // without storage it is said at each start, and «Got it» still closes it until the next
     return false
@@ -22,10 +23,11 @@ const storedSeen = () => {
 }
 // «X is ready», with where models change, is the explanation of the first time (shown once). Read with «Got it» or
 // with a message sent, it does not come back, not after a restart either: a model ready later just ends its load.
-const [readySeen, setReadySeen] = createSignal(storedSeen())
+// Read when first needed, not when the file loads: the interface's state is read from the app before anything draws.
+const [readySeen, setReadySeen] = createSignal<boolean>()
 
 /** The model has just become ready and the explanation was never read: the line says it. */
-export const showReady = (justReady: boolean) => justReady && !readySeen()
+export const showReady = (justReady: boolean) => justReady && !(readySeen() ?? storedSeen())
 
 /** A narrow window (a phone) has no model name in the top bar and no gear in a conversation: the hint does not send there. */
 export const readyHintKey = (narrow: boolean) =>
@@ -37,7 +39,7 @@ export function dismissReady(mango: Pick<ReturnType<typeof useMango>, "justReady
   mango.dismissReady()
   setReadySeen(true)
   try {
-    localStorage.setItem(SEEN_KEY, "1")
+    uiStorage.setItem(SEEN_KEY, "1")
   } catch {}
 }
 

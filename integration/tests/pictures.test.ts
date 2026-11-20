@@ -366,7 +366,12 @@ test("when the user leaves pictures the engine that draws is put away: «Testo»
 test("a conversation opened again shows its pictures and opens on «Immagine»", async () => {
   // the box remembers the choice; without it the last turn decides
   const session = (await (await fetch(`${env.agent}/session?directory=${encodeURIComponent(site)}`)).json())[0].id as string;
-  await p.evaluate(`Object.keys(localStorage).filter((k) => k.includes("prompt")).forEach((k) => localStorage.removeItem(k))`);
+  await p.evaluate(`(async () => {
+    const state = window.__MANGO_DESKTOP__.uiState;
+    const saved = await state.load();
+    const forget = (area, keys) => keys.filter((key) => key.includes("prompt")).map((key) => ({ area, key }));
+    await state.apply([...forget("entries", Object.keys(saved.entries)), ...forget("drafts", Object.keys(saved.drafts))]);
+  })()`);
   const b64 = Buffer.from(site).toString("base64").replace(/=+$/, "").replace(/\+/g, "-").replace(/\//g, "_");
   await p.send("Page.navigate", { url: `${env.agent}/${b64}/session/${session}` });
   await waitUntil(() => exists(`${ROW} [data-slot="picture-image"]`), "the pictures", 60_000);

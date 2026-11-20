@@ -45,3 +45,24 @@ pub fn ok(reply: Reply) -> Reply {
     assert!(reply.status().is_success(), "the server answered {}", reply.status());
     reply
 }
+
+/// Serves the manager's HTTP on a port that was free when it was picked. Another test may pick the same one at the same
+/// moment and bind it first: then the next free port is picked.
+pub fn serve(m: &engine::EngineManager, control: Option<std::sync::Arc<dyn engine::http::Control>>) -> u16 {
+    let mut failures = 0;
+    loop {
+        let port = free_port();
+        match engine::http::serve(m.clone(), port, control.clone()) {
+            Ok(()) => return port,
+            Err(e) if failures < 10 => {
+                failures += 1;
+                eprintln!("port {port} was taken ({e:#}): trying another");
+            }
+            Err(e) => panic!("no port to serve on: {e:#}"),
+        }
+    }
+}
+
+pub fn free_port() -> u16 {
+    std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap().local_addr().unwrap().port()
+}

@@ -69,14 +69,14 @@ impl Fake {
         }
         Fake { _dir: dir, paths, catalog: toq_catalog(), profile: toq_profile() }
     }
-
-    /// A distribution without profiles with only Qwen3.5-4B (as in the real catalog) and official llama.cpp.
+    /// A distribution without profiles with a Qwen3.5-4B that holds 128K tokens (the real one holds more, which the real
+    /// catalog tests use) and official llama.cpp.
     pub fn small() -> Fake {
         let mut t = Fake::new();
         t.catalog = json!({
           "ctx": 131072, "default": "4b", "order": ["4b"],
           "models": { "4b": {
-            "label": "Qwen3.5-4B", "gguf": "4b.gguf", "ctx": 262144,
+            "label": "Qwen3.5-4B", "gguf": "4b.gguf", "ctx": 131072,
             "files": [ { "path": "4b.gguf", "size": 2_740_937_888u64 } ],
             "memory": { "kv_kib_token": 32, "state_mib": 53 } } } });
         t.profile = Value::Null;

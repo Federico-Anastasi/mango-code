@@ -60,13 +60,21 @@ function exists(dir: string) {
     .catch(() => false)
 }
 
-function clean(dir: string) {
-  return fs.rm(dir, {
-    recursive: true,
-    force: true,
-    maxRetries: 5,
-    retryDelay: 100,
-  })
+// Bun's `maxRetries` does not retry a busy folder: Windows keeps a folder locked, or not yet empty, for a moment after
+// its last user lets go.
+export async function clean(dir: string, left = 40, remove: typeof fs.rm = fs.rm): Promise<void> {
+  try {
+    await remove(dir, { recursive: true, force: true })
+  } catch (error) {
+    const busy =
+      typeof error === "object" &&
+      error !== null &&
+      "code" in error &&
+      (error.code === "EBUSY" || error.code === "EPERM" || error.code === "ENOTEMPTY")
+    if (!busy || left <= 1) throw error
+    await new Promise((done) => setTimeout(done, 250))
+    return clean(dir, left - 1, remove)
+  }
 }
 
 async function stop(dir: string) {
@@ -108,7 +116,7 @@ export async function tmpdir<T>(options?: TmpDirOptions<T>) {
         await options?.dispose?.(realpath)
       } finally {
         if (options?.git) await stop(realpath).catch(() => undefined)
-        await clean(realpath).catch(() => undefined)
+        await clean(realpath)
       }
     },
     path: realpath,
@@ -132,7 +140,7 @@ export function tmpdirScoped<E = never, R = never>(options?: {
     yield* Effect.addFinalizer(() =>
       Effect.promise(async () => {
         if (options?.git) await stop(dir).catch(() => undefined)
-        await clean(dir).catch(() => undefined)
+        await clean(dir)
       }),
     )
 

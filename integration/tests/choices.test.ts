@@ -93,6 +93,34 @@ test("a context chosen for the model in use loads it again with that context; th
   expect(saved().models.fake.where).toBe("auto");
 }, 120_000);
 
+test("a personal context is any number of tokens from the minimum to the model's maximum; the values of the style do not load the model again", async () => {
+  const loadsBefore = loads();
+  const choices = (patch: string) => `models.setChoices("fake", { where: "auto", gpus: [], context: 40000, style: "recommended", reasoning: null, sampling: {}, ${patch} })`;
+  expect(await ask(choices(""))).toBe("ok");
+  await waitUntil(async () => (await state()).model.phase === "ready" && (await state()).model.where.context === 40000, "the model loaded again with the number chosen");
+  expect(loads()).toBe(loadsBefore + 1);
+  expect((await model("fake")).verdict.where.context).toBe(40000);
+
+  // Under the minimum, or over what the model holds: refused with the sentence, nothing saved.
+  const under = JSON.parse(await ask(choices("context: 30000")));
+  expect(under).toMatchObject({ code: "refused" });
+  expect(under.message).toContain("Almeno 32K token");
+  const over = JSON.parse(await ask(choices("context: 70000")));
+  expect(over.message).toContain("regge al massimo 64K token");
+  expect(saved().models.fake.context).toBe(40000);
+
+  // The values chosen one by one: saved, shown as what a request gets, and no reload.
+  expect(await ask(choices("sampling: { temperature: 0.2, top_k: 5 }"))).toBe("ok");
+  await Bun.sleep(1500);
+  expect(loads()).toBe(loadsBefore + 1);
+  expect(saved().models.fake.sampling).toEqual({ temperature: 0.2, top_k: 5 });
+  expect((await model("fake")).sampling).toMatchObject({ temperature: 0.2, top_k: 5 });
+  const refused = JSON.parse(await ask(choices("sampling: { top_p: 1.5 }")));
+  expect(refused.message).toContain("top_p");
+  expect(saved().models.fake.sampling).toEqual({ temperature: 0.2, top_k: 5 });
+  await settled();
+}, 120_000);
+
 test("the computer's choices are saved and read back", async () => {
   expect((await get("computer")).small_models).toBe("one");
   expect(await ask(`computer.setSmallModels("all")`)).toBe("ok");

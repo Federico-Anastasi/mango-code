@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
-import { createXai } from "@ai-sdk/xai"
-import { APICallError, generateText, type ModelMessage } from "ai"
+import { APICallError, type ModelMessage } from "ai"
 import { MessageV2 } from "../../src/session/message-v2"
 import { SessionRetry } from "../../src/session/retry"
 import { ProviderTransform } from "@/provider/transform"
@@ -21,7 +20,7 @@ const model: Provider.Model = {
   api: {
     id: "test-model",
     url: "https://example.com",
-    npm: "@ai-sdk/openai",
+    npm: "@ai-sdk/anthropic",
   },
   name: "Test Model",
   capabilities: {
@@ -428,8 +427,20 @@ describe("session.message-v2.toModelMessage", () => {
         info: userInfo(messageID),
         parts: [
           { ...basePart(messageID, "b1"), type: "text", text: "look" },
-          { ...basePart(messageID, "b2"), type: "file", mime: "image/png", filename: "logo.png", url: "data:image/png;base64,Zm9v" },
-          { ...basePart(messageID, "b3"), type: "file", mime: docx, filename: "letter.docx", url: "data:" + docx + ";base64,Zm9v" },
+          {
+            ...basePart(messageID, "b2"),
+            type: "file",
+            mime: "image/png",
+            filename: "logo.png",
+            url: "data:image/png;base64,Zm9v",
+          },
+          {
+            ...basePart(messageID, "b3"),
+            type: "file",
+            mime: docx,
+            filename: "letter.docx",
+            url: "data:" + docx + ";base64,Zm9v",
+          },
         ] as SessionV1.Part[],
       },
     ]
@@ -464,7 +475,10 @@ describe("session.message-v2.toModelMessage", () => {
       url: "data:image/png;base64,Zm9v",
     }
     const input: SessionV1.WithParts[] = [
-      { info: userInfo(userID), parts: [{ ...basePart(userID, "u1"), type: "text", text: "take a screenshot" }] as SessionV1.Part[] },
+      {
+        info: userInfo(userID),
+        parts: [{ ...basePart(userID, "u1"), type: "text", text: "take a screenshot" }] as SessionV1.Part[],
+      },
       {
         info: assistantInfo(assistantID, userID),
         parts: [
@@ -579,302 +593,6 @@ describe("session.message-v2.toModelMessage", () => {
         ],
       },
     })
-  })
-
-  test("sends tool-result images to xai responses as input_image", async () => {
-    const xaiModel: Provider.Model = {
-      ...model,
-      id: ModelV2.ID.make("grok-4.7"),
-      providerID: ProviderV2.ID.make("xai"),
-      api: {
-        id: "grok-4.7",
-        url: "https://api.x.ai/v1",
-        npm: "@ai-sdk/xai",
-      },
-      capabilities: {
-        ...model.capabilities,
-        attachment: true,
-        input: {
-          ...model.capabilities.input,
-          image: true,
-        },
-      },
-    }
-    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).toString("base64")
-    const userID = "m-user-xai"
-    const assistantID = "m-assistant-xai"
-    const input: SessionV1.WithParts[] = [
-      {
-        info: userInfo(userID),
-        parts: [
-          {
-            ...basePart(userID, "u1-xai"),
-            type: "text",
-            text: "describe the diagram",
-          },
-        ] as SessionV1.Part[],
-      },
-      {
-        info: assistantInfo(assistantID, userID),
-        parts: [
-          {
-            ...basePart(assistantID, "a1-xai"),
-            type: "tool",
-            callID: "call-xai-1",
-            tool: "read",
-            state: {
-              status: "completed",
-              input: { filePath: "/tmp/diagram.png" },
-              output: "Image read successfully",
-              title: "Read",
-              metadata: {},
-              time: { start: 0, end: 1 },
-              attachments: [
-                {
-                  ...basePart(assistantID, "file-xai-1"),
-                  type: "file",
-                  mime: "image/png",
-                  filename: "diagram.png",
-                  url: `data:image/png;base64,${png}`,
-                },
-              ],
-            },
-          },
-        ] as SessionV1.Part[],
-      },
-    ]
-
-    const bodies: Record<string, unknown>[] = []
-    const xai = createXai({
-      apiKey: "test",
-      fetch: Object.assign(
-        async (url: RequestInfo | URL, init?: RequestInit) => {
-          bodies.push(await new Request(url, init).json())
-          return new Response("{}", { status: 400 })
-        },
-        { preconnect: globalThis.fetch.preconnect },
-      ),
-    })
-    await generateText({
-      model: xai.responses(xaiModel.api.id),
-      messages: ProviderTransform.message(await MessageV2.toModelMessages(input, xaiModel), xaiModel, {}),
-      providerOptions: { xai: { promptCacheKey: "session", reasoningEffort: "xhigh" } },
-      maxRetries: 0,
-    }).catch(() => undefined)
-
-    expect(bodies).toHaveLength(1)
-    expect(bodies[0].prompt_cache_key).toBe("session")
-    expect(bodies[0].reasoning).toEqual({ effort: "xhigh" })
-    expect(bodies[0].input).toContainEqual({
-      type: "function_call_output",
-      call_id: "call-xai-1",
-      output: [
-        { type: "input_text", text: "Image read successfully" },
-        { type: "input_image", image_url: `data:image/png;base64,${png}` },
-      ],
-    })
-  })
-
-  test("drops tool-result images xai rejects but keeps png and webp", async () => {
-    const xaiModel: Provider.Model = {
-      ...model,
-      id: ModelV2.ID.make("grok-4.7"),
-      providerID: ProviderV2.ID.make("xai"),
-      api: {
-        id: "grok-4.7",
-        url: "https://api.x.ai/v1",
-        npm: "@ai-sdk/xai",
-      },
-      capabilities: {
-        ...model.capabilities,
-        attachment: true,
-        input: {
-          ...model.capabilities.input,
-          image: true,
-        },
-      },
-    }
-    const images = [
-      { mime: "image/png", data: Buffer.from([0x89, 0x50, 0x4e, 0x47]).toString("base64") },
-      { mime: "image/gif", data: Buffer.from("GIF89a").toString("base64") },
-      { mime: "image/webp", data: Buffer.from("RIFFWEBP").toString("base64") },
-    ]
-    const userID = "m-user-xai-gif"
-    const assistantID = "m-assistant-xai-gif"
-    const input: SessionV1.WithParts[] = [
-      {
-        info: userInfo(userID),
-        parts: [
-          {
-            ...basePart(userID, "u1-xai-gif"),
-            type: "text",
-            text: "describe the images",
-          },
-        ] as SessionV1.Part[],
-      },
-      {
-        info: assistantInfo(assistantID, userID),
-        parts: [
-          {
-            ...basePart(assistantID, "a1-xai-gif"),
-            type: "tool",
-            callID: "call-xai-gif",
-            tool: "read",
-            state: {
-              status: "completed",
-              input: { filePath: "/tmp/images" },
-              output: "Images read successfully",
-              title: "Read",
-              metadata: {},
-              time: { start: 0, end: 1 },
-              attachments: images.map((image, index) => ({
-                ...basePart(assistantID, `file-xai-gif-${index}`),
-                type: "file" as const,
-                mime: image.mime,
-                filename: `image-${index}`,
-                url: `data:${image.mime};base64,${image.data}`,
-              })),
-            },
-          },
-        ] as SessionV1.Part[],
-      },
-    ]
-
-    const bodies: Record<string, unknown>[] = []
-    const xai = createXai({
-      apiKey: "test",
-      fetch: Object.assign(
-        async (url: RequestInfo | URL, init?: RequestInit) => {
-          bodies.push(await new Request(url, init).json())
-          return new Response("{}", { status: 400 })
-        },
-        { preconnect: globalThis.fetch.preconnect },
-      ),
-    })
-    await generateText({
-      model: xai.responses(xaiModel.api.id),
-      messages: ProviderTransform.message(await MessageV2.toModelMessages(input, xaiModel), xaiModel, {}),
-      maxRetries: 0,
-    }).catch(() => undefined)
-
-    expect(bodies).toHaveLength(1)
-    expect(bodies[0].input).toContainEqual({
-      type: "function_call_output",
-      call_id: "call-xai-gif",
-      output: [
-        { type: "input_text", text: "Images read successfully" },
-        { type: "input_image", image_url: `data:image/png;base64,${images[0].data}` },
-        { type: "input_image", image_url: `data:image/webp;base64,${images[2].data}` },
-      ],
-    })
-    expect(JSON.stringify(bodies[0])).not.toContain("image/gif")
-  })
-
-  test("moves bedrock pdf tool-result media into a separate user message", async () => {
-    const bedrockModel: Provider.Model = {
-      ...model,
-      id: ModelV2.ID.make("amazon-bedrock/anthropic.claude-sonnet-4-6"),
-      providerID: ProviderV2.ID.make("amazon-bedrock"),
-      api: {
-        id: "anthropic.claude-sonnet-4-6",
-        url: "https://bedrock-runtime.us-east-1.amazonaws.com",
-        npm: "@ai-sdk/amazon-bedrock",
-      },
-      capabilities: {
-        ...model.capabilities,
-        attachment: true,
-        input: {
-          ...model.capabilities.input,
-          image: true,
-          pdf: true,
-        },
-      },
-    }
-    const pdf = Buffer.from("%PDF-1.4\n").toString("base64")
-    const userID = "m-user-bedrock-pdf"
-    const assistantID = "m-assistant-bedrock-pdf"
-    const input: SessionV1.WithParts[] = [
-      {
-        info: userInfo(userID),
-        parts: [
-          {
-            ...basePart(userID, "u1-bedrock-pdf"),
-            type: "text",
-            text: "run tool",
-          },
-        ] as SessionV1.Part[],
-      },
-      {
-        info: assistantInfo(assistantID, userID),
-        parts: [
-          {
-            ...basePart(assistantID, "a1-bedrock-pdf"),
-            type: "tool",
-            callID: "call-bedrock-pdf-1",
-            tool: "read",
-            state: {
-              status: "completed",
-              input: { filePath: "/tmp/example.pdf" },
-              output: "PDF read successfully",
-              title: "Read",
-              metadata: {},
-              time: { start: 0, end: 1 },
-              attachments: [
-                {
-                  ...basePart(assistantID, "file-bedrock-pdf-1"),
-                  type: "file",
-                  mime: "application/pdf",
-                  filename: "example.pdf",
-                  url: `data:application/pdf;base64,${pdf}`,
-                },
-              ],
-            },
-          },
-        ] as SessionV1.Part[],
-      },
-    ]
-
-    expect(await MessageV2.toModelMessages(input, bedrockModel)).toStrictEqual([
-      {
-        role: "user",
-        content: [{ type: "text", text: "run tool" }],
-      },
-      {
-        role: "assistant",
-        content: [
-          {
-            type: "tool-call",
-            toolCallId: "call-bedrock-pdf-1",
-            toolName: "read",
-            input: { filePath: "/tmp/example.pdf" },
-            providerExecuted: undefined,
-          },
-        ],
-      },
-      {
-        role: "tool",
-        content: [
-          {
-            type: "tool-result",
-            toolCallId: "call-bedrock-pdf-1",
-            toolName: "read",
-            output: { type: "text", value: "PDF read successfully" },
-          },
-        ],
-      },
-      {
-        role: "user",
-        content: [
-          { type: "text", text: "Attached media from tool result:" },
-          {
-            type: "file",
-            mediaType: "application/pdf",
-            filename: "example.pdf",
-            data: `data:application/pdf;base64,${pdf}`,
-          },
-        ],
-      },
-    ])
   })
 
   test("omits provider metadata when assistant model differs", async () => {
@@ -1791,10 +1509,6 @@ describe("session.message-v2.fromError", () => {
         message: "Quota exceeded. Check your plan and billing details.",
       },
       {
-        code: "usage_not_included",
-        message: "To use Codex with your ChatGPT plan, upgrade to Plus: https://chatgpt.com/explore/plus.",
-      },
-      {
         code: "invalid_prompt",
         message: "Invalid prompt from test",
       },
@@ -2194,9 +1908,16 @@ describe("session.message-v2.fromError: the engine of another PC", () => {
   }
 
   test("a PC that is gone says so, and the agent still retries", () => {
-    const lost = [refused(), Object.assign(new Error("read ECONNRESET"), { code: "ECONNRESET", syscall: "read" }), new ProviderError.ResponseStreamError("terminated")]
+    const lost = [
+      refused(),
+      Object.assign(new Error("read ECONNRESET"), { code: "ECONNRESET", syscall: "read" }),
+      new ProviderError.ResponseStreamError("terminated"),
+    ]
     for (const error of lost) {
-      const result = withRemoteEngine(() => MessageV2.fromError(error, { providerID: mango })) as { name: string; data: { message: string; isRetryable: boolean } }
+      const result = withRemoteEngine(() => MessageV2.fromError(error, { providerID: mango })) as {
+        name: string
+        data: { message: string; isRetryable: boolean }
+      }
       expect(result.name).toBe("APIError")
       expect(says(result.data.message)).toBe(true)
       expect(result.data.isRetryable).toBe(true)
@@ -2211,10 +1932,17 @@ describe("session.message-v2.fromError: the engine of another PC", () => {
       statusCode: 401,
       isRetryable: false,
     })
-    expect((withRemoteEngine(() => MessageV2.fromError(rejected, { providerID: mango })) as { data: { message: string } }).data.message).toBe("The key is not right")
-    const slow = withRemoteEngine(() => MessageV2.fromError(new ProviderError.HeaderTimeoutError(900000), { providerID: mango })) as { data: { message: string } }
+    expect(
+      (withRemoteEngine(() => MessageV2.fromError(rejected, { providerID: mango })) as { data: { message: string } })
+        .data.message,
+    ).toBe("The key is not right")
+    const slow = withRemoteEngine(() =>
+      MessageV2.fromError(new ProviderError.HeaderTimeoutError(900000), { providerID: mango }),
+    ) as { data: { message: string } }
     expect(says(slow.data.message)).toBe(false)
-    const other = withRemoteEngine(() => MessageV2.fromError(refused(), { providerID: ProviderV2.ID.make("openrouter") })) as { data: { message: string } }
+    const other = withRemoteEngine(() =>
+      MessageV2.fromError(refused(), { providerID: ProviderV2.ID.make("openrouter") }),
+    ) as { data: { message: string } }
     expect(other.data.message).toContain("Cannot connect")
     const local = MessageV2.fromError(refused(), { providerID: mango }) as { data: { message: string } }
     expect(local.data.message).toContain("Cannot connect")

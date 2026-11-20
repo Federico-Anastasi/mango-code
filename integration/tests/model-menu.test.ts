@@ -80,9 +80,9 @@ test("each row of the menu that fits says where it runs, as the top bar's menu; 
     .filter((r) => r.querySelector('[data-slot="model-detail"]'))
     .map((r) => ({ name: r.querySelector('[data-slot="model-detail"]').parentElement.firstElementChild.textContent, detail: r.querySelector('[data-slot="model-detail"]').textContent, warning: r.querySelector('[data-slot="model-warning"]')?.textContent ?? "" }))`);
   const by = (name: string) => rows.find((r) => r.name === name)!;
-  // «2 schede · 128k»; the model that does not fit has no place to say
-  expect(by("Model small").detail).toMatch(/^(\d+ sched[ae]|processore) · \d+k$/);
-  expect(by("Fake model").detail).toMatch(/^(\d+ sched[ae]|processore) · \d+k$/);
+  // «2 schede · 128K»; the model that does not fit has no place to say
+  expect(by("Model small").detail).toMatch(/^(\d+ sched[ae]|processore) · \d+K$/);
+  expect(by("Fake model").detail).toMatch(/^(\d+ sched[ae]|processore) · \d+K$/);
   expect(rows.some((r) => r.name === "Model huge")).toBe(false);
   for (const name of ["Fake model", "Model small", "Model weak"]) expect(by(name).warning, name).toBe("");
   const text: string = await p.evaluate(`document.querySelector('[data-slot="model-selector-scroll"]').innerText`);

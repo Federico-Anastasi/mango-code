@@ -89,6 +89,7 @@ import { observeElementOffsetReconnectAware } from "./observe-element-offset"
 import { createTimelineProjection } from "./projection"
 import { MessageComment, SummaryDiff, TimelineRow, TimelineRowMap } from "./rows"
 import { filterVirtualIndexes } from "./virtual-items"
+import { beforeRevert } from "./model"
 import { createConversationFind, drawnResults, rowText } from "./conversation-find"
 import { ConversationFindBar } from "./conversation-find-bar"
 
@@ -354,6 +355,8 @@ export function MessageTimeline(props: {
    * closed.
    */
   onRetry?: (userMessageID: string) => void
+  /** «Continua» under a turn cut for its length: asks the model to go on. */
+  onContinue?: (userMessageID: string) => void
   scroll: { overflow: boolean; bottom: boolean; jump: boolean }
   onResumeScroll: () => void
   setScrollRef: (el: HTMLDivElement | undefined) => void
@@ -409,12 +412,7 @@ export function MessageTimeline(props: {
   const projectedMessages = createMemo(() => {
     const id = sessionID()
     if (!id) return []
-    const visible = new Set(props.userMessages.map((message) => message.id))
-    const boundary = sessionMessages().find((message) => message.role === "user" && !visible.has(message.id))?.id
-    const messages = sync().data.session_message[id] ?? []
-    if (!boundary) return messages
-    const index = messages.findIndex((message) => message.id === boundary)
-    return index < 0 ? messages : messages.slice(0, index)
+    return beforeRevert(sync().data.session_message[id] ?? [], sync().session.get(id)?.revert?.messageID)
   })
   const info = createMemo(() => {
     const id = sessionID()
@@ -1317,6 +1315,12 @@ export function MessageTimeline(props: {
     )
   }
 
+  // «Continua» under a turn: only the last one, with the conversation still.
+  const continueOf = (userMessageID: string) =>
+    props.onContinue && activeMessageID() === userMessageID && sessionStatus().type === "idle"
+      ? props.onContinue
+      : undefined
+
   // «Riprova» under a turn: only the last one, with the conversation still (sending again an older message would land at
   // the bottom), and only a message with words or pictures (one of only comments has nothing to send again).
   const retryOf = (userMessageID: string) => {
@@ -1470,6 +1474,45 @@ export function MessageTimeline(props: {
               <TurnStats
                 messages={assistantMessagesByParent().get(statsRow().userMessageID) ?? emptyAssistantMessages}
               />
+            </div>
+          </TimelineRowFrame>
+        )
+      }
+      case "Resumed": {
+        const resumedRow = row as Accessor<TimelineRowByTag<"Resumed">>
+        return (
+          <TimelineRowFrame row={resumedRow}>
+            <div data-slot="session-turn-message-container" class="w-full px-4 pt-2 md:px-5">
+              <div data-slot="session-turn-resumed" class="text-14-regular text-text-weak">
+                {language.t("session.length.resumed")}
+              </div>
+            </div>
+          </TimelineRowFrame>
+        )
+      }
+      case "LengthStop": {
+        const stopRow = row as Accessor<TimelineRowByTag<"LengthStop">>
+        const onContinue = () => continueOf(stopRow().userMessageID)
+        return (
+          <TimelineRowFrame row={stopRow}>
+            <div data-slot="session-turn-message-container" class="w-full px-4 pt-2 md:px-5">
+              <div data-slot="session-turn-length-stop" class="flex flex-wrap items-center gap-x-3 gap-y-2">
+                <span class="text-14-regular text-text-weak">
+                  {language.t(stopRow().again ? "session.length.stoppedAgain" : "session.length.stopped")}
+                </span>
+                <Show when={onContinue()}>
+                  {(go) => (
+                    <ButtonV2
+                      variant="outline"
+                      size="small"
+                      data-action="session-turn-continue"
+                      onClick={() => go()(stopRow().userMessageID)}
+                    >
+                      {language.t("session.length.continue")}
+                    </ButtonV2>
+                  )}
+                </Show>
+              </div>
             </div>
           </TimelineRowFrame>
         )

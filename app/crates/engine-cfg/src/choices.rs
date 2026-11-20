@@ -7,7 +7,9 @@
 //! sentence for the user, never the standard values in its place; and it is not overwritten.
 
 use crate::catalog::{load_models, model_cfg};
+use crate::split::{context_label, MIN_CTX};
 use anyhow::Result;
+use mango_common::catalog::Sampling;
 use mango_common::{tr, user_error, Paths};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -54,16 +56,19 @@ pub enum SmallModels {
 }
 
 /// One model's choices.
-#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Choices {
     #[serde(rename = "where")]
     pub place: WhereChoice,
     /// The cards by name; only with `WhereChoice::Pick`.
     pub gpus: Vec<String>,
-    /// `None` = the largest that fits.
+    /// `None` = the largest that fits; a number is any number of tokens from the minimum to what the model holds, and
+    /// the plan goes lower if the memory can't carry it.
     pub context: Option<u32>,
     pub style: Style,
+    /// The values the user chose one by one, over the style's: a missing one is the style's.
+    pub sampling: Sampling,
     /// `None` = as the model wants.
     pub reasoning: Option<bool>,
 }
@@ -88,7 +93,7 @@ impl Default for UpdateChoices {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ChoicesFile {
     /// The model started when the app opens.
@@ -157,6 +162,7 @@ pub fn set_model(paths: &Paths, key: &str, mut choices: Choices) -> Result<()> {
     let file = load_models(paths)?;
     let cfg = model_cfg(&file, key)?;
     choices.check(&cfg.label)?;
+    choices.check_context(&cfg.label, cfg.max_context(&file))?;
     if cfg.requires_engine.is_some() && choices.place != WhereChoice::Auto {
         anyhow::bail!("{}", only_automatic(&cfg.label));
     }
@@ -228,20 +234,34 @@ pub fn set_update_automatic(paths: &Paths, automatic: bool) -> Result<()> {
 const PRECISE: f64 = 0.3;
 const CREATIVE: f64 = 1.1;
 
-/// What a chat request to `key` is given when it does not say it itself: the sampling values of the style the user
-/// chose (the catalog's own for «recommended», the same with another temperature for «precise» and «creative») and, if
-/// the user chose it for a model that reasons, whether it reasons (`chat_template_kwargs.enable_thinking`). Empty when
-/// there is nothing to add: a model with no values in the catalog, the recommended style and the reasoning as the model
-/// wants.
-pub fn request_defaults(paths: &Paths, key: &str) -> Result<serde_json::Map<String, serde_json::Value>> {
-    let cfg = model_cfg(&load_models(paths)?, key)?;
-    let choices = read(paths)?.models.remove(key).unwrap_or_default();
-    let mut sampling = cfg.sampling.unwrap_or_default();
+/// The sampling values a request gets: the catalog's (`catalog`), with the temperature of the style the user chose
+/// («precise» and «creative»), and over them the values the user chose one by one.
+pub(crate) fn effective_sampling(catalog: Option<Sampling>, choices: &Choices) -> Sampling {
+    let mut sampling = catalog.unwrap_or_default();
     match choices.style {
         Style::Recommended => {}
         Style::Precise => sampling.temperature = Some(sampling.temperature.map_or(PRECISE, |t| t.min(PRECISE))),
         Style::Creative => sampling.temperature = Some(CREATIVE),
     }
+    let own = &choices.sampling;
+    Sampling {
+        temperature: own.temperature.or(sampling.temperature),
+        top_p: own.top_p.or(sampling.top_p),
+        top_k: own.top_k.or(sampling.top_k),
+        min_p: own.min_p.or(sampling.min_p),
+        presence_penalty: own.presence_penalty.or(sampling.presence_penalty),
+        repeat_penalty: own.repeat_penalty.or(sampling.repeat_penalty),
+    }
+}
+
+/// What a chat request to `key` is given when it does not say it itself: the sampling values the user's style and
+/// choices make of the catalog's (`effective_sampling`) and, if the user chose it for a model that reasons, whether it
+/// reasons (`chat_template_kwargs.enable_thinking`). Empty when there is nothing to add: a model with no values in the
+/// catalog, the recommended style and the reasoning as the model wants.
+pub fn request_defaults(paths: &Paths, key: &str) -> Result<serde_json::Map<String, serde_json::Value>> {
+    let cfg = model_cfg(&load_models(paths)?, key)?;
+    let choices = read(paths)?.models.remove(key).unwrap_or_default();
+    let sampling = effective_sampling(cfg.sampling, &choices);
     let serde_json::Value::Object(mut fields) = serde_json::to_value(sampling)? else { unreachable!("a struct is written as an object") };
     if let (true, Some(reason)) = (cfg.reasoning, choices.reasoning) {
         fields.insert("chat_template_kwargs".into(), serde_json::json!({ "enable_thinking": reason }));
@@ -268,14 +288,44 @@ fn change(paths: &Paths, apply: impl FnOnce(&mut ChoicesFile)) -> Result<()> {
 }
 
 impl Choices {
-    /// A context of 0 would make the engine take the model's own, and a list of cards needs cards. `name`: the model's
-    /// label for the user, or its key in the file.
+    /// A context of 0 would make the engine take the model's own, a list of cards needs cards, and a sampling value
+    /// has its interval. `name`: the model's label for the user, or its key in the file.
     fn check(&self, name: &str) -> Result<()> {
         if self.context == Some(0) {
             anyhow::bail!("{}", tr!("Il contesto scelto per «{name}» è 0.", "The context chosen for «{name}» is 0."));
         }
         if self.place == WhereChoice::Pick && self.gpus.is_empty() {
             anyhow::bail!("{}", tr!("Per «{name}» hai scelto le schede, ma non ne hai indicata nessuna.", "For «{name}» you chose the cards, but named none."));
+        }
+        let s = &self.sampling;
+        let in_interval = |field: &str, value: Option<f64>, low: f64, high: f64, range: String| match value {
+            Some(v) if !(low..=high).contains(&v) => anyhow::bail!("{}", tr!("Per «{name}» il valore {field} deve stare {range}.", "For «{name}» the value {field} must be {range}.")),
+            _ => Ok(()),
+        };
+        in_interval("temperature", s.temperature, 0.0, 2.0, tr!("fra 0 e 2", "between 0 and 2"))?;
+        in_interval("top_p", s.top_p, 0.0, 1.0, tr!("fra 0 e 1", "between 0 and 1"))?;
+        in_interval("min_p", s.min_p, 0.0, 1.0, tr!("fra 0 e 1", "between 0 and 1"))?;
+        in_interval("presence_penalty", s.presence_penalty, -2.0, 2.0, tr!("fra -2 e 2", "between -2 and 2"))?;
+        match s.repeat_penalty {
+            Some(v) if !(v > 0.0 && v.is_finite()) => {
+                anyhow::bail!("{}", tr!("Per «{name}» il valore repeat_penalty deve essere maggiore di 0.", "For «{name}» the value repeat_penalty must be above 0."))
+            }
+            _ => Ok(()),
+        }
+    }
+
+    /// The context chosen is from the minimum (or what the model holds, if that is less) to what the model holds: less
+    /// leaves the agent no room to work, more is not a context the model has. What the memory carries is not for the
+    /// choice to say: the plan goes lower and the view tells it.
+    fn check_context(&self, name: &str, max: u32) -> Result<()> {
+        let Some(context) = self.context else { return Ok(()) };
+        let k = context_label(MIN_CTX.min(max));
+        if context < MIN_CTX.min(max) {
+            anyhow::bail!("{}", tr!("Almeno {k} token: con meno l'agente non ha spazio per lavorare.", "At least {k} tokens: with less the agent has no room to work."));
+        }
+        let k = context_label(max);
+        if context > max {
+            anyhow::bail!("{}", tr!("«{name}» regge al massimo {k} token di contesto.", "«{name}» holds at most {k} tokens of context."));
         }
         Ok(())
     }

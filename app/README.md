@@ -7,8 +7,8 @@ manager tells how it goes (`GET /engine`). Nothing at startup concerns the last 
 line per phase with the time since the start.
 What PowerShell 7 from the Microsoft Store starts (a web server left in the background) is created outside every job: the agent gets
 `MANGO_APP_RUN`, a value of this run, every process it starts inherits it, and at Quit `mango_common::stragglers` stops the ones that carry it; the start of the next run stops the ones left by an app
-that was closed by force (its value names the process that owned it, which no longer runs), except those with a visible window and the ones those started: the user may be working in them. Measured with `off-screen`: every
-process started by the Store's PowerShell 7 leaves the job, while the ones of Windows PowerShell 5.1 do not.
+that was closed by force (its value names the process that owned it, which no longer runs), except those with a visible window and the ones those started: the user may be working in them. A guardian does the same without waiting for the next start: the app starts `mango-code.exe --reap <pid> <run>` (`helper.rs`) outside its job and without a window, which starts a second copy of itself and ends, so that ending the app with its processes (`taskkill /T`) does not reach it; the copy waits for the app to end, however it ends, and stops the processes of the run that have no visible window. Measured with `off-screen`: every
+process started by the Store's PowerShell 7 leaves the job, while the ones of Windows PowerShell 5.1 do not. Where an outer job does not let a process leave it (the tests run the app inside one) the guardian starts inside the app's job and ends with it, which `startup.log` says; the next start then stops what the agent left running. The copy that starts the app again after a move is let go of the job just before the app ends.
 What the app opens for the user (files with "Open", links in the browser, the logs folder) starts outside that job
 (`supervisor::open_outside_job`): a browser opened by the app stays open when the app quits. "Open" opens only documents,
 text, images, sound and video (`OPENABLE` in `bridge.rs`: the agent writes these files, and other types may run code); any other
@@ -31,7 +31,7 @@ the download and the service with a pretence of the same duration (tests and pic
 | where | what |
 |---|---|
 | `src-tauri/` | window, startup (`lib.rs`), process supervisor, native bridge for the web UI (`bridge.rs`), Preview panel (`preview.rs`), the folders served to it as sites (`sites.rs`), "Use my Chrome" (`chrome.rs`), dictation (`dictation.rs`), the control server's routes (`control.rs`), the downloads in the background (`downloads.rs`), the user's choices about the models and the computer and taking a model off it (`model_choices.rs`), the models the agent knows, told again when they change (`agent_models.rs`), the engine of another PC (`engine_remote.rs`), "Other models" (`other_models.rs`), the Team (`team.rs`), automatic updates (`updater.rs`), zoom of the window (`zoom.rs`), problem reports (`report.rs`), tray (`tray.rs`: "Open", "Settings…", "Quit") |
-| `crates/engine` | the engine manager on 47080: starts the model the request asks for, adds to the chat requests that do not say them the style and the reasoning the user chose, loads the running model again when the user's choices change its plan, remembers the model the conversations stay on while a request marked as a side one has the engine on another, saves the conversation before stopping, releases and resumes the GPUs (`/engine/*`), rejects web pages; `share.rs` shares it with the user's other PCs (below, "The engine for your other PCs") and `remote.rs` is the other side, the code of another PC checked and kept ("Using the engine of another PC"). Also `fake-engine` (the tests), `mango-bench` (the speeds of the catalog models), `mango-tune` (tuning: measures a tune, keeps the log, writes the profile; the `optimize/` skill uses it), `mango-launch` (`-p "request"`: one request from a script to the running app, `docs/INTEGRATION.md`) and `off-screen` (a command on a Windows desktop nobody sees: the integration tests without their windows on the screen) |
+| `crates/engine` | the engine manager on 47080: starts the model the request asks for, adds to the chat requests that do not say them the style and the reasoning the user chose, loads the running model again when the user's choices change its plan, remembers the model the conversations stay on while a request marked as a side one has the engine on another, keeps the official engine's slot files (the system prompt of a new conversation, read once; the last conversation, saved before stopping: `prefix.rs`), releases and resumes the GPUs (`/engine/*`), rejects web pages; `share.rs` shares it with the user's other PCs (below, "The engine for your other PCs") and `remote.rs` is the other side, the code of another PC checked and kept ("Using the engine of another PC"). Also `fake-engine` (the tests), `mango-bench` (the speeds of the catalog models), `mango-tune` (tuning: measures a tune, keeps the log, writes the profile; the `optimize/` skill uses it), `mango-launch` (`-p "request"`: one request from a script to the running app, `docs/INTEGRATION.md`) and `off-screen` (a command on a Windows desktop nobody sees: the integration tests without their windows on the screen) |
 | `crates/images` | the image manager: one picture at a time, drawn by a server of the image engine (`sd-server`, stable-diffusion.cpp) that stays on between the pictures of a conversation about images and is started and stopped for a single picture; it takes the card from the engine manager while it draws (a model that writes there is put aside and comes back), tells how far the picture is step by step with a small preview, and stops a picture on request. `jobs.rs` gives each picture a number to follow it by; `routes.rs` is the routes under `/control/image` on the engine manager's port (`docs/INTEGRATION.md`, "Pictures") |
 | `crates/mango-common` | paths (`Paths::discover`), data folder, service file, `Build` (the build of an engine: `cpu`, `vulkan`, `cuda-12`, `cuda-13`, and `cuda-12-gtx16` of our forks for the GTX 16 family), the app's language (`i18n`); `network` (the addresses of the home network and of Tailscale, for the phone and for the shared engine) and the key helpers (`random_hex`, `equal_ct`); `download`: download of engines (`mango-engines.json`: llama.cpp, our forks, and `sd` for the models that make images) and models (`mango-models.json`) with resume and sha256, plus Hugging Face (`download/hugging_face.rs`: search, links, GGUF files with hash); `credentials`: the keys in the Windows Credential Manager |
 | `crates/engine-cfg` | the PC's hardware (`hardware.rs`: GPUs of any vendor, CPU, RAM, build to use), the optimized profile if it applies (`profiles.rs`, `launcher/profiles/`) or the general plan with the official llama.cpp (`general.rs`), the recommended models (`recommended`), the split of layers across GPUs (`split.rs`), the plan of a model that makes images (`image.rs`: the image engine, the model's files, the card it draws on) |
@@ -49,7 +49,42 @@ otherwise going up from the executable to the first `launcher/` folder (repo), t
 moves engines, models and agent; without it, the
 paths of the installed app apply: `%LOCALAPPDATA%\MangoCode\engine` and `\models` (an update does not delete them) and
 `<dist>/opencode`, that is `resources/opencode` when installed and `launcher/opencode` in the repo, where `scripts\build-agent.ps1`
-builds the agent.
+builds the agent. The models folder the user chose (`%LOCALAPPDATA%\MangoCode\models-dir.txt`, one line, written by the app
+in the settings) comes after `mango-paths.json` and before `\models`; every binary that calls `Paths::discover` reads it.
+
+**Choosing and moving the models folder** (`mango_common::models_dir`, `src-tauri/src/models_move.rs`): the preview changes
+nothing (bytes and files to move, free space with the margin of a download, same volume or not, junctions and hard links found,
+partial downloads, whether the engine can open files in the new path, whether the destination has files of its own, a line of
+warning for a network or removable disk). On the same volume each entry of the old folder is renamed; on another volume the
+files are copied one by one with their modification time (the note of a verified hash, `.verified`, depends on it), checked by
+size and, where a note exists, by hash, the choice is written, and only then the old files are removed one by one
+(`remove_file`, `remove_dir`, never `remove_dir_all`). Junctions and symbolic links are never followed or removed. Before it,
+everything that uses the folder stops as when a model is taken off the computer (the engine and the pictures, the downloads
+held without being paused, the dictation, the watch); the app then starts again by itself (`mango-code.exe --relaunch <pid>`,
+which waits for the old process to end), or, if something stayed in the old folder (a junction that holds models, a file another
+program had open), waits until the user has seen what and asks for it. A move that is cancelled or fails before the choice is written
+leaves the old folder as it was and the app goes on; ending the app or installing an update first stops a move under way. Only what
+is Mango Code's moves (the files of the catalog's models and of the user's list that are in the folder, the dictation models, what the
+app writes next to them); any other file stays and the preview says so. Copies are hashed on both sides, the places and the user's
+models that point into the old folder are rewritten and read back before an original is removed, and a journal (`models-move.json`)
+lets the next start finish or put back a move that stopped half way. A destination with files of its own is only used as it is.
+
+**One model's files elsewhere** (`mango_common::model_files`, `models_dir::place`): the files of a catalog model (with their
+notes and partial downloads) can be put in a folder of the user's, on the same safe terms, and the app remembers it in
+`%LOCALAPPDATA%\MangoCode\model-files.json` (catalog path of each file → where it is). `catalog::read` applies it, so the plan
+of the engine, the downloads, the sizes and the removal find the file there; removing the model deletes it there, downloading
+it again puts it there. A GGUF chosen on the computer that is the very file of a catalog model (same name, size and hash) is not
+added to the user's list: the model keeps its settings and runs from that file, which is never downloaded or deleted.
+
+**In the settings** (`packages/app/src/components/settings-page/models-folder.tsx`): the card «Il resto» of Settings › Computer
+has the row «Cartella dei modelli» (the folder, how much the models take and on which disk, «Cambia…»). The Windows folder picker
+opens, then the row asks what the preview says (size, free space, same disk or not, the warning for a network or removable
+drive, what stops, that the app starts again) with «Annulla» and «Sposta»; a destination with files of its own offers «Usa questa
+cartella» instead; one that cannot be used says why. While it moves the row shows the bar, the bytes and «Annulla» (not once the old
+files are being removed); a move that fails, is cancelled or waits for the app to start again is told in the row. In a model's
+detail in Settings › Models, «Sposta questo modello…» does the same for that model's files (the app goes on), the row says where
+its files are when they are not in the models folder (`placed_in` of `/mango/models`), and «Riporta nella cartella dei modelli»
+puts them back. Models whose files the user chose, or that the user added, do not have it.
 
 ## Language
 
@@ -73,10 +108,13 @@ installer (`bundle.windows.nsis.languages` in `tauri.conf.json`, `windows/hooks.
 - Without a profile that applies, `plan()` uses the **general plan**: official llama.cpp
   (`<engines>\llamacpp\<version>-<build>\`) with the build from `choose_build` and the arguments computed from the hardware.
   The model runs **all on the GPUs or all on the CPU, never split**: on the GPUs (`-fit off -ngl all`, GPUs
-  visible with CUDA) if weights, image encoder and cache for at least 32k tokens fit; otherwise on the CPU
-  (`-dev none -t <cores>`, with the same build: nothing to download) if they fit in RAM; otherwise it does not fit, and
+  visible with CUDA) if weights, image encoder and cache for at least 32K tokens fit; otherwise on the CPU
+  (`-dev none -t <cores>`, with official llama.cpp's processor-only build, `cpu`: the CUDA build used with no card in sight
+  can close with an access violation while it reads a prompt; on a PC with cards that build is a download of 25 MB, which the app
+  makes by itself because the PC already has the engine for its cards) if they fit in RAM; otherwise it does not fit, and
   the error says how much is needed and what to do. The context is the maximum that fits, in steps of 4096, up to the
-  catalog target; the cache drops to q8_0 if f16 is not enough. The context is computed on all the NVIDIA cards that are not
+  model's own maximum (or the context the user chose, any number of tokens from 32K to that maximum); the cache drops to
+  q8_0 if f16 is not enough. The context is computed on all the NVIDIA cards that are not
   loaned; the model then takes the fewest of them (among as many, the strongest: `split::by_power`) that give the same context with the
   same cache type (with Vulkan, all of them). `-fit` must be off because llama.cpp turns it on by itself and would move
   layers to RAM. A loaned GPU (`/engine/release`) does not send a GPU model to the CPU. **How fast a model on the CPU
@@ -105,9 +143,8 @@ The installer brings no engines or weights. With no model on disk the app opens 
 knows every model of the catalog from the start (a model downloaded later needs no new agent). The models are chosen and
 downloaded in the settings of the web UI, section Models (`GET /control/models`, the bridge's `models.*`): the tray's
 "Settings…" opens it with the event `mango-settings` on the
-window (`{ section: "models" }`, `tray::open_settings`). In the web UI a model
-that runs on the CPU or does not fit says so in its name; choosing one that does not fit shows the sentence of the plan (the
-manager answers 422, which the agent does not retry). The agent knows every model of the catalog, also the ones not
+window (`{ section: "models" }`, `tray::open_settings`). A model that does not fit is listed without the line that says
+where it runs; choosing it shows the sentence of the plan (the manager answers 422, which the agent does not retry). The agent knows every model of the catalog, also the ones not
 downloaded yet; the model menu under the chat lists those on the disk (`present`), and the engine loads the model chosen
 there with the next message. When the app opens it loads the default model (`default` in
 `<data>\choices.json`) or, without one, the first model on disk in the catalog's order. If the default's engine is being
@@ -115,12 +152,12 @@ updated (a new version of it came with the app), the app waits for it as long as
 queued or running, and loads the default as soon as the engine is on the disk (not when the files of the download that
 brought it end), also if a message to the agent had made its start fail meanwhile;
 if the download fails, is paused or cancelled, or none was queued, it loads another model that is ready (never one being
-taken off the computer). Under each name the menu has a line (weight, «sulla scheda video» / «sul processore · lento»,
-«legge le immagini» in Italian; a model of another PC has its PC in its name) and, for a model marked `on_request`, the catalog's own warning that it is not reliable as an agent: the app gives
-the facts from its control server (`/control/models`, `/control/state`), which the web UI reads through the agent's
-`GET /mango/models` and `GET /mango/state` (the agent forwards them to `MANGO_CONTROL_URL`).
-Models without a catalog verdict about their quality (the `fallback` 2B among them) have no warning. A model marked `fallback` in the catalog (Qwen3.5-2B, for 4 GB cards) is proposed,
-and called the fastest, only when no other model fits on the graphics cards.
+taken off the computer). Under each name the menu says where the model runs and with how much context («2 schede ·
+128K», «Processore · 128K»; a model of another PC has its PC in its name): the app gives the facts from its control
+server (`/control/models`, `/control/state`), which the web UI reads through the agent's `GET /mango/models` and
+`GET /mango/state` (the agent forwards them to `MANGO_CONTROL_URL`). A model marked `on_request` is never preselected nor
+called the fastest. A model marked `fallback` in the catalog (Qwen3.5-2B, for 4 GB cards) is proposed, and called the
+fastest, only when no other model fits on the graphics cards.
 
 The models that make pictures (`image` in the catalog; `about` is the line under the name, in both languages, like the
 models that write) come in the same answer of `/control/models` as `image_models` (`key`, `label`, `about`, `license`,
@@ -185,7 +222,7 @@ Development builds download from `MANGO_HF_URL` instead of Hugging Face, if set 
 serves the files itself).
 
 The models folder is watched (`src-tauri/src/models_watch.rs`): a file put in it or taken out by hand, at any depth, makes the
-interface read the catalog and the computer again (the space the models use, the models on the computer) two seconds after the last change. If the folder is deleted or renamed while the app runs the watch ends, with one line in the startup log; the folder is watched again at the next start.
+interface read the catalog and the computer again (the space the models use, the models on the computer) two seconds after the last change. The nearest existing parent is watched too (names of folders only): a folder deleted, renamed away or put back is told as a change and watched again. The watch ends only when it is stopped. When the folder and every folder above it are gone (a disk that was unplugged) it is told as a change and the thread waits for Windows to announce a volume arriving (`CM_Register_Notification` on the volume interface class); two seconds after one it looks again and, if the folder is back, tells it and watches it. Reading the models does not start or look for anything. A network share that comes back is not a volume arrival: it is not noticed until the app starts again. The folder is made at startup, not by the watch. A move of the folder takes the watch away until the app starts again.
 
 With `--service` and no model the app is in use all the same: whoever asks the engine for a model that is not on disk gets
 the sentence that says so.
@@ -220,8 +257,7 @@ say, or twice the model's width), the context is the smallest the agent works wi
 the verdict say `estimated`.
 The warnings come from the conversation format inside the GGUF (`tokenizer.chat_template`), tried with a
 conversation that has the tool list, a call with its result and a system message in the middle: if the
-template rejects it (`raise_exception`), ignores the tools or drops that message, the warning says so and the button
-becomes "Add anyway". A template the tester cannot run gives "could not check", never a
+template rejects it (`raise_exception`), ignores the tools or drops that message, the warning says so under the model. A template the tester cannot run gives "could not check", never a
 verdict. "Add" writes the entry in `<data>\user-models.json` (`mango_common::catalog::add_user`) and the
 page comes back with the new model already ticked; from there the download is the usual one (`install_model`,
 with resume and sha256 from Hugging Face, at the revision read). A file on the computer stays where it is: the entry remembers its
@@ -240,9 +276,39 @@ vectors, memory of any model), `mango-common/src/download/hugging_face.rs`, `src
 
 `mango-code.exe --service` starts with the window hidden (the tray icon opens it) and writes `<data>\service.json`
 with the agent and engine ports: this is how the other apps find it (`docs/INTEGRATION.md`). For the tests:
-`MANGO_DATA` (data folder), `MANGO_AGENT_PORT`, `MANGO_ENGINE_PORT`, `MANGO_DIST`; with `MANGO_DATA`
+`MANGO_DATA` (data folder), `MANGO_AGENT_PORT` (the preferred port of the agent: a free one is used when it is taken), `MANGO_ENGINE_PORT`, `MANGO_DIST`; with `MANGO_DATA`
 the single instance is tied to that folder, so a test instance runs next to the real one. The integration tests
 (`bun test --cwd integration`) start an instance like this with the fake engine.
+
+## What the interface remembers
+
+The open and recently closed projects, the preferences, the tabs, the messages waiting to be sent and the drafts with
+their attachments are kept by the app, not by the browser of the window: `<data>\ui-state.json` (written whole or not at
+all, flushed to the disk, with the state before the last write in `ui-state.json.bak`) and `<data>\ui-state\blobs\` (the
+attachments, named by the SHA-256 of their bytes). The browser keeps such things per origin, and the agent's origin has its
+port, which changes when another program holds the preferred one. The page reads the file through the bridge (`uiState`,
+`ui_state.rs`) before it draws and sends its changes a moment after they happen (at the latest two seconds after the first),
+when it goes to the background, when it closes, before it reloads itself (a setting that needs a new start, «Restart» on the
+error page) and when the app asks: before «Quit» in the tray (after the agent has stopped, which can take up to a minute),
+before an update is installed and before the window is taken away from the page, the app asks the page to write what it
+holds and waits for the answer for up to a second and a half, and then for a write that is running to end. The page says
+whether it wrote; if not, or if it does not answer, the app logs it. At the end of a Windows session the page cannot be
+asked (the window's thread, which delivers its answers, is the one that ends the process): the changes of the last quarter
+of a second may be lost, and a write that is running is waited for. The agent's own address is not written in the file, so the state is the same on any
+port. A normal browser and the phone keep their `localStorage`.
+
+A change that cannot be written is told to the user and tried again every few seconds until it can; a change the app
+refuses as invalid (a key over 4096 bytes) is left out and logged, so it cannot hold back the others. If the content of
+`ui-state.json` cannot be read the app starts from the backup and says so, once; if neither can be read, the file is of a
+newer version, or the disk does not give it, the page shows the paths and nothing is touched or replaced.
+
+On its first start the app reads what the window's browser kept for the preferred port's origin (every key of
+`localStorage`, the drafts of `IndexedDB` with their attachments) with a hidden window of the same profile, to which the app
+itself serves that origin (`old_origin.rs`): this works whichever program holds the port, and none receives a
+request. The page merges it into the file: what the app already has stays, the old values fill the rest, and the lists of
+projects are joined. A draft whose attachment is missing is skipped and logged; the copy is marked done only when the list
+of drafts was read and every write succeeded, otherwise the next start tries again. The browser's data is left where it is. Until that copy is made the app waits up to six seconds for the
+preferred port before it takes another. The integration tests are `tests/ui-state.test.ts` and `tests/ui-state-exit.test.ts`.
 
 ## Open with Mango Code
 
@@ -348,10 +414,57 @@ address in `100.64.0.0/10`). The phone does not see the bridge: no phone setting
   moment*, and never by what the phone writes: the phone sends only a path and a query.
   - A page on `http://localhost:<port>` or `http://127.0.0.1:<port>` is relayed to that loopback address (`localhost` is tried
     on `127.0.0.1` and `::1`; no name is resolved), with the page's own `Host`, `Origin` and cookies, without the phone's
-    session cookie, `Referer` or `Authorization`. A redirect to the page's own address comes back as a path, and a WebSocket
-    (the reload of a development server) passes both ways. Absolute addresses written inside the page (`http://localhost:3000/api`)
-    still point at the phone itself and do not work.
-  - A local file (`file://`) serves its folder, read-only (`GET` and `HEAD`, `Range` for videos): `/` is the file, and no path
+    session cookie, `Referer` or `Authorization`. A redirect to the page's own address comes back as a path, one to another
+    address of the computer (`localhost` or `127.0.0.1`, any port) as `/__mango_loopback/<host>/<port>/<path>`, and a WebSocket
+    (the reload of a development server) passes both ways. The HTML of a page the browser opens (a navigation or a frame, as
+    `Sec-Fetch-Dest` says; a browser that sends none is taken at `Accept: text/html`) is read to put a script in it: asked
+    with `Accept-Encoding: identity`, whole within 3 s, up to 4 MiB, UTF-8 (a page in another character set, a compressed
+    one, a bigger or slower one, and every fragment a page fetches for itself, are left exactly as they are). The script,
+    `<script src="/__mango_loopback.js">`, goes first in its `<head>`. Absolute addresses written inside a page
+    (`http://localhost:3000/api`) would point at the phone itself; the script makes `fetch`, `XMLHttpRequest`, `WebSocket`
+    and `EventSource` aimed at `localhost` or `127.0.0.1`, **on any port**, go to the preview port as
+    `/__mango_loopback/<localhost|127.0.0.1>/<port>/<path>`. Such a call has the same checks as everything on that port
+    (session, numeric address, `Origin`, methods), goes to that port of the computer's loopback and to no other address
+    (any host but those two, or a port that is not a number from 1 to 65535, is `400`), and is relayed like the page itself
+    (its own cookies, not the phone's session). A `Request` given to `fetch` is rebuilt with its method, headers, credentials,
+    mode and body (read as bytes); the `credentials` the page wrote are kept. Not covered: `navigator.sendBeacon`, workers
+    (their own `fetch` is not the page's), subresources and navigations written in the markup (`<script src>`, `<img src>`,
+    `<iframe src>`, `<form action>`, a link, all with an absolute `http://localhost:…` address), pages with a Content
+    Security Policy that does not allow scripts from their own origin, and `https:` and `wss:` addresses (the computer's
+    ports are plain HTTP).
+  - **What a page shown on the phone can and cannot reach.** The phone's session is worth the computer; a page is not the
+    phone's user. A page (generated by the model, a development server, a `file://` page, all of which get the script) acts
+    through `/__mango_loopback/…`, and there:
+    - it cannot reach the agent's port, the phone service's two ports, nor any port of the app's own listeners (`403`): the
+      engine's manager, the engine's server from its start until its process has exited (also while it saves the
+      conversation and stops), the image engine, the sharing of the engine, the voice, the debugging port of the browser panel
+      and every folder site (`sites.rs`) except the one the panel is showing. The listeners that live as long as the run are
+      written down in one place (`src-tauri/src/ports.rs`), the engines keep their own lists, and the whole is asked of the
+      app at every call (`phone::Computer::owned_ports`); `integration/tests/app-ports.test.ts` reads the ports that the
+      running app's processes listen on and asks for each one through this route, so a listener nobody registered fails
+      it. Otherwise a page could drive the agent, which has the shell, with the phone's authority.
+    - its `Origin` is the one the computer's browser would send: the origin of the page the panel shows
+      (`http://localhost:3000` for a panel at `http://localhost:3000/`), so a server that accepts that page's calls (a CORS
+      or CSRF list) accepts them from the phone too; for a page that is a file the phone's own origin goes on. No `Origin` is
+      made up when the phone's browser sent none. `Sec-Fetch-Site`, which the phone's browser fills with
+      `same-origin` (it only talks to the phone's port), is rewritten to what the computer's browser would say: `same-origin`
+      for that server, `same-site` for another port under the same name, `cross-site` for the other name and for a page that
+      is a file. The page that is calling cannot be told from the request (every page of the phone has the preview port as its
+      origin, and its relative requests also go to what the panel shows now), so a phone tab left on an earlier page is
+      treated like the one the panel shows.
+    - it can reach any other port of the computer's loopback with what a web page can do from the computer: servers of the
+      user's own (development servers, databases with an HTTP interface), with the cookies the page itself has, never the
+      phone's session. A server that trusts every request that reaches it on the loopback is as exposed as it is with a
+      page open in the computer's browser.
+    - it cannot reach anything but `localhost` and `127.0.0.1`: no other address of the computer, no network address.
+    - a server of the computer cannot set `mango_phone`, the phone's session cookie (cookies belong to a host, not to a port):
+      that `Set-Cookie` is dropped from the replies of the page and of its calls, the other ones pass.
+    The page the panel shows itself is relayed with its server's own `Origin` and is not subject to the limits of calls; it
+    is the server the phone's user chose to look at. But the phone is never shown a page of the app's own ports (a notice
+    with `403`), and it cannot ask the panel to open one (`POST /phone/preview` answers `403`); the computer's own panel may
+    open anything. An HTML reply with `Content-Disposition: attachment` is a download and gets no script.
+  - A local file (`file://`) serves its folder, read-only (`GET` and `HEAD`, `Range` for videos; an HTML file read whole, as
+    UTF-8 and up to 4 MiB, gets the same script): `/` is the file, and no path
     may leave the folder (`..`, a drive, a stream, a device name, a link out are `404`; the real file is resolved and must be
     inside).
   - A page of the internet, a blank panel or a server that does not answer get a page that says so (`404`, `502`).
@@ -393,8 +506,10 @@ address in `100.64.0.0/10`). The phone does not see the bridge: no phone setting
   44 px tall, fields 16 px (iOS does not zoom them). The settings are two screens. The app can be put on the home screen (manifest with
   its icons).
 - Tests: `cargo test -p phone` (the rules one by one, on 127.0.0.1: both ports, the checks, what the preview port may reach,
-  the folder and project limits); `integration/tests/phone.test.ts` (the real app:
-  turned on from the bridge, entry, web UI and agent from the port, turned off). In development builds `MANGO_PHONE_PC_ONLY` keeps
+  the folder and project limits, the calls of a page to the computer's addresses) and `node --test
+  app/scripts/phone-loopback.test.mjs` (the script that sends them); `integration/tests/phone.test.ts` (the real app:
+  turned on from the bridge, entry, web UI and agent from the port, turned off); `integration/tests/app-ports.test.ts` (the
+  ports the running app listens on are all refused to a page). In development builds `MANGO_PHONE_PC_ONLY` keeps
   the port on `127.0.0.1`, so the tests do not make Windows ask to open it.
 
 ## Zoom
@@ -405,8 +520,15 @@ zoom changes. The window's zoom is kept in `<data>\zoom.txt` (the file goes away
 it is the zoom WebView2 reports, not one worked out from the page scale, which also contains the screen's scale and
 Windows' text size. The panel's zoom lasts until the app closes and sits on top of the format's own (`fit` × `user` in
 `preview.rs`: a phone or a tablet is shown whole, shrunk to the room there is). `preview_place` converts the placeholder's rectangle
-with the page scale, so after a zoom of the window the native panel stays on its place. While a dialog, menu or list is open above the
-page the panel steps aside (`layerOver` in `preview-panel.tsx`: Kobalte marks its open layers) and comes back when it closes.
+with the page scale, so after a zoom of the window the native panel stays on its place. A menu, list or popover that does not
+reach the panel leaves it live. One that reaches it, or the dimmed backdrop of a dialog, makes it step aside: `layerOver`
+(`preview-layers.ts`) decides by the rectangle each open layer is drawn in, not by where the library leaves the pointer.
+The native panel cannot be drawn under the page, so just before it steps aside the web UI asks for a picture of it
+(`preview_capture` in `preview.rs`, the bridge's `preview.capture()`: WebView2's `CapturePreview`, a PNG of the panel's size) and
+shows it in the placeholder, under the layer, dimmed with the page by a dialog's backdrop; the capture has 500 ms, during which the
+layer is still under the panel. A tooltip does not make the panel step aside: a hover would freeze the live page. When the layer closes the panel
+comes back and the picture goes once the live page is over it. A capture that fails leaves the empty area and writes one line
+in `logs/ui.log`; it is not tried again until the layer closes.
 
 **How the panel looks.** A card with the chat's gap and rounded corners (`preview-panel.tsx`). The page is a native window on
 top of it, a rectangle: `preview_place` also receives how round its corners are and `round_corners` in `preview.rs` cuts the
@@ -428,6 +550,14 @@ and starts no server: the browser server (`launcher/mango-chrome-mcp.mjs`) asks 
 port of its own on `127.0.0.1`, opened the first time the folder is asked for and kept until the app quits; a request whose
 `Host` is not this computer is refused. A site with several pages, modules or `fetch` works as on the web, and a path the
 model wrote the Unix way (`/home/user/site/index.html`) names the file in the project, as it does for the agent's file tools.
+
+**A page the model changes.** When the model writes or changes a file that can be part of the page shown, the panel
+reloads the page by itself, once after the last of a series (`preview-panel.tsx`; the rule in
+`packages/app/src/utils/preview-reload.ts`): for a `file://` page, a file in its folder or below it; for a page of a server on this computer
+(`localhost`, `127.x`, `::1`, so also the sites of `sites.rs`), a file of the web (html, css, scripts, json, pictures). The
+agent says which files: its `write`, `edit` and `apply_patch` tools at once (`file.watcher.updated`), and what a command of
+its shell changed in the project at the end of the step (the step's `patch` part). A file changed by another program, or by
+a command outside the project, does not reload it: "Reload" does.
 
 **While a page loads.** The native panel stays hidden until the page it navigates to is the one it shows; the web UI puts its own message
 ("Loading the preview…") in the placeholder, so no blank rectangle appears. The WebView2 events (`on_navigation` at the start,
@@ -491,6 +621,9 @@ a running exe: rename the old one, copy the new one, and what is already open st
 
 What it brings compared to opencode:
 
+- **Four model providers only**: the agent carries the local engine (`mango`), OpenAI-compatible endpoints, Anthropic and
+  OpenRouter, with no subscription logins and no provider-specific plugin or loader. The app enables the local engine,
+  and OpenRouter when the Team has a key (`enabled_providers` in the configuration it writes).
 - **Embedded, offline web UI**: the server never forwards it from `app.opencode.ai`; Mango Code brand, light or dark as Windows is until the user picks one,
   the colours of `suite/tokens.css`; `?project=<folder>` opens that folder as a project.
 - **Server without a password but closed to web pages** (`middleware/origin-guard.ts`): a request with `Origin` passes
@@ -556,7 +689,8 @@ the data goes in `%LOCALAPPDATA%\MangoCode` (logs in `logs\`).
 
 Uninstalling asks whether to free the space: if yes, it deletes `models\` (dictation included), `engine\`, `slots\`,
 `memory\` and `logs\`, and leaves the conversations (`agent\`) and the settings (the files next to the folders). The
-question says so and where they are, for whoever wants to delete them by hand. `windows/hooks.test.mjs` runs the
+question says so and where they are, for whoever wants to delete them by hand. A models folder chosen in Settings, or a
+model put in a folder of its own, is outside the data folder and is not deleted. `windows/hooks.test.mjs` runs the
 deletion on a copy (`node --test app/src-tauri/windows/hooks.test.mjs`, needs the `makensis` that `tauri build` downloads).
 
 ## Looking and measuring
@@ -568,7 +702,6 @@ deletion on a copy (`node --test app/src-tauri/windows/hooks.test.mjs`, needs th
   only (9222 is Chrome's). Not `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=…`: it applies to all
   the process's WebView2s, the Preview panel loses its port and the agent can't use it (the browser server refuses a
   port that shows Mango Code's own window).
-- A test is valid when it is done as a user does it: a new conversation, the panel closed, clicks in the window.
 - Model speeds: `cargo run --release -p engine --bin mango-bench -- toq 3.6` (starts each model like
   the app; table at the end).
 - Live engine speed: `llamacpp:tokens_predicted_total` in `engine.log` (delta over 15 s) and the `eval time` lines;
@@ -576,8 +709,8 @@ deletion on a copy (`node --test app/src-tauri/windows/hooks.test.mjs`, needs th
 - Logs: `%LOCALAPPDATA%\MangoCode\logs\{startup,agent,engine,manager,ui}.log` (`manager.log`: who called `release`,
   `resume` or `model`, when and with what outcome; `ui.log`: the web UI's uncaught errors and `console.error`, and the
   calls to the app slower than a second or with no answer, at most 100 lines a minute and 2 MB (then `ui.1.log`); the TOQ engine's `llama.log` is in the same folder); the
-  agent's real one is `%LOCALAPPDATA%\MangoCode\agent\data\opencode\log\opencode.log` (`init count=N` = skills loaded
-  per instance). With the app open, Windows can show these files at 0 bytes: they are being written, not empty.
+  agent's real one is `%LOCALAPPDATA%\MangoCode\agent\data\opencode\log\opencode.log` (`init count=N` = skills read
+  from disk, each time the list is read again: a new conversation, a turn, the «/» menu, the settings page). With the app open, Windows can show these files at 0 bytes: they are being written, not empty.
 
 ## The app's connections to the internet
 
@@ -668,7 +801,7 @@ the button saves the same text on the Desktop and opens a GitHub issue already f
 ## Traps
 
 - With the app open the installer fails with "Access denied" and the old version stays.
-- The development server (`bun … serve --port 4096`) takes the app's port and makes its startup fail.
+- The development server (`bun … serve --port 4096`) takes the agent's preferred port: the app then runs on a free one.
 - Starting the app from a redirected console does not work: `start "" "<path>\mango-code.exe"`.
 - Pictures without `SetProcessDPIAware` come out cut off on the right and at the bottom: it is not the app.
 - `SetForegroundWindow` fails if the caller is not in the foreground: `ui.ps1` presses a fake ALT

@@ -12,9 +12,11 @@ import { disposeAllInstances } from "../fixture/fixture"
 const original = process.env.MANGO_VOICE_URL
 const originalSettings = process.env.MANGO_SETTINGS
 
+const settingsDir = fs.mkdtempSync(path.join(os.tmpdir(), "mango-voice-"))
+
 // The error texts follow the chosen language: the tests fix it to Italian.
 beforeAll(() => {
-  const settings = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "mango-voice-")), "settings.json")
+  const settings = path.join(settingsDir, "settings.json")
   fs.writeFileSync(settings, JSON.stringify({ language: "it" }))
   process.env.MANGO_SETTINGS = settings
 })
@@ -22,6 +24,7 @@ beforeAll(() => {
 afterAll(() => {
   if (originalSettings === undefined) delete process.env.MANGO_SETTINGS
   else process.env.MANGO_SETTINGS = originalSettings
+  fs.rmSync(settingsDir, { recursive: true, force: true })
 })
 
 afterEach(async () => {

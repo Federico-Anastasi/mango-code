@@ -16,7 +16,7 @@ import { ServerConnection } from "@/context/server"
 import { sessionHasOpenTab, useTabs } from "@/context/tabs"
 import { compareSessionTime, displayName, errorMessage, projectForSession } from "@/pages/layout/helpers"
 import { useSessionTabAvatarState } from "@/pages/layout/project-avatar-state"
-import { pathKey } from "@/utils/path-key"
+import { folderKey } from "@/utils/path-key"
 import { projectsToOpen } from "./server-projects"
 import { showToast } from "@/utils/toast"
 import { inMangoDesktop } from "@/utils/mango-desktop"
@@ -212,14 +212,14 @@ export function createHomeSessionsController(home: HomeController) {
       canCreate: home.project.canStartSession,
       create: home.project.openNewSession,
       open: (session: Session, options?: OpenSessionOptions) => {
-        const directoryKey = pathKey(session.directory)
+        const directoryKey = folderKey(session.directory)
         const project =
           home.project
             .list()
             .find(
               (item) =>
-                pathKey(item.worktree) === directoryKey ||
-                item.sandboxes?.some((sandbox) => pathKey(sandbox) === directoryKey),
+                folderKey(item.worktree) === directoryKey ||
+                item.sandboxes?.some((sandbox) => folderKey(sandbox) === directoryKey),
             ) ?? projectForSession(session, home.project.list(), projectByID())
         const conn = home.server.focused()
         if (!conn) return
@@ -350,18 +350,18 @@ function buildHomeSessionRecords(input: {
   projects: () => LocalProject[]
   projectByID: () => Map<string, LocalProject>
 }) {
-  const directories = new Set(input.projectDirectories().map(pathKey))
-  const sessions = input.sessions().filter((session) => directories.has(pathKey(session.directory)))
+  const directories = new Set(input.projectDirectories().map(folderKey))
+  const sessions = input.sessions().filter((session) => directories.has(folderKey(session.directory)))
   return [...new Map(sessions.map((session) => [session.id, session] as const)).values()]
     .sort(compareSessionTime)
     .flatMap((session) => {
-      const directory = pathKey(session.directory)
+      const directory = folderKey(session.directory)
       const project =
         input
           .projects()
           .find(
             (item) =>
-              pathKey(item.worktree) === directory || item.sandboxes?.some((sandbox) => pathKey(sandbox) === directory),
+              folderKey(item.worktree) === directory || item.sandboxes?.some((sandbox) => folderKey(sandbox) === directory),
           ) ?? projectForSession(session, input.projects(), input.projectByID())
       if (!project) return []
       return { session, project, projectName: displayName(project) }
@@ -369,7 +369,7 @@ function buildHomeSessionRecords(input: {
 }
 
 export function homeSessionSearchKey(record: HomeSessionRecord) {
-  return `${pathKey(record.session.directory)}:${record.session.id}`
+  return `${folderKey(record.session.directory)}:${record.session.id}`
 }
 
 function groupSessions(records: HomeSessionRecord[], language: ReturnType<typeof useLanguage>): HomeSessionGroup[] {

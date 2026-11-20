@@ -17,6 +17,10 @@ struct Agent {
 }
 
 fn agent(reply: &'static str) -> Agent {
+    agent_bytes(reply.as_bytes().to_vec())
+}
+
+fn agent_bytes(reply: Vec<u8>) -> Agent {
     let l = TcpListener::bind("127.0.0.1:0").unwrap();
     let port = l.local_addr().unwrap().port();
     let (tx, received) = mpsc::channel();
@@ -44,8 +48,8 @@ fn agent(reply: &'static str) -> Agent {
                 body.extend_from_slice(&b[..n]);
             }
             let _ = tx.send(format!("{head}{}", String::from_utf8_lossy(&body)));
-            let _ = c.write_all(reply.as_bytes());
-            if reply.contains("text/event-stream") {
+            let _ = c.write_all(&reply);
+            if String::from_utf8_lossy(&reply).contains("text/event-stream") {
                 open.push(c);
             }
         }
@@ -79,9 +83,13 @@ struct FakeComputer {
     shown: Mutex<Option<Shown>>,
     folders: Mutex<Vec<PathBuf>>,
     opened: Mutex<Vec<String>>,
+    owned: Mutex<Vec<u16>>,
 }
 
 impl Computer for FakeComputer {
+    fn owned_ports(&self) -> Vec<u16> {
+        self.owned.lock().unwrap().clone()
+    }
     fn shown(&self) -> Option<Shown> {
         self.shown.lock().unwrap().clone()
     }
@@ -103,26 +111,47 @@ fn free_port() -> u16 {
     TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port()
 }
 
+/// Two ports free at the same time, so distinct.
+fn free_ports() -> (u16, u16) {
+    let (a, b) = (TcpListener::bind("127.0.0.1:0").unwrap(), TcpListener::bind("127.0.0.1:0").unwrap());
+    (a.local_addr().unwrap().port(), b.local_addr().unwrap().port())
+}
+
 struct Fixture {
     t: Phone,
     port: u16,
     preview_port: u16,
+    agent_port: u16,
     data: tempfile::TempDir,
     reports: Arc<FakeReports>,
     computer: Arc<FakeComputer>,
 }
 
+/// The ports are picked free and bound only when the phone is turned on (`on`), and another test may have taken one in
+/// between: then the service is built again on other ports.
 fn fixture(agent: &Agent) -> Fixture {
     let data = tempfile::tempdir().unwrap();
-    let port = free_port();
-    let preview_port = free_port();
+    let (port, preview_port) = free_ports();
     let reports = Arc::new(FakeReports { received: Mutex::new(Vec::new()) });
-    let computer = Arc::new(FakeComputer { shown: Mutex::new(None), folders: Mutex::new(Vec::new()), opened: Mutex::new(Vec::new()) });
+    let computer = Arc::new(FakeComputer { shown: Mutex::new(None), folders: Mutex::new(Vec::new()), opened: Mutex::new(Vec::new()), owned: Mutex::new(Vec::new()) });
     let t = Phone::new(data.path(), &data.path().join("logs"), true, port, preview_port, agent.port, reports.clone(), computer.clone()).unwrap();
-    Fixture { t, port, preview_port, data, reports, computer }
+    Fixture { t, port, preview_port, agent_port: agent.port, data, reports, computer }
 }
 
 impl Fixture {
+    fn on(&mut self) -> State {
+        for _ in 0..10 {
+            let state = self.t.set_enabled(true).unwrap();
+            if state.listening {
+                return state;
+            }
+            self.t.set_enabled(false).unwrap();
+            (self.port, self.preview_port) = free_ports();
+            self.t = Phone::new(self.data.path(), &self.data.path().join("logs"), true, self.port, self.preview_port, self.agent_port, self.reports.clone(), self.computer.clone()).unwrap();
+        }
+        panic!("the ports never opened: {:?}", self.t.state());
+    }
+
     fn key(&self) -> String {
         self.t.d.saved.lock().unwrap().key.clone().unwrap()
     }
@@ -181,8 +210,8 @@ fn off_by_default_the_port_is_not_open() {
 #[test]
 fn you_get_in_only_with_the_right_key_and_the_cookie_is_not_the_key() {
     let a = agent(OK);
-    let p = fixture(&a);
-    assert!(p.t.set_enabled(true).unwrap().listening);
+    let mut p = fixture(&a);
+    assert!(p.on().listening);
     let key = p.key();
     assert_eq!(key.len(), 48);
 
@@ -212,8 +241,8 @@ fn you_get_in_only_with_the_right_key_and_the_cookie_is_not_the_key() {
 #[test]
 fn without_a_session_nothing_reaches_the_agent() {
     let a = agent(OK);
-    let p = fixture(&a);
-    p.t.set_enabled(true).unwrap();
+    let mut p = fixture(&a);
+    p.on();
     let r = p.send("GET /session HTTP/1.1\r\nHost: {host}\r\nAccept: application/json\r\n\r\n");
     assert_eq!(status(&r), "401");
     let r = p.send("GET / HTTP/1.1\r\nHost: {host}\r\nAccept: text/html\r\n\r\n");
@@ -230,8 +259,8 @@ fn without_a_session_nothing_reaches_the_agent() {
 #[test]
 fn whoever_arrives_without_the_key_gets_a_page_that_says_how_to_get_in() {
     let a = agent(OK);
-    let p = fixture(&a);
-    p.t.set_enabled(true).unwrap();
+    let mut p = fixture(&a);
+    p.on();
     let r = p.send("GET /phone HTTP/1.1\r\nHost: {host}\r\nAccept: text/html\r\n\r\n");
     assert_eq!(status(&r), "401");
     assert!(r.contains("Cache-Control: no-store"));
@@ -252,8 +281,8 @@ fn whoever_arrives_without_the_key_gets_a_page_that_says_how_to_get_in() {
 #[test]
 fn the_icons_and_the_manifest_need_no_session_and_nothing_else_does() {
     let a = agent(OK);
-    let p = fixture(&a);
-    p.t.set_enabled(true).unwrap();
+    let mut p = fixture(&a);
+    p.on();
     for path in ["/site.webmanifest", "/favicon-v3.svg", "/apple-touch-icon-v3.png", "/web-app-manifest-512x512.png"] {
         let r = p.send(&format!("GET {path} HTTP/1.1\r\nHost: {{host}}\r\nCookie: other=1\r\n\r\n"));
         assert_eq!(status(&r), "200", "{path}: {r}");
@@ -274,8 +303,8 @@ fn the_icons_and_the_manifest_need_no_session_and_nothing_else_does() {
 #[test]
 fn the_page_of_the_web_ui_is_asked_for_again_every_time() {
     let a = agent("HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 6\r\nConnection: keep-alive\r\n\r\n<html>");
-    let p = fixture(&a);
-    p.t.set_enabled(true).unwrap();
+    let mut p = fixture(&a);
+    p.on();
     let cookie = p.enter();
     let r = p.send(&format!("GET / HTTP/1.1\r\nHost: {{host}}\r\nCookie: mango_phone={cookie}\r\nAccept: text/html\r\n\r\n"));
     assert_eq!(status(&r), "200");
@@ -285,8 +314,8 @@ fn the_page_of_the_web_ui_is_asked_for_again_every_time() {
 #[test]
 fn with_the_session_it_passes_to_the_agent_as_the_web_ui_without_cookie() {
     let a = agent(OK);
-    let p = fixture(&a);
-    p.t.set_enabled(true).unwrap();
+    let mut p = fixture(&a);
+    p.on();
     let cookie = p.enter();
     let r = p.send(&format!(
         "POST /session?directory=C%3A%5Cp HTTP/1.1\r\nHost: {{host}}\r\nOrigin: http://{{host}}\r\nReferer: http://{{host}}/x\r\n\
@@ -312,8 +341,8 @@ Content-Type: application/json\r\nContent-Length: 13\r\n\r\n{{\"title\":\"x\"}}"
 #[test]
 fn foreign_origin_and_non_numeric_address_are_refused() {
     let a = agent(OK);
-    let p = fixture(&a);
-    p.t.set_enabled(true).unwrap();
+    let mut p = fixture(&a);
+    p.on();
     let cookie = p.enter();
     for origin in ["https://foreign-site.example", "http://127.0.0.1:1", "null", "http://localhost"] {
         let r = p.send(&format!("POST /session HTTP/1.1\r\nHost: {{host}}\r\nOrigin: {origin}\r\nCookie: mango_phone={cookie}\r\n\r\n"));
@@ -335,8 +364,8 @@ fn foreign_origin_and_non_numeric_address_are_refused() {
 #[test]
 fn the_model_routes_pass() {
     let a = agent(OK);
-    let p = fixture(&a);
-    p.t.set_enabled(true).unwrap();
+    let mut p = fixture(&a);
+    p.on();
     let cookie = p.enter();
     for line in ["GET /mango/state", "GET /mango/models", "GET /mango/computer", "POST /mango/model/use", "POST /mango/model/retry"] {
         let r = p.send(&format!("{line} HTTP/1.1\r\nHost: {{host}}\r\nCookie: mango_phone={cookie}\r\nContent-Length: 0\r\n\r\n"));
@@ -348,8 +377,8 @@ fn the_model_routes_pass() {
 #[test]
 fn app_routes_methods_and_chunked_bodies_are_refused() {
     let a = agent(OK);
-    let p = fixture(&a);
-    p.t.set_enabled(true).unwrap();
+    let mut p = fixture(&a);
+    p.on();
     let cookie = p.enter();
     let with = |line: &str, others: &str| p.send(&format!("{line} HTTP/1.1\r\nHost: {{host}}\r\nCookie: mango_phone={cookie}\r\n{others}\r\n"));
     assert_eq!(status(&with("POST /mango/reload", "")), "403");
@@ -366,8 +395,8 @@ fn app_routes_methods_and_chunked_bodies_are_refused() {
 #[test]
 fn problem_reports_go_to_the_app_with_the_session_and_within_the_limit() {
     let a = agent(OK);
-    let p = fixture(&a);
-    p.t.set_enabled(true).unwrap();
+    let mut p = fixture(&a);
+    p.on();
     let post = |extra: &str, body: &str| {
         format!("POST /phone/report HTTP/1.1\r\nHost: {{host}}\r\n{extra}Content-Length: {}\r\n\r\n{body}", body.len())
     };
@@ -411,8 +440,8 @@ fn problem_reports_go_to_the_app_with_the_session_and_within_the_limit() {
 #[test]
 fn a_new_key_and_turning_off_drop_the_sessions() {
     let a = agent(OK);
-    let p = fixture(&a);
-    p.t.set_enabled(true).unwrap();
+    let mut p = fixture(&a);
+    p.on();
     let (key, cookie) = (p.key(), p.enter());
     p.t.new_key().unwrap();
     assert_ne!(p.key(), key);
@@ -427,7 +456,7 @@ fn a_new_key_and_turning_off_drop_the_sessions() {
     assert!(TcpStream::connect(("127.0.0.1", p.port)).is_err());
     assert!(p.t.new_key().is_err());
     // Turned on again: new key, the earlier link and cookie are not valid.
-    p.t.set_enabled(true).unwrap();
+    p.on();
     assert_ne!(p.key(), key);
     let r = p.send(&format!("GET /phone?key={key} HTTP/1.1\r\nHost: {{host}}\r\n\r\n"));
     assert_eq!(status(&r), "401");
@@ -440,8 +469,8 @@ fn a_new_key_and_turning_off_drop_the_sessions() {
 #[test]
 fn if_the_state_cannot_be_saved_turning_off_and_a_new_key_change_nothing() {
     let a = agent(OK);
-    let p = fixture(&a);
-    p.t.set_enabled(true).unwrap();
+    let mut p = fixture(&a);
+    p.on();
     let (key, cookie) = (p.key(), p.enter());
     // a folder where the file is written first: every save fails
     std::fs::create_dir(p.data.path().join("phone.json.tmp")).unwrap();
@@ -464,8 +493,8 @@ fn if_the_state_cannot_be_saved_turning_off_and_a_new_key_change_nothing() {
 #[test]
 fn control_characters_in_the_head_are_refused_before_the_agent() {
     let a = agent(OK);
-    let p = fixture(&a);
-    p.t.set_enabled(true).unwrap();
+    let mut p = fixture(&a);
+    p.on();
     let cookie = p.enter();
     for (what, request) in [
         ("a line feed in a value", format!("GET /x HTTP/1.1\r\nHost: {{host}}\r\nCookie: mango_phone={cookie}\r\nX-A: b\nInjected: yes\r\n\r\n")),
@@ -485,8 +514,8 @@ fn control_characters_in_the_head_are_refused_before_the_agent() {
 #[test]
 fn slow_heads_and_too_many_connections_are_cut() {
     let a = agent(OK);
-    let p = fixture(&a);
-    p.t.set_enabled(true).unwrap();
+    let mut p = fixture(&a);
+    p.on();
     let started = std::time::Instant::now();
     let mut slow = TcpStream::connect(("127.0.0.1", p.port)).unwrap();
     slow.set_read_timeout(Some(Duration::from_secs(1))).unwrap();
@@ -519,8 +548,8 @@ fn slow_heads_and_too_many_connections_are_cut() {
 #[test]
 fn the_log_does_not_grow_without_limit() {
     let a = agent(OK);
-    let p = fixture(&a);
-    p.t.set_enabled(true).unwrap();
+    let mut p = fixture(&a);
+    p.on();
     let long = "a".repeat(5000);
     for _ in 0..(crate::REFUSALS_PER_MINUTE + 50) {
         assert_eq!(status(&p.send(&format!("GET /{long} HTTP/1.1\r\nHost: {{host}}\r\n\r\n"))), "401");
@@ -544,8 +573,8 @@ fn the_log_does_not_grow_without_limit() {
 fn turning_off_also_closes_the_open_events() {
     // The agent sends the head and an event, then keeps the stream open.
     let a = agent("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\ndata: {}\n\n");
-    let p = fixture(&a);
-    p.t.set_enabled(true).unwrap();
+    let mut p = fixture(&a);
+    p.on();
     let cookie = p.enter();
     let mut c = TcpStream::connect(("127.0.0.1", p.port)).unwrap();
     write!(c, "GET /event HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nCookie: mango_phone={cookie}\r\n\r\n", p.port).unwrap();
@@ -573,8 +602,8 @@ fn turning_off_also_closes_the_open_events() {
 #[test]
 fn on_and_sessions_stay_after_a_restart() {
     let a = agent(OK);
-    let p = fixture(&a);
-    p.t.set_enabled(true).unwrap();
+    let mut p = fixture(&a);
+    p.on();
     let cookie = p.enter();
     p.t.d.listener.lock().unwrap().take().unwrap().close();
     let t = Phone::new(p.data.path(), &p.data.path().join("logs"), true, p.port, p.preview_port, a.port, p.reports.clone(), p.computer.clone()).unwrap();
@@ -586,8 +615,8 @@ fn on_and_sessions_stay_after_a_restart() {
 #[test]
 fn at_most_twenty_sessions() {
     let a = agent(OK);
-    let p = fixture(&a);
-    p.t.set_enabled(true).unwrap();
+    let mut p = fixture(&a);
+    p.on();
     let first = p.enter();
     for _ in 0..MAX_SESSIONS {
         p.enter();
@@ -622,6 +651,22 @@ fn with_cookie(cookie: &str) -> String {
 
 fn preview_get(p: &Fixture, cookie: &str, path: &str) -> String {
     p.send_preview(&format!("GET {path} HTTP/1.1\r\nHost: {{host}}\r\n{}\r\n", with_cookie(cookie)))
+}
+
+/// What a browser sends to open a page or a frame: the only requests whose HTML gets the script.
+fn preview_page(p: &Fixture, cookie: &str, path: &str) -> String {
+    p.send_preview(&format!(
+        "GET {path} HTTP/1.1\r\nHost: {{host}}\r\nAccept: text/html\r\nSec-Fetch-Dest: document\r\nSec-Fetch-Mode: navigate\r\n{}\r\n",
+        with_cookie(cookie)
+    ))
+}
+
+/// A call a page makes with `fetch` or `XMLHttpRequest`: whatever the type it asks for, the reply is not a page.
+fn preview_fetch(p: &Fixture, cookie: &str, path: &str, accept: &str) -> String {
+    p.send_preview(&format!(
+        "GET {path} HTTP/1.1\r\nHost: {{host}}\r\nAccept: {accept}\r\nSec-Fetch-Dest: empty\r\nSec-Fetch-Mode: cors\r\nAccept-Encoding: gzip\r\n{}\r\n",
+        with_cookie(cookie)
+    ))
 }
 
 fn body(r: &str) -> &str {
@@ -662,9 +707,9 @@ fn json_path(p: &Path) -> String {
 #[test]
 fn the_preview_port_is_open_only_while_the_phone_is_on() {
     let a = agent(OK);
-    let p = fixture(&a);
+    let mut p = fixture(&a);
     assert!(TcpStream::connect(("127.0.0.1", p.preview_port)).is_err());
-    p.t.set_enabled(true).unwrap();
+    p.on();
     assert!(TcpStream::connect(("127.0.0.1", p.preview_port)).is_ok());
     assert!(TcpStream::connect(("127.0.0.1", p.port)).is_ok());
     p.t.set_enabled(false).unwrap();
@@ -688,8 +733,8 @@ fn a_busy_preview_port_keeps_the_phone_off_and_says_which() {
 fn the_preview_port_needs_the_phones_session_for_everything() {
     let a = agent(OK);
     let page = agent(OK);
-    let p = fixture(&a);
-    p.t.set_enabled(true).unwrap();
+    let mut p = fixture(&a);
+    p.on();
     p.show(&format!("http://127.0.0.1:{}/", page.port), None);
     let cookie = p.enter();
     for request in [
@@ -718,8 +763,8 @@ fn the_preview_port_needs_the_phones_session_for_everything() {
 fn the_preview_port_has_the_address_origin_and_method_checks_of_the_main_port() {
     let a = agent(OK);
     let page = agent(OK);
-    let p = fixture(&a);
-    p.t.set_enabled(true).unwrap();
+    let mut p = fixture(&a);
+    p.on();
     p.show(&format!("http://127.0.0.1:{}/", page.port), None);
     let cookie = p.enter();
     let c = with_cookie(&cookie);
@@ -743,8 +788,8 @@ fn the_preview_goes_only_to_the_page_the_panel_shows() {
     let a = agent(OK);
     let shown = agent(OK);
     let other = agent(OK);
-    let p = fixture(&a);
-    p.t.set_enabled(true).unwrap();
+    let mut p = fixture(&a);
+    p.on();
     let cookie = p.enter();
     p.show(&format!("http://127.0.0.1:{}/start", shown.port), None);
     // The phone writes another address in the head, a path that looks like one, a port: none of it is used.
@@ -778,8 +823,8 @@ fn the_preview_goes_only_to_the_page_the_panel_shows() {
 fn localhost_is_a_name_only_for_the_loopback() {
     let a = agent(OK);
     let shown = agent(OK);
-    let p = fixture(&a);
-    p.t.set_enabled(true).unwrap();
+    let mut p = fixture(&a);
+    p.on();
     let cookie = p.enter();
     p.show(&format!("http://localhost:{}/", shown.port), None);
     assert_eq!(status(&preview_get(&p, &cookie, "/")), "200");
@@ -790,8 +835,8 @@ fn localhost_is_a_name_only_for_the_loopback() {
 fn a_page_that_is_not_the_computers_is_never_relayed() {
     let a = agent(OK);
     let server = agent(OK);
-    let p = fixture(&a);
-    p.t.set_enabled(true).unwrap();
+    let mut p = fixture(&a);
+    p.on();
     let cookie = p.enter();
     let n = server.port;
     for url in [
@@ -820,8 +865,8 @@ fn a_page_that_is_not_the_computers_is_never_relayed() {
 #[test]
 fn a_server_that_does_not_answer_is_said_in_a_page() {
     let a = agent(OK);
-    let p = fixture(&a);
-    p.t.set_enabled(true).unwrap();
+    let mut p = fixture(&a);
+    p.on();
     let cookie = p.enter();
     p.show(&format!("http://127.0.0.1:{}/", free_port()), None);
     let r = preview_get(&p, &cookie, "/");
@@ -832,8 +877,8 @@ fn a_server_that_does_not_answer_is_said_in_a_page() {
 #[test]
 fn a_redirect_to_the_pages_own_address_comes_back_as_a_path() {
     let a = agent(OK);
-    let p = fixture(&a);
-    p.t.set_enabled(true).unwrap();
+    let mut p = fixture(&a);
+    p.on();
     let cookie = p.enter();
     let l = TcpListener::bind("127.0.0.1:0").unwrap();
     let port = l.local_addr().unwrap().port();
@@ -854,8 +899,8 @@ fn a_redirect_to_the_pages_own_address_comes_back_as_a_path() {
 #[test]
 fn the_page_reload_socket_passes_both_ways() {
     let a = agent(OK);
-    let p = fixture(&a);
-    p.t.set_enabled(true).unwrap();
+    let mut p = fixture(&a);
+    p.on();
     let cookie = p.enter();
     let l = TcpListener::bind("127.0.0.1:0").unwrap();
     let port = l.local_addr().unwrap().port();
@@ -897,19 +942,19 @@ fn the_page_reload_socket_passes_both_ways() {
 #[test]
 fn a_local_file_is_served_read_only_from_its_folder_and_never_beyond() {
     let a = agent(OK);
-    let p = fixture(&a);
-    p.t.set_enabled(true).unwrap();
+    let mut p = fixture(&a);
+    p.on();
     let cookie = p.enter();
     let site = Site::new();
     p.show("file:///site/index.html", Some(&site.dir().join("index.html")));
 
-    let r = preview_get(&p, &cookie, "/");
+    let r = preview_page(&p, &cookie, "/");
     assert_eq!(status(&r), "200", "{r}");
-    assert!(r.contains("Content-Type: text/html") && body(&r) == "<html>home</html>" && r.contains("nosniff"), "{r}");
+    assert!(r.contains("Content-Type: text/html") && body(&r) == format!("<html>{SCRIPT_TAG}home</html>") && r.contains("nosniff"), "{r}");
     let r = preview_get(&p, &cookie, "/style.css?v=2");
     assert!(r.contains("Content-Type: text/css") && body(&r) == "body{}", "{r}");
     assert_eq!(body(&preview_get(&p, &cookie, "/sub/app.js")), "1;");
-    assert_eq!(body(&preview_get(&p, &cookie, "/sub/")), "<html>sub</html>");
+    assert_eq!(body(&preview_page(&p, &cookie, "/sub/")), format!("<html>{SCRIPT_TAG}sub</html>"));
     assert_eq!(body(&preview_get(&p, &cookie, "/sub/%61pp.js")), "1;");
     // a part of a file, as the browser asks for videos
     let r = p.send_preview(&format!("GET /style.css HTTP/1.1\r\nHost: {{host}}\r\n{}Range: bytes=1-3\r\n\r\n", with_cookie(&cookie)));
@@ -951,8 +996,8 @@ fn a_local_file_is_served_read_only_from_its_folder_and_never_beyond() {
 #[test]
 fn the_state_of_the_panel_is_told_to_the_phone() {
     let a = agent(OK);
-    let p = fixture(&a);
-    p.t.set_enabled(true).unwrap();
+    let mut p = fixture(&a);
+    p.on();
     let cookie = p.enter();
     let state = |p: &Fixture| {
         let r = p.send(&format!("GET /phone/preview HTTP/1.1\r\nHost: {{host}}\r\n{}\r\n", with_cookie(&cookie)));
@@ -983,8 +1028,8 @@ fn the_state_of_the_panel_is_told_to_the_phone() {
 #[test]
 fn the_phone_asks_the_panel_to_open_a_page_of_the_computer_and_nothing_else() {
     let a = agent(OK);
-    let p = fixture(&a);
-    p.t.set_enabled(true).unwrap();
+    let mut p = fixture(&a);
+    p.on();
     let cookie = p.enter();
     let site = Site::new();
     p.computer.folders.lock().unwrap().push(site.dir());
@@ -1003,7 +1048,7 @@ fn the_phone_asks_the_panel_to_open_a_page_of_the_computer_and_nothing_else() {
     assert_eq!(status(&r), "200", "{r}");
     assert!(r.contains("\"path\":\"/index.html\""), "{r}");
     // and the phone sees it through the preview port
-    assert_eq!(body(&preview_get(&p, &cookie, "/")), "<html>home</html>");
+    assert_eq!(body(&preview_page(&p, &cookie, "/")), format!("<html>{SCRIPT_TAG}home</html>"));
 
     let opened = p.computer.opened.lock().unwrap().len();
     let css = json_path(&site.dir().join("style.css"));
@@ -1042,8 +1087,8 @@ fn the_phone_asks_the_panel_to_open_a_page_of_the_computer_and_nothing_else() {
 #[test]
 fn the_documents_of_the_conversations_project_go_to_the_phone_and_nothing_else() {
     let a = agent(OK);
-    let p = fixture(&a);
-    p.t.set_enabled(true).unwrap();
+    let mut p = fixture(&a);
+    p.on();
     let cookie = p.enter();
     let site = Site::new();
     let project = site.dir();
@@ -1094,8 +1139,8 @@ fn the_documents_of_the_conversations_project_go_to_the_phone_and_nothing_else()
 #[test]
 fn a_big_document_can_be_taken_in_parts() {
     let a = agent(OK);
-    let p = fixture(&a);
-    p.t.set_enabled(true).unwrap();
+    let mut p = fixture(&a);
+    p.on();
     let cookie = p.enter();
     let site = Site::new();
     let pdf = site.dir().join("a.pdf");
@@ -1113,8 +1158,8 @@ fn a_big_document_can_be_taken_in_parts() {
 #[test]
 fn the_web_ui_may_show_the_preview_port_in_a_frame() {
     let a = agent("HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Security-Policy: default-src 'self'\r\nContent-Length: 6\r\n\r\n<html>");
-    let p = fixture(&a);
-    p.t.set_enabled(true).unwrap();
+    let mut p = fixture(&a);
+    p.on();
     let cookie = p.enter();
     let r = p.send(&format!("GET / HTTP/1.1\r\nHost: {{host}}\r\n{}Accept: text/html\r\n\r\n", with_cookie(&cookie)));
     assert!(r.contains(&format!("Content-Security-Policy: default-src 'self'; frame-src 'self' blob: http://127.0.0.1:{}\r\n", p.preview_port)), "{r}");
@@ -1123,10 +1168,689 @@ fn the_web_ui_may_show_the_preview_port_in_a_frame() {
 #[test]
 fn the_port_is_open_only_on_the_addresses_of_the_links() {
     let a = agent(OK);
-    let p = fixture(&a);
-    p.t.set_enabled(true).unwrap();
+    let mut p = fixture(&a);
+    p.on();
     assert!(TcpStream::connect(("127.0.0.1", p.port)).is_ok());
     // a port on all the networks would answer on every address of the computer
     assert!(TcpStream::connect(("127.0.0.2", p.port)).is_err());
     assert!(TcpStream::connect(("127.0.0.2", p.preview_port)).is_err());
+}
+
+// ---------------------------------------------------------------- the computer's addresses in the pages (loopback relay)
+
+const SCRIPT_TAG: &str = "<script src=\"/__mango_loopback.js\"></script>";
+
+/// A fake server whose reply is an HTML page.
+fn html_agent(page: &str) -> Agent {
+    agent(Box::leak(format!("HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{page}", page.len()).into_boxed_str()))
+}
+
+fn loopback_get(p: &Fixture, cookie: &str, host: &str, port: u16, path: &str) -> String {
+    preview_get(p, cookie, &format!("/__mango_loopback/{host}/{port}{path}"))
+}
+
+#[test]
+fn the_page_of_the_computer_carries_a_script_that_sends_its_calls_to_the_phone_port() {
+    let page = "<!doctype html><html><head><title>x</title></head><body>hi</body></html>";
+    let shown = html_agent(page);
+    let a = agent(OK);
+    let mut p = fixture(&a);
+    p.on();
+    let cookie = p.enter();
+    p.show(&format!("http://localhost:{}/", shown.port), None);
+    let r = p.send_preview(&format!("GET / HTTP/1.1\r\nHost: {{host}}\r\nAccept: text/html\r\nAccept-Encoding: gzip, br\r\n{}\r\n", with_cookie(&cookie)));
+    assert_eq!(status(&r), "200", "{r}");
+    let expected = page.replace("<head>", &format!("<head>{SCRIPT_TAG}"));
+    assert_eq!(body(&r), expected);
+    assert!(r.contains(&format!("Content-Length: {}\r\n", expected.len())), "{r}");
+    assert!(!r.contains("Transfer-Encoding") && !r.contains("Content-Encoding"), "{r}");
+    // the page is asked for without compression, so that it can be read
+    let asked = shown.received.recv().unwrap();
+    assert!(asked.contains("Accept-Encoding: identity\r\n") && !asked.contains("gzip"), "{asked}");
+}
+
+#[test]
+fn the_script_goes_where_a_page_can_take_it_first() {
+    let a = agent(OK);
+    let mut p = fixture(&a);
+    p.on();
+    let cookie = p.enter();
+    for (page, expected) in [
+        ("<HEAD data-x=\"1\"><title>x</title></HEAD>", format!("<HEAD data-x=\"1\">{SCRIPT_TAG}<title>x</title></HEAD>")),
+        ("<!doctype html><html lang=\"it\"><body>hi</body></html>", format!("<!doctype html><html lang=\"it\">{SCRIPT_TAG}<body>hi</body></html>")),
+        ("<!-- <head> --><body>hi</body>", format!("<!-- <head> -->{SCRIPT_TAG}<body>hi</body>")),
+        ("hello", format!("{SCRIPT_TAG}hello")),
+        ("<header>not the head</header>", format!("{SCRIPT_TAG}<header>not the head</header>")),
+    ] {
+        let shown = html_agent(page);
+        p.show(&format!("http://127.0.0.1:{}/", shown.port), None);
+        let r = preview_page(&p, &cookie, "/");
+        assert_eq!(body(&r), expected, "{page}");
+    }
+}
+
+#[test]
+fn a_page_in_pieces_is_put_together_and_what_is_not_a_readable_page_passes_as_it_is() {
+    let a = agent(OK);
+    let mut p = fixture(&a);
+    p.on();
+    let cookie = p.enter();
+
+    let chunked = agent("HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n6\r\n<head>\r\n5\r\nhello\r\n0\r\n\r\n");
+    p.show(&format!("http://127.0.0.1:{}/", chunked.port), None);
+    let r = preview_page(&p, &cookie, "/");
+    assert_eq!(body(&r), format!("<head>{SCRIPT_TAG}hello"), "{r}");
+    assert!(r.contains("Content-Length: ") && !r.contains("Transfer-Encoding"), "{r}");
+
+    // already compressed whatever was asked: its bytes are not touched
+    let packed = agent("HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Encoding: gzip\r\nContent-Length: 11\r\nConnection: close\r\n\r\n<head>xxxxx");
+    p.show(&format!("http://127.0.0.1:{}/", packed.port), None);
+    let r = preview_page(&p, &cookie, "/");
+    assert!(r.contains("Content-Encoding: gzip\r\n") && body(&r) == "<head>xxxxx" && !r.contains("__mango_loopback"), "{r}");
+
+    for reply in [
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 6\r\nConnection: close\r\n\r\n<head>",
+        "HTTP/1.1 304 Not Modified\r\nContent-Type: text/html\r\nConnection: close\r\n\r\n",
+        "HTTP/1.1 200 OK\r\nContent-Type: text/javascript\r\nContent-Length: 6\r\nConnection: close\r\n\r\n<head>",
+    ] {
+        let other = agent(reply);
+        p.show(&format!("http://127.0.0.1:{}/", other.port), None);
+        let r = preview_page(&p, &cookie, "/");
+        assert!(!r.contains("__mango_loopback"), "{r}");
+    }
+
+    // a page too big to hold passes untouched
+    let big = format!("<head>{}", "x".repeat(5 * 1024 * 1024));
+    let large = html_agent(&big);
+    p.show(&format!("http://127.0.0.1:{}/", large.port), None);
+    let r = preview_page(&p, &cookie, "/");
+    assert_eq!(status(&r), "200");
+    assert_eq!(body(&r), big);
+}
+
+#[test]
+fn the_script_is_given_only_with_the_session() {
+    let a = agent(OK);
+    let mut p = fixture(&a);
+    p.on();
+    let cookie = p.enter();
+    assert_eq!(status(&p.send_preview("GET /__mango_loopback.js HTTP/1.1\r\nHost: {host}\r\n\r\n")), "401");
+    let r = preview_get(&p, &cookie, "/__mango_loopback.js");
+    assert_eq!(status(&r), "200", "{r}");
+    assert!(r.contains("Content-Type: text/javascript"), "{r}");
+    for call in ["fetch", "XMLHttpRequest", "WebSocket", "EventSource", "localhost", "127.0.0.1"] {
+        assert!(body(&r).contains(call), "{call}");
+    }
+    // it is the phone port's own: the panel shows nothing and the script is there all the same
+    assert!(a.received.try_recv().is_err());
+}
+
+#[test]
+fn a_page_reaches_every_port_of_the_computer_on_localhost_and_127_0_0_1() {
+    let a = agent(OK);
+    let shown = agent(OK);
+    let api = agent("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 12\r\nConnection: close\r\n\r\n{\"api\":true}");
+    let mut p = fixture(&a);
+    p.on();
+    let cookie = p.enter();
+    p.show(&format!("http://localhost:{}/", shown.port), None);
+    let own = shown.port;
+    for (host, port) in [("localhost", api.port), ("127.0.0.1", api.port), ("localhost", own), ("127.0.0.1", own)] {
+        let r = p.send_preview(&format!(
+            "GET /__mango_loopback/{host}/{port}/api/items?page=2&q=a%20b HTTP/1.1\r\nHost: {{host}}\r\nCookie: theme=dark; mango_phone={cookie}\r\nReferer: http://x/\r\n\r\n"
+        ));
+        assert_eq!(status(&r), "200", "{host}:{port}: {r}");
+        let received = if port == api.port { api.received.recv().unwrap() } else { shown.received.recv().unwrap() };
+        assert!(received.starts_with("GET /api/items?page=2&q=a%20b HTTP/1.1\r\n"), "{received}");
+        assert!(received.contains(&format!("Host: {host}:{port}\r\n")), "{received}");
+        // the server of the computer gets its own cookies and never the phone's session
+        assert!(received.contains("Cookie: theme=dark\r\n") && !received.contains("mango_phone"), "{received}");
+        assert!(!received.to_ascii_lowercase().contains("referer"), "{received}");
+    }
+    let r = loopback_get(&p, &cookie, "localhost", api.port, "/");
+    assert_eq!(body(&r), "{\"api\":true}", "{r}");
+    api.received.recv().unwrap();
+    // a body goes through, and the Origin is the one the computer's browser would send: the shown page's
+    let r = p.send_preview(&format!(
+        "POST /__mango_loopback/127.0.0.1/{}/save HTTP/1.1\r\nHost: {{host}}\r\nOrigin: http://127.0.0.1:{}\r\n{}Content-Length: 5\r\n\r\nhello",
+        api.port,
+        p.preview_port,
+        with_cookie(&cookie)
+    ));
+    assert_eq!(status(&r), "200", "{r}");
+    let received = api.received.recv().unwrap();
+    assert!(received.starts_with("POST /save HTTP/1.1\r\n") && received.ends_with("hello"), "{received}");
+    assert!(received.contains(&format!("Origin: http://localhost:{own}\r\n")), "{received}");
+    assert!(a.received.try_recv().is_err());
+}
+
+#[test]
+fn a_call_to_the_computer_needs_the_phones_session_and_the_checks_of_the_port() {
+    let a = agent(OK);
+    let api = agent(OK);
+    let mut p = fixture(&a);
+    p.on();
+    let cookie = p.enter();
+    let path = format!("/__mango_loopback/localhost/{}/api", api.port);
+    for request in [
+        format!("GET {path} HTTP/1.1\r\nHost: {{host}}\r\n\r\n"),
+        format!("GET {path} HTTP/1.1\r\nHost: {{host}}\r\nCookie: mango_phone=made-up\r\n\r\n"),
+        format!("GET {path} HTTP/1.1\r\nHost: {{host}}\r\nCookie: mango_phone={}\r\n\r\n", p.key()),
+    ] {
+        assert_eq!(status(&p.send_preview(&request)), "401", "{request}");
+    }
+    let c = with_cookie(&cookie);
+    assert_eq!(status(&p.send_preview(&format!("GET {path} HTTP/1.1\r\nHost: mango.example\r\n{c}\r\n"))), "403");
+    assert_eq!(status(&p.send_preview(&format!("GET {path} HTTP/1.1\r\nHost: {{host}}\r\nOrigin: https://foreign-site.example\r\n{c}\r\n"))), "403");
+    assert_eq!(status(&p.send_preview(&format!("GET {path} HTTP/1.1\r\nHost: {{host}}\r\nOrigin: http://127.0.0.1:{}\r\n{c}\r\n", p.port))), "403");
+    assert_eq!(status(&p.send_preview(&format!("TRACE {path} HTTP/1.1\r\nHost: {{host}}\r\n{c}\r\n"))), "405");
+    assert!(api.received.try_recv().is_err());
+    // the main port has no such route: it goes to the agent like any other path
+    let r = p.send(&format!("GET {path} HTTP/1.1\r\nHost: {{host}}\r\n{c}\r\n"));
+    assert_eq!(status(&r), "200");
+    assert!(a.received.recv().unwrap().starts_with(&format!("GET {path} ")) && api.received.try_recv().is_err());
+}
+
+#[test]
+fn no_other_address_than_the_computers_own_loopback_is_ever_reached() {
+    let a = agent(OK);
+    let api = agent(OK);
+    let mut p = fixture(&a);
+    p.on();
+    let cookie = p.enter();
+    let n = api.port;
+    for path in [
+        format!("/__mango_loopback/192.168.1.5/{n}/x"),
+        format!("/__mango_loopback/example.com/{n}/x"),
+        format!("/__mango_loopback/localhost.evil.com/{n}/x"),
+        format!("/__mango_loopback/127.0.0.1.nip.io/{n}/x"),
+        format!("/__mango_loopback/127.0.0.2/{n}/x"),
+        format!("/__mango_loopback/0.0.0.0/{n}/x"),
+        format!("/__mango_loopback/[::1]/{n}/x"),
+        format!("/__mango_loopback/%6cocalhost/{n}/x"),
+        format!("/__mango_loopback/LOCALHOST/{n}/x"),
+        format!("/__mango_loopback/localhost@evil.com/{n}/x"),
+        format!("/__mango_loopback/localhost:{n}/x"),
+        "/__mango_loopback/localhost/0/x".to_string(),
+        "/__mango_loopback/localhost/65536/x".to_string(),
+        format!("/__mango_loopback/localhost/{n}x/x"),
+        format!("/__mango_loopback/localhost/+{n}/x"),
+        "/__mango_loopback/localhost//x".to_string(),
+        "/__mango_loopback/localhost".to_string(),
+        "/__mango_loopback/".to_string(),
+        "/__mango_loopback".to_string(),
+        format!("/__mango_loopback/localhost/{n}x"),
+    ] {
+        let r = preview_get(&p, &cookie, &path);
+        assert!(["400", "404"].contains(&status(&r)), "{path}: {r}");
+    }
+    assert!(api.received.try_recv().is_err() && a.received.try_recv().is_err());
+    // the same port, in the two names that are the loopback, does arrive
+    assert_eq!(status(&loopback_get(&p, &cookie, "localhost", n, "")), "200");
+    assert!(api.received.recv().unwrap().starts_with("GET / HTTP/1.1\r\n"));
+}
+
+#[test]
+fn a_page_cannot_reach_the_agent_nor_any_port_of_the_app_through_the_route() {
+    let a = agent(OK);
+    let engine = agent(OK);
+    let voice = agent(OK);
+    let dev = agent(OK);
+    let mut p = fixture(&a);
+    p.on();
+    let cookie = p.enter();
+    *p.computer.owned.lock().unwrap() = vec![engine.port, voice.port];
+    p.show("file:///site/index.html", Some(Path::new("C:/site/index.html")));
+    let pp = p.preview_port;
+    for (host, port) in [
+        ("127.0.0.1", a.port),
+        ("localhost", a.port),
+        ("127.0.0.1", engine.port),
+        ("localhost", voice.port),
+        ("127.0.0.1", p.port),
+        ("localhost", p.preview_port),
+    ] {
+        for path in ["/", "/session", "/mango/state", "/mango/reload"] {
+            let r = loopback_get(&p, &cookie, host, port, path);
+            assert_eq!(status(&r), "403", "{host}:{port}{path}: {r}");
+        }
+        // what a hostile page does: a call with the preview's own Origin, and a socket
+        let r = p.send_preview(&format!(
+            "POST /__mango_loopback/{host}/{port}/session HTTP/1.1\r\nHost: {{host}}\r\nOrigin: http://127.0.0.1:{pp}\r\n{}Content-Length: 2\r\n\r\n{{}}",
+            with_cookie(&cookie)
+        ));
+        assert_eq!(status(&r), "403", "{host}:{port}: {r}");
+        let r = p.send_preview(&format!(
+            "GET /__mango_loopback/{host}/{port}/event HTTP/1.1\r\nHost: {{host}}\r\nOrigin: http://127.0.0.1:{pp}\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n{}\r\n",
+            with_cookie(&cookie)
+        ));
+        assert_eq!(status(&r), "403", "{host}:{port}: {r}");
+    }
+    assert!(a.received.try_recv().is_err() && engine.received.try_recv().is_err() && voice.received.try_recv().is_err());
+    assert!(p.log().contains("a port of the app"), "{}", p.log());
+
+    // the app's ports are asked at every call: one that starts later is shut at once, and the user's own servers stay open
+    let later = agent(OK);
+    assert_eq!(status(&loopback_get(&p, &cookie, "127.0.0.1", later.port, "/")), "200");
+    later.received.recv().unwrap();
+    p.computer.owned.lock().unwrap().push(later.port);
+    assert_eq!(status(&loopback_get(&p, &cookie, "127.0.0.1", later.port, "/")), "403");
+    assert!(later.received.try_recv().is_err());
+    assert_eq!(status(&loopback_get(&p, &cookie, "127.0.0.1", dev.port, "/")), "200");
+    assert!(dev.received.recv().unwrap().starts_with("GET / HTTP/1.1\r\n"));
+}
+
+#[test]
+fn the_origin_of_a_call_is_the_one_the_computer_gives_the_page_the_panel_shows() {
+    let a = agent(OK);
+    let shown = agent(OK);
+    let other = agent(OK);
+    let mut p = fixture(&a);
+    p.on();
+    let cookie = p.enter();
+    let preview = format!("http://127.0.0.1:{}", p.preview_port);
+    p.show(&format!("http://localhost:{}/", shown.port), None);
+    let post = |host: &str, port: u16, origin: Option<&str>| {
+        let origin = origin.map(|o| format!("Origin: {o}\r\n")).unwrap_or_default();
+        p.send_preview(&format!("POST /__mango_loopback/{host}/{port}/x HTTP/1.1\r\nHost: {{host}}\r\n{origin}{}Content-Length: 0\r\n\r\n", with_cookie(&cookie)))
+    };
+    let origin_of = |s: &Agent| s.received.recv().unwrap().lines().find(|l| l.starts_with("Origin:")).map(str::to_string);
+
+    // every server of the computer, the page's own under either name or another one, sees the page's origin on the
+    // computer, as the computer's browser would send it: a server that lets that page call it lets the phone too
+    let page = format!("Origin: http://localhost:{}", shown.port);
+    assert_eq!(status(&post("127.0.0.1", other.port, Some(&preview))), "200");
+    assert_eq!(origin_of(&other), Some(page.clone()));
+    assert_eq!(status(&post("localhost", shown.port, Some(&preview))), "200");
+    assert_eq!(origin_of(&shown), Some(page.clone()));
+    assert_eq!(status(&post("127.0.0.1", shown.port, Some(&preview))), "200");
+    assert_eq!(origin_of(&shown), Some(page));
+    // no Origin from the page, none made up
+    assert_eq!(status(&post("127.0.0.1", other.port, None)), "200");
+    assert_eq!(origin_of(&other), None);
+}
+
+#[test]
+fn a_redirect_from_a_server_of_the_computer_stays_in_the_route() {
+    let a = agent(OK);
+    let mut p = fixture(&a);
+    p.on();
+    let cookie = p.enter();
+    let redirect = |location: &str| {
+        let reply = format!("HTTP/1.1 302 Found\r\nLocation: {location}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+        agent(Box::leak(reply.into_boxed_str()))
+    };
+    let location = |r: &str| r.lines().find_map(|l| l.strip_prefix("Location: ")).unwrap_or("").to_string();
+    let anywhere = agent(OK).port;
+    for (host, written, expected) in [
+        ("localhost", "http://127.0.0.1:4000/api/".to_string(), "/__mango_loopback/127.0.0.1/4000/api/".to_string()),
+        ("localhost", "http://localhost:4000".to_string(), "/__mango_loopback/localhost/4000/".to_string()),
+        ("localhost", "HTTP://LocalHost/a?b=1#top".to_string(), "/__mango_loopback/localhost/80/a?b=1#top".to_string()),
+        ("localhost", "//127.0.0.1:4000/a".to_string(), "/__mango_loopback/127.0.0.1/4000/a".to_string()),
+        ("localhost", format!("http://localhost:{anywhere}/back"), format!("/__mango_loopback/localhost/{anywhere}/back")),
+        // an address of the server itself stays in the same place
+        ("127.0.0.1", "/login?next=%2F".to_string(), "/__mango_loopback/127.0.0.1/{port}/login?next=%2F".to_string()),
+        // not an address of the computer, or relative to the request: left as it is
+        ("localhost", "login".to_string(), "login".to_string()),
+        ("localhost", "?page=2".to_string(), "?page=2".to_string()),
+        ("localhost", "http://example.com/x".to_string(), "http://example.com/x".to_string()),
+        ("localhost", "https://localhost:3000/".to_string(), "https://localhost:3000/".to_string()),
+        ("localhost", "http://localhost.evil.com:3000/".to_string(), "http://localhost.evil.com:3000/".to_string()),
+        ("localhost", "http://127.0.0.2:3000/".to_string(), "http://127.0.0.2:3000/".to_string()),
+    ] {
+        let server = redirect(&written);
+        let r = loopback_get(&p, &cookie, host, server.port, "/start");
+        assert_eq!(status(&r), "302", "{written}: {r}");
+        assert_eq!(location(&r), expected.replace("{port}", &server.port.to_string()), "{written}");
+    }
+
+    // the page the panel shows: another address of the computer goes through the route too
+    for (written, expected) in [
+        ("http://localhost:4000/api/", "/__mango_loopback/localhost/4000/api/"),
+        ("/same", "/same"),
+        ("http://example.com/", "http://example.com/"),
+    ] {
+        let page = redirect(written);
+        p.show(&format!("http://localhost:{}/", page.port), None);
+        let r = preview_get(&p, &cookie, "/start");
+        assert_eq!(location(&r), expected, "{written}: {r}");
+    }
+}
+#[test]
+fn a_web_socket_to_a_port_of_the_computer_passes_both_ways() {
+    let a = agent(OK);
+    let mut p = fixture(&a);
+    p.on();
+    let cookie = p.enter();
+    let l = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = l.local_addr().unwrap().port();
+    let (tx, asked) = mpsc::channel();
+    std::thread::spawn(move || {
+        let (mut c, _) = l.accept().unwrap();
+        let mut head = Vec::new();
+        let mut b = [0u8; 1024];
+        while !head.windows(4).any(|w| w == b"\r\n\r\n") {
+            let n = c.read(&mut b).unwrap();
+            head.extend_from_slice(&b[..n]);
+        }
+        tx.send(String::from_utf8_lossy(&head).into_owned()).unwrap();
+        c.write_all(b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n").unwrap();
+        let n = c.read(&mut b).unwrap();
+        c.write_all(&b[..n]).unwrap();
+    });
+    // the panel shows another server: the socket goes where its address says
+    let shown = agent(OK);
+    p.show(&format!("http://127.0.0.1:{}/", shown.port), None);
+    let mut c = TcpStream::connect(("127.0.0.1", p.preview_port)).unwrap();
+    c.set_read_timeout(Some(std::time::Duration::from_secs(10))).unwrap();
+    write!(
+        c,
+        "GET /__mango_loopback/localhost/{port}/live?room=1 HTTP/1.1\r\nHost: 127.0.0.1:{pp}\r\nOrigin: http://127.0.0.1:{pp}\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n{}\r\n",
+        with_cookie(&cookie),
+        pp = p.preview_port
+    )
+    .unwrap();
+    let mut read = Vec::new();
+    let mut b = [0u8; 1024];
+    while !read.windows(4).any(|w| w == b"\r\n\r\n") {
+        let n = c.read(&mut b).unwrap();
+        assert!(n > 0);
+        read.extend_from_slice(&b[..n]);
+    }
+    assert!(String::from_utf8_lossy(&read).starts_with("HTTP/1.1 101"));
+    c.write_all(b"ping").unwrap();
+    assert_eq!(c.read(&mut b).unwrap(), 4);
+    assert_eq!(&b[..4], b"ping");
+    let received = asked.recv().unwrap();
+    assert!(received.starts_with("GET /live?room=1 HTTP/1.1\r\n") && received.contains(&format!("Host: localhost:{port}\r\n")), "{received}");
+    assert!(received.contains(&format!("Origin: http://127.0.0.1:{}\r\n", shown.port)) && !received.contains("mango_phone"), "{received}");
+    assert!(shown.received.try_recv().is_err());
+}
+
+#[test]
+fn a_socket_without_the_session_is_refused() {
+    let a = agent(OK);
+    let api = agent(OK);
+    let mut p = fixture(&a);
+    p.on();
+    let r = p.send_preview(&format!(
+        "GET /__mango_loopback/localhost/{}/live HTTP/1.1\r\nHost: {{host}}\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n",
+        api.port
+    ));
+    assert_eq!(status(&r), "401", "{r}");
+    assert!(api.received.try_recv().is_err());
+}
+
+#[test]
+fn a_local_page_carries_the_script_too_and_other_files_do_not() {
+    let a = agent(OK);
+    let mut p = fixture(&a);
+    p.on();
+    let cookie = p.enter();
+    let site = Site::new();
+    let dir = site.dir();
+    std::fs::write(dir.join("with-head.html"), "<!doctype html><html><head><meta charset=\"utf-8\"></head><body>é</body></html>").unwrap();
+    std::fs::write(dir.join("latin.html"), b"<html><body>caf\xe9</body></html>").unwrap();
+    std::fs::write(dir.join("big.html"), format!("<html>{}", "x".repeat(5 * 1024 * 1024))).unwrap();
+    p.show("file:///site/with-head.html", Some(&dir.join("with-head.html")));
+
+    let r = preview_page(&p, &cookie, "/");
+    let expected = format!("<!doctype html><html><head>{SCRIPT_TAG}<meta charset=\"utf-8\"></head><body>é</body></html>");
+    assert_eq!(body(&r), expected, "{r}");
+    assert!(r.contains(&format!("Content-Length: {}\r\n", expected.len())) && r.contains("nosniff"), "{r}");
+
+    // only a whole page that can be read is changed: a part, the head of a request, a page that is not UTF-8 or too big, and every other file
+    let r = p.send_preview(&format!("GET /with-head.html HTTP/1.1\r\nHost: {{host}}\r\n{}Range: bytes=0-5\r\n\r\n", with_cookie(&cookie)));
+    assert!(status(&r) == "206" && body(&r) == "<!doct", "{r}");
+    let r = p.send_preview(&format!("HEAD /with-head.html HTTP/1.1\r\nHost: {{host}}\r\n{}\r\n", with_cookie(&cookie)));
+    assert!(status(&r) == "200" && body(&r).is_empty() && !r.contains(&format!("Content-Length: {}\r\n", expected.len())), "{r}");
+    assert!(!preview_page(&p, &cookie, "/latin.html").contains("__mango_loopback"));
+    let r = preview_page(&p, &cookie, "/big.html");
+    assert!(status(&r) == "200" && !r.contains("__mango_loopback"), "{}", &r[..200]);
+    assert!(!preview_get(&p, &cookie, "/style.css").contains("__mango_loopback"));
+    assert!(!std::fs::read_to_string(dir.join("with-head.html")).unwrap().contains("__mango_loopback"));
+}
+
+#[test]
+fn only_a_page_opened_by_the_browser_gets_the_script_not_the_fragments_a_page_asks_for() {
+    let page = "<!doctype html><html><head><title>x</title></head><body>hi</body></html>";
+    let shown = html_agent(page);
+    let a = agent(OK);
+    let mut p = fixture(&a);
+    p.on();
+    let cookie = p.enter();
+    p.show(&format!("http://localhost:{}/", shown.port), None);
+    let with_script = page.replace("<head>", &format!("<head>{SCRIPT_TAG}"));
+
+    // a fragment (an htmx swap, a template fetched by a script) is the server's own, whatever it accepts: the compression it asked for stays
+    for accept in ["text/html", "*/*", "text/html,application/xhtml+xml"] {
+        let r = preview_fetch(&p, &cookie, "/fragment", accept);
+        assert_eq!(body(&r), page, "{accept}: {r}");
+        assert!(!r.contains("__mango_loopback"), "{r}");
+        assert!(shown.received.recv().unwrap().contains("Accept-Encoding: gzip\r\n"));
+    }
+    // a page, a frame (the web UI shows the panel's page in one) and a browser that sends no Sec-Fetch headers but asks for HTML
+    assert_eq!(body(&preview_page(&p, &cookie, "/")), with_script);
+    let r = p.send_preview(&format!("GET / HTTP/1.1\r\nHost: {{host}}\r\nSec-Fetch-Dest: iframe\r\nSec-Fetch-Mode: navigate\r\n{}\r\n", with_cookie(&cookie)));
+    assert_eq!(body(&r), with_script, "{r}");
+    let r = p.send_preview(&format!("GET / HTTP/1.1\r\nHost: {{host}}\r\nAccept: text/html,*/*;q=0.8\r\n{}\r\n", with_cookie(&cookie)));
+    assert_eq!(body(&r), with_script, "{r}");
+    // but nothing says it is a page: it is not one
+    let r = p.send_preview(&format!("GET / HTTP/1.1\r\nHost: {{host}}\r\nAccept: */*\r\n{}\r\n", with_cookie(&cookie)));
+    assert_eq!(body(&r), page, "{r}");
+    // a script, an image or a worker asked for by the page are not documents either
+    for dest in ["script", "image", "worker", "style", "empty"] {
+        let r = p.send_preview(&format!("GET / HTTP/1.1\r\nHost: {{host}}\r\nAccept: text/html\r\nSec-Fetch-Dest: {dest}\r\n{}\r\n", with_cookie(&cookie)));
+        assert_eq!(body(&r), page, "{dest}: {r}");
+    }
+
+    // a local file is the same
+    let site = Site::new();
+    let dir = site.dir();
+    p.show("file:///site/index.html", Some(&dir.join("index.html")));
+    assert_eq!(body(&preview_page(&p, &cookie, "/")), format!("<html>{SCRIPT_TAG}home</html>"));
+    assert_eq!(body(&preview_fetch(&p, &cookie, "/", "text/html")), "<html>home</html>");
+}
+
+/// A server that sends the start of an HTML page without a length and keeps the connection open until the sender is dropped.
+fn held_page(start: &'static str) -> (u16, mpsc::Sender<()>) {
+    let l = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = l.local_addr().unwrap().port();
+    let (hold, held) = mpsc::channel::<()>();
+    std::thread::spawn(move || {
+        let Ok((mut c, _)) = l.accept() else { return };
+        let mut b = [0u8; 4096];
+        let _ = c.read(&mut b);
+        let _ = c.write_all(start.as_bytes());
+        let _ = held.recv();
+    });
+    (port, hold)
+}
+
+#[test]
+fn a_page_that_does_not_end_is_not_waited_for() {
+    let a = agent(OK);
+    let mut p = fixture(&a);
+    p.on();
+    let cookie = p.enter();
+    let (port, hold) = held_page("HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nConnection: close\r\n\r\n<html><head></head><body>first part");
+    p.show(&format!("http://127.0.0.1:{port}/"), None);
+    let mut c = TcpStream::connect(("127.0.0.1", p.preview_port)).unwrap();
+    c.set_read_timeout(Some(Duration::from_secs(20))).unwrap();
+    let started = Instant::now();
+    write!(
+        c,
+        "GET / HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nAccept: text/html\r\nSec-Fetch-Dest: document\r\n{}\r\n",
+        p.preview_port,
+        with_cookie(&cookie)
+    )
+    .unwrap();
+    let mut read = Vec::new();
+    let mut b = [0u8; 1024];
+    while !String::from_utf8_lossy(&read).contains("first part") {
+        let n = c.read(&mut b).unwrap();
+        assert!(n > 0, "closed before the page came: {}", String::from_utf8_lossy(&read));
+        read.extend_from_slice(&b[..n]);
+    }
+    // the page arrives as it is, within the short time a page is held, while the server still holds the connection open
+    assert!(started.elapsed() < Duration::from_secs(5), "{:?}", started.elapsed());
+    let r = String::from_utf8_lossy(&read);
+    assert!(r.starts_with("HTTP/1.1 200") && !r.contains("__mango_loopback"), "{r}");
+    // and what comes later still follows
+    drop(hold);
+    let mut rest = Vec::new();
+    let _ = c.read_to_end(&mut rest);
+}
+
+#[test]
+fn a_page_in_another_character_set_than_utf_8_is_not_changed() {
+    let a = agent(OK);
+    let mut p = fixture(&a);
+    p.on();
+    let cookie = p.enter();
+    let utf16 = |bom: &[u8], text: &str| [bom.to_vec(), text.encode_utf16().flat_map(u16::to_le_bytes).collect()].concat();
+    let page = utf16(&[0xFF, 0xFE], "<html><head></head></html>");
+    let declared = [format!("HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-16le\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", page.len()).into_bytes(), page.clone()].concat();
+    let without = [format!("HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", page.len()).into_bytes(), page.clone()].concat();
+    let latin = b"HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=ISO-8859-1\r\nContent-Length: 22\r\nConnection: close\r\n\r\n<head></head>caf\xe9 caf\xe9".to_vec();
+    for (name, reply, bytes) in [("declared", declared, page.clone()), ("bom only", without, page), ("latin-1", latin, b"<head></head>caf\xe9 caf\xe9".to_vec())] {
+        let server = agent_bytes(reply);
+        p.show(&format!("http://127.0.0.1:{}/", server.port), None);
+        let mut c = TcpStream::connect(("127.0.0.1", p.preview_port)).unwrap();
+        write!(c, "GET / HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nAccept: text/html\r\nSec-Fetch-Dest: document\r\n{}\r\n", p.preview_port, with_cookie(&cookie)).unwrap();
+        let mut got = Vec::new();
+        c.read_to_end(&mut got).unwrap();
+        let at = got.windows(4).position(|w| w == b"\r\n\r\n").unwrap() + 4;
+        assert_eq!(&got[at..], bytes.as_slice(), "{name}");
+        assert!(!String::from_utf8_lossy(&got[..at]).to_ascii_lowercase().contains("transfer-encoding"), "{name}");
+    }
+}
+
+fn fetch_site_of(s: &Agent) -> Option<String> {
+    s.received.recv().unwrap().lines().find(|l| l.to_ascii_lowercase().starts_with("sec-fetch-site:")).map(str::to_string)
+}
+
+#[test]
+fn a_call_to_another_server_says_what_the_computer_would_say_about_where_the_page_comes_from() {
+    let a = agent(OK);
+    let shown = agent(OK);
+    let other = agent(OK);
+    let mut p = fixture(&a);
+    p.on();
+    let cookie = p.enter();
+    p.show(&format!("http://localhost:{}/", shown.port), None);
+    // the phone's browser says `same-origin`: the call goes to its own port
+    let call = |host: &str, port: u16, site: Option<&str>| {
+        let site = site.map(|s| format!("Sec-Fetch-Site: {s}\r\nSec-Fetch-Mode: cors\r\n")).unwrap_or_default();
+        let r = p.send_preview(&format!("GET /__mango_loopback/{host}/{port}/x HTTP/1.1\r\nHost: {{host}}\r\n{site}{}\r\n", with_cookie(&cookie)));
+        assert_eq!(status(&r), "200", "{r}");
+    };
+    call("localhost", shown.port, Some("same-origin"));
+    assert_eq!(fetch_site_of(&shown).as_deref(), Some("Sec-Fetch-Site: same-origin"));
+    call("localhost", other.port, Some("same-origin"));
+    assert_eq!(fetch_site_of(&other).as_deref(), Some("Sec-Fetch-Site: same-site"));
+    call("127.0.0.1", other.port, Some("same-origin"));
+    assert_eq!(fetch_site_of(&other).as_deref(), Some("Sec-Fetch-Site: cross-site"));
+    call("127.0.0.1", shown.port, Some("same-origin"));
+    assert_eq!(fetch_site_of(&shown).as_deref(), Some("Sec-Fetch-Site: cross-site"));
+    // a browser that sends none: none is made up
+    call("localhost", other.port, None);
+    assert_eq!(fetch_site_of(&other), None);
+    // a page that is a file of the computer comes from no server: everything is another site
+    p.show("file:///site/index.html", Some(Path::new("C:/site/index.html")));
+    call("localhost", other.port, Some("same-origin"));
+    assert_eq!(fetch_site_of(&other).as_deref(), Some("Sec-Fetch-Site: cross-site"));
+    // what the page asks of its own server by a relative address is the page's own: it stays as the browser said
+    p.show(&format!("http://localhost:{}/", shown.port), None);
+    let r = preview_fetch(&p, &cookie, "/x", "*/*");
+    assert_eq!(status(&r), "200", "{r}");
+    assert!(shown.received.recv().unwrap().contains("Sec-Fetch-Dest: empty\r\n"));
+}
+
+#[test]
+fn a_server_of_the_computer_cannot_replace_the_phones_session_with_its_cookies() {
+    let a = agent(OK);
+    let reply = "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nSet-Cookie: theme=dark; Path=/\r\nSet-Cookie: mango_phone=forged; Path=/\r\nset-cookie: mango_phone=; Max-Age=0\r\nSet-Cookie: x_mango_phone=1\r\nContent-Length: 2\r\nConnection: close\r\n\r\nhi";
+    let shown = agent(reply);
+    let other = agent(reply);
+    let mut p = fixture(&a);
+    p.on();
+    let cookie = p.enter();
+    p.show(&format!("http://localhost:{}/", shown.port), None);
+    for r in [preview_page(&p, &cookie, "/"), loopback_get(&p, &cookie, "127.0.0.1", other.port, "/")] {
+        assert_eq!(status(&r), "200", "{r}");
+        let head = r.split("\r\n\r\n").next().unwrap().to_ascii_lowercase();
+        assert!(head.contains("set-cookie: theme=dark; path=/\r\n") && head.contains("set-cookie: x_mango_phone=1"), "{r}");
+        assert!(!head.contains("mango_phone=forged") && !head.contains("set-cookie: mango_phone"), "{r}");
+    }
+}
+
+#[test]
+fn a_page_that_is_a_download_does_not_get_the_script() {
+    let a = agent(OK);
+    let page = "<html><head></head><body>report</body></html>";
+    let attachment = agent(Box::leak(
+        format!("HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Disposition: attachment; filename=\"r.html\"\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{page}", page.len()).into_boxed_str(),
+    ));
+    let mut p = fixture(&a);
+    p.on();
+    let cookie = p.enter();
+    p.show(&format!("http://localhost:{}/", attachment.port), None);
+    let r = preview_page(&p, &cookie, "/");
+    assert_eq!(body(&r), page, "{r}");
+    assert!(r.to_ascii_lowercase().contains("content-disposition: attachment"), "{r}");
+}
+
+#[test]
+fn the_phone_cannot_be_shown_a_page_of_the_app_either() {
+    let a = agent(OK);
+    let engine = agent(OK);
+    let mut p = fixture(&a);
+    p.on();
+    let cookie = p.enter();
+    *p.computer.owned.lock().unwrap() = vec![engine.port];
+    for port in [a.port, engine.port, p.port, p.preview_port] {
+        p.show(&format!("http://127.0.0.1:{port}/"), None);
+        for path in ["/", "/session", "/mango/state", "/mango/reload", "/mango//Processes/"] {
+            let r = preview_fetch(&p, &cookie, path, "*/*");
+            assert_eq!(status(&r), "403", "{port}{path}: {r}");
+        }
+    }
+    assert!(a.received.try_recv().is_err() && engine.received.try_recv().is_err());
+    // what the panel shows is told to the phone as a page it cannot have, not as the app's address
+    p.show(&format!("http://127.0.0.1:{}/", engine.port), None);
+    let r = p.send(&format!("GET /phone/preview HTTP/1.1\r\nHost: {{host}}\r\n{}\r\n", with_cookie(&cookie)));
+    let told = serde_json::from_str::<serde_json::Value>(body(&r)).unwrap();
+    assert_eq!(told["page"]["local"], false, "{r}");
+    assert_eq!(told["page"]["label"], "", "{r}");
+    // and the phone cannot ask the panel to open one
+    let opened = p.computer.opened.lock().unwrap().len();
+    let origin = format!("http://127.0.0.1:{}", p.port);
+    for port in [a.port, engine.port, p.port, p.preview_port] {
+        let json = format!("{{\"url\":\"http://localhost:{port}/\"}}");
+        let r = p.send(&format!("POST /phone/preview HTTP/1.1\r\nHost: {{host}}\r\nOrigin: {origin}\r\n{}Content-Length: {}\r\n\r\n{json}", with_cookie(&cookie), json.len()));
+        assert_eq!(status(&r), "403", "{port}: {r}");
+    }
+    assert_eq!(p.computer.opened.lock().unwrap().len(), opened);
+    // a server of the user's is shown and opened as before
+    let dev = agent(OK);
+    let json = format!("{{\"url\":\"http://localhost:{}/\"}}", dev.port);
+    let r = p.send(&format!("POST /phone/preview HTTP/1.1\r\nHost: {{host}}\r\nOrigin: {origin}\r\n{}Content-Length: {}\r\n\r\n{json}", with_cookie(&cookie), json.len()));
+    assert_eq!(status(&r), "200", "{r}");
+    assert_eq!(status(&preview_fetch(&p, &cookie, "/", "*/*")), "200");
+}
+
+#[test]
+fn when_the_agent_changes_its_port_the_phone_follows_it() {
+    let first = agent(OK);
+    let p = fixture(&first);
+    p.t.set_enabled(true).unwrap();
+    let cookie = p.enter();
+    let second = agent(OK);
+    p.t.set_agent_port(second.port);
+    let r = p.send(&format!("GET /session HTTP/1.1\r\nHost: {{host}}\r\nCookie: mango_phone={cookie}\r\n\r\n"));
+    assert_eq!(status(&r), "200", "{r}");
+    let received = second.received.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+    assert!(received.contains(&format!("Host: 127.0.0.1:{}\r\n", second.port)), "{received}");
+    assert!(first.received.try_recv().is_err());
 }

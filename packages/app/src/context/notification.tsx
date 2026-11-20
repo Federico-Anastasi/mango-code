@@ -18,6 +18,7 @@ import { type DraftTab, useTabs } from "./tabs"
 import { requireServerKey } from "@/utils/session-route"
 import type { ServerScope } from "@/utils/server-scope"
 import { sessionTitle } from "@/utils/session-title"
+import { folderKey } from "@/utils/path-key"
 
 type NotificationBase = {
   directory?: string
@@ -80,7 +81,7 @@ function createNotificationIndex(): NotificationIndex {
   }
 }
 
-function buildNotificationIndex(list: Notification[]) {
+export function buildNotificationIndex(list: Notification[]) {
   const index = createNotificationIndex()
 
   list.forEach((notification) => {
@@ -96,13 +97,14 @@ function buildNotificationIndex(list: Notification[]) {
     }
 
     if (notification.directory) {
-      const all = index.project.all[notification.directory] ?? []
-      index.project.all[notification.directory] = [...all, notification]
+      const project = folderKey(notification.directory)
+      const all = index.project.all[project] ?? []
+      index.project.all[project] = [...all, notification]
       if (!notification.viewed) {
-        const unseen = index.project.unseen[notification.directory] ?? []
-        index.project.unseen[notification.directory] = [...unseen, notification]
-        index.project.unseenCount[notification.directory] = unseen.length + 1
-        if (notification.type === "error") index.project.unseenHasError[notification.directory] = true
+        const unseen = index.project.unseen[project] ?? []
+        index.project.unseen[project] = [...unseen, notification]
+        index.project.unseenCount[project] = unseen.length + 1
+        if (notification.type === "error") index.project.unseenHasError[project] = true
       }
     }
   })
@@ -265,11 +267,12 @@ function createServerNotificationState(input: {
     }
 
     if (notification.directory) {
-      setIndex("project", "all", notification.directory, (all = []) => [...all, notification])
+      const project = folderKey(notification.directory)
+      setIndex("project", "all", project, (all = []) => [...all, notification])
       if (!notification.viewed) {
-        setIndex("project", "unseen", notification.directory, (unseen = []) => [...unseen, notification])
-        setIndex("project", "unseenCount", notification.directory, (count = 0) => count + 1)
-        if (notification.type === "error") setIndex("project", "unseenHasError", notification.directory, true)
+        setIndex("project", "unseen", project, (unseen = []) => [...unseen, notification])
+        setIndex("project", "unseenCount", project, (count = 0) => count + 1)
+        if (notification.type === "error") setIndex("project", "unseenHasError", project, true)
       }
     }
   }
@@ -284,10 +287,11 @@ function createServerNotificationState(input: {
     }
 
     if (notification.directory) {
-      setIndex("project", "all", notification.directory, (all = []) => all.filter((n) => n !== notification))
+      const project = folderKey(notification.directory)
+      setIndex("project", "all", project, (all = []) => all.filter((n) => n !== notification))
       if (!notification.viewed) {
-        const unseen = (index.project.unseen[notification.directory] ?? empty).filter((n) => n !== notification)
-        updateUnseen("project", notification.directory, unseen)
+        const unseen = (index.project.unseen[project] ?? empty).filter((n) => n !== notification)
+        updateUnseen("project", project, unseen)
       }
     }
   }
@@ -332,7 +336,7 @@ function createServerNotificationState(input: {
     const activeSession = currentSession()
     if (!activeSession) return false
     if (!sessionID) return false
-    if (activeDirectory && directory !== activeDirectory) return false
+    if (activeDirectory && folderKey(directory) !== folderKey(activeDirectory)) return false
     return sessionID === activeSession
   }
 
@@ -436,7 +440,7 @@ function createServerNotificationState(input: {
         if (!unseen.length) return
 
         const projects = [
-          ...new Set(unseen.flatMap((notification) => (notification.directory ? [notification.directory] : []))),
+          ...new Set(unseen.flatMap((notification) => (notification.directory ? [folderKey(notification.directory)] : []))),
         ]
         batch(() => {
           setStore("list", (n) => n.session === session && !n.viewed, "viewed", true)
@@ -452,30 +456,31 @@ function createServerNotificationState(input: {
     },
     project: {
       all(directory: string) {
-        return index.project.all[directory] ?? empty
+        return index.project.all[folderKey(directory)] ?? empty
       },
       unseen(directory: string) {
-        return index.project.unseen[directory] ?? empty
+        return index.project.unseen[folderKey(directory)] ?? empty
       },
       unseenCount(directory: string) {
-        return index.project.unseenCount[directory] ?? 0
+        return index.project.unseenCount[folderKey(directory)] ?? 0
       },
       unseenHasError(directory: string) {
-        return index.project.unseenHasError[directory] ?? false
+        return index.project.unseenHasError[folderKey(directory)] ?? false
       },
       markViewed(directory: string) {
-        const unseen = index.project.unseen[directory] ?? empty
+        const project = folderKey(directory)
+        const unseen = index.project.unseen[project] ?? empty
         if (!unseen.length) return
 
         const sessions = [
           ...new Set(unseen.flatMap((notification) => (notification.session ? [notification.session] : []))),
         ]
         batch(() => {
-          setStore("list", (n) => n.directory === directory && !n.viewed, "viewed", true)
-          updateUnseen("project", directory, [])
+          setStore("list", (n) => n.directory !== undefined && folderKey(n.directory) === project && !n.viewed, "viewed", true)
+          updateUnseen("project", project, [])
           sessions.forEach((session) => {
             const next = (index.session.unseen[session] ?? empty).filter(
-              (notification) => notification.directory !== directory,
+              (notification) => notification.directory === undefined || folderKey(notification.directory) !== project,
             )
             updateUnseen("session", session, next)
           })

@@ -5,6 +5,7 @@ import { createEffect } from "solid-js"
 import { createStore, reconcile } from "solid-js/store"
 import { useMango } from "@/context/mango"
 import { mangoDesktopError } from "@/utils/mango-desktop"
+import { createModelsDir } from "./models-dir"
 import { applyView, type ControlView } from "./view"
 
 export const { use: useControl, provider: ControlProvider } = createSimpleContext({
@@ -24,7 +25,7 @@ export const { use: useControl, provider: ControlProvider } = createSimpleContex
         catalogFailed: mango.catalogFailed(),
       }),
     )
-    return { view, now: mango.refresh }
+    return { view, now: mango.refresh, dir: createModelsDir(() => void mango.refresh()) }
   },
 })
 

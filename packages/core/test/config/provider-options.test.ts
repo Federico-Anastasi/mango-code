@@ -87,85 +87,6 @@ describe("ConfigProviderOptionsV1", () => {
     })
   })
 
-  test("lowers Google provider and request options", () => {
-    const lowerer = ConfigProviderOptionsV1.get("@ai-sdk/google")
-
-    expect(
-      lowerer.provider({
-        apiKey: "secret",
-        baseURL: "https://google.example",
-        headers: { "x-test": "1" },
-        body: { trace: true },
-        project: "project",
-      }),
-    ).toEqual({
-      url: "https://google.example",
-      headers: { "x-goog-api-key": "secret", "x-test": "1" },
-      body: { trace: true },
-      settings: { project: "project" },
-    })
-    expect(
-      lowerer.request({
-        thinkingConfig: { thinkingBudget: 1024 },
-        responseModalities: ["TEXT"],
-        mediaResolution: "high",
-        imageConfig: { aspectRatio: "16:9" },
-        safetySettings: ["safe"],
-      }),
-    ).toEqual({
-      safetySettings: ["safe"],
-      generationConfig: {
-        thinkingConfig: { thinkingBudget: 1024 },
-        responseModalities: ["TEXT"],
-        mediaResolution: "high",
-        imageConfig: { aspectRatio: "16:9" },
-      },
-    })
-  })
-
-  test("lowers Azure provider options and uses OpenAI request lowering", () => {
-    const lowerer = ConfigProviderOptionsV1.get("@ai-sdk/azure")
-
-    expect(
-      lowerer.provider({
-        apiKey: "secret",
-        baseURL: "https://azure.example",
-        headers: { "x-test": "1" },
-        body: { trace: true },
-        resourceName: "resource",
-      }),
-    ).toEqual({
-      url: "https://azure.example",
-      headers: { "api-key": "secret", "x-test": "1" },
-      body: { trace: true },
-      settings: { resourceName: "resource" },
-    })
-    expect(lowerer.request({ reasoningEffort: "high", reasoningSummary: "auto", textVerbosity: "low" })).toEqual({
-      reasoning: { effort: "high", summary: "auto" },
-      text: { verbosity: "low" },
-    })
-  })
-
-  test("lowers Amazon Bedrock provider and request options", () => {
-    const lowerer = ConfigProviderOptionsV1.get("@ai-sdk/amazon-bedrock")
-
-    expect(
-      lowerer.provider({
-        headers: { "x-test": "1" },
-        body: { trace: true },
-        region: "us-east-1",
-        profile: "dev",
-      }),
-    ).toEqual({
-      headers: { "x-test": "1" },
-      body: { trace: true },
-      settings: { region: "us-east-1", profile: "dev" },
-    })
-    expect(lowerer.request({ temperature: 0.2 })).toEqual({
-      additionalModelRequestFields: { temperature: 0.2 },
-    })
-  })
-
   test("lowers OpenAI-compatible provider and request options", () => {
     const lowerer = ConfigProviderOptionsV1.get("@ai-sdk/openai-compatible")
 
@@ -188,18 +109,8 @@ describe("ConfigProviderOptionsV1", () => {
     })
   })
 
-  test.each([
-    "@ai-sdk/cerebras",
-    "@ai-sdk/deepinfra",
-    "@ai-sdk/groq",
-    "@ai-sdk/mistral",
-    "@ai-sdk/togetherai",
-    "@ai-sdk/xai",
-    "@openrouter/ai-sdk-provider",
-    "ai-gateway-provider",
-    "venice-ai-sdk-provider",
-  ])("uses OpenAI-compatible lowering for %s", (packageName) => {
-    const lowerer = ConfigProviderOptionsV1.get(packageName)
+  test("uses OpenAI-compatible lowering for OpenRouter", () => {
+    const lowerer = ConfigProviderOptionsV1.get("@openrouter/ai-sdk-provider")
 
     expect(lowerer.provider({ baseURL: "https://example.test", apiKey: "secret" })).toEqual({
       url: "https://example.test",
@@ -209,16 +120,4 @@ describe("ConfigProviderOptionsV1", () => {
     })
     expect(lowerer.request({ reasoningEffort: "high" })).toEqual({ reasoning_effort: "high" })
   })
-
-  test.each(["@ai-sdk/google-vertex", "@ai-sdk/google-vertex/anthropic"])(
-    "uses provider family lowering for %s",
-    (packageName) => {
-      const lowerer = ConfigProviderOptionsV1.get(packageName)
-
-      expect(lowerer.provider({ baseURL: "https://example.test", profile: "dev" })).toMatchObject({
-        url: "https://example.test",
-        settings: { profile: "dev" },
-      })
-    },
-  )
 })

@@ -7,6 +7,7 @@ import { useTabs } from "@/context/tabs"
 import { useDefaultProject } from "@/hooks/use-default-project"
 import { toggleHomeProjectSelection } from "@/pages/layout/helpers"
 import { isDirectoryMissingError, reportMissingDirectory } from "@/utils/missing-directory"
+import { folderKey } from "@/utils/path-key"
 import { createEffect, createMemo } from "solid-js"
 
 export function createHomeController() {
@@ -32,11 +33,13 @@ export function createHomeController() {
     () => focusedServerCtx()?.projects.recentlyClosed() ?? layout.projects.recentlyClosed(),
   )
   const homedir = createMemo(() => focusedSync().data.path.home ?? "")
-  const selectedProject = createMemo(() => projects().find((project) => project.worktree === selection().directory))
+  const selectedProject = createMemo(() =>
+    projects().find((project) => folderKey(project.worktree) === folderKey(selection().directory ?? "")),
+  )
   const newSessionProject = createMemo(
     () =>
       selectedProject() ??
-      projects().find((project) => project.worktree === focusedServerCtx()?.projects.last()) ??
+      projects().find((project) => folderKey(project.worktree) === folderKey(focusedServerCtx()?.projects.last() ?? "")) ??
       projects()[0],
   )
 
@@ -104,7 +107,7 @@ export function createHomeController() {
           !global
             .ensureServerCtx(conn)
             .projects.list()
-            .some((project) => project.worktree === directory)
+            .some((project) => folderKey(project.worktree) === folderKey(directory))
         )
           return
         setSelection(toggleHomeProjectSelection(selection(), key, directory))
@@ -116,7 +119,7 @@ export function createHomeController() {
         if (!directory) return
         const ctx = global.ensureServerCtx(conn)
         directories.forEach((item) => {
-          if (ctx.projects.list().some((project) => project.worktree === item)) return
+          if (ctx.projects.list().some((project) => folderKey(project.worktree) === folderKey(item))) return
           const location = { directory: item }
           void ctx.sdk.api.file
             .list({ path: ".", location })

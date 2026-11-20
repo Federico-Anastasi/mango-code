@@ -12,6 +12,7 @@ import { createHomeSessionsController } from "./home/home-sessions-controller"
 import { HomeSessions } from "./home/home-sessions"
 import { HomeMobile } from "./home/home-mobile"
 import { MangoHomePanel } from "@/components/mango-home"
+import { folderKey } from "@/utils/path-key"
 
 export function NewHome() {
   const home = createHomeController()
@@ -55,7 +56,7 @@ export function NewHome() {
         const native = directory.replace(/\//g, "\\")
         ctx.projects.close(directory)
         ctx.projects.open(native)
-        if (home.selection.value().directory === directory)
+        if (folderKey(home.selection.value().directory ?? "") === folderKey(directory))
           home.selection.set({ ...home.selection.value(), directory: native })
         continue
       }

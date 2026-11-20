@@ -10,7 +10,7 @@ const entry = (key: string) => ({
   present: true,
   bytes: 1,
   verdict: { fits: true, where, reason: "Sta." },
-  choices: { where: "auto", gpus: [], context: null, style: "recommended", reasoning: null },
+  choices: { where: "auto", gpus: [], context: null, style: "recommended", reasoning: null, sampling: {} },
   limits: { where: ["auto"], context: [], reasoning: false },
 })
 const download = (model: string) => ({

@@ -1,6 +1,7 @@
 import type { SessionMessageInfo } from "@opencode-ai/client/promise"
 import type { AssistantMessage, Message, Part, SessionStatus, UserMessage } from "@opencode-ai/sdk/v2"
 import { createMemo, type Accessor } from "solid-js"
+import { foldResumes } from "./resumes"
 import { reuseTimelineRows } from "./row-reconciliation"
 import { Timeline, TimelineRow } from "./rows"
 
@@ -14,10 +15,11 @@ export function createTimelineProjection(input: {
   status: Accessor<SessionStatus>
   inlineComments: Accessor<boolean>
 }) {
-  const messageByID = createMemo(() => new Map(input.messages().map((message) => [message.id, message] as const)))
+  const folded = createMemo(() => foldResumes(input.messages(), input.parts))
+  const messageByID = createMemo(() => new Map(folded().messages.map((message) => [message.id, message] as const)))
   const assistantMessagesByParent = createMemo(() => {
     const result = new Map<string, AssistantMessage[]>()
-    input.messages().forEach((message) => {
+    folded().messages.forEach((message) => {
       if (message.role !== "assistant") return
       const messages = result.get(message.parentID)
       if (messages) {

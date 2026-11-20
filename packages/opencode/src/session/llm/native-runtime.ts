@@ -1,4 +1,3 @@
-import type { Auth } from "@/auth"
 import type { Provider } from "@/provider/provider"
 import { ProviderTransform } from "@/provider/transform"
 import { errorMessage } from "@/util/error"
@@ -6,7 +5,6 @@ import { isRecord } from "@/util/record"
 import { asSchema, type ModelMessage, type Tool } from "ai"
 import { Cause, Effect, FiberSet, Queue } from "effect"
 import * as Stream from "effect/Stream"
-import { FetchHttpClient } from "effect/unstable/http"
 import {
   LLMRequest,
   Tool as NativeTool,
@@ -29,7 +27,6 @@ export type StreamResult =
 type StreamInput = {
   readonly model: Provider.Model
   readonly provider: Provider.Info
-  readonly auth: Auth.Info | undefined
   readonly llmClient: LLMClientShape
   readonly messages: ModelMessage[]
   readonly tools: Record<string, Tool>
@@ -43,23 +40,13 @@ type StreamInput = {
   readonly abort: AbortSignal
 }
 
-export function status(input: Pick<StreamInput, "model" | "provider" | "auth">): RuntimeStatus {
-  return statusWithFetch(input, providerFetch(input))
-}
-
-function statusWithFetch(
-  input: Pick<StreamInput, "model" | "provider" | "auth">,
-  fetch: typeof globalThis.fetch | undefined,
-): RuntimeStatus {
+export function status(input: Pick<StreamInput, "model" | "provider">): RuntimeStatus {
   const providerID = input.model.providerID
-  if (providerID !== "openai" && providerID !== "anthropic" && !providerID.startsWith("opencode"))
-    return { type: "unsupported", reason: "provider is not openai, opencode, or anthropic" }
+  if (providerID !== "openai" && providerID !== "anthropic")
+    return { type: "unsupported", reason: "provider is not openai or anthropic" }
   const npm = input.model.api.npm
   if (npm !== "@ai-sdk/openai" && npm !== "@ai-sdk/openai-compatible" && npm !== "@ai-sdk/anthropic")
     return { type: "unsupported", reason: "provider package is not OpenAI, OpenAI-compatible, or Anthropic" }
-  if (input.auth?.type === "oauth" && !(input.provider.id === "openai" && fetch)) {
-    return { type: "unsupported", reason: "OAuth auth requires a provider fetch override" }
-  }
 
   const apiKey = typeof input.provider.options.apiKey === "string" ? input.provider.options.apiKey : input.provider.key
   if (!apiKey) return { type: "unsupported", reason: "API key is not configured" }
@@ -72,8 +59,7 @@ function statusWithFetch(
 }
 
 export function stream(input: StreamInput): StreamResult {
-  const fetch = providerFetch(input)
-  const current = statusWithFetch(input, fetch)
+  const current = status(input)
   if (current.type === "unsupported") return current
 
   // Integration point with @opencode-ai/llm: native-request lowers session data
@@ -139,17 +125,7 @@ export function stream(input: StreamInput): StreamResult {
     ),
   )
 
-  return {
-    ...current,
-    stream: fetch ? stream.pipe(Stream.provideService(FetchHttpClient.Fetch, fetch)) : stream,
-  }
-}
-
-function providerFetch(input: Pick<StreamInput, "provider" | "auth">): typeof globalThis.fetch | undefined {
-  if (input.provider.id !== "openai" || input.auth?.type !== "oauth") return undefined
-  const value: unknown = input.provider.options.fetch
-  if (typeof value !== "function") return undefined
-  return value as typeof globalThis.fetch
+  return { ...current, stream }
 }
 
 function providerHeaders(value: unknown): Record<string, string> | undefined {

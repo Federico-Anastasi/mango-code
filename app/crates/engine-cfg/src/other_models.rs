@@ -13,6 +13,7 @@ use crate::split::MIN_CTX;
 use crate::user;
 use anyhow::{bail, Result};
 use mango_common::download::hugging_face::{self, image_encoder, is_encoder, piece, variants, HfFile, Reference, Repo, Variant};
+use mango_common::catalog::Recognition;
 use mango_common::{tr, Paths};
 use minijinja::value::{Kwargs, Serde};
 use minijinja::{Environment, Error, ErrorKind};
@@ -572,8 +573,36 @@ fn named_after(encoder_file: &str, model_file: &str) -> bool {
     !name.is_empty() && model.strip_prefix(&name).is_some_and(|rest| rest == ".gguf" || rest.starts_with(['-', '_']))
 }
 
-/// Adds the model to the user's list (`user-models.json`), with the key it got from the analysis.
-pub fn add(paths: &Paths, key: &str, entry: Value) -> Result<()> {
+/// What adding a model did.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "added", rename_all = "snake_case")]
+pub enum Added {
+    /// The model is in the user's list.
+    User,
+    /// The files are those of a model of Mango Code: nothing was added to the user's list, the model runs from these files
+    /// (`mango_common::model_files`) and keeps what the catalog knows about it.
+    Catalog { model: String },
+}
+
+/// Adds the model to the user's list (`user-models.json`), with the key it got from the analysis. A model made from files
+/// on the computer that are the very files of a model of Mango Code's (same names, sizes and hashes) is not added: that
+/// model is told where its files are.
+pub fn add(paths: &Paths, key: &str, mut entry: Value) -> Result<Added> {
+    match mango_common::catalog::recognize_local(paths, &entry)? {
+        Recognition::Is(found) => {
+            let places: Vec<(String, PathBuf)> =
+                found.files.into_iter().filter(|(catalog, own)| !mango_common::models_dir::same(&paths.models.join(catalog), own)).collect();
+            if !places.is_empty() {
+                mango_common::model_files::update(&paths.data, |all| {
+                    places.iter().for_each(|(catalog, at)| drop(all.insert(catalog.clone(), mango_common::model_files::Place { at: at.clone(), own: false })))
+                })?;
+            }
+            mango_common::startup_log(paths, &format!("other models: {key} is {}, it runs from the user's files", found.model));
+            return Ok(Added::Catalog { model: found.model });
+        }
+        Recognition::Lookalike => entry["distinct"] = true.into(),
+        Recognition::No => {}
+    }
     let not_valid = || tr!("Il modello «{key}» non è valido.", "The model «{key}» is not valid.");
     let cfg: ModelCfg = serde_json::from_value(entry.clone()).map_err(|e| user(&not_valid(), e))?;
     let Some(memory) = cfg.memory.filter(|_| !cfg.files.is_empty()) else {
@@ -585,7 +614,7 @@ pub fn add(paths: &Paths, key: &str, entry: Value) -> Result<()> {
         None => format!("other models: {key} added"),
     };
     mango_common::startup_log(paths, &line);
-    Ok(())
+    Ok(Added::User)
 }
 
 /// The band of a model of `weights` bytes, if it runs on the processor.
@@ -1059,6 +1088,49 @@ mod tests {
         assert!(!entries.iter().find(|v| v.key == key).unwrap().weights, "the weights aren't on disk yet");
     }
 
+
+    /// A GGUF chosen on the computer that is the very file of a catalog model (name, size, hash) is not added to the user's
+    /// list: the model keeps its curated settings and runs from that file. One with the same name and size and another
+    /// content stays a model of the user's, and is not taken for the catalog's afterwards either.
+    #[test]
+    fn a_file_that_is_a_catalog_model_is_not_added_to_the_users_list() {
+        let mut t = Fake::small();
+        let elsewhere = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(elsewhere.path().join("a")).unwrap();
+        std::fs::create_dir_all(elsewhere.path().join("b")).unwrap();
+        let mine = write_gguf(&elsewhere.path().join("a"), "example.gguf", None);
+        let twin = write_gguf(&elsewhere.path().join("b"), "example.gguf", None);
+        let mut bytes = std::fs::read(&twin).unwrap();
+        *bytes.last_mut().unwrap() ^= 0xff;
+        std::fs::write(&twin, &bytes).unwrap();
+        let size = std::fs::metadata(&mine).unwrap().len();
+        t.catalog["models"]["4b"]["gguf"] = "Q/example.gguf".into();
+        t.catalog["models"]["4b"]["files"] = json!([ { "path": "Q/example.gguf", "size": size, "sha256": mango_common::download::sha256_file(&mine).unwrap() } ]);
+        t.save();
+        let hw = pc(vec![], 16_384);
+
+        let twin_analysis = analyze_local(&t.paths, &hw, &twin).unwrap();
+        assert_eq!(add(&t.paths, &twin_analysis.variants[0].key, twin_analysis.variants[0].entry.clone()).unwrap(), Added::User);
+        let read = mango_common::catalog::read(&t.paths).unwrap();
+        assert_eq!(read.user, ["local-example"], "the lookalike is the user's");
+        assert!(read.same.is_empty(), "and the catalog's model does not run from it");
+        assert!(mango_common::model_files::read(&t.paths.data).unwrap().is_empty());
+        mango_common::catalog::remove_user(&t.paths, "local-example").unwrap();
+
+        let a = analyze_local(&t.paths, &hw, &mine).unwrap();
+        let added = add(&t.paths, &a.variants[0].key, a.variants[0].entry.clone()).unwrap();
+
+        assert_eq!(added, Added::Catalog { model: "4b".into() });
+        let read = mango_common::catalog::read(&t.paths).unwrap();
+        assert!(read.user.is_empty(), "nothing in the user's list");
+        let places = mango_common::model_files::read(&t.paths.data).unwrap();
+        assert_eq!(places["Q/example.gguf"], mango_common::model_files::Place { at: mine.clone(), own: false });
+        assert_eq!(read.root["models"]["4b"]["files"][0].get("sha256"), None, "the user's file: never downloaded, never deleted");
+        let (entries, _) = crate::catalog::catalog_for(&t.paths, &hw).unwrap();
+        let model = entries.iter().find(|v| v.key == "4b").unwrap();
+        assert!(model.weights && model.missing.is_none(), "{model:?}");
+        assert_eq!(model.label, "Qwen3.5-4B", "the catalog's settings stay");
+    }
     #[test]
     fn a_gguf_on_the_computer_is_added_where_it_is_and_counts_as_present() {
         let t = Fake::small();

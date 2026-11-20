@@ -34,17 +34,18 @@ const screenshot = async (p: Page, name: string) => {
   fs.writeFileSync(path.join(os.tmpdir(), `mango-first-run-${name}.png`), Buffer.from(r.result.data, "base64"));
 };
 
-// The port of the agent, taken by "another program" until the test lets it go: the start fails on it.
+// The engine's port, taken by "another program" until the test lets it go: the start fails on it. (The agent's port is not
+// one to fail on: when its preferred port is taken the agent takes a free one.)
 const busy = net.createServer();
 await new Promise<void>((ok) => busy.listen(0, "127.0.0.1", ok));
-const agentPort = (busy.address() as net.AddressInfo).port;
+const enginePort = (busy.address() as net.AddressInfo).port;
 
 let env: Environment;
 let p: Page;
 
 beforeAll(async () => {
   // `start` returns when the service file is written: here with the reason of the failure, not with the agent.
-  env = await start([{ text: "Here I am." }], { window: true, noModels: true, env: { MANGO_AGENT_PORT: String(agentPort) } });
+  env = await start([{ text: "Here I am." }], { window: true, noModels: true, env: { MANGO_ENGINE_PORT: String(enginePort) } });
   p = await page(env.cdp!, appWindow, 120_000);
 }, 200_000);
 
@@ -56,10 +57,10 @@ afterAll(() => {
 
 test("a start that fails shows the app's page with the error alone: Retry, Report a problem, Open the logs", async () => {
   await waitUntil(() => p.evaluate(visible("error")), "the error page", 120_000);
-  expect(readJson(path.join(env.data, "service.json")).reason).toContain(String(agentPort));
+  expect(readJson(path.join(env.data, "service.json")).reason).toContain(String(enginePort));
   // The page has nothing but the error: no choice of models, no download, no engine of another PC.
   expect(await p.evaluate(`[...document.querySelectorAll('section')].map((s) => s.id)`)).toEqual(["error"]);
-  expect(await p.evaluate(`document.getElementById('error-sentence').innerText`)).toContain(`La porta ${agentPort} è occupata`);
+  expect(await p.evaluate(`document.getElementById('error-sentence').innerText`)).toContain(`La porta ${enginePort} del motore è occupata`);
   for (const [id, label] of [["retry", "Riprova"], ["report", "Segnala un problema"], ["logs", "Apri i log"]]) {
     expect(await p.evaluate(visible(id))).toBe(true);
     expect(await p.evaluate(`document.getElementById('${id}').innerText`)).toBe(label);

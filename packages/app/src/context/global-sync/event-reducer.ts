@@ -16,6 +16,7 @@ import { trimSessions } from "./session-trim"
 import { dropSessionCaches } from "./session-cache"
 import { diffs as list, message as clean } from "@/utils/diffs"
 import { messageKey } from "@/utils/session-message"
+import { folderKey } from "@/utils/path-key"
 
 const SKIP_PARTS = new Set(["patch", "step-start", "step-finish"])
 const SESSION_CONTENT_EVENTS = new Set([
@@ -234,7 +235,7 @@ export function applyDirectoryEvent(input: {
       }
       const result = Binary.search(input.store.session, properties.sessionID, (session) => session.id)
       if (!result.found) break
-      if (properties.location.directory === input.directory) {
+      if (folderKey(properties.location.directory) === folderKey(input.directory)) {
         input.setStore("session", result.index, (session) => ({
           ...session,
           projectID: properties.projectID ?? session.projectID,

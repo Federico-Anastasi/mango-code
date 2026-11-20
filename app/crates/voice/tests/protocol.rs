@@ -6,37 +6,50 @@
 use mango_common::tr;
 use std::io::{Read, Write};
 use std::net::TcpStream;
-use std::path::PathBuf;
+use std::path::Path;
 
 struct Fixture {
-    dir: PathBuf,
+    dir: Option<tempfile::TempDir>,
     server: Option<voice::VoiceServer>,
     port: u16,
 }
 
-fn fixture(tag: &str) -> Fixture {
-    let dir = std::env::temp_dir().join(format!("mango-voice-test-{tag}-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+impl Fixture {
+    fn dir(&self) -> &Path {
+        self.dir.as_ref().unwrap().path()
+    }
+}
+
+fn fixture() -> Fixture {
+    let dir = tempfile::tempdir().unwrap();
     for f in voice::FILES {
-        std::fs::write(dir.join(f.name), b"placeholder").unwrap();
+        std::fs::write(dir.path().join(f.name), b"placeholder").unwrap();
     }
     // A port is free when it is picked and may be taken before the service binds it, by a test that picks its own at
     // the same moment: then another port is picked.
     let mut tries = 0;
     let (server, port) = loop {
         let port = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap().local_addr().unwrap().port();
-        match voice::start(&dir.join(voice::FILES[0].name), port) {
+        match voice::start(&dir.path().join(voice::FILES[0].name), port) {
             Ok(server) => break (server, port),
-            Err(_) if tries < 10 => tries += 1,
+            Err(e) if tries < 10 => {
+                eprintln!("the dictation service did not start on port {port}, another port is tried: {e:?}");
+                tries += 1;
+            }
             Err(e) => panic!("the dictation service did not start: {e:?}"),
         }
     };
-    Fixture { dir, server: Some(server), port }
+    Fixture { dir: Some(dir), server: Some(server), port }
 }
 
 impl Drop for Fixture {
     fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.dir);
+        // The service holds the model files: it stops before the folder is removed, and a folder that cannot be removed fails the test.
+        drop(self.server.take());
+        let removed = self.dir.take().unwrap().close();
+        if !std::thread::panicking() {
+            removed.unwrap();
+        }
     }
 }
 
@@ -64,7 +77,7 @@ fn raw(port: u16, head: &str, body: &[u8]) -> (u16, serde_json::Value) {
 
 #[test]
 fn health_says_error_if_the_model_does_not_load() {
-    let f = fixture("health");
+    let f = fixture();
     // loading is in a thread: we wait for it to fail
     let mut last = None;
     for _ in 0..100 {
@@ -85,7 +98,7 @@ fn health_says_error_if_the_model_does_not_load() {
 
 #[test]
 fn paths_and_methods() {
-    let f = fixture("paths");
+    let f = fixture();
     assert_eq!(raw(f.port, "GET /other HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n", b"").0, 404);
     assert_eq!(post_to(f.port, "/other").0, 404);
     // the clip-at-once route is gone: the page sends the audio in pieces (live)
@@ -98,7 +111,7 @@ fn post_to(port: u16, path: &str) -> (u16, serde_json::Value) {
 
 #[test]
 fn a_web_page_cannot_use_the_service() {
-    let f = fixture("origin");
+    let f = fixture();
     let (code, body) = post(f.port, "/live/start", "Origin: http://evil.example\r\n", b"");
     assert_eq!(code, 403);
     assert!(body["error"].as_str().unwrap().contains(&tr!("server di Mango Code", "Mango Code server")));
@@ -113,7 +126,7 @@ fn a_web_page_cannot_use_the_service() {
 
 #[test]
 fn malformed_requests() {
-    let f = fixture("malformed");
+    let f = fixture();
     assert_eq!(post(f.port, "/live/pcm", "", b"\0\0").0, 400, "without the dictation id");
     assert_eq!(post(f.port, "/live/pcm?id=1", "", b"\0\0\0").0, 400, "an odd number of bytes is not 16-bit audio");
     // declares 2 MiB and doesn't send them: the refusal must come before reading them
@@ -134,7 +147,7 @@ fn malformed_requests() {
 
 #[test]
 fn a_dictation_with_a_broken_model_gives_503() {
-    let f = fixture("503");
+    let f = fixture();
     let (code, body) = post(f.port, "/live/start", "", b"");
     assert_eq!(code, 503);
     assert!(body["error"].as_str().unwrap().contains(&tr!("non caricato", "not loaded")));
@@ -142,20 +155,19 @@ fn a_dictation_with_a_broken_model_gives_503() {
 
 #[test]
 fn start_without_the_files_and_without_a_port_gives_an_error() {
-    let dir = std::env::temp_dir().join(format!("mango-voice-test-empty-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let err = voice::start(&dir.join(voice::FILES[0].name), 0).err().unwrap();
+    let empty = tempfile::tempdir().unwrap();
+    let err = voice::start(&empty.path().join(voice::FILES[0].name), 0).err().unwrap();
     assert!(err.to_string().contains(&tr!("manca il file", "is missing")));
-    let _ = std::fs::remove_dir_all(&dir);
+    empty.close().unwrap();
 
-    let f = fixture("port");
-    let err = voice::start(&f.dir.join(voice::FILES[0].name), f.port).err().unwrap();
+    let f = fixture();
+    let err = voice::start(&f.dir().join(voice::FILES[0].name), f.port).err().unwrap();
     assert!(err.to_string().contains(&tr!("non disponibile", "not available")));
 }
 
 #[test]
 fn drop_frees_the_port() {
-    let mut f = fixture("drop");
+    let mut f = fixture();
     drop(f.server.take());
     // tiny_http closes the listener with its accept thread: it takes a few milliseconds
     let free = (0..40).any(|_| {

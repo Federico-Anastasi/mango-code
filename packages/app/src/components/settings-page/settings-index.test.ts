@@ -114,8 +114,8 @@ describe("the search finds the settings of Agent, General and Help", () => {
     expect(ask("gpu")).toEqual(["computer: Schede video"])
     expect(ask("gpu", en)).toEqual(["computer: Graphics cards"])
     expect(ask("scheda video")).toEqual(["computer: Schede video"])
-    expect(ask("cartella dei modelli")).toEqual(["models: Apri la cartella"])
-    expect(ask("models folder", en)).toEqual(["models: Open the folder"])
+    expect(ask("cartella dei modelli")).toEqual(["computer: Cartella dei modelli", "models: Apri la cartella"])
+    expect(ask("models folder", en)).toEqual(["computer: Models folder", "models: Open the folder"])
     expect(ask("cpu")).toEqual(["computer: Processore e memoria"])
     expect(ask("notifiche")).toHaveLength(3)
     expect(ask("notifications", en)).toHaveLength(3)
@@ -153,8 +153,8 @@ describe("the search finds the settings of Agent, General and Help", () => {
 describe("the index and the page", () => {
   /** The files that draw each section. */
   const FILES: Record<SettingsSection, string[]> = {
-    models: ["models.tsx", "other-model.tsx", "images.tsx"],
-    computer: ["computer.tsx"],
+    models: ["models.tsx", "model-choices.tsx", "other-model.tsx", "images.tsx", "models-folder.tsx"],
+    computer: ["computer.tsx", "models-folder.tsx"],
     agent: ["agent.tsx"],
     links: ["links.tsx"],
     general: ["general.tsx", "dictation.tsx"],

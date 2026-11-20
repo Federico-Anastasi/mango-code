@@ -14,8 +14,9 @@ import { usePreview } from "@/context/preview"
 import { ServerConnection } from "@/context/server"
 import { displayName } from "@/pages/layout/helpers"
 import { onMissingDirectory } from "@/utils/missing-directory"
-import { pathKey } from "@/utils/path-key"
-import { setV2Toast, showToast, ToastRegion } from "@/utils/toast"
+import { folderKey } from "@/utils/path-key"
+import { UiStateNotice } from "@/components/ui-state-notice"
+import { showToast, ToastRegion } from "@/utils/toast"
 import { missingParent } from "@/utils/mango-state"
 import { useMangoPendingSender } from "@/context/mango"
 import { useSettingsFromApp } from "@/components/settings-page/open"
@@ -30,7 +31,7 @@ function useMissingProjectCleanup() {
 
   onCleanup(
     onMissingDirectory((directory) => {
-      const key = pathKey(directory)
+      const key = folderKey(directory)
       if (Date.now() - (recent.get(key) ?? 0) < 30_000) return
       recent.set(key, Date.now())
 
@@ -38,11 +39,11 @@ function useMissingProjectCleanup() {
       for (const conn of global.servers.list()) {
         const projects = global.ensureServerCtx(conn).projects
         for (const project of projects.list()) {
-          if (pathKey(project.worktree) !== key) continue
+          if (folderKey(project.worktree) !== key) continue
           name = displayName(project)
           projects.remove(project.worktree)
           const selected = layout.home.selection()
-          if (selected.directory && pathKey(selected.directory) === key) {
+          if (selected.directory && folderKey(selected.directory) === key) {
             layout.home.setSelection({ server: ServerConnection.key(conn) })
           }
         }
@@ -79,7 +80,6 @@ export default function NewLayout(props: ParentProps) {
   preview.follow(useLayout().route)
   const [state, setState] = createStore({ debugTools: true })
 
-  createEffect(() => setV2Toast(true))
   useMissingProjectCleanup()
   useMangoPending()
   useSettingsFromApp()
@@ -154,6 +154,7 @@ export default function NewLayout(props: ParentProps) {
       <PhonePreview />
       <TabsInfoPopup />
       <ToastRegion v2 />
+      <UiStateNotice />
     </div>
   )
 }

@@ -25,12 +25,16 @@ use std::path::Path;
 use std::sync::Mutex;
 use std::time::Duration;
 use tauri::{
+    ipc::Response,
     webview::{NewWindowResponse, PageLoadEvent, WebviewBuilder},
     AppHandle, LogicalPosition, LogicalSize, Manager, Rect, Url, WebviewUrl, Window,
 };
 
 const LABEL: &str = "preview";
 const BLANK: &str = "about:blank";
+
+/// How long a picture of the panel may take: meanwhile the menu that asked for it is still under the panel.
+const CAPTURE_LIMIT: Duration = Duration::from_millis(500);
 
 /// How long a page may take to arrive (its address to be the one the panel shows) before the panel says it cannot open it.
 /// Chrome waits for a server that accepts and never answers for minutes; a panel that stays empty that long looks broken.
@@ -169,6 +173,7 @@ pub fn install(app: &AppHandle) -> anyhow::Result<()> {
     let port = mango_common::random_port()?;
     let data = mango_common::data_dir()?.join("preview");
     std::fs::create_dir_all(&data)?;
+    app.state::<crate::AppState>().ports.add(port);
     app.manage(Panel { cdp_port: port, state: Mutex::new(State { fit: 1.0, user: 1.0, ..Default::default() }) });
 
     let main = crate::main_window(app).ok_or_else(|| anyhow::anyhow!("main window missing"))?;
@@ -385,6 +390,53 @@ pub fn preview_nav(app: AppHandle, action: String) -> Result<(), BridgeError> {
         other => return Err(err("invalid", tr!("azione sconosciuta: {other}", "unknown action: {other}"))),
     };
     panel(&app)?.eval(js).map_err(io)
+}
+
+/// The page the panel shows now, as a PNG of the panel's size. The web UI asks for it just before a menu or a dialog that
+/// covers the panel makes it step aside, and shows it in its place: the native panel cannot be drawn under the page.
+#[tauri::command]
+pub async fn preview_capture(app: AppHandle) -> Result<Response, BridgeError> {
+    let wv = panel(&app)?;
+    let (done, picture) = std::sync::mpsc::channel();
+    let failed = done.clone();
+    wv.with_webview(move |webview| unsafe {
+        if let Err(e) = capture(webview, done) {
+            let _ = failed.send(Err(e.to_string()));
+        }
+    })
+    .map_err(io)?;
+    let png = tauri::async_runtime::spawn_blocking(move || picture.recv_timeout(CAPTURE_LIMIT))
+        .await
+        .map_err(io)?
+        .map_err(|e| match e {
+            std::sync::mpsc::RecvTimeoutError::Timeout => err(
+                "timeout",
+                tr!("nessuna immagine del pannello entro {} ms", "no picture of the panel within {} ms", CAPTURE_LIMIT.as_millis()),
+            ),
+            std::sync::mpsc::RecvTimeoutError::Disconnected => {
+                err("gone", tr!("il pannello è stato chiuso prima dell'immagine", "the panel was closed before its picture"))
+            }
+        })?
+        .map_err(io)?;
+    Ok(Response::new(png))
+}
+
+/// Starts WebView2's capture of the panel; its handler sends the PNG, or why there is none.
+unsafe fn capture(webview: tauri::webview::PlatformWebview, done: std::sync::mpsc::Sender<Result<Vec<u8>, String>>) -> windows_webview::core::Result<()> {
+    use webview2_com::Microsoft::Web::WebView2::Win32::COREWEBVIEW2_CAPTURE_PREVIEW_IMAGE_FORMAT_PNG;
+    use windows_webview::Win32::System::Com::STREAM_SEEK_SET;
+    use windows_webview::Win32::UI::Shell::SHCreateMemStream;
+    let core = webview.controller().CoreWebView2()?;
+    let stream = SHCreateMemStream(None).ok_or_else(|| windows_webview::core::Error::from(windows_webview::Win32::Foundation::E_OUTOFMEMORY))?;
+    let written = stream.clone();
+    let handler = webview2_com::CapturePreviewCompletedHandler::create(Box::new(move |result| {
+        let png = result
+            .and_then(|()| written.Seek(0, STREAM_SEEK_SET, None))
+            .and_then(|()| crate::old_origin::read_all(&written));
+        let _ = done.send(png.map_err(|e| e.to_string()));
+        Ok(())
+    }));
+    core.CapturePreview(COREWEBVIEW2_CAPTURE_PREVIEW_IMAGE_FORMAT_PNG, &stream, &handler)
 }
 
 #[derive(Serialize)]

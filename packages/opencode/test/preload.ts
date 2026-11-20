@@ -9,19 +9,27 @@ import { afterAll } from "bun:test"
 // Set XDG env vars FIRST, before any src/ imports
 const dir = path.join(os.tmpdir(), "opencode-test-data-" + process.pid)
 await fs.mkdir(dir, { recursive: true })
+// The agent's own temporary folder (`Global.Path.tmp`) and the tests' are made inside `dir`, which is removed at the end.
+const temporary = path.join(dir, "tmp")
+await fs.mkdir(temporary, { recursive: true })
+process.env["TEMP"] = temporary
+process.env["TMP"] = temporary
+process.env["TMPDIR"] = temporary
 afterAll(async () => {
   const { AppRuntime } = await import("../src/effect/app-runtime")
   await AppRuntime.dispose()
 
   const busy = (error: unknown) =>
-    typeof error === "object" && error !== null && "code" in error && error.code === "EBUSY"
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    (error.code === "EBUSY" || error.code === "EPERM" || error.code === "ENOTEMPTY")
   const rm = async (left: number): Promise<void> => {
     Bun.gc(true)
     await sleep(100)
     return fs.rm(dir, { recursive: true, force: true }).catch((error) => {
       if (!busy(error)) throw error
-      if (left <= 1 && process.platform !== "win32") throw error
-      if (left <= 1) return
+      if (left <= 1) throw error
       return rm(left - 1)
     })
   }
@@ -59,21 +67,10 @@ delete process.env["ANTHROPIC_API_KEY"]
 delete process.env["OPENAI_API_KEY"]
 delete process.env["GOOGLE_API_KEY"]
 delete process.env["GOOGLE_GENERATIVE_AI_API_KEY"]
-delete process.env["AZURE_OPENAI_API_KEY"]
-delete process.env["AWS_ACCESS_KEY_ID"]
-delete process.env["AWS_PROFILE"]
-delete process.env["AWS_REGION"]
-delete process.env["AWS_BEARER_TOKEN_BEDROCK"]
 delete process.env["OPENROUTER_API_KEY"]
-delete process.env["LLM_GATEWAY_API_KEY"]
-delete process.env["GROQ_API_KEY"]
-delete process.env["MISTRAL_API_KEY"]
-delete process.env["PERPLEXITY_API_KEY"]
 delete process.env["TOGETHER_API_KEY"]
-delete process.env["XAI_API_KEY"]
 delete process.env["DEEPSEEK_API_KEY"]
 delete process.env["FIREWORKS_API_KEY"]
-delete process.env["CEREBRAS_API_KEY"]
 delete process.env["SAMBANOVA_API_KEY"]
 delete process.env["OPENCODE_SERVER_PASSWORD"]
 delete process.env["OPENCODE_SERVER_USERNAME"]

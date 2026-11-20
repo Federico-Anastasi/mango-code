@@ -3,8 +3,9 @@ import { makePersisted, type AsyncStorage, type SyncStorage } from "@solid-primi
 import { checksum } from "@opencode-ai/core/util/encode"
 import { createResource, type Accessor } from "solid-js"
 import type { SetStoreFunction, Store } from "solid-js/store"
-import { pathKey } from "@/utils/path-key"
+import { folderKey, pathKey } from "@/utils/path-key"
 import { ScopedKey, ServerScope, type ServerScope as ServerScopeValue } from "@/utils/server-scope"
+import { uiStorage, type UiStorage } from "@/utils/ui-storage"
 
 type InitType = Promise<string> | string | null
 type PersistedWithReady<T> = [
@@ -109,7 +110,7 @@ function quota(error: unknown) {
 
 type Evict = { key: string; size: number }
 
-function evict(storage: Storage, keep: string, value: string) {
+function evict(storage: UiStorage, keep: string, value: string) {
   const total = storage.length
   const indexes = Array.from({ length: total }, (_, index) => index)
   const items: Evict[] = []
@@ -141,7 +142,7 @@ function evict(storage: Storage, keep: string, value: string) {
   return false
 }
 
-function write(storage: Storage, key: string, value: string) {
+function write(storage: UiStorage, key: string, value: string) {
   try {
     storage.setItem(key, value)
     cacheSet(key, value)
@@ -363,26 +364,53 @@ function windowStorage(windowID: string) {
   return `${WINDOW_STORAGE}.${safe}.dat`
 }
 
-function legacyWorkspaceStorage(dir: string) {
-  const storage = workspaceStorage(pathKey(dir))
-  const result = new Set<string>()
-  const raw = workspaceStorage(dir)
-  if (raw !== storage) result.add(raw)
+const SPELLINGS = "opencode.folder-spellings"
 
-  const key = pathKey(dir)
-  const drive = key.length >= 3 && key[1] === ":" && key[2] === "/"
-  if (drive) {
-    const backslash = workspaceStorage(key.replaceAll("/", "\\"))
-    if (backslash !== storage) result.add(backslash)
+const readSpellings = (): Record<string, string[]> => {
+  try {
+    const value = JSON.parse(uiStorage.getItem(SPELLINGS) ?? "{}")
+    return typeof value === "object" && value !== null && !Array.isArray(value) ? value : {}
+  } catch {
+    return {}
   }
+}
 
+/**
+ * The spellings of a folder whose project was saved twice and then merged. The browser kept what it knew of a folder
+ * in a storage per spelling; the storage of the project that stays also reads those of the others, so that nothing the
+ * user did under them is hidden.
+ */
+export function rememberSpellings(paths: string[]) {
+  const [first] = paths
+  if (first === undefined) return
+  const key = folderKey(first)
+  const all = readSpellings()
+  const known = Array.isArray(all[key]) ? all[key] : []
+  const next = [...new Set([...known, ...paths])]
+  if (next.length === known.length) return
+  try {
+    uiStorage.setItem(SPELLINGS, JSON.stringify({ ...all, [key]: next }))
+  } catch {}
+}
+
+// Every spelling of a folder names the same storage; the names the storage of each spelling had before are read too.
+function legacyWorkspaceStorage(dir: string) {
+  const storage = workspaceStorage(folderKey(dir))
+  const result = new Set<string>()
+  for (const spelling of [dir, ...(readSpellings()[folderKey(dir)] ?? [])]) {
+    const key = pathKey(spelling)
+    result.add(workspaceStorage(spelling))
+    result.add(workspaceStorage(key))
+    if (key.length >= 3 && key[1] === ":" && key[2] === "/") result.add(workspaceStorage(key.replaceAll("/", "\\")))
+  }
+  result.delete(storage)
   if (result.size === 0) return
   return [...result]
 }
 
 function serverWorkspaceTarget(scope: ServerScopeValue, dir: string, key: string, legacy?: string[]): PersistTarget {
   if (scope !== ServerScope.local) return { storage: workspaceStorage(ScopedKey.from(scope, pathKey(dir))), key }
-  return { storage: workspaceStorage(pathKey(dir)), legacyStorageNames: legacyWorkspaceStorage(dir), key, legacy }
+  return { storage: workspaceStorage(folderKey(dir)), legacyStorageNames: legacyWorkspaceStorage(dir), key, legacy }
 }
 
 function localStorageWithPrefix(prefix: string): SyncStorage {
@@ -397,7 +425,7 @@ function localStorageWithPrefix(prefix: string): SyncStorage {
 
       const stored = (() => {
         try {
-          return localStorage.getItem(name)
+          return uiStorage.getItem(name)
         } catch {
           fallbackSet(scope)
           return null
@@ -411,7 +439,7 @@ function localStorageWithPrefix(prefix: string): SyncStorage {
       const name = item(key)
       if (fallbackDisabled(scope)) return
       try {
-        if (write(localStorage, name, value)) return
+        if (write(uiStorage, name, value)) return
       } catch {
         fallbackSet(scope)
         return
@@ -423,7 +451,7 @@ function localStorageWithPrefix(prefix: string): SyncStorage {
       cacheDelete(name)
       if (fallbackDisabled(scope)) return
       try {
-        localStorage.removeItem(name)
+        uiStorage.removeItem(name)
       } catch {
         fallbackSet(scope)
       }
@@ -440,7 +468,7 @@ function localStorageDirect(): SyncStorage {
 
       const stored = (() => {
         try {
-          return localStorage.getItem(key)
+          return uiStorage.getItem(key)
         } catch {
           fallbackSet(scope)
           return null
@@ -453,7 +481,7 @@ function localStorageDirect(): SyncStorage {
     setItem: (key, value) => {
       if (fallbackDisabled(scope)) return
       try {
-        if (write(localStorage, key, value)) return
+        if (write(uiStorage, key, value)) return
       } catch {
         fallbackSet(scope)
         return
@@ -464,7 +492,7 @@ function localStorageDirect(): SyncStorage {
       cacheDelete(key)
       if (fallbackDisabled(scope)) return
       try {
-        localStorage.removeItem(key)
+        uiStorage.removeItem(key)
       } catch {
         fallbackSet(scope)
       }

@@ -37,9 +37,9 @@ const GB = 1024 ** 3
 describe("the line above the composer", () => {
   test("a load says the model, the cards, the context and the seconds; after a download, «Downloaded.»", () => {
     const loading = state({ phase: "loading", model: "3.6", label: "Qwen", seconds: 20, where })
-    expect(line(loading)).toEqual({ kind: "text", text: "Loading Qwen · RTX 3060 Ti + GTX 1080 · 128k · 20 s" })
+    expect(line(loading)).toEqual({ kind: "text", text: "Loading Qwen · RTX 3060 Ti + GTX 1080 · 128K · 20 s" })
     expect(line(loading, { downloaded: ["3.6"] })?.text).toBe(
-      "Downloaded. Loading Qwen · RTX 3060 Ti + GTX 1080 · 128k · 20 s",
+      "Downloaded. Loading Qwen · RTX 3060 Ti + GTX 1080 · 128K · 20 s",
     )
     // before the plan is made it says only what it knows
     expect(line(state({ phase: "loading", model: "3.6", label: "Qwen", seconds: 1, where: null }))?.text).toBe(
@@ -154,7 +154,7 @@ describe("the line above the composer", () => {
     const ready = state({ phase: "ready", model: "3.6", label: "Qwen", where })
     expect(line(ready, { justReady: true })).toEqual({
       kind: "ready",
-      text: "Qwen is ready: it runs on 2 cards and remembers about 85 thousand words.",
+      text: "Qwen is ready: it runs on 2 cards and remembers 128K tokens.",
     })
     expect(line(ready)).toBeUndefined()
     const cpu = state({
@@ -164,7 +164,7 @@ describe("the line above the composer", () => {
       where: { placement: "cpu", gpus: [], context: 32768 },
     })
     expect(line(cpu, { justReady: true })?.text).toBe(
-      "Ling is ready: it runs on the processor and remembers about 21 thousand words.",
+      "Ling is ready: it runs on the processor and remembers 32K tokens.",
     )
   })
 

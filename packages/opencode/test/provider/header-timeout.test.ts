@@ -227,23 +227,6 @@ it.live("OpenAI Codex header and chunk timeout defaults can be disabled by confi
   }),
 )
 
-it.live("OpenAI API auth gets default headerTimeout", () =>
-  Effect.gen(function* () {
-    yield* withAuthContent(
-      Effect.gen(function* () {
-        yield* provideTmpdirInstance(() =>
-          Effect.gen(function* () {
-            const provider = yield* Provider.Service
-            const openai = yield* provider.getProvider(ProviderV2.ID.openai)
-            expect(openai.options.headerTimeout).toBe(300_000)
-          }),
-        )
-      }),
-      { openai: { type: "api", key: "sk-test" } },
-    )
-  }),
-)
-
 function providerConfig(url: string, options: Record<string, unknown> = {}) {
   const config = testProviderConfig(url)
   return {

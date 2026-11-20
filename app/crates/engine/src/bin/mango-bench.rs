@@ -60,6 +60,7 @@ fn main() -> Result<()> {
             let mut plan = engine_cfg::plan_excluding(&p, Some(k), port, excluded)?;
             plan.spec.startup_post = None;
             plan.spec.shutdown_post = None;
+            plan.slots = None;
             Ok(plan)
         }),
         Box::new(engine_cfg::gpu_memory),

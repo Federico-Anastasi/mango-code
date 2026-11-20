@@ -36,7 +36,8 @@ import { createAutoScroll } from "@opencode-ai/ui/hooks"
 import { previewSelectedLines } from "@opencode-ai/session-ui/pierre/selection-bridge"
 import { Button } from "@opencode-ai/ui/button"
 import { showToast } from "@/utils/toast"
-import { base64Encode, checksum } from "@opencode-ai/core/util/encode"
+import { checksum } from "@opencode-ai/core/util/encode"
+import { decode64 } from "@/utils/base64"
 import { useLocation, useNavigate, useParams, useSearchParams } from "@solidjs/router"
 import { NewSessionView, SessionHeader } from "@/components/session"
 import { ErrorPage } from "@/pages/error"
@@ -99,6 +100,7 @@ import { legacySessionHref, requireServerKey, sessionHref } from "@/utils/sessio
 import { useUsageExceededDialogs } from "./session/usage-exceeded-dialogs"
 import { createSessionOwnership } from "./session/session-ownership"
 import { createSessionLineage } from "./session/session-lineage"
+import { folderKey } from "@/utils/path-key"
 
 type FollowupItem = FollowupDraft & { id: string }
 type FollowupEdit = Pick<FollowupItem, "id" | "prompt" | "context">
@@ -320,11 +322,7 @@ function SessionProviders(props: ParentProps) {
 }
 
 function SessionRouteFrame(props: ParentProps) {
-  return (
-    <div class="relative size-full overflow-hidden flex flex-col">
-      {props.children}
-    </div>
-  )
+  return <div class="relative size-full overflow-hidden flex flex-col">{props.children}</div>
 }
 
 function SessionPanelFrame(props: ParentProps<{ newLayout: boolean }>) {
@@ -414,7 +412,7 @@ export default function Page() {
 
         if (pending.id !== id) return
         layout.handoff.clearTabs()
-        if (pending.dir !== base64Encode(sdk().directory)) return
+        if (folderKey(decode64(pending.dir) ?? "") !== folderKey(sdk().directory)) return
 
         const from = workspaceTabs().tabs()
         if (from.all.length === 0 && !from.active) return
@@ -735,7 +733,7 @@ export default function Page() {
   const newSessionWorktree = createMemo(() => {
     if (store.newSessionWorktree === "create") return "create"
     const project = sync().project
-    if (project && sdk().directory !== project.worktree) return sdk().directory
+    if (project && folderKey(sdk().directory) !== folderKey(project.worktree)) return sdk().directory
     return "main"
   })
 
@@ -1622,7 +1620,7 @@ export default function Page() {
         sync: sync(),
         serverSync: serverSync(),
         draft: item,
-        optimisticBusy: item.sessionDirectory === sdk().directory,
+        optimisticBusy: folderKey(item.sessionDirectory) === folderKey(sdk().directory),
       }).catch((err) => {
         setFollowup("failed", input.sessionID, input.id)
         fail(err)
@@ -1824,27 +1822,29 @@ export default function Page() {
   // changed it meanwhile, and a local one follows the engine's). One click sends it once: a second one while the first is
   // on its way does nothing.
   let retrying: string | undefined
-  const retryTurn = (userMessageID: string) => {
+  const sendAgain = (userMessageID: string, words?: string) => {
     const sessionID = params.id
     const message = sessionID ? sync().data.message[sessionID]?.find((item) => item.id === userMessageID) : undefined
     if (!sessionID || message?.role !== "user" || retrying === userMessageID) return
     retrying = userMessageID
     const model = local.model.current()
-    const context = (sync().data.part[userMessageID] ?? []).flatMap((part) => {
-      const comment = part.type === "text" && part.synthetic ? readCommentMetadata(part.metadata) : undefined
-      if (!comment) return []
-      return [
-        {
-          key: `retry:${part.id}`,
-          type: "file" as const,
-          path: comment.path,
-          selection: comment.selection,
-          comment: comment.comment,
-          preview: comment.preview,
-          commentOrigin: comment.origin,
-        },
-      ]
-    })
+    const context = words
+      ? []
+      : (sync().data.part[userMessageID] ?? []).flatMap((part) => {
+          const comment = part.type === "text" && part.synthetic ? readCommentMetadata(part.metadata) : undefined
+          if (!comment) return []
+          return [
+            {
+              key: `retry:${part.id}`,
+              type: "file" as const,
+              path: comment.path,
+              selection: comment.selection,
+              comment: comment.comment,
+              preview: comment.preview,
+              commentOrigin: comment.origin,
+            },
+          ]
+        })
     sendFollowupDraft({
       api: sdk().api.session,
       sync: sync(),
@@ -1852,7 +1852,7 @@ export default function Page() {
       draft: {
         sessionID,
         sessionDirectory: sdk().directory,
-        prompt: draft(userMessageID),
+        prompt: words ? [{ type: "text", content: words, start: 0, end: words.length }] : draft(userMessageID),
         context,
         agent: message.agent,
         model: model
@@ -1868,6 +1868,8 @@ export default function Page() {
         retrying = undefined
       })
   }
+  // An answer cut for its length, taken up already by the agent: the user asks it to go on, with a message of its own.
+  const continueTurn = (userMessageID: string) => sendAgain(userMessageID, language.t("session.length.continueMessage"))
 
   // Ctrl+F searches the conversation. A file in front keeps it for its own search: its handlers come first
   // (capture on the window) and stop the key there.
@@ -1998,7 +2000,8 @@ export default function Page() {
               {(_id) => (
                 <MessageTimeline
                   actions={actions}
-                  onRetry={isChildSession() ? undefined : retryTurn}
+                  onRetry={isChildSession() ? undefined : sendAgain}
+                  onContinue={isChildSession() ? undefined : continueTurn}
                   setOpenFind={(fn) => {
                     openFind = fn
                   }}
@@ -2167,10 +2170,7 @@ export default function Page() {
   return (
     <SessionRouteFrame>
       <SessionHeader />
-      <div
-        ref={panelRow}
-        class="flex-1 min-h-0 flex flex-col md:flex-row"
-      >
+      <div ref={panelRow} class="flex-1 min-h-0 flex flex-col md:flex-row">
         <div
           classList={{
             "@container relative shrink-0 flex flex-col min-h-0 h-full flex-1 md:flex-none transition-[width]": true,
@@ -2190,9 +2190,7 @@ export default function Page() {
               )}
             </Show>
           ) : (
-            <SessionPanelFrame newLayout={false}>
-              {sessionPanelContent()}
-            </SessionPanelFrame>
+            <SessionPanelFrame newLayout={false}>{sessionPanelContent()}</SessionPanelFrame>
           )}
 
           <Show when={desktopSessionResizeOpen()}>

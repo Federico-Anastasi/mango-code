@@ -1,7 +1,7 @@
 // Branded HTML pages for local OAuth callback servers.
 //
 // These are served by the loopback HTTP servers that finish an OAuth exchange
-// (MCP, Codex/ChatGPT, xAI, Snowflake, DigitalOcean, ...). The functions return
+// (MCP, ...). The functions return
 // a fully self-contained HTML string with no external assets, so they work
 // offline and drop into any transport (`res.end(...)`, Effect `response.end`,
 // etc.).
@@ -12,7 +12,7 @@
 // Keep this file in sync with those sources when the brand changes.
 
 export interface CallbackPageOptions {
-  /** Friendly integration name shown as a subtitle, e.g. "xAI", "Snowflake", "MCP". */
+  /** Friendly integration name shown as a subtitle, e.g. "MCP". */
   provider?: string
   /** Attempt to close the window shortly after success. Defaults to true. */
   autoClose?: boolean

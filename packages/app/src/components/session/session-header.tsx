@@ -28,6 +28,7 @@ import { IconButtonV2 } from "@opencode-ai/ui/v2/icon-button-v2"
 import { Icon as IconV2 } from "@opencode-ai/ui/v2/icon"
 import { TooltipV2 } from "@opencode-ai/ui/v2/tooltip-v2"
 import { useTitlebarRightMount } from "../titlebar"
+import { folderKey } from "@/utils/path-key"
 
 const OPEN_APPS = [
   "vscode",
@@ -146,7 +147,10 @@ export function SessionHeader() {
   const project = createMemo(() => {
     const directory = projectDirectory()
     if (!directory) return
-    return layout.projects.list().find((p) => p.worktree === directory || p.sandboxes?.includes(directory))
+    const key = folderKey(directory)
+    return layout.projects
+      .list()
+      .find((p) => folderKey(p.worktree) === key || p.sandboxes?.some((sandbox) => folderKey(sandbox) === key))
   })
   const name = createMemo(() => {
     const current = project()

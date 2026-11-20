@@ -1,10 +1,8 @@
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
-import os from "os"
-import { ConfigV1 } from "@opencode-ai/core/v1/config/config"
 import fuzzysort from "fuzzysort"
 import { Config } from "@/config/config"
 import { mapValues, mergeDeep, omit, pickBy, sortBy } from "remeda"
-import { NoSuchModelError, type Provider as SDK } from "ai"
+import { NoSuchModelError } from "ai"
 import { Npm } from "@opencode-ai/core/npm"
 import { Hash } from "@opencode-ai/core/util/hash"
 import { Plugin } from "../plugin"
@@ -13,7 +11,6 @@ import { type LanguageModelV3 } from "@ai-sdk/provider"
 import { ModelsDev } from "@opencode-ai/core/models-dev"
 import { Auth } from "../auth"
 import { Env } from "../env"
-import { InstallationVersion } from "@opencode-ai/core/installation/version"
 import { iife } from "@/util/iife"
 import { Global } from "@opencode-ai/core/global"
 import path from "path"
@@ -32,8 +29,6 @@ import { ModelStatus } from "./model-status"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { ProviderError } from "./error"
 import { engineTimingsExtractor, setEngineOrigin } from "./engine-timings"
-
-const OPENAI_HEADER_TIMEOUT_DEFAULT = 300_000
 
 function wrapSSE(res: Response, ms: number, ctl: AbortController) {
   if (typeof ms !== "number" || ms <= 0) return res
@@ -127,416 +122,30 @@ function timeoutFetch(options: Record<string, any>) {
   }
 }
 
-function googleVertexAnthropicBaseURL(project: string | undefined, location: string | undefined) {
-  if (!project) return
-  if (location !== "eu" && location !== "us") return
-  // Continental multi-regions require Regional Endpoint Platform domains.
-  return `https://aiplatform.${location}.rep.googleapis.com/v1/projects/${project}/locations/${location}/publishers/anthropic/models`
-}
-
 type BundledSDK = {
   languageModel(modelId: string): LanguageModelV3
-  chat?: (modelId: string) => LanguageModelV3
-  responses?: (modelId: string) => LanguageModelV3
 }
 
-// mango-code: only these providers' libraries are built into the agent. Another provider named in a configuration is
-// installed on demand like any other package, without the sign-in help its own loader gave.
+// mango-code: only these providers' libraries are built into the agent; any other package named in a configuration is
+// installed on demand.
 const BUNDLED_PROVIDERS: Record<string, () => Promise<(opts: any) => BundledSDK>> = {
   "@ai-sdk/anthropic": () => import("@ai-sdk/anthropic").then((m) => m.createAnthropic),
   "@ai-sdk/openai-compatible": () => import("@ai-sdk/openai-compatible").then((m) => m.createOpenAICompatible),
   "@openrouter/ai-sdk-provider": () => import("@openrouter/ai-sdk-provider").then((m) => m.createOpenRouter),
-  "@ai-sdk/github-copilot": () =>
-    import("@opencode-ai/core/github-copilot/copilot-provider").then((m) => m.createOpenaiCompatible),
 }
 
-type CustomModelLoader = (sdk: any, modelID: string, options?: Record<string, any>, model?: Model) => Promise<any>
-type CustomVarsLoader = (options: Record<string, any>) => Record<string, string>
-type CustomDiscoverModels = () => Promise<Record<string, Model>>
-type CustomLoader = (provider: Info) => Effect.Effect<{
-  autoload: boolean
-  getModel?: CustomModelLoader
-  vars?: CustomVarsLoader
-  options?: Record<string, any>
-  discoverModels?: CustomDiscoverModels
-}>
-
-type CustomDep = {
-  auth: (id: string) => Effect.Effect<Auth.Info | undefined>
-  config: () => Effect.Effect<ConfigV1.Info>
-  env: () => Effect.Effect<Record<string, string | undefined>>
-  get: (key: string) => Effect.Effect<string | undefined>
-}
-
-function selectAzureLanguageModel(sdk: any, modelID: string, useChat: boolean) {
-  if (useChat && sdk.chat) return sdk.chat(modelID)
-  if (sdk.responses) return sdk.responses(modelID)
-  if (sdk.messages) return sdk.messages(modelID)
-  if (sdk.chat) return sdk.chat(modelID)
-  return sdk.languageModel(modelID)
-}
-
-function custom(dep: CustomDep): Record<string, CustomLoader> {
-  return {
-    anthropic: () =>
-      Effect.succeed({
-        autoload: false,
-        options: {
-          headers: {
-            "anthropic-beta": "interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14",
-          },
-        },
-      }),
-    opencode: Effect.fnUntraced(function* (input: Info) {
-      const env = yield* dep.env()
-      const hasKey = iife(() => {
-        if (input.env.some((item) => env[item])) return true
-        return false
-      })
-      const ok =
-        hasKey ||
-        Boolean(yield* dep.auth(input.id)) ||
-        Boolean((yield* dep.config()).provider?.["opencode"]?.options?.apiKey)
-
-      if (!ok) {
-        for (const [key, value] of Object.entries(input.models)) {
-          if (value.cost.input === 0) continue
-          delete input.models[key]
-        }
-      }
-
-      return {
-        autoload: Object.keys(input.models).length > 0,
-        options: ok ? {} : { apiKey: "public" },
-      }
-    }),
-    openai: () =>
-      Effect.succeed({
-        autoload: false,
-        async getModel(sdk: any, modelID: string, _options?: Record<string, any>) {
-          return sdk.responses(modelID)
-        },
-        options: { headerTimeout: OPENAI_HEADER_TIMEOUT_DEFAULT },
-      }),
-    meta: () =>
-      Effect.succeed({
-        autoload: false,
-        async getModel(sdk: any, modelID: string, _options?: Record<string, any>) {
-          return sdk.responses(modelID)
-        },
-      }),
-    xai: () =>
-      Effect.succeed({
-        autoload: false,
-        async getModel(sdk: any, modelID: string, _options?: Record<string, any>) {
-          return sdk.responses(modelID)
-        },
-        options: {},
-      }),
-    "github-copilot": () =>
-      Effect.succeed({
-        autoload: false,
-        async getModel(sdk: any, modelID: string, _options?: Record<string, any>, model?: Model) {
-          if (sdk.responses === undefined && sdk.chat === undefined) return sdk.languageModel(modelID)
-          if (model && "endpoint" in model.api) {
-            if (model.api.endpoint === "responses" && sdk.responses) return sdk.responses(modelID)
-            if (model.api.endpoint === "chat" && sdk.chat) return sdk.chat(modelID)
-          }
-          const match = /^gpt-(\d+)/.exec(modelID)
-          if (match && Number(match[1]) >= 5 && !modelID.startsWith("gpt-5-mini")) return sdk.responses(modelID)
-          return sdk.chat(modelID)
-        },
-        options: {},
-      }),
-    azure: Effect.fnUntraced(function* (provider: Info) {
-      const env = yield* dep.env()
-      const auth = yield* dep.auth(provider.id)
-      const resource = iife(() => {
-        return [
-          provider.options?.resourceName,
-          auth?.type === "api" ? auth.metadata?.resourceName : undefined,
-          auth?.type === "oauth" ? auth.accountId : undefined,
-          env["AZURE_RESOURCE_NAME"],
-        ].find((name) => typeof name === "string" && name.trim() !== "")
-      })
-
-      if (!resource && !provider.options?.baseURL) {
-        return {
-          autoload: false,
-          async getModel() {
-            throw new Error(
-              "AZURE_RESOURCE_NAME is missing, set it using env var or reconnecting the azure provider and setting it",
-            )
-          },
-        }
-      }
-
-      return {
-        autoload: false,
-        async getModel(sdk: any, modelID: string, options?: Record<string, any>) {
-          return selectAzureLanguageModel(sdk, modelID, Boolean(options?.["useCompletionUrls"]))
-        },
-        options: {
-          resourceName: resource,
-        },
-        vars(_options): Record<string, string> {
-          if (resource) {
-            return {
-              AZURE_RESOURCE_NAME: resource,
-            }
-          }
-          return {}
-        },
-      }
-    }),
-    "azure-cognitive-services": Effect.fnUntraced(function* (provider: Info) {
-      const resourceName = yield* dep.get("AZURE_COGNITIVE_SERVICES_RESOURCE_NAME")
-      return {
-        autoload: false,
-        async getModel(sdk: any, modelID: string, options?: Record<string, any>) {
-          return selectAzureLanguageModel(sdk, modelID, Boolean(options?.["useCompletionUrls"]))
-        },
-        options: {
-          baseURL: resourceName
-            ? `https://${resourceName}.cognitiveservices.azure.com/openai${provider.options?.useDeploymentBasedUrls ? "" : "/v1"}`
-            : undefined,
-        },
-      }
-    }),
-    llmgateway: () =>
-      Effect.succeed({
-        autoload: false,
-        options: {
-          headers: {
-            "HTTP-Referer": "https://opencode.ai/",
-            "X-Title": "opencode",
-            "X-Source": "opencode",
-          },
-        },
-      }),
-    openrouter: () =>
-      Effect.succeed({
-        autoload: false,
-        options: {
-          headers: {
-            "HTTP-Referer": "https://opencode.ai/",
-            "X-Title": "opencode",
-          },
-        },
-      }),
-    nvidia: (provider) =>
-      Effect.succeed({
-        autoload: provider.source === "config",
-        options: {
-          headers: {
-            "HTTP-Referer": "https://opencode.ai/",
-            "X-Title": "opencode",
-            "X-BILLING-INVOKE-ORIGIN": "OpenCode",
-          },
-        },
-      }),
-    vercel: () =>
-      Effect.succeed({
-        autoload: false,
-        options: {
-          headers: {
-            "http-referer": "https://opencode.ai/",
-            "x-title": "opencode",
-          },
-        },
-      }),
-    "sap-ai-core": Effect.fnUntraced(function* () {
-      const auth = yield* dep.auth("sap-ai-core")
-      // TODO: Using process.env directly because Env.set only updates a shallow copy (not process.env),
-      // until the scope of the Env API is clarified (test only or runtime?)
-      const envServiceKey = iife(() => {
-        const envAICoreServiceKey = process.env.AICORE_SERVICE_KEY
-        if (envAICoreServiceKey) return envAICoreServiceKey
-        if (auth?.type === "api") {
-          process.env.AICORE_SERVICE_KEY = auth.key
-          return auth.key
-        }
-        return undefined
-      })
-      const deploymentId = process.env.AICORE_DEPLOYMENT_ID
-      const resourceGroup = process.env.AICORE_RESOURCE_GROUP
-
-      return {
-        autoload: !!envServiceKey,
-        options: envServiceKey ? { deploymentId, resourceGroup } : {},
-        async getModel(sdk: any, modelID: string) {
-          return sdk(modelID)
-        },
-      }
-    }),
-    zenmux: () =>
-      Effect.succeed({
-        autoload: false,
-        options: {
-          headers: {
-            "HTTP-Referer": "https://opencode.ai/",
-            "X-Title": "opencode",
-          },
-        },
-      }),
-    "cloudflare-workers-ai": Effect.fnUntraced(function* (input: Info) {
-      // When baseURL is already configured (e.g. corporate config routing through a proxy/gateway),
-      // skip the account ID check because the URL is already fully specified.
-      if (input.options?.baseURL) return { autoload: false }
-
-      const auth = yield* dep.auth(input.id)
-      const env = yield* dep.env()
-      const accountId = env["CLOUDFLARE_ACCOUNT_ID"] || (auth?.type === "api" ? auth.metadata?.accountId : undefined)
-      if (!accountId)
-        return {
-          autoload: false,
-          async getModel() {
-            throw new Error(
-              "CLOUDFLARE_ACCOUNT_ID is missing. Set it with: export CLOUDFLARE_ACCOUNT_ID=<your-account-id>",
-            )
-          },
-        }
-
-      const apiKey = env["CLOUDFLARE_API_KEY"] || (auth?.type === "api" ? auth.key : undefined)
-
-      return {
-        autoload: !!apiKey,
-        options: {
-          apiKey,
-          headers: {
-            "User-Agent": `opencode/${InstallationVersion} cloudflare-workers-ai (${os.platform()} ${os.release()}; ${os.arch()})`,
-          },
-        },
-        async getModel(sdk: any, modelID: string) {
-          return sdk.languageModel(modelID)
-        },
-        vars(_options) {
-          return {
-            CLOUDFLARE_ACCOUNT_ID: accountId,
-          }
-        },
-      }
-    }),
-    cerebras: () =>
-      Effect.succeed({
-        autoload: false,
-        options: {
-          headers: {
-            "X-Cerebras-3rd-Party-Integration": "opencode",
-          },
-        },
-      }),
-    kilo: () =>
-      Effect.succeed({
-        autoload: false,
-        options: {
-          headers: {
-            "HTTP-Referer": "https://opencode.ai/",
-            "X-Title": "opencode",
-          },
-        },
-      }),
-    "snowflake-cortex": Effect.fnUntraced(function* (input: Info) {
-      const env = yield* dep.env()
-      const auth = yield* dep.auth(input.id)
-
-      const account =
-        env["SNOWFLAKE_ACCOUNT"] ??
-        (auth?.type === "api" ? auth.metadata?.account : undefined) ??
-        (auth?.type === "oauth" ? auth.accountId : undefined) ??
-        input.options?.account
-
-      const envToken = env["SNOWFLAKE_CORTEX_TOKEN"] ?? env["SNOWFLAKE_CORTEX_PAT"]
-      const apiKeyToken = auth?.type === "api" ? auth.key : undefined
-      const oauthToken = auth?.type === "oauth" ? auth.access : undefined
-      const configToken = input.options?.token ?? input.options?.apiKey
-
-      const token = envToken ?? apiKeyToken ?? oauthToken ?? configToken
-
-      if (!account || !token) {
-        const missing = [!account && "SNOWFLAKE_ACCOUNT", !token && "SNOWFLAKE_CORTEX_TOKEN"].filter(Boolean).join(", ")
-        return {
-          autoload: false,
-          async getModel() {
-            throw new Error(
-              `Snowflake Cortex: missing credentials (${missing}). Provide a bearer token (OAuth, JWT, or PAT) via env var, opencode auth, or provider options.`,
-            )
-          },
-        }
-      }
-
-      const baseURL = `https://${account}.snowflakecomputing.com/api/v2/cortex/v1`
-
-      const options: Record<string, any> = { baseURL, apiKey: token }
-
-      // Only skip provider-level fetch when the token is from OAuth with no override.
-      // For OAuth tokens, the plugin auth loader's combined fetch handles
-      // OAuth refresh + snowflake transformations in one place.
-      // For env/config/API-key tokens, the provider fetch applies snowflake
-      // transformations directly.
-      const useOAuthHandler =
-        oauthToken !== undefined && envToken === undefined && apiKeyToken === undefined && configToken === undefined
-      if (!useOAuthHandler) {
-        options.fetch = async (url: RequestInfo | URL, init?: RequestInit) => {
-          if (init?.body && typeof init.body === "string") {
-            try {
-              const body = JSON.parse(init.body)
-              if ("max_tokens" in body) {
-                body.max_completion_tokens = body.max_tokens
-                delete body.max_tokens
-                init = { ...init, body: JSON.stringify(body) }
-              }
-            } catch {}
-          }
-
-          const response = await fetch(url, init)
-
-          if (!response.ok && response.status === 400) {
-            try {
-              const errorData = await response.clone().json()
-              const errorMessage = String(errorData.message || errorData.error || "")
-              if (errorMessage.toLowerCase().includes("conversation complete")) {
-                return new Response(
-                  JSON.stringify({
-                    choices: [{ finish_reason: "stop", message: { content: "", role: "assistant" } }],
-                  }),
-                  { status: 200, headers: new Headers({ "content-type": "application/json" }) },
-                )
-              }
-            } catch {}
-          }
-
-          if (response.body && response.headers.get("content-type")?.includes("text/event-stream")) {
-            const reader = response.body.getReader()
-            const encoder = new TextEncoder()
-            const decoder = new TextDecoder()
-            const stream = new ReadableStream({
-              async pull(ctrl) {
-                const { done, value } = await reader.read()
-                if (done) {
-                  ctrl.close()
-                  return
-                }
-                const text = decoder.decode(value, { stream: true })
-                ctrl.enqueue(encoder.encode(text.replace(/"role"\s*:\s*""/g, '"role":"assistant"')))
-              },
-              cancel() {
-                reader.cancel()
-              },
-            })
-            return new Response(stream, { headers: response.headers, status: response.status })
-          }
-
-          return response
-        }
-      }
-
-      return {
-        autoload: input.source === "config",
-        options,
-      }
-    }),
-  }
+const PROVIDER_OPTIONS: Record<string, Record<string, any>> = {
+  anthropic: {
+    headers: {
+      "anthropic-beta": "interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14",
+    },
+  },
+  openrouter: {
+    headers: {
+      "HTTP-Referer": "https://opencode.ai/",
+      "X-Title": "opencode",
+    },
+  },
 }
 
 const ProviderApiInfo = Schema.Struct({
@@ -755,8 +364,6 @@ interface State {
   providers: Record<ProviderV2.ID, Info>
   catalog: Record<ProviderV2.ID, Info>
   sdk: Map<string, BundledSDK>
-  modelLoaders: Record<string, CustomModelLoader>
-  varsLoaders: Record<string, CustomVarsLoader>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/Provider") {}
@@ -796,17 +403,6 @@ function cost(c: ModelsDev.Model["cost"]): Model["cost"] {
   return result
 }
 
-// Cloudflare AI Gateway routes OpenAI and Anthropic models through their native
-// passthrough SDKs (Responses / Messages APIs). Resolving the native npm before
-// variants are computed makes reasoning variants produce payloads the native
-// SDKs understand (e.g. anthropic `effort` instead of compat `reasoningEffort`).
-function cloudflareGatewayNpm(providerID: string, modelID: string) {
-  if (providerID !== "cloudflare-ai-gateway") return undefined
-  if (modelID.startsWith("openai/")) return "@ai-sdk/openai"
-  if (modelID.startsWith("anthropic/")) return "@ai-sdk/anthropic"
-  return undefined
-}
-
 function fromModelsDevModel(provider: ModelsDev.Provider, model: ModelsDev.Model): Model {
   const base: Model = {
     id: ModelV2.ID.make(model.id),
@@ -816,11 +412,7 @@ function fromModelsDevModel(provider: ModelsDev.Provider, model: ModelsDev.Model
     api: {
       id: model.id,
       url: model.provider?.api ?? provider.api ?? "",
-      npm:
-        cloudflareGatewayNpm(provider.id, model.id) ??
-        model.provider?.npm ??
-        provider.npm ??
-        "@ai-sdk/openai-compatible",
+      npm: model.provider?.npm ?? provider.npm ?? "@ai-sdk/openai-compatible",
     },
     status: model.status ?? "active",
     headers: {},
@@ -893,13 +485,9 @@ export function fromModelsDevProvider(provider: ModelsDev.Provider): Info {
 
 function modeOptions(model: Model, body: Record<string, unknown> | undefined) {
   if (!body) return model.options
-  const options = Object.fromEntries(
+  return Object.fromEntries(
     Object.entries(body).map(([key, value]) => [key.replace(/_([a-z])/g, (_, char) => char.toUpperCase()), value]),
   )
-  const reasoning = body.reasoning
-  if (model.api.npm !== "@ai-sdk/openai" || !isRecord(reasoning) || typeof reasoning.mode !== "string") return options
-  const { reasoning: _, ...rest } = options
-  return { ...rest, reasoningMode: reasoning.mode }
 }
 
 function modelSuggestions(provider: Info | undefined, modelID: ModelV2.ID, enableExperimentalModels: boolean) {
@@ -952,22 +540,7 @@ const layer = Layer.effect(
 
         const providers: Record<ProviderV2.ID, Info> = {} as Record<ProviderV2.ID, Info>
         const languages = new Map<string, LanguageModelV3>()
-        const modelLoaders: {
-          [providerID: string]: CustomModelLoader
-        } = {}
-        const varsLoaders: {
-          [providerID: string]: CustomVarsLoader
-        } = {}
         const sdk = new Map<string, BundledSDK>()
-        const discoveryLoaders: {
-          [providerID: string]: CustomDiscoverModels
-        } = {}
-        const dep = {
-          auth: (id: string) => auth.get(id).pipe(Effect.orDie),
-          config: () => config.get(),
-          env: () => env.all(),
-          get: (key: string) => env.get(key),
-        }
 
         function mergeProvider(providerID: ProviderV2.ID, provider: Partial<Info>) {
           const existing = providers[providerID]
@@ -1042,9 +615,6 @@ const layer = Layer.effect(
               model.provider?.npm ??
               provider.npm ??
               existingModel?.api.npm ??
-              // Config-defined gateway models bypass fromModelsDevModel, so resolve the
-              // native passthrough npm here before falling back to the catalog default.
-              cloudflareGatewayNpm(providerID, apiID) ??
               modelsDev[providerID]?.npm ??
               "@ai-sdk/openai-compatible"
             const name = iife(() => {
@@ -1174,22 +744,10 @@ const layer = Layer.effect(
           mergeProvider(providerID, patch)
         }
 
-        for (const [id, fn] of Object.entries(custom(dep))) {
+        for (const [id, options] of Object.entries(PROVIDER_OPTIONS)) {
           const providerID = ProviderV2.ID.make(id)
-          if (disabled.has(providerID)) continue
-          const data = database[providerID]
-          if (!data) {
-            continue
-          }
-          const result = yield* fn(data)
-          if (result && (result.autoload || providers[providerID])) {
-            if (result.getModel) modelLoaders[providerID] = result.getModel
-            if (result.vars) varsLoaders[providerID] = result.vars
-            if (result.discoverModels) discoveryLoaders[providerID] = result.discoverModels
-            const opts = result.options ?? {}
-            const patch: Partial<Info> = providers[providerID] ? { options: opts } : { source: "custom", options: opts }
-            mergeProvider(providerID, patch)
-          }
+          if (disabled.has(providerID) || !providers[providerID]) continue
+          mergeProvider(providerID, { options })
         }
 
         // load config - re-apply with updated data
@@ -1200,20 +758,6 @@ const layer = Layer.effect(
           if (provider.name) partial.name = provider.name
           if (provider.options) partial.options = provider.options
           mergeProvider(providerID, partial)
-        }
-
-        const gitlab = ProviderV2.ID.make("gitlab")
-        if (discoveryLoaders[gitlab] && providers[gitlab] && isProviderAllowed(gitlab)) {
-          yield* Effect.promise(async () => {
-            try {
-              const discovered = await discoveryLoaders[gitlab]()
-              for (const [modelID, model] of Object.entries(discovered)) {
-                if (!providers[gitlab].models[modelID]) {
-                  providers[gitlab].models[modelID] = model
-                }
-              }
-            } catch (e) {}
-          })
         }
 
         for (const [id, provider] of Object.entries(providers)) {
@@ -1231,10 +775,7 @@ const layer = Layer.effect(
             if (
               // These chat aliases are invalid for the special handling in the
               // built-in providers below, but custom providers may support them.
-              (modelID === "gpt-5-chat-latest" &&
-                (providerID === ProviderV2.ID.openai ||
-                  providerID === ProviderV2.ID.githubCopilot ||
-                  providerID === ProviderV2.ID.openrouter)) ||
+              (modelID === "gpt-5-chat-latest" && providerID === ProviderV2.ID.openrouter) ||
               (providerID === ProviderV2.ID.openrouter && modelID === "openai/gpt-5-chat")
             )
               delete provider.models[modelID]
@@ -1271,8 +812,6 @@ const layer = Layer.effect(
           providers,
           catalog,
           sdk,
-          modelLoaders,
-          varsLoaders,
         }
       }),
     )
@@ -1283,22 +822,6 @@ const layer = Layer.effect(
       try {
         const provider = s.providers[model.providerID]
         const options = { ...provider.options }
-
-        if (
-          model.providerID === "google-vertex" &&
-          model.api.npm === "@ai-sdk/google-vertex/anthropic" &&
-          !options.baseURL
-        ) {
-          const baseURL = googleVertexAnthropicBaseURL(
-            typeof options.project === "string" ? options.project : undefined,
-            typeof options.location === "string" ? options.location : undefined,
-          )
-          if (baseURL) options.baseURL = baseURL
-        }
-
-        if (model.providerID === "google-vertex" && !model.api.npm.includes("@ai-sdk/openai-compatible")) {
-          delete options.fetch
-        }
 
         if (model.api.npm.includes("@ai-sdk/openai-compatible") && options["includeUsage"] !== false) {
           options["includeUsage"] = true
@@ -1314,15 +837,6 @@ const layer = Layer.effect(
           let url =
             typeof options["baseURL"] === "string" && options["baseURL"] !== "" ? options["baseURL"] : model.api.url
           if (!url) return
-
-          const loader = s.varsLoaders[model.providerID]
-          if (loader) {
-            const vars = loader(options)
-            for (const [key, value] of Object.entries(vars)) {
-              const field = "${" + key + "}"
-              url = url.replaceAll(field, value)
-            }
-          }
 
           url = url.replace(/\$\{([^}]+)\}/g, (item, key) => {
             const val = envs[String(key)]
@@ -1362,7 +876,7 @@ const layer = Layer.effect(
             ...options,
           })
           s.sdk.set(key, loaded)
-          return loaded as SDK
+          return loaded
         }
 
         const installedPath = await (async () => {
@@ -1385,7 +899,7 @@ const layer = Layer.effect(
           ...options,
         })
         s.sdk.set(key, loaded)
-        return loaded as SDK
+        return loaded
       } catch (e) {
         throw new InitError({ providerID: model.providerID, cause: e })
       }
@@ -1425,21 +939,10 @@ const layer = Layer.effect(
       const key = `${model.providerID}/${model.id}`
       if (s.models.has(key)) return s.models.get(key)!
 
-      const provider = s.providers[model.providerID]
       return yield* EffectPromise.refineRejection(
         async () => {
           const sdk = await resolveSDK(model, s, envs)
-          const language = s.modelLoaders[model.providerID]
-            ? await s.modelLoaders[model.providerID](
-                sdk,
-                model.api.id,
-                {
-                  ...provider.options,
-                  ...model.options,
-                },
-                model,
-              )
-            : sdk.languageModel(model.api.id)
+          const language = sdk.languageModel(model.api.id)
           s.models.set(key, language)
           return language
         },
@@ -1489,42 +992,13 @@ const layer = Layer.effect(
         }
       }
 
-      // TODO: Remove these provider-specific assumptions once model syncing reliably reports available deployments.
-      if (providerID === ProviderV2.ID.azure || providerID === ProviderV2.ID.make("azure-cognitive-services")) {
-        return undefined
-      }
-
-      const priority = providerID.startsWith("opencode")
-        ? ["gpt-nano"]
-        : providerID.startsWith("github-copilot")
-          ? ["gpt-mini", ...smallModelFamilyPriority]
-          : smallModelFamilyPriority
       const models = sortBy(
         Object.values(provider.models),
         [(model) => model.release_date, "desc"],
         [(model) => model.id, "desc"],
       )
-      for (const family of priority) {
+      for (const family of smallModelFamilyPriority) {
         const candidates = models.filter((model) => model.family === family)
-        if (providerID === ProviderV2.ID.amazonBedrock) {
-          const crossRegionPrefixes = ["global.", "us.", "eu."]
-
-          const globalMatch = candidates.find((model) => model.id.startsWith("global."))
-          if (globalMatch) return globalMatch
-
-          const region = provider.options?.region
-          if (region) {
-            const regionPrefix = region.split("-")[0]
-            if (regionPrefix === "us" || regionPrefix === "eu") {
-              const regionalMatch = candidates.find((model) => model.id.startsWith(`${regionPrefix}.`))
-              if (regionalMatch) return regionalMatch
-            }
-          }
-
-          const unprefixed = candidates.find((model) => !crossRegionPrefixes.some((p) => model.id.startsWith(p)))
-          if (unprefixed) return unprefixed
-          continue
-        }
         if (candidates[0]) return candidates[0]
       }
 

@@ -83,7 +83,7 @@ agent `team` of the app's server, dev and agents are hidden `opencode serve` pro
 | 47096 | the phone service: the web interface | off by default |
 | 47097 | the phone service: the pages of the browser panel | open only while 47096 is |
 | 47098 | the engine lent to the user's other PCs | off by default |
-| 4096 | the agent's server: the web interface | |
+| 4096 | the agent's server: the web interface | the preferred port: a free one when it is taken, and the port can change when the app restarts the agent (`service.json` has the current one) |
 | 4097 | the dictation service | |
 | 4090-4095 | the Team: dev, agents | |
 
@@ -123,8 +123,12 @@ How a model runs on a given PC (engine, arguments, measured context, the reason 
 another PC the general plan applies (official llama.cpp, arguments from the hardware: `app/README.md`). A model with a
 profile keeps the conversations' **disk memory** (`--cache-disk`, an addition of the forks): the system prompt and the
 conversations of the last 24 hours stay ready after an engine shutdown (loaned GPUs, model switch, closing). With the
-general plan only the conversation that was open is saved at the shutdown (`slots\<model>.bin`) and reloaded at the
-next start.
+general plan the manager keeps the files itself, in `slots\`: the system prompt of a new conversation is read once and
+saved (`<model>.prefix-<key>.bin`) and every new conversation, restart or return to the model starts from it; the
+conversation that was open is saved at the shutdown (`<model>.bin`) and reloaded at the next start. Same limits as the
+profiles' memory: 6 GiB for everything and 24 hours; taking a model off removes its files. The agent says where its system
+prompt ends (`X-Mango-Stable-Prompt`), so the working folder and the date, which come last, are not part of what is kept; the
+tools, which the model's template puts after the system text, are read again by a conversation of another folder or day.
 
 Models without images get their own web instructions: `mango-discipline.js` adds `MANGO-web-text.md` (pages are read
 with `take_snapshot`) instead of `MANGO-web-images.md`, depending on the request's model: whether it sees images is
@@ -147,16 +151,18 @@ capability, so a `cuda-12` profile runs on `cuda-12-gtx16` only where the PC's T
 
 ### The context
 
-128k is the **target**, at global level in the JSON. A model's own `ctx` is the maximum it supports (the GGUF header):
-the general plan uses the smaller of the two and goes lower only if memory is not enough; a profile has the context
-measured on its hardware. The agent's config uses the **effective** ctx of the loaded model.
+A model's own `ctx` is the maximum it supports (the GGUF header): the general plan takes it and goes lower only if
+memory is not enough, or if the user chose a smaller context (from 32K tokens up to the maximum, in any number of
+tokens). The global `ctx` in the JSON is only the maximum of a model that does not say its own. A profile has the
+context measured on its hardware. The agent's config uses the **effective** ctx of the loaded model.
 
 ## Gotchas and useful truths
 
 - **Thinking is on by default**: it makes the model better at programming, at the price of time on short messages.
 - **KV cache:** the context lives ONLY in the KV caches. A new turn goes through the model only for the new tokens; the
   past is read from the cache (prefix reuse, safe, doesn't mix). With a profile, disk memory (`--cache-disk`) keeps the
-  conversations even after an engine restart; with the general plan, the one that was open.
+  conversations even after an engine restart; with the general plan the manager keeps the system prompt and the one that
+  was open (`slots\`).
 
 ## Extensions (MCP + skills + plugins)
 
@@ -207,5 +213,5 @@ measured on its hardware. The agent's config uses the **effective** ctx of the l
 | `profiles/3060ti-1080-1660s/` | **the profiles for the RTX 3060 Ti + GTX 1080 + GTX 1660 SUPER**: for each model engine, arguments, env, context and measured notes. The app reads them (`engine-cfg`) |
 | `chat-templates/` | the Jinja chat templates passed to llama-server, one per model |
 | `opencode/` | the agent built from the repo, `web/mango-code.exe` (`app/scripts/build-agent.ps1`). Generated, gitignored |
-| `mango-paths.json` | where binaries and weights are on THIS machine. Optional, written by hand, gitignored |
+| `mango-paths.json` | where binaries and weights are on THIS machine. Optional, written by hand, gitignored. When it names the models folder, the user cannot choose another one in the settings |
 | `package.json` | the node dependencies (readability, jsdom, turndown, chrome-devtools-mcp, document libraries) |

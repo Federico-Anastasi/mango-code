@@ -1,7 +1,6 @@
 import {
   checkPluginCompatibility,
   createPluginEntry,
-  isDeprecatedPlugin,
   pluginSource,
   resolvePluginTarget,
   type PluginKind,
@@ -17,7 +16,6 @@ export namespace PluginLoader {
   export type Plan = {
     spec: string
     options: ConfigPluginV1.Options | undefined
-    deprecated: boolean
   }
 
   // A plugin that has been resolved to a concrete target and entrypoint on disk.
@@ -76,7 +74,7 @@ export namespace PluginLoader {
   // Normalize a config item into the loader's internal representation.
   function plan(item: ConfigPluginV1.Spec): Plan {
     const spec = ConfigPlugin.pluginSpecifier(item)
-    return { spec, options: ConfigPlugin.pluginOptions(item), deprecated: isDeprecatedPlugin(spec) }
+    return { spec, options: ConfigPlugin.pluginOptions(item) }
   }
 
   // Resolve a configured plugin into a concrete entrypoint that can later be imported.
@@ -156,9 +154,6 @@ export namespace PluginLoader {
   ): Promise<AttemptResult<R>> {
     const plan = candidate.plan
     const filePlugin = pluginSource(plan.spec) === "file"
-
-    // Deprecated plugin packages are silently ignored because they are now built in.
-    if (plan.deprecated) return { retry: false }
 
     report?.start?.(candidate, retry)
 

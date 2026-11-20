@@ -300,13 +300,24 @@ fn handle(c: TcpStream, m: &EngineManager, net: Option<&Share>, app: Option<&dyn
         // A model that doesn't start as it is must not be retried, and the agent retries 5xx: 422, with the sentence that explains it.
         Err(e) => return respond(&c, if crate::not_to_retry(&e) { 422 } else { 503 }, error(&format!("{e:#}"))),
     };
+    // The engine has one slot: a conversation takes its turn here, and the system prompt of a new one is put in it first.
+    let slot = permit.slot.clone();
+    let mut turn = None;
     if path == "/v1/chat/completions" && req.method == "POST" {
         req.body = m.with_request_defaults(&permit.key, std::mem::take(&mut req.body));
+        turn = slot.as_deref().map(crate::prefix::Slot::turn);
+        if let Some(turn) = turn.as_mut() {
+            // The client that closes while its prompt is being read does not get the engine's time for the rest.
+            if !crate::prefix::prepare(turn, m, &permit.url, req.header(crate::prefix::STABLE_PROMPT), &req.body, &c) {
+                return;
+            }
+        }
     }
     if let Err(e) = forward(&c, &permit.url, &req) {
         // Before anything has been written to the client the error can still be told; after that, the connection drops.
         respond(&c, 502, error(&tr!("il motore non risponde: {e:#}", "the engine does not answer: {e:#}")));
     }
+    drop(turn);
     drop(permit);
 }
 

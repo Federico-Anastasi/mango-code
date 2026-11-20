@@ -113,6 +113,13 @@ export interface Interface {
    * its cache only for an identical prefix).
    */
   readonly listing: (sessionID: string, agent?: Agent.Info) => Effect.Effect<Listed[]>
+  /**
+   * The skills on disk now that the prompt of the conversation does not list and that were not announced yet; each is
+   * returned once. Empty for a conversation whose list is not kept: its next request lists the current skills.
+   */
+  readonly added: (sessionID: string, agent?: Agent.Info) => Effect.Effect<Listed[]>
+  /** Reads the skills from disk again. */
+  readonly refresh: () => Effect.Effect<void>
 }
 
 const add = Effect.fnUntraced(function* (state: State, match: string, events: EventV2Bridge.Service["Service"]) {
@@ -354,29 +361,50 @@ const layer = Layer.effect(
     // mango-code: the list of each conversation, kept in memory for as long as the instance lives (until the project
     // is closed or the agent restarts) and for the last MAX_LISTINGS conversations: the oldest is let go when another
     // begins. A conversation whose list is gone (restart, let go) reads the current skills, like a new one.
-    const listings = yield* InstanceState.make(() => Effect.sync(() => new Map<string, Listed[]>()))
+    // `known`: the names the conversation has been told of, in its prompt or announced later.
+    const listings = yield* InstanceState.make(() =>
+      Effect.sync(() => new Map<string, { list: Listed[]; known: Set<string> }>()),
+    )
+
+    const refresh = Effect.fn("Skill.refresh")(function* () {
+      yield* InstanceState.invalidate(discovered)
+      yield* InstanceState.invalidate(state)
+    })
+
+    // Without the content of the skills: only what the prompt shows is kept.
+    const current = Effect.fn("Skill.current")(function* () {
+      return Object.values(yield* skills()).map((item) => ({
+        name: item.name,
+        description: item.description,
+        location: item.location,
+      }))
+    })
 
     const listing = Effect.fn("Skill.listing")(function* (sessionID: string, agent?: Agent.Info) {
       const kept = yield* InstanceState.get(listings)
-      const list =
+      const entry =
         kept.get(sessionID) ??
         (yield* Effect.gen(function* () {
-          yield* InstanceState.invalidate(discovered)
-          yield* InstanceState.invalidate(state)
-          // Without the content of the skills: only what the prompt shows is kept.
-          return Object.values(yield* skills()).map((item) => ({
-            name: item.name,
-            description: item.description,
-            location: item.location,
-          }))
+          yield* refresh()
+          const list = yield* current()
+          return { list, known: new Set(list.map((item) => item.name)) }
         }))
       kept.delete(sessionID)
-      kept.set(sessionID, list)
+      kept.set(sessionID, entry)
       if (kept.size > MAX_LISTINGS) kept.delete(kept.keys().next().value!)
-      return permitted(list, agent)
+      return permitted(entry.list, agent)
     })
 
-    return Service.of({ get, require, all, dirs, available, listing })
+    const added = Effect.fn("Skill.added")(function* (sessionID: string, agent?: Agent.Info) {
+      const entry = (yield* InstanceState.get(listings)).get(sessionID)
+      if (!entry) return []
+      yield* refresh()
+      const fresh = permitted(yield* current(), agent).filter((item) => !entry.known.has(item.name))
+      for (const item of fresh) entry.known.add(item.name)
+      return fresh
+    })
+
+    return Service.of({ get, require, all, dirs, available, listing, added, refresh })
   }),
 )
 

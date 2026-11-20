@@ -7,6 +7,7 @@ use engine::EngineManager;
 use engine_cfg::{EnginePlan, Gpu, Vendor};
 use mango_common::{tr, ProcSpec};
 use serde_json::{json, Value};
+use std::cell::{Cell, RefCell};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
 use std::path::PathBuf;
@@ -14,6 +15,7 @@ use std::time::{Duration, Instant};
 
 #[allow(dead_code)] // each test file uses a part of it
 mod support;
+use support::free_port;
 
 const FAKE: &str = env!("CARGO_BIN_EXE_fake-engine");
 
@@ -43,57 +45,81 @@ fn planner(log: PathBuf) -> Box<engine::Planner> {
             images: false,
             gpus_used: vec![Gpu { index: 0, name: "GPU 0".into(), vendor: Vendor::Nvidia, memory_mib: 8192, cuda_driver: Some((12, 6)), cc: Some((8, 6)) }],
             gguf: r"C:\fake\a.gguf".into(),
+            slots: None,
         })
     })
 }
 
+/// The share service stays as it is built until it is turned on: its port is picked free and bound only then, and another
+/// test may have taken it in between. `on` builds it again on another port.
 struct Fixture {
     m: EngineManager,
-    share: Share,
-    port: u16,
+    share: RefCell<Share>,
+    port: Cell<u16>,
     log: PathBuf,
     dir: tempfile::TempDir,
 }
 
-fn free_port() -> u16 {
-    std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap().local_addr().unwrap().port()
+fn shared_on(dir: &std::path::Path, m: &EngineManager) -> (Share, u16) {
+    let port = free_port();
+    let share = Share::new(dir, m.clone(), port, true).unwrap();
+    share.set_models(vec![SharedModel { key: "a".into(), label: "Model A".into(), context: 4096, images: false }]);
+    (share, port)
 }
 
 fn fixture() -> Fixture {
     let dir = tempfile::tempdir().unwrap();
     let log = dir.path().join("requests.jsonl");
     let m = EngineManager::new(planner(log.clone()), Box::new(Vec::new), dir.path());
-    engine::http::serve(m.clone(), free_port(), None).unwrap();
-    let port = free_port();
-    let share = Share::new(dir.path(), m.clone(), port, true).unwrap();
-    share.set_models(vec![SharedModel { key: "a".into(), label: "Model A".into(), context: 4096, images: false }]);
-    Fixture { m, share, port, log, dir }
+    support::serve(&m, None);
+    let (share, port) = shared_on(dir.path(), &m);
+    Fixture { m, share: RefCell::new(share), port: Cell::new(port), log, dir }
 }
 
 impl Drop for Fixture {
     fn drop(&mut self) {
-        let _ = self.share.set_enabled(false);
+        let _ = self.share().set_enabled(false);
         self.m.stop();
     }
 }
 
 impl Fixture {
+    fn share(&self) -> Share {
+        self.share.borrow().clone()
+    }
+
+    fn port(&self) -> u16 {
+        self.port.get()
+    }
+
     fn on(&self) -> (State, String) {
-        let state = self.share.set_enabled(true).unwrap();
+        let mut failures = 0;
+        let state = loop {
+            let state = self.share().set_enabled(true).unwrap();
+            if state.listening {
+                break state;
+            }
+            assert!(failures < 10, "the port never opened: {state:?}");
+            failures += 1;
+            self.share().set_enabled(false).unwrap();
+            let (share, port) = shared_on(self.dir.path(), &self.m);
+            *self.share.borrow_mut() = share;
+            self.port.set(port);
+        };
         let code = state.home.as_ref().expect("an address while on").code.clone();
         let key = code.rsplit('/').next().unwrap().to_string();
         (state, key)
     }
 
     fn url(&self, p: &str) -> String {
-        format!("http://127.0.0.1:{}{p}", self.port)
+        format!("http://127.0.0.1:{}{p}", self.port())
     }
 
     /// A request written by hand: (status, body). `extra`: header lines.
     fn raw(&self, method: &str, path: &str, extra: &str, body: &str) -> (u16, String) {
-        let mut s = TcpStream::connect(("127.0.0.1", self.port)).unwrap();
+        let mut s = TcpStream::connect(("127.0.0.1", self.port())).unwrap();
         s.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
-        write!(s, "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\n{extra}Content-Length: {}\r\n\r\n{body}", self.port, body.len()).unwrap();
+        write!(s, "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\n{extra}Content-Length: {}\r\n\r\n{body}", self.port(), body.len()).unwrap();
         let mut text = String::new();
         let _ = s.read_to_string(&mut text);
         let status = text.split(' ').nth(1).and_then(|c| c.parse().ok()).unwrap_or(0);
@@ -112,9 +138,9 @@ fn closed(port: u16) -> bool {
 #[test]
 fn off_by_default_and_the_port_is_closed() {
     let b = fixture();
-    let s = b.share.state();
+    let s = b.share().state();
     assert!(!s.enabled && !s.listening && s.home.is_none() && s.away.is_none(), "{s:?}");
-    assert!(closed(b.port));
+    assert!(closed(b.port()));
     assert!(!b.dir.path().join("engine-share.json").exists());
 }
 
@@ -122,8 +148,8 @@ fn off_by_default_and_the_port_is_closed() {
 fn the_right_key_gets_the_models_and_the_streaming_reply() {
     let b = fixture();
     let (state, key) = b.on();
-    assert_eq!(state.home.as_ref().unwrap().address, format!("127.0.0.1:{}", b.port));
-    assert_eq!(state.home.unwrap().code, format!("mango://127.0.0.1:{}/{key}", b.port));
+    assert_eq!(state.home.as_ref().unwrap().address, format!("127.0.0.1:{}", b.port()));
+    assert_eq!(state.home.unwrap().code, format!("mango://127.0.0.1:{}/{key}", b.port()));
     assert_eq!(key.len(), 48);
 
     let (status, body) = b.with_key("GET", "/mango/models", &key, "");
@@ -212,8 +238,8 @@ fn a_web_page_and_a_name_are_refused_even_with_the_key() {
     let (status, _) = b.with_key("GET", "/mango/models", &key, "");
     assert_eq!(status, 200);
     assert_eq!(b.raw("GET", "/mango/models", &format!("Authorization: Bearer {key}\r\nOrigin: http://evil.example\r\n"), "").0, 403);
-    let mut s = TcpStream::connect(("127.0.0.1", b.port)).unwrap();
-    write!(s, "GET /mango/models HTTP/1.1\r\nHost: pc.example:{}\r\nAuthorization: Bearer {key}\r\n\r\n", b.port).unwrap();
+    let mut s = TcpStream::connect(("127.0.0.1", b.port())).unwrap();
+    write!(s, "GET /mango/models HTTP/1.1\r\nHost: pc.example:{}\r\nAuthorization: Bearer {key}\r\n\r\n", b.port()).unwrap();
     let mut text = String::new();
     let _ = s.read_to_string(&mut text);
     assert!(text.starts_with("HTTP/1.1 403"), "{text}");
@@ -225,10 +251,10 @@ fn a_web_page_and_a_name_are_refused_even_with_the_key() {
 fn a_refused_request_is_answered_before_its_body_is_read() {
     let b = fixture();
     b.on();
-    let mut s = TcpStream::connect(("127.0.0.1", b.port)).unwrap();
+    let mut s = TcpStream::connect(("127.0.0.1", b.port())).unwrap();
     s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
     // 200 MB announced, none sent: a manager that reads the body first would wait for them.
-    write!(s, "POST /v1/chat/completions HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nContent-Length: 200000000\r\n\r\n", b.port).unwrap();
+    write!(s, "POST /v1/chat/completions HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nContent-Length: 200000000\r\n\r\n", b.port()).unwrap();
     let t0 = Instant::now();
     let mut buf = [0u8; 64];
     s.read_exact(&mut buf[..12]).unwrap();
@@ -256,13 +282,13 @@ fn refusals_leave_a_line_in_the_log_without_the_key() {
 fn turning_off_closes_the_port_and_the_connections_and_the_old_code_never_returns() {
     let b = fixture();
     let (_, key) = b.on();
-    let mut open = TcpStream::connect(("127.0.0.1", b.port)).unwrap();
+    let mut open = TcpStream::connect(("127.0.0.1", b.port())).unwrap();
     open.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
     write!(open, "GET /mango/models HTTP/1.1\r\nHost: 127.0.0.1\r\n").unwrap(); // the head never ends
 
-    let off = b.share.set_enabled(false).unwrap();
+    let off = b.share().set_enabled(false).unwrap();
     assert!(!off.enabled && !off.listening && off.home.is_none(), "{off:?}");
-    assert!(closed(b.port));
+    assert!(closed(b.port()));
     let mut buf = [0u8; 8];
     assert!(matches!(open.read(&mut buf), Ok(0) | Err(_)), "the open connection stayed");
     assert!(!std::fs::read_to_string(b.dir.path().join("engine-share.json")).unwrap().contains(&key));
@@ -277,7 +303,7 @@ fn turning_off_closes_the_port_and_the_connections_and_the_old_code_never_return
 fn a_new_key_drops_the_old_one_and_stays_on() {
     let b = fixture();
     let (_, key) = b.on();
-    let state = b.share.new_key().unwrap();
+    let state = b.share().new_key().unwrap();
     let next = state.home.unwrap().code.rsplit('/').next().unwrap().to_string();
     assert_ne!(next, key);
     assert_eq!(b.with_key("GET", "/mango/models", &key, "").0, 401);
@@ -287,7 +313,7 @@ fn a_new_key_drops_the_old_one_and_stays_on() {
 #[test]
 fn a_new_key_with_sharing_off_says_so() {
     let b = fixture();
-    let e = b.share.new_key().unwrap_err().to_string();
+    let e = b.share().new_key().unwrap_err().to_string();
     assert!(e.contains("spenta") || e.contains("off"), "{e}");
 }
 
@@ -296,7 +322,10 @@ fn on_survives_a_restart_of_the_app_with_the_same_key() {
     let b = fixture();
     let (_, key) = b.on();
     // The app starts again: «on» in the file reopens a port with the same key.
-    let again = Share::new(b.dir.path(), b.m.clone(), free_port(), true).unwrap();
+    let again = (0..10)
+        .map(|_| Share::new(b.dir.path(), b.m.clone(), free_port(), true).unwrap())
+        .find(|share| share.state().listening)
+        .expect("no port opened");
     let state = again.state();
     assert!(state.enabled && state.listening, "{state:?}");
     assert!(state.home.as_ref().unwrap().code.ends_with(&key));
@@ -306,17 +335,17 @@ fn on_survives_a_restart_of_the_app_with_the_same_key() {
 #[test]
 fn a_busy_port_is_told_not_hidden() {
     let b = fixture();
-    let _taken = std::net::TcpListener::bind(("127.0.0.1", b.port)).unwrap();
-    let s = b.share.set_enabled(true).unwrap();
+    let _taken = std::net::TcpListener::bind(("127.0.0.1", b.port())).unwrap();
+    let s = b.share().set_enabled(true).unwrap();
     assert!(s.enabled && !s.listening && s.home.is_none(), "{s:?}");
-    assert!(s.error.unwrap().contains(&b.port.to_string()));
+    assert!(s.error.unwrap().contains(&b.port().to_string()));
 }
 
 #[test]
 fn too_many_open_connections_are_closed_without_an_answer() {
     let b = fixture();
     b.on();
-    let held: Vec<TcpStream> = (0..80).filter_map(|_| TcpStream::connect(("127.0.0.1", b.port)).ok()).collect();
+    let held: Vec<TcpStream> = (0..80).filter_map(|_| TcpStream::connect(("127.0.0.1", b.port())).ok()).collect();
     std::thread::sleep(Duration::from_millis(500));
     let mut refused = 0;
     for mut c in held {
@@ -398,7 +427,7 @@ fn the_right_code_gets_the_models_and_which_one_runs() {
 fn a_wrong_key_or_sharing_turned_off_says_the_code_is_not_valid_or_the_sharing_is_off() {
     let b = fixture();
     let code = b.code();
-    let renewed = b.share.new_key().unwrap();
+    let renewed = b.share().new_key().unwrap();
     let e = remote::verify(&code).unwrap_err();
     assert!(matches!(e, Failure::Rejected), "{e:?}");
     assert_eq!(e.code(), "rejected");
@@ -413,7 +442,7 @@ fn a_wrong_key_or_sharing_turned_off_says_the_code_is_not_valid_or_the_sharing_i
 fn a_pc_that_does_not_answer_is_told_with_what_to_check() {
     let b = fixture();
     let code = b.code();
-    b.share.set_enabled(false).unwrap();
+    b.share().set_enabled(false).unwrap();
     let e = remote::verify(&code).unwrap_err();
     assert!(matches!(e, Failure::Unreachable), "{e:?}");
     let sentence = e.to_string();
@@ -439,12 +468,12 @@ fn whether_the_other_pc_answers_is_watched_while_its_engine_is_in_use() {
     let reachable = Arc::new(AtomicBool::new(false));
     let watching = remote::watch(code, Arc::downgrade(&reachable), Duration::from_millis(50), Duration::from_millis(50));
     until("it answers", &|| reachable.load(Ordering::SeqCst));
-    b.share.new_key().unwrap();
+    b.share().new_key().unwrap();
     std::thread::sleep(Duration::from_millis(300));
     assert!(reachable.load(Ordering::SeqCst), "a refused key is an answer");
-    b.share.set_enabled(false).unwrap();
+    b.share().set_enabled(false).unwrap();
     until("it does not answer", &|| !reachable.load(Ordering::SeqCst));
-    b.share.set_enabled(true).unwrap();
+    b.share().set_enabled(true).unwrap();
     until("it answers again", &|| reachable.load(Ordering::SeqCst));
     drop(reachable);
     let t0 = Instant::now();
@@ -508,7 +537,7 @@ fn a_pc_that_accepts_and_never_answers_is_given_up_after_five_seconds() {
 fn a_pc_with_no_model_ready_and_a_port_with_another_service_are_told_apart() {
     let b = fixture();
     let code = b.code();
-    b.share.set_models(vec![]);
+    b.share().set_models(vec![]);
     let e = remote::verify(&code).unwrap_err();
     assert!(matches!(e, Failure::NoModels), "{e:?}");
     assert!(says(&e.to_string(), "non ha modelli pronti", "has no model ready"), "{e}");

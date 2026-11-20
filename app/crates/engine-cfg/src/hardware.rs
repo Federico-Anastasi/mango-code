@@ -17,9 +17,7 @@ use mango_common::{tr, Build};
 use nvml_wrapper::error::NvmlError;
 use nvml_wrapper::Nvml;
 use serde::Serialize;
-use windows::core::PCWSTR;
 use windows::Win32::Graphics::Dxgi::{CreateDXGIFactory1, IDXGIFactory1, DXGI_ADAPTER_FLAG_SOFTWARE};
-use windows::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
 use windows::Win32::System::SystemInformation::{
     GetLogicalProcessorInformationEx, GlobalMemoryStatusEx, RelationProcessorCore, MEMORYSTATUSEX,
     SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX,
@@ -358,19 +356,6 @@ fn ram_mib() -> Result<u64> {
     // SAFETY: `m` is initialized with its length, as the function requires.
     unsafe { GlobalMemoryStatusEx(&mut m) }.with_context(|| tr!("Non riesco a leggere la memoria del computer.", "I can't read the computer's memory."))?;
     Ok(m.ullTotalPhys / (1 << 20))
-}
-
-/// Free bytes on the disk that holds `dir` (that the user can use), also if the folder isn't there yet.
-pub(crate) fn free_space(dir: &std::path::Path) -> Result<u64> {
-    use std::os::windows::ffi::OsStrExt;
-    let cannot = |e: &dyn std::fmt::Display| user(&tr!("Non riesco a leggere lo spazio libero sul disco.", "I can't read the free space on the disk."), format!("{}: {e}", dir.display()));
-    let full = std::path::absolute(dir).map_err(|e| cannot(&e))?;
-    let existing = full.ancestors().find(|p| p.is_dir()).ok_or_else(|| cannot(&"no folder of the path exists"))?;
-    let wide: Vec<u16> = existing.as_os_str().encode_wide().chain([0]).collect();
-    let mut free = 0u64;
-    // SAFETY: `wide` ends with 0 and `free` is a valid pointer for the call.
-    unsafe { GetDiskFreeSpaceExW(PCWSTR(wide.as_ptr()), Some(&mut free), None, None) }.map_err(|e| cannot(&e))?;
-    Ok(free)
 }
 
 #[cfg(test)]

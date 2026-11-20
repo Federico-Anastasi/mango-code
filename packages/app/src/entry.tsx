@@ -7,8 +7,10 @@ import { loadInitialLocale } from "@/context/language"
 import { type Platform, PlatformProvider } from "@/context/platform"
 import { createBrowserDraftStore } from "@/utils/draft-store"
 import { dict as en } from "@/i18n/en"
-import { authFromToken } from "@/utils/server"
-import { mangoPlatform } from "@/utils/mango-desktop"
+import { authFromToken, defaultServerToUse } from "@/utils/server"
+import { browserOrigin, openUiState, reloadPage } from "@/utils/ui-state"
+import { uiStorage } from "@/utils/ui-storage"
+import { mangoDesktopError, mangoPlatform } from "@/utils/mango-desktop"
 import { followKeyboard } from "@/utils/visible-area"
 import { forgetTerminal } from "@/utils/forget-terminal"
 import pkg from "../package.json"
@@ -19,28 +21,26 @@ const DEFAULT_SERVER_URL_KEY = "opencode.settings.dat:defaultServerUrl"
 const getRootNotFoundError = () => en["error.dev.rootNotFound"]
 
 const getStorage = (key: string) => {
-  if (typeof localStorage === "undefined") return null
   try {
-    return localStorage.getItem(key)
+    return uiStorage.getItem(key)
   } catch {
     return null
   }
 }
 
 const setStorage = (key: string, value: string | null) => {
-  if (typeof localStorage === "undefined") return
   try {
     if (value !== null) {
-      localStorage.setItem(key, value)
+      uiStorage.setItem(key, value)
       return
     }
-    localStorage.removeItem(key)
+    uiStorage.removeItem(key)
   } catch {
     return
   }
 }
 
-const readDefaultServerUrl = () => getStorage(DEFAULT_SERVER_URL_KEY)
+const readDefaultServerUrl = () => defaultServerToUse(getStorage(DEFAULT_SERVER_URL_KEY), !!window.__MANGO_DESKTOP__)
 const writeDefaultServerUrl = (url: string | null) => setStorage(DEFAULT_SERVER_URL_KEY, url)
 
 const notify: Platform["notify"] = async (title, description, onClick) => {
@@ -75,9 +75,7 @@ const openExternal: Platform["openExternal"] = (value) => {
   window.open(url.href, "_blank", "noopener,noreferrer")
 }
 
-const restart: Platform["restart"] = async () => {
-  window.location.reload()
-}
+const restart: Platform["restart"] = () => reloadPage()
 
 const root = document.getElementById("root")
 if (!(root instanceof HTMLElement) && import.meta.env.DEV) {
@@ -104,9 +102,9 @@ const clearAuthToken = () => {
   history.replaceState(null, "", location.pathname + (params.size ? `?${params}` : "") + location.hash)
 }
 
-const platform: Platform = {
+const createPlatform = (draftStore: Platform["draftStore"]): Platform => ({
   platform: "web",
-  draftStore: createBrowserDraftStore(),
+  draftStore,
   version: pkg.version,
   openExternal,
   restart,
@@ -118,7 +116,7 @@ const platform: Platform = {
   setDefaultServer: writeDefaultServerUrl,
   // inside the Mango Code desktop app: native folder picker, new project, clipboard and external links
   ...(window.__MANGO_DESKTOP__ ? mangoPlatform(window.__MANGO_DESKTOP__) : {}),
-}
+})
 
 if (import.meta.env.VITE_SENTRY_DSN) {
   Sentry.init({
@@ -139,15 +137,30 @@ if (import.meta.env.VITE_SENTRY_DSN) {
   })
 }
 
+/** The state the app keeps for the interface cannot be read: the page says so and why, and nothing is drawn over it. */
+function showUiStateError(root: HTMLElement, cause: unknown) {
+  console.error("the interface's state is unreadable", cause)
+  const message = document.createElement("p")
+  message.textContent = mangoDesktopError(cause).message
+  message.style.cssText = "max-width: 36rem; margin: 20vh auto; padding: 0 1rem; line-height: 1.5; user-select: text"
+  root.replaceChildren(message)
+  root.style.cssText = "background: var(--mango-ground); color: var(--mango-text); font-family: var(--mango-font-text)"
+}
+
 if (root instanceof HTMLElement) {
   followKeyboard(root)
-  // Before anything reads the storage: what the removed terminal saved goes (a storage that cannot be read stays as it is).
-  try {
-    forgetTerminal(localStorage)
-  } catch {}
   const auth = authFromToken(new URLSearchParams(location.search).get("auth_token"))
-  void loadInitialLocale({ url: getCurrentUrl(), auth }).then((locale) => {
+  void loadInitialLocale({ url: getCurrentUrl(), auth }).then(async (locale) => {
     clearAuthToken()
+    // Inside the Mango Code window the app keeps the interface's state: it is read before anything draws or reads it.
+    const bridge = window.__MANGO_DESKTOP__?.uiState
+    const state = bridge ? await openUiState(bridge, browserOrigin()).catch((cause: unknown) => showUiStateError(root, cause)) : undefined
+    if (bridge && !state) return
+    // Before anything reads the storage: what the terminal of older releases saved goes (a storage that cannot be read stays as it is).
+    try {
+      forgetTerminal(uiStorage)
+    } catch {}
+    const platform = createPlatform(state?.draftStore ?? createBrowserDraftStore())
     const server: ServerConnection.Http = {
       type: "http",
       authToken: !!auth,

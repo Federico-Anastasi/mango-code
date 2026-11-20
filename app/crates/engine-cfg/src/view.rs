@@ -9,13 +9,13 @@
 use crate::catalog::{load_models, model_cfg, setup_for, ModelCfg, ModelsFile, Origin, Setup};
 use crate::choices::{self, Choices, ChoicesFile, SmallModels, WhereChoice};
 use crate::general::{self, Fit, Located, Placement};
-use crate::hardware::{choose_build, free_space, Gpu, Hardware, Vendor};
+use crate::hardware::{choose_build, Gpu, Hardware, Vendor};
 use crate::profiles::Profile;
 use crate::speed::{cpu_speed, Speed};
 use crate::split::MIN_CTX;
 use anyhow::Result;
 use mango_common::catalog::Sampling;
-use mango_common::{tr, Build, Paths};
+use mango_common::{free_space, tr, Build, Paths};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 
@@ -29,12 +29,15 @@ pub(crate) struct Assessed {
 /// one, otherwise the general plan; what the plan itself would do at start, with the cards in `lent` lent to another job.
 pub(crate) fn assess(paths: &Paths, file: &ModelsFile, key: &str, cfg: &ModelCfg, hw: &Hardware, choices: &ChoicesFile, lent: &[u32]) -> Assessed {
     let scope = choices.scope(key);
-    let setup = setup_for(paths, key, cfg, hw, &scope.choices);
+    let mut setup = setup_for(paths, key, cfg, hw, &scope.choices);
     let mut located = match &setup {
         Err(e) => Located { fit: None, reason: format!("{e:#}") },
         Ok(Setup::General { build }) => general::evaluate(file, cfg, hw, *build, &scope, lent),
         Ok(Setup::Profile(p)) => profile_located(cfg, p, hw, &scope, lent),
     };
+    if let (Ok(setup), Some(Fit { placement: Placement::Cpu, .. })) = (&mut setup, &located.fit) {
+        setup.on_processor();
+    }
     // The reason is shown to the user: the detail of an error is for the log.
     located.reason = mango_common::without_detail(&located.reason);
     Assessed { setup, located }
@@ -187,7 +190,7 @@ pub struct Limits {
     /// and with Vulkan and a card that can't be left out only the processor is left.
     #[serde(rename = "where")]
     pub places: Vec<WhereChoice>,
-    /// The contexts offered with the current choice of where: 32k, 64k, 128k... up to the largest that fits, which is
+    /// The contexts offered with the current choice of where: 32K, 64K, 128K... up to the largest that fits, which is
     /// the last one. Empty if the model doesn't fit.
     pub context: Vec<u32>,
     /// The model can think before it answers: the switch makes sense.
@@ -207,6 +210,9 @@ pub struct ModelView {
     /// Its files that Mango Code never downloaded (a GGUF the user chose on the computer), where they are: «Togli» takes
     /// the model off the list and leaves them. Empty for a model whose files Mango Code downloads.
     pub own_files: Vec<String>,
+    /// The folder where Mango Code's own files of the model are when the user put them outside the models folder
+    /// (`mango_common::model_files`); `None` when they are in the models folder.
+    pub placed_in: Option<String>,
     /// Weights, image encoder and engine are on disk: it can be used.
     pub present: bool,
     /// Its files are on the disk and it waits for the new version of its engine, whose old version is on the disk: the
@@ -215,6 +221,7 @@ pub struct ModelView {
     /// What a download brings here: its files for its engine that are not on the disk yet, and the engine if it is
     /// missing. For a model that is there, or that waits for its engine, what its files weigh.
     pub bytes: u64,
+    /// The values a request to the model gets: the model's own, with the style and the values the user chose.
     pub sampling: Option<Sampling>,
     pub verdict: Verdict,
     /// The one to propose to whoever has no model yet (`mark_recommended`).
@@ -249,13 +256,13 @@ pub fn models_view(paths: &Paths, hw: &Hardware) -> Result<Vec<ModelView>> {
         let places = if r.cfg.requires_engine.is_some() { vec![WhereChoice::Auto] } else { general::places(hw, build, &scope) };
         let (present, waits_engine, bytes) = match &r.assessed.setup {
             Ok(setup) => {
-                use mango_common::download::{engine_size, installed_engine, older_engine};
+                use mango_common::download::{engine_size, installed_engine};
                 let weights = r.cfg.weights_on_disk(paths, setup.engine());
                 // An engine catalog that cannot be read counts nothing here: the download itself says why it can't start.
                 let engine = engine_size(paths, setup.engine(), setup.build()).unwrap_or(0);
                 let installed = installed_engine(paths, setup.engine(), setup.build()).is_some();
                 let present = weights && installed;
-                let waits = weights && !installed && older_engine(paths, setup.engine(), setup.build());
+                let waits = weights && !installed && setup.arrives(paths);
                 let bytes = if present || waits { r.recommendation.bytes } else { engine + if weights { 0 } else { r.recommendation.bytes } };
                 (present, waits, bytes)
             }
@@ -271,15 +278,21 @@ pub fn models_view(paths: &Paths, hw: &Hardware) -> Result<Vec<ModelView>> {
             own_files: r
                 .cfg
                 .files_for(r.cfg.engine_with(&r.assessed.setup))
-                .filter_map(|f| mango_common::download::users_file(paths, &f.path, &f.sha256))
+                .filter_map(|f| mango_common::download::users_file(paths, &f.path, &f.sha256, f.relocated))
                 .map(|p| p.display().to_string())
                 .collect(),
+            placed_in: r
+                .cfg
+                .files_for(r.cfg.engine_with(&r.assessed.setup))
+                .find(|f| f.relocated)
+                .and_then(|f| Path::new(&f.path).parent())
+                .map(|p| p.display().to_string()),
             present,
             waits_engine,
             bytes,
             recommended: false,
             on_request: r.recommendation.on_request,
-            sampling: r.cfg.sampling,
+            sampling: Some(choices::effective_sampling(r.cfg.sampling, &scope.choices)).filter(|s| *s != Sampling::default()),
             verdict: Verdict {
                 fits: fit.is_some(),
                 place: fit.map(|f| Where { placement: f.placement, gpus: f.gpus.iter().map(|g| g.name.clone()).collect(), context: f.ctx }),
@@ -434,7 +447,7 @@ pub(crate) fn mark_recommended(views: &mut [ModelView], fallback: &[bool]) {
     }
 }
 
-/// 32k, 64k, 128k... below `largest`, and `largest` as the last.
+/// 32K, 64K, 128K... below `largest`, and `largest` as the last.
 fn offered_contexts(largest: u32) -> Vec<u32> {
     let mut v: Vec<u32> = std::iter::successors(Some(MIN_CTX), |c| c.checked_mul(2)).take_while(|&c| c < largest).collect();
     v.push(largest);
@@ -585,7 +598,7 @@ fn disk_view(models: &Path) -> Result<DiskView> {
     Ok(DiskView { path: models.to_path_buf(), used_bytes, free_bytes: free_space(models)? })
 }
 
-/// Bytes of the files under `dir`; a folder that isn't there holds nothing.
+/// Bytes of the files under `dir`, links (junctions, symbolic links) not followed; a folder that isn't there holds nothing.
 fn folder_size(dir: &Path) -> std::io::Result<u64> {
     let entries = match std::fs::read_dir(dir) {
         Ok(e) => e,
@@ -596,6 +609,7 @@ fn folder_size(dir: &Path) -> std::io::Result<u64> {
     for entry in entries {
         let entry = entry?;
         total += match entry.metadata() {
+            Ok(m) if mango_common::models_dir::is_link(&m) => 0,
             Ok(m) if m.is_dir() => folder_size(&entry.path())?,
             Ok(m) => m.len(),
             // A file that goes away while we count (a download that ends) is not there.
@@ -604,4 +618,29 @@ fn folder_size(dir: &Path) -> std::io::Result<u64> {
         };
     }
     Ok(total)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::windows::process::CommandExt;
+
+    /// A junction in the models folder (a model kept on another disk, or the folder of another program) is not counted:
+    /// its target is not the models folder's, and a link back into the folder would never end.
+    #[test]
+    fn the_size_of_the_models_folder_does_not_follow_junctions() {
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("elsewhere.gguf"), vec![0u8; 5000]).unwrap();
+        let models = tempfile::tempdir().unwrap();
+        std::fs::create_dir(models.path().join("owner")).unwrap();
+        std::fs::write(models.path().join("owner").join("a.gguf"), vec![0u8; 300]).unwrap();
+        std::fs::write(models.path().join("b.gguf"), vec![0u8; 20]).unwrap();
+        for (link, target) in [(models.path().join("linked"), outside.path()), (models.path().join("owner").join("back"), models.path())] {
+            let made = std::process::Command::new("cmd").arg("/C").arg("mklink").arg("/J").arg(link).arg(target).creation_flags(mango_common::CREATE_NO_WINDOW).output().unwrap();
+            assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
+        }
+
+        assert_eq!(folder_size(models.path()).unwrap(), 320);
+        assert_eq!(folder_size(&models.path().join("missing")).unwrap(), 0);
+    }
 }

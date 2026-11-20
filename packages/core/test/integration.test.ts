@@ -54,7 +54,7 @@ describe("Integration", () => {
     Effect.gen(function* () {
       const integrations = yield* Integration.Service
       const integrationID = Integration.ID.make("openai")
-      const methodID = Integration.MethodID.make("chatgpt")
+      const methodID = Integration.MethodID.make("login")
       const first = yield* Scope.fork(yield* Scope.Scope)
       const second = yield* Scope.fork(yield* Scope.Scope)
       const authorize = () =>
@@ -69,7 +69,7 @@ describe("Integration", () => {
         .transform((editor) =>
           editor.method.update({
             integrationID,
-            method: { id: methodID, type: "oauth", label: "ChatGPT" },
+            method: { id: methodID, type: "oauth", label: "Login" },
             authorize,
           }),
         )
@@ -79,21 +79,21 @@ describe("Integration", () => {
           expect(editor.get(integrationID)).toEqual({ id: integrationID, name: "openai" })
           expect(editor.list()).toEqual([{ id: integrationID, name: "openai" }])
           expect(editor.method.list(integrationID)).toEqual([
-            expect.objectContaining({ id: methodID, label: "ChatGPT" }),
+            expect.objectContaining({ id: methodID, label: "Login" }),
           ])
           editor.method.update({
             integrationID,
-            method: { id: methodID, type: "oauth", label: "ChatGPT Override" },
+            method: { id: methodID, type: "oauth", label: "Login Override" },
             authorize,
           })
         })
         .pipe(Scope.provide(second))
 
       expect((yield* integrations.get(integrationID))?.name).toBe("openai")
-      expect((yield* integrations.get(integrationID))?.methods[0]).toMatchObject({ label: "ChatGPT Override" })
+      expect((yield* integrations.get(integrationID))?.methods[0]).toMatchObject({ label: "Login Override" })
 
       yield* Scope.close(second, Exit.void)
-      expect((yield* integrations.get(integrationID))?.methods[0]).toMatchObject({ label: "ChatGPT" })
+      expect((yield* integrations.get(integrationID))?.methods[0]).toMatchObject({ label: "Login" })
       expect((yield* integrations.get(integrationID))?.methods).toEqual([expect.objectContaining({ id: methodID })])
     }),
   )
@@ -137,11 +137,11 @@ describe("Integration", () => {
       const integrations = yield* Integration.Service
       const credentials = yield* Credential.Service
       const integrationID = Integration.ID.make("openai")
-      const methodID = Integration.MethodID.make("chatgpt")
+      const methodID = Integration.MethodID.make("login")
       yield* integrations.transform((editor) =>
         editor.method.update({
           integrationID,
-          method: { id: methodID, type: "oauth", label: "ChatGPT" },
+          method: { id: methodID, type: "oauth", label: "Login" },
           authorize: () =>
             Effect.succeed({
               mode: "code" as const,
@@ -193,12 +193,12 @@ describe("Integration", () => {
       const integrations = yield* Integration.Service
       const credentials = yield* Credential.Service
       const integrationID = Integration.ID.make("openai")
-      const methodID = Integration.MethodID.make("chatgpt")
+      const methodID = Integration.MethodID.make("login")
       let closed = false
       yield* integrations.transform((editor) =>
         editor.method.update({
           integrationID,
-          method: { id: methodID, type: "oauth", label: "ChatGPT" },
+          method: { id: methodID, type: "oauth", label: "Login" },
           authorize: () =>
             Effect.addFinalizer(() => Effect.sync(() => (closed = true))).pipe(
               Effect.as({

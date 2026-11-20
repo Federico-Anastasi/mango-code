@@ -5,7 +5,7 @@ import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { SessionProjector } from "@opencode-ai/core/session/projector"
 import { eq } from "drizzle-orm"
 import { EventV2Bridge } from "@/event-v2-bridge"
-import { expect } from "bun:test"
+import { expect, setSystemTime } from "bun:test"
 import { Cause, Deferred, Duration, Effect, Exit, Fiber, Layer } from "effect"
 import fs from "fs"
 import path from "path"
@@ -51,7 +51,7 @@ import { Truncate } from "@/tool/truncate"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
 import { Ripgrep } from "@opencode-ai/core/ripgrep"
 import { Format } from "../../src/format"
-import { TestInstance } from "../fixture/fixture"
+import { provideInstance, TestInstance, testInstanceStoreLayer, tmpdirScoped } from "../fixture/fixture"
 import { awaitWithTimeout, pollWithTimeout, testEffect } from "../lib/effect"
 import { reply, TestLLMServer } from "../lib/llm-server"
 import { RuntimeFlags } from "@/effect/runtime-flags"
@@ -904,6 +904,108 @@ it.instance("loop gives up on a model that answers with blank lines every time",
   }),
 )
 
+it.instance("loop takes up an answer cut for its length once, telling the model, and then lets it stop", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useServerConfig(providerCfg)
+    const prompt = yield* SessionPrompt.Service
+    const sessions = yield* Session.Service
+    const session = yield* sessions.create({
+      title: "Pinned",
+      permission: [{ permission: "*", pattern: "*", action: "allow" }],
+    })
+    yield* prompt.prompt({
+      sessionID: session.id,
+      agent: "build",
+      noReply: true,
+      parts: [{ type: "text", text: "hello" }],
+      system: "Be brief.",
+      tools: { webfetch: false },
+    })
+    yield* llm.push(reply().reason("a long thought").length())
+    yield* llm.text("checked")
+
+    const result = yield* prompt.loop({ sessionID: session.id })
+    expect(yield* llm.calls).toBe(2)
+    expect(JSON.stringify((yield* llm.inputs).at(-1)?.messages)).toContain("Your answer was cut")
+    expect(result.parts.some((part) => part.type === "text" && part.text === "checked")).toBe(true)
+    const messages = yield* MessageV2.stream(session.id)
+    const wake = messages.find(
+      (message) =>
+        message.info.role === "user" &&
+        message.parts.some((part) => part.type === "text" && part.text.startsWith("Your answer was cut")),
+    )
+    expect(wake?.parts.some((part) => part.type === "text" && part.synthetic && part.metadata?.resume === "length")).toBe(true)
+    // the step it asks for runs with what the user asked for the turn
+    expect(wake?.info).toMatchObject({ system: "Be brief.", tools: { webfetch: false } })
+    const finishes = messages.flatMap((message) => (message.info.role === "assistant" ? [message.info.finish] : []))
+    expect(finishes.toSorted()).toEqual(["length", "stop"])
+  }),
+)
+
+it.instance("loop takes up a cut answer only once: a second cut ends the turn", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useServerConfig(providerCfg)
+    const prompt = yield* SessionPrompt.Service
+    const sessions = yield* Session.Service
+    const session = yield* sessions.create({
+      title: "Pinned",
+      permission: [{ permission: "*", pattern: "*", action: "allow" }],
+    })
+    yield* prompt.prompt({
+      sessionID: session.id,
+      agent: "build",
+      noReply: true,
+      parts: [{ type: "text", text: "hello" }],
+    })
+    for (const _ of [1, 2, 3]) yield* llm.push(reply().reason("a long thought").length())
+
+    const result = yield* prompt.loop({ sessionID: session.id })
+    expect(yield* llm.calls).toBe(2)
+    expect(yield* llm.pending).toBe(1)
+    if (result.info.role === "assistant") expect(result.info.finish).toBe("length")
+  }),
+)
+
+it.instance("the working folder and the date come last in the system prompt: two projects and two days share all the rest", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useServerConfig(providerCfg)
+    const other = yield* tmpdirScoped()
+    yield* writeConfig(other, providerCfg(llm.url))
+    // what the model receives: the system messages of the request the fake endpoint got
+    const ask = Effect.gen(function* () {
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const session = yield* sessions.create({ title: "Pinned", permission: [{ permission: "*", pattern: "*", action: "allow" }] })
+      yield* prompt.prompt({ sessionID: session.id, agent: "build", noReply: true, parts: [{ type: "text", text: "hello" }] })
+      yield* llm.text("ok")
+      yield* prompt.loop({ sessionID: session.id })
+      const messages = (yield* llm.inputs).at(-1)?.messages
+      if (!Array.isArray(messages)) throw new Error("expected LLM messages")
+      return messages.filter((message) => message.role === "system").map((message) => String(message.content)).join("\n")
+    })
+    const shared = (a: string, b: string) => [...a].findIndex((char, index) => char !== b[index])
+
+    setSystemTime(new Date("2026-03-04T10:00:00Z"))
+    const first = yield* ask
+    setSystemTime(new Date("2026-11-19T10:00:00Z"))
+    const nextDay = yield* ask
+    const otherProject = yield* ask.pipe(provideInstance(other), Effect.provide(testInstanceStoreLayer))
+    setSystemTime()
+
+    const block = first.indexOf("You are powered by the model named")
+    expect(block).toBeGreaterThan(0)
+    // the block says where the model works and what day it is, and it is the end of the prompt
+    expect(first.slice(block)).toContain("  Working directory: ")
+    expect(first.endsWith("</env>")).toBe(true)
+    expect(first.length - block).toBeLessThan(1_000)
+    // so what two projects and two days share is all that comes before it
+    expect(shared(first, nextDay)).toBeGreaterThanOrEqual(block)
+    expect(shared(nextDay, otherProject)).toBeGreaterThanOrEqual(block)
+    expect(first.slice(0, block)).toBe(otherProject.slice(0, block))
+  }),
+  60_000,
+)
+
 it.instance("loop continues when finish is unknown", () =>
   Effect.gen(function* () {
     const { llm } = yield* useServerConfig(providerCfg)
@@ -1095,6 +1197,7 @@ noLLMServer.instance("prompt tools replace previous prompt tool rules", () =>
     expect(reloaded.permission).toEqual([{ permission: "read", pattern: "*", action: "allow" }])
     expect(Permission.evaluate("bash", "anything", reloaded.permission ?? []).action).toBe("ask")
   }),
+  { config: cfg },
 )
 
 it.instance(

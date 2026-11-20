@@ -7,7 +7,8 @@
 //! * `POST /v1/chat/completions` → without a script it answers «I am the engine <name of the -m file>»;
 //!   with `FAKE_ENGINE_SCRIPT` (JSON file: a list of steps) it answers step number N, where N is the number of tool
 //!   results already in the conversation. A step is `{"text": "..."}` (said in pieces, one word per piece) or
-//!   `{"tool": "<name>", "arguments": {...}}` (a tool call). When streaming (`"stream": true`) one piece every
+//!   `{"tool": "<name>", "arguments": {...}}` (a tool call); a text step may end with `"finish": "length"` (an answer
+//!   cut by the length limit) instead of `stop`. When streaming (`"stream": true`) one piece every
 //!   `FAKE_ENGINE_CHUNK_MS` (default 30). Like the real engine, every reply carries `usage`: the tokens read
 //!   (`prompt_tokens`, of which `prompt_tokens_details.cached_tokens` already cached) and written
 //!   (`completion_tokens`, of which `reasoning_tokens` of reasoning); a step sets them with `"token": {"prompt": N,
@@ -16,26 +17,35 @@
 //!   (the conversation summary, the title), `{"if": "...", "text": "..."}` those in which that text appears (usually
 //!   the summary, after it has entered the conversation);
 //! * `POST /test/crash` → the process exits with code 3 (an engine crash);
-//! * `POST /tokenize` `{"content": "..."}` → `{"tokens": [...]}` with one token per word (separated by spaces): the
-//!   fixed rule used to test token-based measurements;
+//! * `POST /tokenize` `{"content": "..."}` → `{"tokens": [...]}` with one token per word (separated by spaces), its
+//!   number a hash of the word: the fixed rule used to test token-based measurements;
 //! * `POST /detokenize` `{"tokens": [...]}` → `{"content": "..."}`: one word per token;
 //! * every `/v1/chat/completions` reply also carries `timings`, like the real engine: `prompt_n` = the words of the
 //!   messages, `prompt_per_second` 1000, `predicted_n` = `max_tokens`, `predicted_per_second` =
 //!   `FAKE_ENGINE_DECODE_TOK_S` (default 10): changing the variable between two starts pretends a faster or slower
 //!   tune (the `mango-tune` tests);
-//! * on-disk memory like the real one, in small (`--cache-disk <folder>`): every completion adds 100 tokens to the
-//!   slot's memory; `POST /slots/0?action=persist` writes it to `<folder>/fake.json` (`saved` false if it hasn't
-//!   changed), at start it's reloaded; `GET /slots` → `[{"id": 0, "n_cache_tokens": N}]`.
+//! * the slot's memory is a list of tokens, like the real engine's (one token per word; the chat template is a fixed
+//!   one, see `render`): a request reads the tokens its prompt has beyond those the slot already holds and then adds
+//!   the tokens it writes. With `FAKE_ENGINE_HYBRID=1` the model is a hybrid one: a slot that holds more than the common
+//!   start of the new prompt cannot be cut back, and the whole prompt is read again. What each request read goes, as a
+//!   JSON line `{route, reread, prompt_tokens}`, in `<FAKE_ENGINE_LOG>.reads`; `FAKE_ENGINE_READ_MS` makes every token
+//!   read last that many milliseconds (a slow processor).
+//! * `POST /apply-template` → `{"prompt": ...}`: the messages and tools of a chat request as text, and `POST /completion`
+//!   with `prompt` (tokens or text) and `n_predict: 0` reads the prompt into the slot and writes nothing.
+//! * on-disk memory like the real one, in small (`--cache-disk <folder>`): `POST /slots/0?action=persist` writes the
+//!   slot's size to `<folder>/fake.json` (`saved` false if it hasn't changed), at start it's reloaded;
+//!   `GET /slots` → `[{"id": 0, "n_cache_tokens": N}]`.
 //!
 //! * like official llama.cpp, `POST /slots/0?action=save` and `?action=restore` with `{"filename": "x.bin"}` write
-//!   and reread the slot's memory in `<--slot-save-path>/x.bin` (`n_saved`, `n_written`, `n_restored`); a file that
-//!   isn't there gives 400.
+//!   and reread the slot's tokens in `<--slot-save-path>/x.bin` (`n_saved`, `n_written`, `n_restored`); a file that
+//!   isn't there or isn't one of its own gives 400.
 //!
 //! `FAKE_ENGINE_SAVE_MS` makes the save (`persist`, `save`) last that long before writing the file.
 //!
 //! Like ik_llama.cpp at start it creates `llama.log` in its working folder.
 //!
-//! Every request is appended to `FAKE_ENGINE_LOG` (if set) as a JSON line `{model, method, route, body, headers}`.
+//! Every request is appended to `FAKE_ENGINE_LOG` (if set) as a JSON line `{model, model_path, method, route, body, headers}`
+//! (`model_path` is the `-m` it was started with).
 
 use serde_json::{json, Value};
 use std::io::Write;
@@ -64,7 +74,8 @@ fn main() {
         .ok()
         .map(|f| serde_json::from_str(&std::fs::read_to_string(&f).expect("script")).expect("script JSON"));
     let _ = std::fs::write("llama.log", "");
-    // (tokens in the slot, tokens already on disk)
+    let hybrid = std::env::var("FAKE_ENGINE_HYBRID").is_ok_and(|v| v == "1");
+    let read_ms: f64 = std::env::var("FAKE_ENGINE_READ_MS").ok().and_then(|v| v.parse().ok()).unwrap_or(0.0);
     let memory_file = value("--cache-disk").map(|d| std::path::Path::new(&d).join("fake.json"));
     let slot_save_path = value("--slot-save-path").map(std::path::PathBuf::from);
     let on_disk: u64 = memory_file
@@ -73,7 +84,7 @@ fn main() {
         .and_then(|t| serde_json::from_str::<Value>(&t).ok())
         .and_then(|v| v["token"].as_u64())
         .unwrap_or(0);
-    let memory = Arc::new(Mutex::new((on_disk, on_disk)));
+    let memory = Arc::new(Mutex::new(Slot { tokens: vec![0; on_disk as usize], saved: on_disk as usize }));
     let t0 = Instant::now();
     let server = Server::http(("127.0.0.1", port)).expect("port");
 
@@ -88,7 +99,7 @@ fn main() {
             if let Some(f) = &log {
                 let headers: serde_json::Map<String, Value> =
                     req.headers().iter().map(|h| (h.field.as_str().as_str().to_ascii_lowercase(), json!(h.value.as_str()))).collect();
-                let line = json!({ "model": name, "method": req.method().as_str(), "route": req.url(), "body": v, "headers": headers });
+                let line = json!({ "model": name, "model_path": model, "method": req.method().as_str(), "route": req.url(), "body": v, "headers": headers });
                 write_line(f, &line);
             }
             let json_h = Header::from_bytes("Content-Type", "application/json").unwrap();
@@ -105,15 +116,34 @@ fn main() {
                 }
                 (Method::Post, "/test/crash") => std::process::exit(3),
                 (Method::Post, "/tokenize") => {
-                    let words = v["content"].as_str().unwrap_or("").split_whitespace().count();
-                    let _ = req.respond(Response::from_string(json!({ "tokens": vec![0; words] }).to_string()).with_header(json_h));
+                    let tokens = tokenize(v["content"].as_str().unwrap_or(""));
+                    let _ = req.respond(Response::from_string(json!({ "tokens": tokens }).to_string()).with_header(json_h));
+                }
+                (Method::Post, "/apply-template") => {
+                    let r = match v["messages"].as_array() {
+                        Some(_) => Response::from_string(json!({ "prompt": render(&v, true) }).to_string()).with_header(json_h),
+                        None => Response::from_string(r#"{"error":{"message":"messages is required"}}"#).with_status_code(400).with_header(json_h),
+                    };
+                    let _ = req.respond(r);
+                }
+                (Method::Post, "/completion") => {
+                    let tokens: Vec<u64> = match &v["prompt"] {
+                        Value::Array(a) => a.iter().filter_map(Value::as_u64).collect(),
+                        Value::String(t) => tokenize(t),
+                        _ => Vec::new(),
+                    };
+                    let reread = read_prompt(&mut memory.lock().unwrap(), &tokens, hybrid);
+                    std::thread::sleep(Duration::from_secs_f64(reread as f64 * read_ms / 1000.0));
+                    note_read(&log, "/completion", reread, tokens.len());
+                    let r = json!({ "content": "", "tokens_evaluated": tokens.len(), "timings": { "prompt_n": reread, "cache_n": tokens.len() - reread.min(tokens.len()) } });
+                    let _ = req.respond(Response::from_string(r.to_string()).with_header(json_h));
                 }
                 (Method::Post, "/detokenize") => {
                     let words = vec!["word"; v["tokens"].as_array().map_or(0, Vec::len)].join(" ");
                     let _ = req.respond(Response::from_string(json!({ "content": words }).to_string()).with_header(json_h));
                 }
                 (Method::Get, "/slots") => {
-                    let n = memory.lock().unwrap().0;
+                    let n = memory.lock().unwrap().tokens.len();
                     let _ = req.respond(Response::from_string(json!([{ "id": 0, "n_cache_tokens": n }]).to_string()).with_header(json_h));
                 }
                 (Method::Post, "/slots/0") if req.url().contains("action=save") || req.url().contains("action=restore") => {
@@ -127,11 +157,16 @@ fn main() {
                     let mut m = memory.lock().unwrap();
                     let r = if req.url().contains("action=save") {
                         std::thread::sleep(save);
-                        let _ = std::fs::write(&file, json!({ "token": m.0 }).to_string());
-                        Some(json!({ "id_slot": 0, "filename": v["filename"], "n_saved": m.0, "n_written": m.0 * 10 }))
+                        let _ = std::fs::write(&file, json!({ "tokens": m.tokens }).to_string());
+                        Some(json!({ "id_slot": 0, "filename": v["filename"], "n_saved": m.tokens.len(), "n_written": m.tokens.len() * 10 }))
                     } else {
-                        std::fs::read_to_string(&file).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok()).and_then(|j| j["token"].as_u64()).map(|n| {
-                            *m = (n, n);
+                        let tokens = std::fs::read_to_string(&file)
+                            .ok()
+                            .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+                            .and_then(|j| j["tokens"].as_array().map(|a| a.iter().filter_map(Value::as_u64).collect::<Vec<u64>>()));
+                        tokens.map(|tokens| {
+                            let n = tokens.len();
+                            *m = Slot { saved: n, tokens };
                             json!({ "id_slot": 0, "filename": v["filename"], "n_restored": n, "n_read": n * 10 })
                         })
                     };
@@ -144,18 +179,22 @@ fn main() {
                     // A slow save: the file appears at the end, like on a busy disk.
                     std::thread::sleep(save);
                     let mut m = memory.lock().unwrap();
-                    let written = m.0 != m.1;
+                    let n = m.tokens.len();
+                    let written = n != m.saved;
                     if let (true, Some(f)) = (written, &memory_file) {
                         let _ = std::fs::create_dir_all(f.parent().unwrap());
-                        let _ = std::fs::write(f, json!({ "token": m.0 }).to_string());
+                        let _ = std::fs::write(f, json!({ "token": n }).to_string());
                     }
-                    m.1 = m.0;
-                    let r = json!({ "id_slot": 0, "saved": written, "n_saved": if written { m.0 } else { 0 }, "n_cache_tokens": m.0,
-                                    "n_written": if written { m.0 * 10 } else { 0 }, "timings": { "save_ms": 1.0 } });
+                    m.saved = n;
+                    let r = json!({ "id_slot": 0, "saved": written, "n_saved": if written { n } else { 0 }, "n_cache_tokens": n,
+                                    "n_written": if written { n * 10 } else { 0 }, "timings": { "save_ms": 1.0 } });
                     let _ = req.respond(Response::from_string(r.to_string()).with_header(json_h));
                 }
                 (Method::Post, "/v1/chat/completions") => {
-                    memory.lock().unwrap().0 += 100;
+                    let prompt = tokenize(&render(&v, true));
+                    let reread = read_prompt(&mut memory.lock().unwrap(), &prompt, hybrid);
+                    std::thread::sleep(Duration::from_secs_f64(reread as f64 * read_ms / 1000.0));
+                    note_read(&log, "/v1/chat/completions", reread, prompt.len());
                     let step = match &script {
                         None => json!({ "text": format!("I am the engine {name}") }),
                         Some(c) => {
@@ -181,6 +220,8 @@ fn main() {
                             }
                         }
                     };
+                    let written = tokenize(&format!("{} {END}", step["text"].as_str().map_or_else(|| step["tool"].to_string(), str::to_string)));
+                    memory.lock().unwrap().tokens.extend(written);
                     let usage = usage(&step);
                     let mut events = events(&step);
                     // Like llama-server: the counts after the last piece, in a block without choices.
@@ -217,6 +258,71 @@ fn main() {
     }
 }
 
+/// The tokens in the slot, and how many of them are in the on-disk memory file.
+struct Slot {
+    tokens: Vec<u64>,
+    saved: usize,
+}
+
+const END: &str = "<|end|>";
+
+/// One token per word, its number a hash of the word (never 0).
+fn tokenize(text: &str) -> Vec<u64> {
+    text.split_whitespace().map(|w| w.bytes().fold(0xcbf29ce484222325u64, |h, b| (h ^ u64::from(b)).wrapping_mul(0x100000001b3)) | 1).collect()
+}
+
+/// The text of a message's content, whether it is a string or a list of parts.
+fn text_of(content: &Value) -> String {
+    match content {
+        Value::String(t) => t.clone(),
+        Value::Array(parts) => parts.iter().filter_map(|p| p["text"].as_str()).collect::<Vec<_>>().join(" "),
+        _ => String::new(),
+    }
+}
+
+/// The chat template of the fake engine: `<|role|> content <|end|>` for every message, the tools right after the system
+/// message's text (where Qwen's template puts them) and, with `generation`, the opening of the answer.
+fn render(request: &Value, generation: bool) -> String {
+    let tools = request["tools"].as_array().filter(|t| !t.is_empty()).map(|t| Value::Array(t.clone()).to_string());
+    let mut out = String::new();
+    let mut tools_done = tools.is_none();
+    for m in request["messages"].as_array().into_iter().flatten() {
+        let role = m["role"].as_str().unwrap_or("user");
+        let mut text = text_of(&m["content"]);
+        if text.is_empty() && m["tool_calls"].is_array() {
+            text = m["tool_calls"].to_string();
+        }
+        out.push_str(&format!("<|{role}|> {text}"));
+        if role == "system" && !tools_done {
+            out.push_str(&format!(" <|tools|> {}", tools.as_deref().unwrap_or("")));
+            tools_done = true;
+        }
+        out.push_str(&format!(" {END} "));
+    }
+    if generation {
+        out.push_str("<|assistant|>");
+    }
+    out
+}
+
+/// What the slot does with a new prompt: it keeps the start the two have in common and reads the rest (at least the last
+/// token); a hybrid model that holds more than that start reads all of it. Returns the tokens read. The slot ends
+/// holding the prompt.
+fn read_prompt(slot: &mut Slot, prompt: &[u64], hybrid: bool) -> usize {
+    let common = slot.tokens.iter().zip(prompt).take_while(|(a, b)| a == b).count();
+    let kept = if hybrid && common < slot.tokens.len() { 0 } else { common.min(prompt.len().saturating_sub(1)) };
+    let reread = prompt.len() - kept;
+    slot.tokens = prompt.to_vec();
+    reread
+}
+
+/// What a request read, for the tests: a line of `<FAKE_ENGINE_LOG>.reads`.
+fn note_read(log: &Option<String>, route: &str, reread: usize, prompt: usize) {
+    if let Some(f) = log {
+        write_line(&format!("{f}.reads"), &json!({ "route": route, "reread": reread, "prompt_tokens": prompt }));
+    }
+}
+
 /// A line in the log, written with a single call: requests arrive together (a conversation and the token
 /// measurements) and lines written in pieces would get mixed up.
 fn write_line(file: &str, line: &Value) {
@@ -237,7 +343,7 @@ fn events(step: &Value) -> Vec<Value> {
     }
     let text = step["text"].as_str().unwrap_or("");
     let mut v: Vec<Value> = text.split_inclusive(' ').map(|p| delta(json!({ "content": p }), None)).collect();
-    v.push(delta(json!({}), Some("stop")));
+    v.push(delta(json!({}), Some(step["finish"].as_str().unwrap_or("stop"))));
     v
 }
 
@@ -261,6 +367,6 @@ fn whole_reply(step: &Value, usage: Value) -> Value {
         Some(name) => json!({ "role": "assistant", "content": null, "tool_calls": [{ "id": "call_fake", "type": "function", "function": { "name": name, "arguments": step["arguments"].to_string() } }] }),
         None => json!({ "role": "assistant", "content": step["text"] }),
     };
-    let finish = if step["tool"].is_string() { "tool_calls" } else { "stop" };
+    let finish = if step["tool"].is_string() { "tool_calls" } else { step["finish"].as_str().unwrap_or("stop") };
     json!({ "choices": [{ "index": 0, "message": message, "finish_reason": finish }], "usage": usage })
 }

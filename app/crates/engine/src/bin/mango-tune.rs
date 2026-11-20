@@ -324,6 +324,7 @@ fn measure_tune(p: &mut Trial, points: &[String], point_tokens: &[usize], repeat
             images: false,
             gpus_used: Vec::<Gpu>::new(),
             gguf: PathBuf::from(&a.model),
+            slots: None,
         })
     });
     let m = EngineManager::new(planner, Box::new(engine_cfg::gpu_memory), &logs);

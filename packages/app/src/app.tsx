@@ -63,6 +63,7 @@ import LegacyLayout from "@/pages/layout"
 import NewLayout from "@/pages/layout-new"
 import { ErrorPage } from "./pages/error"
 import { useCheckServerHealth } from "./utils/server-health"
+import { uiStorage } from "./utils/ui-storage"
 import { legacySessionHref, legacySessionServer, requireServerKey, sessionHref } from "./utils/session-route"
 import { createSessionLineage } from "@/pages/session/session-lineage"
 
@@ -403,6 +404,7 @@ export function AppBaseProviders(
     <MetaProvider>
       <Font />
       <ThemeProvider
+        storage={uiStorage}
         onThemeApplied={(mode, scheme) => {
           void window.api?.setTitlebar?.({ mode, scheme })
         }}

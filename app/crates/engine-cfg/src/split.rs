@@ -37,7 +37,7 @@ const PREFILL_MAIN_MIB: u64 = 527;
 /// Compute buffer of the MTP layer's context, which has its own cache and graph (batches of 128 tokens; engine log:
 /// 49.5 MiB).
 const MTP_COMPUTE_MIB: u64 = 50;
-/// Below this context the agent isn't usable: the system prompt alone weighs ~18 600 tokens.
+/// Below this context the agent isn't usable: the system prompt alone weighs ~14 300 tokens.
 pub const MIN_CTX: u32 = 32_768;
 const CTX_STEP: u32 = 4096;
 /// The engine's trellis kernels start at sm_61 (Pascal): below that they don't run.
@@ -198,9 +198,9 @@ fn gib(bytes: u64) -> f64 {
     bytes as f64 / (MIB * 1024) as f64
 }
 
-/// A context as the settings write it: «128k».
+/// A context as the settings write it: «128K».
 pub(crate) fn context_label(tokens: u32) -> String {
-    format!("{}k", (tokens + 512) / 1024)
+    format!("{}K", (tokens + 512) / 1024)
 }
 
 fn list(gpus: &[Gpu]) -> String {
@@ -382,7 +382,7 @@ mod tests {
         let g = [gpu(0, "RTX 3060 Ti", 8192, (8, 6))];
         let e = partition(&g, &qwen38_27b(), 122_880, false, 0).unwrap_err().to_string();
         assert!(e.contains(&tr!("non basta", "is not enough")) && e.contains("RTX 3060 Ti"), "{e}");
-        assert!(e.contains(&tr!("contesto minimo di 32k token", "minimum context of 32k tokens")), "{e}");
+        assert!(e.contains(&tr!("contesto minimo di 32K token", "minimum context of 32K tokens")), "{e}");
     }
 
     #[test]

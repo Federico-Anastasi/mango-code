@@ -5,7 +5,8 @@
 //! engines holding the VRAM. A process started with CREATE_BREAKAWAY_FROM_JOB leaves it (the job allows it): the
 //! installer of an update (`updater.rs`), which must outlive the app it replaces, and the programs the app opens for
 //! the user (`open_outside_job`).
-//! The Job does not hold what the Store's PowerShell 7 starts: at quit `stop_stragglers` stops those, and a start stops the
+//! The Job does not hold what the Store's PowerShell 7 starts: at quit `stop_stragglers` stops those, a guardian started at the
+//! beginning (`helper.rs`) stops them if the app is ended by force, and a start stops the
 //! ones left by an app that was closed by force (`mango_common::stragglers`).
 
 use anyhow::{bail, Context, Result};
@@ -28,10 +29,10 @@ use windows::Win32::System::Threading::GetCurrentProcess;
 pub const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x0100_0000;
 
 /// Names this run of the app in the environment of the agent, and so of every process the agent starts.
-const RUN_VAR: &str = "MANGO_APP_RUN";
+pub(crate) const RUN_VAR: &str = "MANGO_APP_RUN";
 
 pub struct Supervisor {
-    _job: HANDLE,
+    job: HANDLE,
     run: String,
     children: Mutex<Vec<Running>>,
     logs: PathBuf,
@@ -64,7 +65,7 @@ impl Supervisor {
                 .context("AssignProcessToJobObject (app)")?;
             job
         };
-        Ok(Self { _job: job, run: mango_common::stragglers::run_name(), children: Mutex::new(Vec::new()), logs: logs.to_path_buf() })
+        Ok(Self { job, run: mango_common::stragglers::run_name(), children: Mutex::new(Vec::new()), logs: logs.to_path_buf() })
     }
 
     /// Starts the process hidden, with stdout and stderr on `<logs>/<name>.log`.
@@ -99,18 +100,15 @@ impl Supervisor {
         Ok(log)
     }
 
-    /// Waits for `spec.health_url` to answer 200. If the process dies first, or the time runs out,
-    /// the error carries the last lines of its log. `tick` receives the seconds elapsed.
+    /// Waits for `spec.health_url` to answer 200, from a program that is the process or one it started: a 200 from
+    /// another program that took the port first is not the process being ready. If the process dies first, or the time
+    /// runs out, the error carries the last lines of its log. `tick` receives the seconds elapsed.
     pub fn wait_ready(&self, spec: &ProcSpec, mut tick: impl FnMut(u64)) -> Result<()> {
         let Some(url) = &spec.health_url else { return Ok(()) };
         let t0 = Instant::now();
         let agent = mango_common::internet::agent(url, Duration::from_secs(2));
         loop {
-            if let Ok(r) = agent.get(url).call() {
-                if r.status().as_u16() == 200 {
-                    return Ok(());
-                }
-            }
+            let answered = agent.get(url).call().is_ok_and(|r| r.status().as_u16() == 200);
             if let Some((code, log)) = self.exited(&spec.name) {
                 bail!(
                     "{}",
@@ -122,6 +120,9 @@ impl Supervisor {
                     )
                 );
             }
+            if answered {
+                return self.answered_by_the_process(spec, url);
+            }
             let s = t0.elapsed().as_secs();
             if s >= spec.ready_timeout_s {
                 let log = self.logs.join(format!("{}.log", spec.name));
@@ -132,6 +133,28 @@ impl Supervisor {
             }
             tick(s);
             std::thread::sleep(Duration::from_millis(500));
+        }
+    }
+
+    /// The listener of the loopback port in `url` belongs to the process `spec` started, or to one of its own.
+    fn answered_by_the_process(&self, spec: &ProcSpec, url: &str) -> Result<()> {
+        let port = url
+            .strip_prefix("http://127.0.0.1:")
+            .and_then(|rest| rest.split('/').next())
+            .and_then(|port| port.parse::<u16>().ok())
+            .with_context(|| format!("not a loopback address with a port: {url}"))?;
+        let root = self.children.lock().unwrap().iter().find(|r| r.name == spec.name).map(|r| r.child.id());
+        let listener = mango_common::listener::loopback_listener(port).with_context(|| format!("who listens on port {port}"))?;
+        match (root, listener) {
+            (Some(root), Some(listener)) if mango_common::listener::descends_from(listener, root) => Ok(()),
+            _ => bail!(
+                "{}",
+                tr!(
+                    "la porta {port} è occupata da un altro programma, non da {}.",
+                    "port {port} is taken by another program, not by {}.",
+                    spec.name
+                )
+            ),
         }
     }
 
@@ -168,6 +191,22 @@ impl Supervisor {
     pub fn stop_stale_stragglers() -> usize {
         mango_common::stragglers::kill_background_where_env(RUN_VAR, mango_common::stragglers::stale_runs)
     }
+
+    /// Starts the guardian of this run (`helper::start_guardian`): if the app is ended by force, with its processes, it stops
+    /// what the agent started and the Job did not hold, without waiting for the next start.
+    pub fn start_guardian(&self) -> std::io::Result<crate::helper::Placement> {
+        crate::helper::start_guardian(&self.run)
+    }
+
+    /// Takes the end of the app away from the job: what is in it is no longer killed when the app ends. The app does this
+    /// just before it ends to start again, once it has stopped what it started itself, when the copy that starts it again
+    /// could not leave the job (`helper::Placement::InTheJob`) and would end with the app.
+    pub fn let_go(&self) -> Result<()> {
+        let mut info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+        info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_BREAKAWAY_OK;
+        unsafe { SetInformationJobObject(self.job, JobObjectExtendedLimitInformation, &info as *const _ as *const _, std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32) }
+            .context("SetInformationJobObject (let go)")
+    }
 }
 
 /// Opens a file, a folder or an address with its Windows program, outside the app's job: the browser or the
@@ -187,3 +226,93 @@ pub fn open_outside_job(target: &str) -> std::io::Result<()> {
 }
 
 const OPEN_SCRIPT: &str = "$ErrorActionPreference = 'Stop'; if (Test-Path -LiteralPath $env:MANGO_OPEN_TARGET) { Invoke-Item -LiteralPath $env:MANGO_OPEN_TARGET } else { Start-Process -FilePath $env:MANGO_OPEN_TARGET }";
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    impl Supervisor {
+        /// A supervisor that does not put the test's process in a job.
+        fn without_job(logs: &Path) -> Self {
+            Self { job: HANDLE::default(), run: "test".into(), children: Mutex::new(Vec::new()), logs: logs.to_path_buf() }
+        }
+    }
+
+    fn spec(exe: &str, args: &[&str], port: u16) -> ProcSpec {
+        ProcSpec {
+            name: "agent".into(),
+            exe: exe.into(),
+            args: args.iter().map(|a| a.to_string()).collect(),
+            env: vec![],
+            env_remove: vec![],
+            cwd: None,
+            health_url: Some(format!("http://127.0.0.1:{port}/global/health")),
+            ready_timeout_s: 20,
+            shutdown_post: None,
+            startup_post: None,
+        }
+    }
+
+    /// Answers every request with a 200, from a thread of the test: a program of its own, not the one the supervisor starts.
+    fn health_server() -> (TcpListener, u16) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let serving = listener.try_clone().unwrap();
+        std::thread::spawn(move || {
+            for stream in serving.incoming().map_while(Result::ok) {
+                let mut stream = stream;
+                let _ = stream.read(&mut [0u8; 1024]);
+                let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok");
+            }
+        });
+        (listener, port)
+    }
+
+    #[test]
+    fn a_200_from_another_program_on_the_port_is_not_the_process_being_ready() {
+        let dir = tempfile::tempdir().unwrap();
+        let supervisor = Supervisor::without_job(dir.path());
+        let (_foreign, port) = health_server();
+        let agent = spec("ping", &["-n", "30", "127.0.0.1"], port);
+        supervisor.spawn(&agent).unwrap();
+        let error = supervisor.wait_ready(&agent, |_| {}).unwrap_err().to_string();
+        supervisor.shutdown();
+        assert!(error.contains(&port.to_string()) && !error.contains("exited"), "{error}");
+    }
+
+    #[test]
+    fn a_200_from_the_process_itself_is_ready() {
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join("serve.ps1");
+        std::fs::write(
+            &script,
+            "param($port)\n$listener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, [int]$port)\n$listener.Start()\n\
+             $reply = [Text.Encoding]::ASCII.GetBytes('HTTP/1.1 200 OK' + [char]13 + [char]10 + 'Content-Length: 2' + [char]13 + [char]10 + 'Connection: close' + [char]13 + [char]10 + [char]13 + [char]10 + 'ok')\n\
+             while ($true) { $client = $listener.AcceptTcpClient(); $client.GetStream().Write($reply, 0, $reply.Length); $client.Close() }\n",
+        )
+        .unwrap();
+        let supervisor = Supervisor::without_job(dir.path());
+        let port = mango_common::random_port().unwrap();
+        let agent = spec("powershell.exe", &["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", &script.display().to_string(), &port.to_string()], port);
+        supervisor.spawn(&agent).unwrap();
+        let ready = supervisor.wait_ready(&agent, |_| {});
+        supervisor.shutdown();
+        ready.unwrap();
+    }
+
+    #[test]
+    fn a_process_that_exits_is_told_as_that_even_if_something_else_answers() {
+        let dir = tempfile::tempdir().unwrap();
+        let supervisor = Supervisor::without_job(dir.path());
+        let (_foreign, port) = health_server();
+        let agent = spec("cmd", &["/c", "exit", "3"], port);
+        supervisor.spawn(&agent).unwrap();
+        while supervisor.exited("agent").is_none() {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let error = supervisor.wait_ready(&agent, |_| {}).unwrap_err().to_string();
+        assert!(error.contains("code 3") || error.contains("codice 3"), "{error}");
+    }
+}

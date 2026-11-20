@@ -2,6 +2,7 @@ import { createMemo, createSignal } from "solid-js"
 import { useSDK } from "@/context/sdk"
 import { useServerSync } from "@/context/server-sync"
 import { useSync } from "@/context/sync"
+import { folderKey } from "@/utils/path-key"
 
 const workspaceBarEnabled = import.meta.env.VITE_OPENCODE_CHANNEL !== "prod"
 
@@ -13,12 +14,12 @@ export function resolveNewSessionWorktree(input: {
 }) {
   if (!input.enabled) return "main"
   if (input.selected) return input.selected
-  if (input.projectWorktree && input.directory !== input.projectWorktree) return input.directory
+  if (input.projectWorktree && folderKey(input.directory) !== folderKey(input.projectWorktree)) return input.directory
   return "main"
 }
 
 export function normalizeNewSessionWorktree(value: string, directory: string, projectWorktree?: string) {
-  if (value === "main" && projectWorktree !== directory) return projectWorktree
+  if (value === "main" && (projectWorktree === undefined || folderKey(projectWorktree) !== folderKey(directory))) return projectWorktree
   return value
 }
 

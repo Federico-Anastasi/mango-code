@@ -125,24 +125,21 @@ export namespace Timeline {
         .filter((part) => renderable(part))
         .map((part) => ({ messageID: message.id, messageIndex, part })),
     )
-    const assistantItems =
-      interrupted && !compaction
-        ? [
-            ...groupParts(assistantPartRefs.filter((ref) => ref.messageIndex <= interruptedMessageIndex)).map(
-              (group) => ({
-                type: "part" as const,
-                group,
-              }),
-            ),
-            { type: "interrupted" as const },
-            ...groupParts(assistantPartRefs.filter((ref) => ref.messageIndex > interruptedMessageIndex)).map(
-              (group) => ({
-                type: "part" as const,
-                group,
-              }),
-            ),
-          ]
-        : groupParts(assistantPartRefs).map((group) => ({ type: "part" as const, group }))
+    // where the turn has a line between two answers: it was interrupted there, or the answer was cut for its length and
+    // the turn took it up again
+    const cuts = [
+      ...(interrupted && !compaction ? [{ index: interruptedMessageIndex, item: { type: "interrupted" as const } }] : []),
+      ...assistantMessages.flatMap((message, index) =>
+        index < assistantMessages.length - 1 && message.finish === "length" && !message.error
+          ? [{ index, item: { type: "resumed" as const, messageID: message.id } }]
+          : [],
+      ),
+    ].toSorted((a, b) => a.index - b.index)
+    const assistantItems = [...cuts, { index: assistantMessages.length - 1, item: undefined }].flatMap((cut, position) => {
+      const from = position === 0 ? -1 : cuts[position - 1].index
+      const parts = groupParts(assistantPartRefs.filter((ref) => ref.messageIndex > from && ref.messageIndex <= cut.index))
+      return [...parts.map((group) => ({ type: "part" as const, group })), ...(cut.item ? [cut.item] : [])]
+    })
     if (previousUserMessage) rows.push(new TimelineRow.TurnGap({ userMessageID: userMessage.id }))
 
     if (comments.length > 0 && !inlineComments)
@@ -179,6 +176,10 @@ export namespace Timeline {
         )
         return
       }
+      if (item.type === "resumed") {
+        rows.push(new TimelineRow.Resumed({ userMessageID: userMessage.id, messageID: item.messageID }))
+        return
+      }
 
       rows.push(
         new TimelineRow.AssistantPart({
@@ -205,7 +206,16 @@ export namespace Timeline {
     if (isActive && status === "retry") rows.push(new TimelineRow.Retry({ userMessageID: userMessage.id }))
 
     const finished = !(isActive && status !== "idle")
-    if (finished && !error && !interrupted && !compaction && silent(assistantMessages, getMessageParts))
+    const last = assistantMessages.at(-1)
+    const cutShort = typeof last?.time.completed === "number" && last.finish === "length"
+    if (finished && !error && !interrupted && !compaction && cutShort)
+      rows.push(
+        new TimelineRow.LengthStop({
+          userMessageID: userMessage.id,
+          again: assistantMessages.slice(0, -1).some((message) => message.finish === "length"),
+        }),
+      )
+    else if (finished && !error && !interrupted && !compaction && silent(assistantMessages, getMessageParts))
       rows.push(new TimelineRow.EmptyAnswer({ userMessageID: userMessage.id }))
 
     // mango-code: duration and speed of the engine under the finished answer

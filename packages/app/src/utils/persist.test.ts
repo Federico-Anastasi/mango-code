@@ -4,6 +4,7 @@ import { ServerScope } from "./server-scope"
 type PersistTestingType = typeof import("./persist").PersistTesting
 type PersistType = typeof import("./persist").Persist
 type RemovePersistedType = typeof import("./persist").removePersisted
+type RememberSpellingsType = typeof import("./persist").rememberSpellings
 
 class MemoryStorage implements Storage {
   private values = new Map<string, string>()
@@ -50,6 +51,7 @@ const storage = new MemoryStorage()
 let persistTesting: PersistTestingType
 let Persist: PersistType
 let removePersisted: RemovePersistedType
+let rememberSpellings: RememberSpellingsType
 
 beforeAll(async () => {
   mock.module("@/context/platform", () => ({
@@ -60,6 +62,7 @@ beforeAll(async () => {
   persistTesting = mod.PersistTesting
   Persist = mod.Persist
   removePersisted = mod.removePersisted
+  rememberSpellings = mod.rememberSpellings
 })
 
 beforeEach(() => {
@@ -120,18 +123,76 @@ describe("persist localStorage resilience", () => {
     expect(/[:\\/]/.test(result)).toBeFalse()
   })
 
-  test("workspace target keeps raw path storage as legacy fallback", () => {
+  test("workspace target keeps the earlier storage names as legacy fallbacks", () => {
     const target = Persist.workspace("C:\\Users\\foo", "vcs")
 
-    expect(target.storage).toBe(persistTesting.workspaceStorage("C:/Users/foo"))
-    expect(target.legacyStorageNames).toEqual([persistTesting.workspaceStorage("C:\\Users\\foo")])
+    expect(target.storage).toBe(persistTesting.workspaceStorage("c:/users/foo"))
+    expect(target.legacyStorageNames).toEqual([
+      persistTesting.workspaceStorage("C:\\Users\\foo"),
+      persistTesting.workspaceStorage("C:/Users/foo"),
+    ])
   })
 
   test("workspace target keeps backslash storage as fallback for normalized Windows paths", () => {
     const target = Persist.workspace("C:/Users/foo", "vcs")
 
-    expect(target.storage).toBe(persistTesting.workspaceStorage("C:/Users/foo"))
-    expect(target.legacyStorageNames).toEqual([persistTesting.workspaceStorage("C:\\Users\\foo")])
+    expect(target.storage).toBe(persistTesting.workspaceStorage("c:/users/foo"))
+    expect(target.legacyStorageNames).toEqual([
+      persistTesting.workspaceStorage("C:/Users/foo"),
+      persistTesting.workspaceStorage("C:\\Users\\foo"),
+    ])
+  })
+
+  test("a Windows folder has one storage however its path is written, and a network path keeps its case", () => {
+    const spellings = ["C:\\Users\\Foo", "c:/users/foo/", "C:/USERS/FOO"]
+    expect(new Set(spellings.map((dir) => Persist.workspace(dir, "vcs").storage)).size).toBe(1)
+    expect(Persist.session("C:\\Users\\Foo", "ses_1", "prompt").storage).toBe(Persist.workspace("c:/users/foo", "vcs").storage)
+    expect(Persist.workspace("\\\\server\\Share", "vcs").storage).not.toBe(Persist.workspace("\\\\server\\share", "vcs").storage)
+    expect(Persist.workspace("/Repo", "vcs").storage).not.toBe(Persist.workspace("/repo", "vcs").storage)
+  })
+
+  test("what the browser kept under the spelling of a project that was merged is still read from the one that stays", () => {
+    // before: one storage per spelling, each with what the user did under it
+    const dropped = persistTesting.workspaceStorage("C:/USERS/foo")
+    storage.setItem(`${dropped}:workspace:comments`, '{"value":"from the dropped"}')
+    rememberSpellings(["C:\\Users\\Foo", "C:\\USERS\\foo"])
+
+    const target = Persist.workspace("C:\\Users\\Foo", "comments")
+    expect(target.legacyStorageNames).toContain(dropped)
+    expect(Persist.workspace("C:/USERS/foo/", "comments").legacyStorageNames).toContain(dropped)
+    const current = persistTesting.localStorageWithPrefix(target.storage!)
+    const result = persistTesting.migrateLegacy({
+      current,
+      stores: target.legacyStorageNames!.map(persistTesting.localStorageWithPrefix),
+      keys: [],
+      key: target.key,
+      defaults: { value: "" },
+    })
+    expect(result).toBe('{"value":"from the dropped"}')
+    expect(storage.getItem(`${target.storage}:${target.key}`)).toBe('{"value":"from the dropped"}')
+  })
+
+  test("in the app's window the spellings are kept with the rest of the interface's state, not in the browser of one port", async () => {
+    const { useUiStorage } = await import("./ui-storage")
+    const app = new MemoryStorage()
+    useUiStorage(app)
+    try {
+      const dropped = persistTesting.workspaceStorage("C:/USERS/foo")
+      rememberSpellings(["C:\\Users\\Foo", "C:\\USERS\\foo"])
+      // the next start is served from another port: the browser's storage of that origin is empty
+      storage.clear()
+      expect(Persist.workspace("C:\\Users\\Foo", "comments").legacyStorageNames).toContain(dropped)
+    } finally {
+      useUiStorage(undefined)
+    }
+  })
+
+  test("the spellings that were remembered are not listed twice, and the storage in use is not among the legacy ones", () => {
+    rememberSpellings(["C:\\Users\\Foo", "c:/users/foo"])
+    rememberSpellings(["c:/users/foo", "C:\\Users\\Foo"])
+    const target = Persist.workspace("C:\\Users\\Foo", "x")
+    expect(target.legacyStorageNames!.length).toBe(new Set(target.legacyStorageNames).size)
+    expect(target.legacyStorageNames).not.toContain(target.storage)
   })
 
   test("migrates direct legacy keys into scoped storage", () => {

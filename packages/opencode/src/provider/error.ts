@@ -121,13 +121,6 @@ export function parseStreamError(input: unknown): ParsedStreamError | undefined 
         isRetryable: false,
         responseBody,
       }
-    case "usage_not_included":
-      return {
-        type: "api_error",
-        message: "To use Codex with your ChatGPT plan, upgrade to Plus: https://chatgpt.com/explore/plus.",
-        isRetryable: false,
-        responseBody,
-      }
     case "invalid_prompt":
       return {
         type: "api_error",

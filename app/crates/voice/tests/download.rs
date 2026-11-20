@@ -7,8 +7,8 @@ use std::fs;
 #[ignore = "downloads 885 KB from Hugging Face"]
 fn resumes_a_partial_and_verifies_the_sha256() {
     let vad = voice::FILES[1];
-    let dir = std::env::temp_dir().join(format!("mango-voice-dl-{}", std::process::id()));
-    let _ = fs::remove_dir_all(&dir);
+    let folder = tempfile::tempdir().unwrap();
+    let dir = folder.path().to_path_buf();
     assert_eq!(voice::missing_files(&dir).len(), 2);
 
     // first whole round
@@ -45,5 +45,5 @@ fn resumes_a_partial_and_verifies_the_sha256() {
     let err = voice::download(vad, &dir, &std::sync::atomic::AtomicBool::new(false), &mut |_, _| {}).unwrap_err();
     assert!(err.to_string().contains("sha256"), "{err}");
     assert!(!part.exists());
-    let _ = fs::remove_dir_all(&dir);
+    folder.close().unwrap();
 }

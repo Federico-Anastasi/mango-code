@@ -26,6 +26,14 @@ describe("new session workspace selection", () => {
     )
   })
 
+  test("the project folder is the same folder however the path is written", () => {
+    expect(resolveNewSessionWorktree({ enabled: true, directory: "c:/users/x/", projectWorktree: "C:\\Users\\X" })).toBe("main")
+    expect(normalizeNewSessionWorktree("main", "c:/users/x/", "C:\\Users\\X")).toBe("main")
+    expect(resolveNewSessionWorktree({ enabled: true, directory: "c:/users/x/feature", projectWorktree: "C:\\Users\\X" })).toBe(
+      "c:/users/x/feature",
+    )
+  })
+
   test("normalizes main to the project root outside the main worktree", () => {
     expect(normalizeNewSessionWorktree("main", "/project/feature", "/project")).toBe("/project")
     expect(normalizeNewSessionWorktree("main", "/project", "/project")).toBe("main")

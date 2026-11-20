@@ -4,7 +4,7 @@
 # It needs the Bun that package.json names (packageManager) or a later one, and takes 5-15 minutes. It leaves bun.lock as it was.
 #
 #   .\build-agent.ps1                    # default place
-#   .\build-agent.ps1 -Opencode D:\agent # somewhere else
+#   .\build-agent.ps1 -Opencode D:\build\agent # somewhere else
 param([string]$Opencode)
 $ErrorActionPreference = "Stop"
 $repo = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent

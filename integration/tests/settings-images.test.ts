@@ -66,8 +66,14 @@ const section = (title: string) =>
     for (let el = h.nextElementSibling; el && el.tagName !== "H3"; el = el.nextElementSibling) rows.push(...el.querySelectorAll('[data-model-row], [data-download-row]'));
     return rows.map((r) => r.dataset.modelRow ?? r.dataset.downloadRow);
   })()`) as Promise<string[] | null>;
-/** What the interface keeps of its own settings (`images.*`), as it is saved. */
-const kept = () => p.evaluate(`JSON.parse(localStorage.getItem("settings.v3") ?? "{}").images`) as Promise<{ rewrite: boolean; rewriter: { providerID: string; modelID: string } | null }>;
+/** What the interface keeps of its own settings (`images.*`), as the app has it on disk: the page is told to send what it holds first. */
+async function kept() {
+  await p.evaluate(`window.dispatchEvent(new Event("pagehide"))`);
+  await Bun.sleep(200);
+  const file = path.join(env.data, "ui-state.json");
+  const entries = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf8")).entries : {};
+  return JSON.parse(entries["settings.v3"] ?? "{}").images as { rewrite: boolean; rewriter: { providerID: string; modelID: string } | null };
+}
 
 /** A click with the mouse, like a person, on the first element of `selector` whose text is `label` (any, if empty). */
 async function mouseClick(selector: string, label = "") {

@@ -135,6 +135,17 @@ const layer = Layer.effect(
         }
       }
 
+      return {
+        commands,
+      }
+    })
+
+    const state = yield* InstanceState.make<State>((ctx) => init(ctx))
+
+    // mango-code: the skills are taken when the commands are asked for, not when the instance starts, so a skill put
+    // on disk meanwhile is a command too; `list` (the interface's menu) reads them from disk again.
+    const withSkills = Effect.fn("Command.withSkills")(function* () {
+      const commands = { ...(yield* InstanceState.get(state)).commands }
       for (const item of yield* skill.all()) {
         if (commands[item.name]) continue
         const dir = item.location === "<built-in>" ? undefined : path.dirname(item.location)
@@ -154,22 +165,16 @@ const layer = Layer.effect(
           hints: [],
         }
       }
-
-      return {
-        commands,
-      }
+      return commands
     })
 
-    const state = yield* InstanceState.make<State>((ctx) => init(ctx))
-
     const get = Effect.fn("Command.get")(function* (name: string) {
-      const s = yield* InstanceState.get(state)
-      return s.commands[name]
+      return (yield* withSkills())[name]
     })
 
     const list = Effect.fn("Command.list")(function* () {
-      const s = yield* InstanceState.get(state)
-      return Object.values(s.commands)
+      yield* skill.refresh()
+      return Object.values(yield* withSkills())
     })
 
     return Service.of({ get, list })

@@ -8,7 +8,7 @@
   "_reasoning": "'reasoning': the model can think before it answers, and its chat template turns that on and off (enable_thinking): the app then offers the switch. A model of the user's has none: nobody knows its template.",
   "_sampling": "'sampling': the values recommended by whoever made the model (temperature, top_p, top_k, min_p, presence_penalty, repeat_penalty), those of the mode the model starts in with its chat template here (reasoning on for 3.6, 3.8, bonsai2, lfm, ling, toq; off for 3.5-4b and 3.5-2b, whose template turns it on only on request); a value the card does not give is missing. toq has no card of its own for this: it takes the base model's (Qwen3.8-27B).",
   "ctx": 131072,
-  "_ctx": "128k is Mango Code's TARGET context. A local model's 'ctx' is the maximum it supports (GGUF header): the general plan uses the smaller of the two and goes lower only if memory is not enough. A profile has the context measured on its hardware.",
+  "_ctx": "A local model's 'ctx' is the maximum it supports (GGUF header): the general plan takes it and goes lower only if memory is not enough or the user chose less. This global 'ctx' is the maximum of a model that does not say its own. A profile has the context measured on its hardware.",
   "default": "3.6",
   "order": ["3.6", "3.8", "bonsai2", "toq", "lfm", "ling", "3.5-4b", "3.5-2b"],
   "_order": "The recommended local models in the order they are listed (selector, first run): each local model of 'models' appears once. The user's models follow, then the cloud ones.",

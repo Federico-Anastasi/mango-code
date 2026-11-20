@@ -629,6 +629,65 @@ describe("session.compaction.create", () => {
 
 describe("session.compaction.prune", () => {
   it.live(
+    "a message that takes up a cut answer is not a turn of its own: the turn before keeps its tool output",
+    provideTmpdirInstance(
+      (dir) =>
+        Effect.gen(function* () {
+          const compact = yield* SessionCompaction.Service
+          const ssn = yield* SessionNs.Service
+          const info = yield* ssn.create({})
+          const user = (text: string, resume?: string) =>
+            Effect.gen(function* () {
+              const msg = yield* ssn.updateMessage({
+                id: MessageID.ascending(),
+                role: "user",
+                sessionID: info.id,
+                agent: "build",
+                model: ref,
+                time: { created: Date.now() },
+              })
+              yield* ssn.updatePart({
+                id: PartID.ascending(),
+                messageID: msg.id,
+                sessionID: info.id,
+                type: "text",
+                text,
+                ...(resume ? { synthetic: true, metadata: { resume } } : {}),
+              })
+              return msg
+            })
+          const first = yield* user("first")
+          const answer = yield* createAssistantMessage(info.id, first.id, dir)
+          yield* ssn.updatePart({
+            id: PartID.ascending(),
+            messageID: answer.id,
+            sessionID: info.id,
+            type: "tool",
+            callID: crypto.randomUUID(),
+            tool: "bash",
+            state: {
+              status: "completed",
+              input: {},
+              output: "x".repeat(200_000),
+              title: "done",
+              metadata: {},
+              time: { start: Date.now(), end: Date.now() },
+            },
+          })
+          yield* user("second")
+          yield* user("Your answer was cut: go on.", "length")
+
+          yield* compact.prune({ sessionID: info.id })
+
+          const msgs = yield* ssn.messages({ sessionID: info.id })
+          const part = msgs.flatMap((msg) => msg.parts).find((part) => part.type === "tool")
+          expect(part?.type === "tool" && part.state.status === "completed" && part.state.time.compacted).toBeFalsy()
+        }),
+      { config: { compaction: { prune: true } } },
+    ),
+  )
+
+  it.live(
     "compacts old completed tool output",
     provideTmpdirInstance(
       (dir) =>
@@ -1847,20 +1906,6 @@ describe("SessionNs.getUsage", () => {
     expect(result.cost).toBe(3 + 1.5)
   })
 
-  test("uses authoritative Copilot billed cost when provided", () => {
-    const result = SessionNs.getUsage({
-      model: createModel({
-        context: 100_000,
-        output: 32_000,
-        cost: { input: 3, output: 15, cache: { read: 0.3, write: 0.3 } },
-      }),
-      usage: usage({ inputTokens: 11_774, outputTokens: 39, totalTokens: 11_813 }),
-      metadata: { copilot: { totalNanoAiu: 4_473_525_000 } },
-    })
-
-    expect(result.cost).toBe(0.04473525)
-  })
-
   test("uses matching context cost tier before over-200k fallback", () => {
     const model = createModel({
       context: 1_000_000,
@@ -1935,72 +1980,20 @@ describe("SessionNs.getUsage", () => {
     expect(result.cost).toBe(0.9 + 0.4)
   })
 
-  test.each(["@ai-sdk/anthropic", "@ai-sdk/amazon-bedrock", "@ai-sdk/google-vertex/anthropic"])(
-    "computes total from components for %s models",
-    (npm) => {
-      const model = createModel({ context: 100_000, output: 32_000, npm })
-      // AI SDK v6: inputTokens includes cached tokens for all providers
-      const item = usage({
-        inputTokens: 1000,
-        outputTokens: 500,
-        totalTokens: 1500,
-        cacheReadInputTokens: 200,
-      })
-      if (npm === "@ai-sdk/amazon-bedrock") {
-        const result = SessionNs.getUsage({
-          model,
-          usage: item,
-          metadata: {
-            bedrock: {
-              usage: {
-                cacheWriteInputTokens: 300,
-              },
-            },
-          },
-        })
-
-        // inputTokens (1000) includes cache, so adjusted = 1000 - 200 - 300 = 500
-        expect(result.tokens.input).toBe(500)
-        expect(result.tokens.cache.read).toBe(200)
-        expect(result.tokens.cache.write).toBe(300)
-        // total = adjusted (500) + output (500) + cacheRead (200) + cacheWrite (300)
-        expect(result.tokens.total).toBe(1500)
-        return
-      }
-
-      const result = SessionNs.getUsage({
-        model,
-        usage: item,
-        metadata: {
-          anthropic: {
-            cacheCreationInputTokens: 300,
-          },
-        },
-      })
-
-      // inputTokens (1000) includes cache, so adjusted = 1000 - 200 - 300 = 500
-      expect(result.tokens.input).toBe(500)
-      expect(result.tokens.cache.read).toBe(200)
-      expect(result.tokens.cache.write).toBe(300)
-      // total = adjusted (500) + output (500) + cacheRead (200) + cacheWrite (300)
-      expect(result.tokens.total).toBe(1500)
-    },
-  )
-
-  test("extracts cache write tokens from vertex metadata key", () => {
-    const model = createModel({ context: 100_000, output: 32_000, npm: "@ai-sdk/google-vertex/anthropic" })
+  test("computes total from components for anthropic models", () => {
+    const model = createModel({ context: 100_000, output: 32_000, npm: "@ai-sdk/anthropic" })
+    // AI SDK v6: inputTokens includes cached tokens for all providers
     const result = SessionNs.getUsage({
       model,
       usage: usage({ inputTokens: 1000, outputTokens: 500, totalTokens: 1500, cacheReadInputTokens: 200 }),
-      metadata: {
-        vertex: {
-          cacheCreationInputTokens: 300,
-        },
-      },
+      metadata: { anthropic: { cacheCreationInputTokens: 300 } },
     })
 
+    // inputTokens (1000) includes cache, so adjusted = 1000 - 200 - 300 = 500
     expect(result.tokens.input).toBe(500)
     expect(result.tokens.cache.read).toBe(200)
     expect(result.tokens.cache.write).toBe(300)
+    // total = adjusted (500) + output (500) + cacheRead (200) + cacheWrite (300)
+    expect(result.tokens.total).toBe(1500)
   })
 })

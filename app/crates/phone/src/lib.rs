@@ -14,7 +14,10 @@
 //!   another site's that points to the computer, DNS rebinding) and, if there is an `Origin`, only if it is that of
 //!   the requested address. The checks and the forwarding are in `http.rs`.
 //! * The second port accepts the same session, address and origin, and sends only to the page the panel on the computer
-//!   shows at that moment: a server on the computer's loopback, or a local file's folder, read-only.
+//!   shows at that moment: a server on the computer's loopback, or a local file's folder, read-only. The HTML of that page
+//!   carries a script that sends its calls to `localhost` and `127.0.0.1` (any port) back to this port, which passes them to
+//!   that port of the computer's loopback (not the agent's, not the phone's, not the app's own services) and to no other address,
+//!   with the same session checks (`site.rs`).
 //! * Turning off and remaking the key drop all the sessions and close the open connections; turning off also removes
 //!   the key, so a link seen earlier doesn't reopen access when it is turned on again.
 //!
@@ -35,7 +38,7 @@ use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::net::TcpStream;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU16, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -84,6 +87,9 @@ pub trait Computer: Send + Sync {
     fn open(&self, page: Page) -> std::result::Result<(), (u16, String)>;
     /// The project folders the agent knows. Err: why they could not be read.
     fn project_folders(&self) -> std::result::Result<Vec<PathBuf>, String>;
+    /// The loopback ports of the app's own services (the engine and its backends, the voice, the sharing of the engine...),
+    /// asked at every call of a page because some change at every start. A page shown on the phone never reaches them.
+    fn owned_ports(&self) -> Vec<u16>;
 }
 
 /// The phone service. Cloning is cheap: all copies are the same service.
@@ -100,7 +106,7 @@ struct Inner {
     port: u16,
     /// The second port, for the browser panel's pages.
     preview_port: u16,
-    agent_port: u16,
+    agent_port: AtomicU16,
     reports: Arc<dyn Reports>,
     computer: Arc<dyn Computer>,
     saved: Mutex<Saved>,
@@ -183,7 +189,7 @@ impl Phone {
                 only_here,
                 port,
                 preview_port,
-                agent_port,
+                agent_port: AtomicU16::new(agent_port),
                 reports,
                 computer,
                 saved: Mutex::new(saved),
@@ -199,6 +205,11 @@ impl Phone {
             t.open();
         }
         Ok(t)
+    }
+
+    /// The agent now listens on `port`: the next requests of the phone go there.
+    pub fn set_agent_port(&self, port: u16) {
+        self.d.agent_port.store(port, Ordering::SeqCst);
     }
 
     pub fn state(&self) -> State {
@@ -281,6 +292,12 @@ impl Phone {
 }
 
 impl Inner {
+    /// A port the phone's pages never reach: the two of the phone, the agent's and every one of the app's own services, asked
+    /// of the app each time because some change at every start.
+    fn app_port(&self, port: u16) -> bool {
+        port == self.port || port == self.preview_port || port == self.agent_port.load(Ordering::SeqCst) || self.computer.owned_ports().contains(&port)
+    }
+
     /// The addresses to listen on: the home network's and Tailscale's.
     fn places(&self) -> Vec<std::net::Ipv4Addr> {
         if self.only_here {

@@ -130,6 +130,8 @@ pub const INIT_SCRIPT: &str = r#"
       go: (url) => call("preview_go", { url }),
       nav: (action) => call("preview_nav", { action }),
       state: () => call("preview_state"),
+      // the page as it is, a PNG (ArrayBuffer) of the panel's size; rejects with { code, message } when it cannot be taken
+      capture: () => call("preview_capture"),
       openExternal: () => call("preview_external"),
       // a PDF, a picture or a web page the agent wrote (absolute path); rejects with { code, message } (not_found, blocked_type, too_large, ...)
       openFile: (path) => call("preview_file", { path }),
@@ -164,7 +166,7 @@ pub const INIT_SCRIPT: &str = r#"
     // with { code: "refused", message } where message is the sentence for the user.
     // setDefault(key | null): the model loaded when the app opens; setImageDefault(key | null): the model that makes the
     // pictures when a request names none (null = the catalog's). setChoices(key, { where, gpus, context, style,
-    // reasoning }): where the model runs and how. remove(key): takes it off the computer, its download included; it answers
+    // sampling, reasoning }): where the model runs and how. remove(key): takes it off the computer, its download included; it answers
     // null, or the sentence to show when some files stay (those of a model the user added). openFolder(): the models' folder.
     models: Object.freeze({
       download: (keys) => call("models_download", { keys }),
@@ -176,6 +178,26 @@ pub const INIT_SCRIPT: &str = r#"
       setChoices: (key, choices) => call("models_set_choices", { key, choices }),
       remove: (key) => call("models_remove", { key }),
       openFolder: () => call("models_open_folder"),
+    }),
+    // Where the models are kept: state() = { path, default_path, chosen, pinned, moving } (moving: the MoveState of models_move.rs);
+    // preview(dir) says what moving there would do and changes nothing; move(dir) moves the models and starts the app again on
+    // the new folder (answers at once, the progress and the end arrive as "mango-models-dir" on window with the MoveState);
+    // use(dir) takes a folder that has files of its own as it is and starts the app again; cancel() stops a move that has not
+    // written the choice yet; restart() starts the app again after a move that left something behind or whose app could not
+    // start again by itself (state "moved", with `left`: what stayed in the old folder, and `reason` when it is the app), once
+    // the user has seen it. The state of the last move stays in state() until the next begins. They reject like `models`.
+    modelsDir: Object.freeze({
+      state: () => call("models_dir_state"),
+      preview: (dir) => call("models_dir_preview", { dir }),
+      move: (dir) => call("models_dir_move", { dir }),
+      use: (dir) => call("models_dir_use", { dir }),
+      cancel: () => call("models_dir_cancel"),
+      restart: () => call("models_dir_restart"),
+      // one model's files: previewModel(key, dir) says what putting them in `dir` would do (without a folder: back in the
+      // models folder) and changes nothing; moveModel(key, dir) does it, with the same progress and end as move() but the app
+      // goes on; cancel() stops it too. The model is where it was put from then on: it starts, downloads and is removed there.
+      previewModel: (key, dir) => call("model_place_preview", { key, dir: dir ?? null }),
+      moveModel: (key, dir) => call("model_place_move", { key, dir: dir ?? null }),
     }),
     // "Another model": search(text) = { type: "results", results: [{ id, downloads, likes, gated }] } for a name,
     // { type: "analysis", repo, analysis } for a link (or a result's id), { type: "tested", key, label } for the repo of
@@ -219,6 +241,30 @@ pub const INIT_SCRIPT: &str = r#"
     engineRemote: Object.freeze({
       connect: (code) => call("engine_remote_connect", { code }),
       disconnect: () => call("engine_remote_disconnect"),
+    }),
+    // What the interface remembers, kept by the app (ui_state.rs): load() = { entries, drafts, imported, preferred, restored,
+    // old } (storage keys and draft documents, whether the browser's old storage was already copied, whether this page is
+    // served from the port the app prefers, whether the state came from its backup, and the old storage as the app read it
+    // while it is not copied); apply(ops) with ops = [{ area: "entries" | "drafts" | "superseded", key, value? }] (no value
+    // removes the key); markImported(); putBlob(id, bytes) and getBlob(id) for the attachments of the drafts, by the hex
+    // SHA-256 of their bytes (getBlob gives null when there is none); flushed(token, written) answers the app's request to write what
+    // the page holds (the window event `mango-ui-state-flush`, `detail` is the token). They reject with { code, message }:
+    // `unreadable` is a state file the app cannot read, and `message` says which.
+    uiState: Object.freeze({
+      load: () => call("ui_state_load"),
+      apply: (ops) => call("ui_state_apply", { ops }),
+      markImported: () => call("ui_state_mark_imported"),
+      flushed: (token, written) => call("ui_state_flushed", { token, written }),
+      putBlob: async (id, bytes) => {
+        const body = new Uint8Array(64 + bytes.byteLength);
+        body.set(new TextEncoder().encode(id));
+        body.set(new Uint8Array(bytes), 64);
+        await call("ui_blob_put", body.buffer);
+      },
+      getBlob: async (id) => {
+        const found = new Uint8Array(await call("ui_blob_get", { id }));
+        return found[0] === 1 ? found.slice(1).buffer : null;
+      },
     }),
   });
 
@@ -626,14 +672,26 @@ fn set_titlebar_color(window: Window, r: u8, g: u8, b: u8) -> Result<(), BridgeE
 
 // ---------------------------------------------------------------- window
 
-/// Registers the bridge plugin. The web UI served by the agent (this app's agent port, nothing else on the computer)
-/// gets the bridge like the loading page; `capabilities/default.json` covers the local page.
-pub fn install(app: &App) -> tauri::Result<()> {
-    let mut agent_ui = CapabilityBuilder::new("agent-ui").local(false).webview("main").remote(format!("http://127.0.0.1:{}", crate::agent_port()));
+/// The web UI served by the agent (this app's agent, on the port it really bound, nothing else on the computer) gets the
+/// bridge like the loading page; `capabilities/default.json` covers the local page. Called once the agent answers, before the
+/// window goes to it, and again if a restart brought the agent to another port.
+pub fn allow_agent_page(app: &AppHandle, port: u16) -> tauri::Result<()> {
+    static ALLOWED: std::sync::Mutex<Vec<u16>> = std::sync::Mutex::new(Vec::new());
+    let mut allowed = ALLOWED.lock().unwrap();
+    if allowed.contains(&port) {
+        return Ok(());
+    }
+    let mut agent_ui = CapabilityBuilder::new(format!("agent-ui-{port}")).local(false).webview("main").remote(format!("http://127.0.0.1:{port}"));
     for permission in ["core:default", "dialog:default", "opener:default", "mango-bridge:default"] {
         agent_ui = agent_ui.permission(permission);
     }
     app.add_capability(agent_ui)?;
+    allowed.push(port);
+    Ok(())
+}
+
+/// Registers the bridge plugin.
+pub fn install(app: &App) -> tauri::Result<()> {
     app.handle().plugin(
         Builder::<Wry>::new("mango-bridge")
             .invoke_handler(tauri::generate_handler![
@@ -655,6 +713,14 @@ pub fn install(app: &App) -> tauri::Result<()> {
                 crate::model_choices::models_set_choices,
                 crate::model_choices::models_remove,
                 crate::model_choices::models_open_folder,
+                crate::models_move::models_dir_state,
+                crate::models_move::models_dir_preview,
+                crate::models_move::models_dir_move,
+                crate::models_move::models_dir_use,
+                crate::models_move::models_dir_cancel,
+                crate::models_move::models_dir_restart,
+                crate::models_move::model_place_preview,
+                crate::models_move::model_place_move,
                 crate::model_choices::computer_set_gpu_used,
                 crate::model_choices::computer_set_small_models,
                 crate::model_choices::computer_open_optimize,
@@ -674,6 +740,7 @@ pub fn install(app: &App) -> tauri::Result<()> {
                 crate::preview::preview_go,
                 crate::preview::preview_nav,
                 crate::preview::preview_state,
+                crate::preview::preview_capture,
                 crate::preview::preview_external,
                 crate::preview::preview_file,
                 crate::chrome::chrome_info,
@@ -701,7 +768,13 @@ pub fn install(app: &App) -> tauri::Result<()> {
                 crate::updater::update_set_automatic,
                 crate::updater::update_install,
                 crate::close_notice::close_notice_answer,
-                crate::close_notice::close_notice_seen
+                crate::close_notice::close_notice_seen,
+                crate::ui_state::ui_state_load,
+                crate::ui_state::ui_state_apply,
+                crate::ui_state::ui_state_mark_imported,
+                crate::ui_state::ui_state_flushed,
+                crate::ui_state::ui_blob_put,
+                crate::ui_state::ui_blob_get
             ])
             .build(),
     )

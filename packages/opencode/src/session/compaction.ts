@@ -11,6 +11,7 @@ import { Agent } from "@/agent/agent"
 import { Plugin } from "@/plugin"
 import { Config } from "@/config/config"
 import { NotFoundError } from "@/storage/storage"
+import { isResume } from "./summary"
 
 import { Effect, Layer, Context } from "effect"
 import { InstanceState } from "@/effect/instance-state"
@@ -127,6 +128,7 @@ function turns(messages: SessionV1.WithParts[]) {
     const msg = messages[i]
     if (msg.info.role !== "user") continue
     if (msg.parts.some((part) => part.type === "compaction")) continue
+    if (isResume(msg)) continue
     result.push({
       start: i,
       end: messages.length,
@@ -289,7 +291,7 @@ const layer = Layer.effect(
 
       loop: for (let msgIndex = msgs.length - 1; msgIndex >= 0; msgIndex--) {
         const msg = msgs[msgIndex]
-        if (msg.info.role === "user") turns++
+        if (msg.info.role === "user" && !isResume(msg)) turns++
         if (turns < 2) continue
         if (msg.info.role === "assistant" && msg.info.summary) break loop
         for (let partIndex = msg.parts.length - 1; partIndex >= 0; partIndex--) {
@@ -343,7 +345,7 @@ const layer = Layer.effect(
         const idx = input.messages.findIndex((m) => m.info.id === input.parentID)
         for (let i = idx - 1; i >= 0; i--) {
           const msg = input.messages[i]
-          if (msg.info.role === "user" && !msg.parts.some((p) => p.type === "compaction")) {
+          if (msg.info.role === "user" && !msg.parts.some((p) => p.type === "compaction") && !isResume(msg)) {
             replay = { info: msg.info, parts: msg.parts }
             messages = input.messages.slice(0, i)
             break

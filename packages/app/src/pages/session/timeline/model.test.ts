@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
-import type { AssistantMessage, Message, UserMessage } from "@opencode-ai/sdk/v2"
-import { isTimelineReady, loadOlderTimeline, selectUserMessages, selectVisibleUserMessages } from "./model"
+import type { AssistantMessage, Message, Part, UserMessage } from "@opencode-ai/sdk/v2"
+import { beforeRevert, isTimelineReady, loadOlderTimeline, selectUserMessages } from "./model"
 
 const user = (id: string) => ({ id, role: "user" }) as UserMessage
 const assistant = (id: string) => ({ id, role: "assistant" }) as AssistantMessage
@@ -8,11 +8,26 @@ const assistant = (id: string) => ({ id, role: "assistant" }) as AssistantMessag
 describe("timeline model", () => {
   test("selects users and applies the revert boundary", () => {
     const messages: Message[] = [user("msg_z"), assistant("msg_a"), user("msg_b"), user("msg_c")]
-    const users = selectUserMessages(messages)
+    const users = selectUserMessages(messages, () => [])
 
     expect(users.map((message) => message.id)).toEqual(["msg_z", "msg_b", "msg_c"])
-    expect(selectVisibleUserMessages(users, "msg_b").map((message) => message.id)).toEqual(["msg_z"])
-    expect(selectVisibleUserMessages(users)).toBe(users)
+    expect(beforeRevert(users, "msg_b").map((message) => message.id)).toEqual(["msg_z"])
+    expect(beforeRevert(users)).toBe(users)
+  })
+
+  test("the message the agent writes to take up a cut answer is not one of the user's", () => {
+    const messages: Message[] = [user("msg_a"), assistant("msg_b"), user("msg_c"), assistant("msg_d"), user("msg_e")]
+    const parts = (id: string) =>
+      id === "msg_c"
+        ? ([{ id: "prt_c", type: "text", sessionID: "ses_1", messageID: id, synthetic: true, text: "Go on.", metadata: { resume: "length" } }] as Part[])
+        : ([{ id: `prt_${id}`, type: "text", sessionID: "ses_1", messageID: id, text: "Ciao." }] as Part[])
+    expect(selectUserMessages(messages, parts).map((message) => message.id)).toEqual(["msg_a", "msg_e"])
+  })
+
+  test("a resume message and its answer stay in the conversation shown; only the revert point cuts it", () => {
+    const messages: Message[] = [user("msg_a"), assistant("msg_b"), user("msg_c"), assistant("msg_d"), user("msg_e"), assistant("msg_f")]
+    expect(beforeRevert(messages)).toBe(messages)
+    expect(beforeRevert(messages, "msg_e").map((message) => message.id)).toEqual(["msg_a", "msg_b", "msg_c", "msg_d"])
   })
 
   test("waits for an assistant-only load to hydrate its user root", () => {

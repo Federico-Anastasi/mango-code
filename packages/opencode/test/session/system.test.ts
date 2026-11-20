@@ -78,6 +78,8 @@ const it = testEffect(
           dirs: () => Effect.succeed([]),
           available: () => Effect.succeed(skills),
           listing: () => Effect.succeed(skills),
+          added: () => Effect.succeed([]),
+          refresh: () => Effect.void,
         }),
       ),
     ],

@@ -42,6 +42,10 @@ struct ModelFile {
     revision: Option<String>,
     /// The only engine that reads the file; without it, it serves all.
     engine: Option<String>,
+    /// Mango Code's own file, which the user moved elsewhere (`model_files`): `path` is where it is, and it is deleted with
+    /// the model.
+    #[serde(default)]
+    relocated: bool,
 }
 
 /// The already verified hash of a file, written next to it: it saves rereading 18 GB every time. It holds as
@@ -68,7 +72,7 @@ pub fn discard_partial(paths: &Paths, model: &str, engine: &str, queued: &[Strin
     let (cat, m) = catalog_model(paths, model)?;
     let shared = shared_with_others(paths, &cat, &m, queued);
     for f in m.files.iter().filter(|f| file_for_engine(f.engine.as_deref(), engine) && !shared(&f.path)) {
-        if let Some(dest) = inside(paths, &f.path) {
+        if let Some(dest) = owned(paths, f) {
             remove_if_there(&part_path(&dest))?;
             remove_empty_folders(paths, &dest);
         }
@@ -85,7 +89,7 @@ pub fn remove_model(paths: &Paths, model: &str, engine: &str, queued: &[String])
     let shared = shared_with_others(paths, &cat, &m, queued);
     let mut kept = Vec::new();
     for f in m.files.iter().filter(|f| file_for_engine(f.engine.as_deref(), engine)) {
-        match inside(paths, &f.path).filter(|_| !f.sha256.is_empty()) {
+        match owned(paths, f).filter(|_| !f.sha256.is_empty()) {
             Some(dest) => {
                 if !shared(&f.path) {
                     for file in [note_path(&dest), part_path(&dest), dest.clone()] {
@@ -94,19 +98,34 @@ pub fn remove_model(paths: &Paths, model: &str, engine: &str, queued: &[String])
                     remove_empty_folders(paths, &dest);
                 }
             }
-            None => kept.extend(users_file(paths, &f.path, &f.sha256).filter(|p| p.is_file())),
+            None => kept.extend(users_file(paths, &f.path, &f.sha256, f.relocated).filter(|p| p.is_file())),
         }
+    }
+    // A model that ran from a file the user chose goes back to being downloaded like any other: that file is no longer its place.
+    let users: Vec<PathBuf> = m.files.iter().filter(|f| file_for_engine(f.engine.as_deref(), engine)).filter_map(|f| users_file(paths, &f.path, &f.sha256, f.relocated)).collect();
+    if !users.is_empty() {
+        crate::model_files::update(&paths.data, |places| places.retain(|_, place| place.own || !users.contains(&place.at)))?;
     }
     Ok(kept)
 }
 
 /// A file of the catalog that Mango Code never downloaded, so never deletes: one named without a hash (the user's own) or
-/// with a path outside the models folder. The answer is where it is; `None` for a file Mango Code downloads, and for a
-/// relative path with `..`, which is not followed, not even to say the file stays.
-pub fn users_file(paths: &Paths, path: &str, sha256: &str) -> Option<PathBuf> {
+/// with a path outside the models folder. The answer is where it is; `None` for a file Mango Code downloads, `relocated`
+/// to another folder included (`model_files`), and for a relative path with `..`, which is not followed, not even to say
+/// the file stays.
+pub fn users_file(paths: &Paths, path: &str, sha256: &str, relocated: bool) -> Option<PathBuf> {
     match inside(paths, path) {
+        _ if relocated => None,
         Some(_) if !sha256.is_empty() => None,
         _ => location(paths, path),
+    }
+}
+
+/// Where a file that Mango Code downloads is: in the models folder, or where the user moved it.
+fn owned(paths: &Paths, f: &ModelFile) -> Option<PathBuf> {
+    match f.relocated {
+        true => Some(PathBuf::from(&f.path)),
+        false => inside(paths, &f.path),
     }
 }
 
@@ -198,7 +217,7 @@ fn install_from(paths: &Paths, base: &str, model: &str, engine: &str, stop: &Ato
     // The total counts every file, those already whole too: after a resume the bar goes on from where it was.
     let (mut to_do, mut total, mut before) = (Vec::new(), 0, 0);
     for mf in m.files.iter().filter(|f| file_for_engine(f.engine.as_deref(), engine)) {
-        let dest = inside(paths, &mf.path).with_context(|| tr!("{}: un file del catalogo fuori dalla cartella dei modelli", "{}: a catalog file outside the models folder", mf.path))?;
+        let dest = owned(paths, mf).with_context(|| tr!("{}: un file del catalogo fuori dalla cartella dei modelli", "{}: a catalog file outside the models folder", mf.path))?;
         let name = mf.name.as_deref().or_else(|| mf.path.rsplit('/').next()).unwrap_or(&mf.path);
         let repo = mf
             .repo
@@ -220,10 +239,23 @@ fn install_from(paths: &Paths, base: &str, model: &str, engine: &str, stop: &Ato
     }
 
     // Room for the whole model before its first file: one of several files must not fill the disk and stop at the next.
-    let left: u64 = to_do.iter().map(|(dest, remote)| remote.size.saturating_sub(fs::metadata(part_path(dest)).map_or(0, |m| m.len()))).sum();
-    if left > 0 {
-        fs::create_dir_all(&paths.models).with_context(|| user_text(&tr!("Non riesco a creare la cartella dei modelli.", "I can't create the models folder."), paths.models.display()))?;
-        enough_space(left, free_space(&paths.models)?, &paths.models)?;
+    // It is counted per disk: a file the user moved to another folder may be on another one.
+    let mut rooms: Vec<(Vec<u16>, PathBuf, u64)> = Vec::new();
+    for (dest, remote) in &to_do {
+        let left = remote.size.saturating_sub(fs::metadata(part_path(dest)).map_or(0, |m| m.len()));
+        if left == 0 {
+            continue;
+        }
+        let folder = dest.parent().unwrap_or(&paths.models).to_path_buf();
+        fs::create_dir_all(&folder).with_context(|| user_text(&tr!("Non riesco a creare la cartella dei modelli.", "I can't create the models folder."), folder.display()))?;
+        let volume = crate::models_dir::relocate::volume_root(&folder).unwrap_or_default();
+        match rooms.iter_mut().find(|(v, ..)| *v == volume) {
+            Some(room) => room.2 += left,
+            None => rooms.push((volume, folder, left)),
+        }
+    }
+    for (_, folder, left) in &rooms {
+        enough_space(*left, free_space(folder)?, folder)?;
     }
 
     for (dest, remote) in &to_do {
@@ -254,11 +286,19 @@ fn already_verified(dest: &Path, f: &RemoteFile) -> Result<bool> {
     Ok(false)
 }
 
-fn write_verified(dest: &Path, sha256: &str) -> Result<()> {
+pub(crate) fn write_verified(dest: &Path, sha256: &str) -> Result<()> {
     let meta = fs::metadata(dest)?;
     let v = Verified { sha256: sha256.to_ascii_lowercase(), size: meta.len(), modified_ms: modified_ms(&meta)? };
     let note = note_path(dest);
     fs::write(&note, serde_json::to_string(&v)?).with_context(|| user_text(&tr!("Non riesco a scrivere nella cartella dei modelli.", "I can't write in the models folder."), note.display()))
+}
+
+/// The hash noted for `file` when it was verified, if the note still holds: the file has the size and the modification
+/// time it had then.
+pub(crate) fn recorded_hash(file: &Path) -> Option<String> {
+    let meta = fs::metadata(file).ok()?;
+    let note: Verified = serde_json::from_str(&fs::read_to_string(note_path(file)).ok()?).ok()?;
+    (note.size == meta.len() && note.modified_ms == modified_ms(&meta).ok()?).then_some(note.sha256)
 }
 
 fn note_path(dest: &Path) -> std::path::PathBuf {
@@ -385,6 +425,96 @@ mod tests {
         discard_partial(&paths, "m", "llamacpp", &[]).unwrap();
         assert!(!paths.models.join("other-GGUF/mm.gguf.part").exists());
         assert!(paths.models.join("m-GGUF/m.gguf").is_file(), "a whole file is not a partial one");
+    }
+
+    /// The models folder moved to another volume with a download stopped halfway: the partial file arrives with its bytes,
+    /// and the download goes on from them in the new folder instead of starting over.
+    #[test]
+    fn a_partial_download_moved_with_the_models_folder_is_resumed() {
+        use crate::models_dir::owned::Owned;
+        use crate::models_dir::relocate::{copy_all, Job};
+        use crate::models_dir::Cancel;
+        use std::sync::atomic::Ordering;
+        let (g, mm) = (data(1_500_000, 0), data(400_000, 5));
+        let s = server(&g, &mm);
+        s.set("/acme/m-GGUF/resolve/rev1/m.gguf", Route { pause_every: Some(400_000), ..Route::file(g.clone()) });
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = dist(tmp.path(), &g, &mm);
+        let stop = AtomicBool::new(false);
+        install_from(&paths, &s.url, "m", "llamacpp", &stop, &mut |done, _| stop.store(done >= 300_000, Ordering::SeqCst)).unwrap_err();
+        let arrived = fs::metadata(paths.models.join("m-GGUF/m.gguf.part")).unwrap().len();
+        assert!((300_000..1_500_000).contains(&arrived), "{arrived}");
+
+        let moved = Paths { models: tmp.path().join("other disk"), ..paths.clone() };
+        let owned = Owned::of(&paths, &paths.models, &[]).unwrap();
+        copy_all(Job { data: &paths.data, from: &paths.models, to: &moved.models, owned: &owned }, u64::MAX / 2, &Cancel::new(), &mut |_| {}).unwrap();
+        assert!(!paths.models.join("m-GGUF/m.gguf.part").exists());
+        assert_eq!(fs::metadata(moved.models.join("m-GGUF/m.gguf.part")).unwrap().len(), arrived);
+
+        let mut first = None;
+        install_from(&moved, &s.url, "m", "llamacpp", &AtomicBool::new(false), &mut |done, _| {
+            first.get_or_insert(done);
+        })
+        .unwrap();
+        assert_eq!(first, Some(arrived), "the download goes on from the bytes that had arrived");
+        assert_eq!(s.requests().iter().rev().find_map(|r| r.range.clone()), Some(format!("bytes={arrived}-")), "the server was asked for the rest, not for the whole file");
+        assert_eq!(fs::read(moved.models.join("m-GGUF/m.gguf")).unwrap(), g);
+    }
+
+    /// A file of a model that the user moved to another folder is removed there with the model, downloaded there again, and
+    /// the other files of the model stay in the models folder.
+    #[test]
+    fn a_model_whose_file_was_moved_is_removed_and_downloaded_where_the_file_is() {
+        use crate::model_files::{update, Place};
+        let (g, mm) = (data(300_000, 0), data(100_000, 5));
+        let s = server(&g, &mm);
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = dist(tmp.path(), &g, &mm);
+        install_from(&paths, &s.url, "m", "llamacpp", &AtomicBool::new(false), &mut |_, _| {}).unwrap();
+        let fast = tmp.path().join("fast disk");
+        fs::create_dir_all(&fast).unwrap();
+        for ext in ["", ".verified"] {
+            fs::rename(paths.models.join(format!("m-GGUF/m.gguf{ext}")), fast.join(format!("m.gguf{ext}"))).unwrap();
+        }
+        update(&paths.data, |places| drop(places.insert("m-GGUF/m.gguf".into(), Place { at: fast.join("m.gguf"), own: true }))).unwrap();
+
+        // Nothing to download: the file is where the map says, and its note holds.
+        let before = s.requests().len();
+        install_from(&paths, &s.url, "m", "llamacpp", &AtomicBool::new(false), &mut |_, _| {}).unwrap();
+        assert_eq!(s.requests().len(), before);
+
+        let kept = remove_model(&paths, "m", "llamacpp", &[]).unwrap();
+        assert!(kept.is_empty(), "{kept:?}");
+        for gone in [fast.join("m.gguf"), fast.join("m.gguf.verified"), paths.models.join("other-GGUF/mm.gguf")] {
+            assert!(!gone.exists(), "{}", gone.display());
+        }
+        assert!(fast.is_dir(), "the user's folder stays");
+
+        install_from(&paths, &s.url, "m", "llamacpp", &AtomicBool::new(false), &mut |_, _| {}).unwrap();
+        assert_eq!(fs::read(fast.join("m.gguf")).unwrap(), g, "it arrives where the user put it");
+        assert!(!paths.models.join("m-GGUF/m.gguf").exists());
+        assert_eq!(fs::read(paths.models.join("other-GGUF/mm.gguf")).unwrap(), mm);
+        assert_eq!(s.requests().iter().rev().find_map(|r| r.range.clone()), None, "whole files, asked for by their name in the repo");
+    }
+
+    /// A file of the user's that is the very file of a model stays when the model is removed, and the model goes back to
+    /// being downloaded into the models folder.
+    #[test]
+    fn a_model_that_runs_from_a_file_of_the_users_leaves_it_alone_when_removed() {
+        use crate::model_files::{read, update, Place};
+        let (g, mm) = (data(300_000, 0), data(100_000, 5));
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = dist(tmp.path(), &g, &mm);
+        let mine = tmp.path().join("mine");
+        fs::create_dir_all(&mine).unwrap();
+        fs::write(mine.join("m.gguf"), &g).unwrap();
+        update(&paths.data, |places| drop(places.insert("m-GGUF/m.gguf".into(), Place { at: mine.join("m.gguf"), own: false }))).unwrap();
+
+        let kept = remove_model(&paths, "m", "llamacpp", &[]).unwrap();
+
+        assert_eq!(kept, [mine.join("m.gguf")]);
+        assert_eq!(fs::read(mine.join("m.gguf")).unwrap(), g);
+        assert!(read(&paths.data).unwrap().is_empty(), "its file is no longer where the model is");
     }
 
     /// Taking a model off the disk deletes its files and what their download left; a file another model uses too
@@ -601,10 +731,10 @@ mod tests {
 
         // The same rule says which files of a model are the user's before removing it.
         let absolute = outside.display().to_string();
-        assert_eq!(users_file(&paths, &absolute, &hash), Some(outside.clone()));
-        assert_eq!(users_file(&paths, "../outside.gguf", &hash), None);
-        assert_eq!(users_file(&paths, "mine/own.gguf", ""), Some(paths.models.join("mine/own.gguf")));
-        assert_eq!(users_file(&paths, "m/m.gguf", &hash), None, "Mango Code downloads it");
+        assert_eq!(users_file(&paths, &absolute, &hash, false), Some(outside.clone()));
+        assert_eq!(users_file(&paths, "../outside.gguf", &hash, false), None);
+        assert_eq!(users_file(&paths, "mine/own.gguf", "", false), Some(paths.models.join("mine/own.gguf")));
+        assert_eq!(users_file(&paths, "m/m.gguf", &hash, false), None, "Mango Code downloads it");
     }
 
     /// A resumed download whose first file is already whole: the bar starts from the bytes already on the disk, out of

@@ -57,9 +57,14 @@ pub fn open(app: &AppHandle, written: &str) {
         *waiting = Some(folder);
         return;
     };
-    if let Err(e) = navigate(&state, &agent, &folder) {
-        eprintln!("folder {} not opened: {e:#}", folder.display());
-    }
+    let (app, agent) = (app.clone(), agent.clone());
+    // The page being left writes what it holds first; that wait cannot be on the thread that delivers its answer.
+    std::thread::spawn(move || {
+        crate::ui_state::flush_page(&app);
+        if let Err(e) = navigate(&app.state::<crate::AppState>(), &agent, &folder) {
+            eprintln!("folder {} not opened: {e:#}", folder.display());
+        }
+    });
 }
 
 fn navigate(state: &crate::AppState, agent: &str, folder: &Path) -> anyhow::Result<()> {

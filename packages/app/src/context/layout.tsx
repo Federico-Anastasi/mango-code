@@ -9,7 +9,8 @@ import { RECENTLY_CLOSED_DISPLAY_LIMIT, ServerConnection, useServer } from "./se
 import { usePlatform } from "./platform"
 import { Project } from "@opencode-ai/sdk/v2"
 import { Persist, persisted, removePersisted } from "@/utils/persist"
-import { pathKey } from "@/utils/path-key"
+import { folderKey } from "@/utils/path-key"
+import { moveToKept } from "@/utils/folder-state"
 import { decode64 } from "@/utils/base64"
 import { same } from "@/utils/same"
 import { createScrollPersistence, type SessionScroll } from "./layout-scroll"
@@ -413,7 +414,7 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
       const projectID = childStore.project
       const metadata = projectID
         ? serverSync().data.project.find((x) => x.id === projectID)
-        : serverSync().data.project.find((x) => x.worktree === project.worktree)
+        : serverSync().data.project.find((x) => folderKey(x.worktree) === folderKey(project.worktree))
 
       // Preserve local icon override from per-workspace localStorage cache (childStore.icon).
       // Without this, different subdirectories of the same git repo would share the same
@@ -460,18 +461,18 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
 
     createEffect(() => {
       const projects = server.projects.list()
-      const seen = new Set(projects.map((project) => project.worktree))
+      const seen = new Set(projects.map((project) => folderKey(project.worktree)))
 
       batch(() => {
         for (const project of projects) {
           const root = rootFor(project.worktree)
-          if (root === project.worktree) continue
+          if (folderKey(root) === folderKey(project.worktree)) continue
 
           server.projects.remove(project.worktree)
 
-          if (!seen.has(root)) {
+          if (!seen.has(folderKey(root))) {
             server.projects.open(root)
-            seen.add(root)
+            seen.add(folderKey(root))
           }
 
           if (project.expanded) server.projects.expand(root)
@@ -480,6 +481,17 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
     })
 
     const enriched = createMemo(() => server.projects.list().map(enrich))
+
+    // Projects that were saved twice, in two spellings of one folder, were merged: what the sidebar remembered of the other
+    // spelling goes to the one that stays.
+    createEffect(() => {
+      if (!ready()) return
+      const moved = moveToKept(
+        store.sidebar.workspaces,
+        enriched().flatMap((project) => [project.worktree, ...(project.sandboxes ?? [])]),
+      )
+      if (moved) setStore("sidebar", "workspaces", reconcile(moved))
+    })
 
     createEffect(() => {
       const projects = enriched()
@@ -547,16 +559,16 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
       projects: {
         list: enriched,
         recentlyClosed: createMemo(() => {
-          const known = new Set(serverSync().data.project.map((project) => pathKey(project.worktree)))
+          const known = new Set(serverSync().data.project.map((project) => folderKey(project.worktree)))
           return server.projects
             .recentlyClosed()
-            .filter((worktree) => known.has(pathKey(worktree)))
+            .filter((worktree) => known.has(folderKey(worktree)))
             .slice(0, RECENTLY_CLOSED_DISPLAY_LIMIT)
             .map((worktree) => enrich({ worktree, expanded: false }))
         }),
         open(directory: string) {
           const root = rootFor(directory)
-          if (server.projects.list().find((x) => x.worktree === root)) return
+          if (server.projects.list().find((x) => folderKey(x.worktree) === folderKey(root))) return
           void serverSync().project.loadSessions(root)
           server.projects.open(root)
         },

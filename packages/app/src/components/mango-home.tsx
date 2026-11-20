@@ -18,7 +18,6 @@ import { mangoDesktopError } from "@/utils/mango-desktop"
 import {
   chosenBytes,
   contextLabel,
-  contextWords,
   diskDrive,
   engineUpdate,
   homeView,
@@ -374,10 +373,7 @@ function ModelFacts(props: { model: CatalogEntry }) {
               : language.t("mango.home.onCpu")}
           </span>
           <span>
-            {language.t("mango.home.context", {
-              context: contextLabel(place().context),
-              words: contextWords(place().context),
-            })}
+            {language.t("mango.home.context", { context: contextLabel(place().context) })}
           </span>
           <Show when={speed()}>
             {(value) => <span data-slot="mango-speed">{language.t(`mango.speed.${value()}`)}</span>}

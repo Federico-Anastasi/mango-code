@@ -29,6 +29,7 @@ import { authHeaders } from "@/utils/server"
 import { SettingsListV2 } from "../settings-v2/parts/list"
 import { SettingsRowV2 } from "../settings-v2/parts/row"
 import { useSettingsProject } from "./directory"
+import { folderKey } from "@/utils/path-key"
 import { PaneHeader } from "./header"
 
 type Scope = "all" | "folder"
@@ -160,7 +161,7 @@ export const SettingsAgent: Component<{ focus?: string }> = (props) => {
                 appearance="inline"
                 data-action="settings-prompt-project"
                 options={projects()}
-                current={projects().find((project) => project.worktree === directory())}
+                current={projects().find((project) => folderKey(project.worktree) === folderKey(directory()))}
                 placement="bottom-end"
                 gutter={6}
                 value={(project) => project.worktree}

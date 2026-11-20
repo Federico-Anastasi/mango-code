@@ -89,7 +89,7 @@ pub fn on_close(window: &WebviewWindow) {
         hide(window);
         return;
     };
-    let agent_page = window.url().is_ok_and(|url| url.host_str() == Some("127.0.0.1") && url.port() == Some(crate::agent_port()));
+    let agent_page = crate::on_agent_page(window);
     if decide(seen(&data), agent_page, PENDING.waiting()) == Close::Hide {
         PENDING.answer();
         hide(window);

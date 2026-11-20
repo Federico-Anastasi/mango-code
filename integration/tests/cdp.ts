@@ -2,6 +2,8 @@
 // evaluate code in the page, collect console messages and exceptions, take screenshots, listen to its events.
 
 export interface Page {
+  /** The id of the target in the browser's list of pages. */
+  id: string;
   evaluate: (expression: string) => Promise<any>;
   send: (method: string, params?: object) => Promise<any>;
   /** Console messages and exceptions of the page, in order. */
@@ -11,7 +13,7 @@ export interface Page {
   close: () => void;
 }
 
-export async function page(port: number, choose: (t: { url: string; type: string }) => boolean, waitMs = 60_000): Promise<Page> {
+export async function page(port: number, choose: (t: { url: string; type: string; id: string }) => boolean, waitMs = 60_000): Promise<Page> {
   const t0 = Date.now();
   let target: any;
   while (!target) {
@@ -52,5 +54,22 @@ export async function page(port: number, choose: (t: { url: string; type: string
     if (r.result?.exceptionDetails) throw new Error(r.result.exceptionDetails.exception?.description ?? r.result.exceptionDetails.text);
     return r.result?.result?.value;
   };
-  return { evaluate, send, console, on: (method, handler) => void handlers.push({ method, handler }), close: () => ws.close() };
+  return { id: target.id, evaluate, send, console, on: (method, handler) => void handlers.push({ method, handler }), close: () => ws.close() };
+}
+
+/**
+ * The page of the Mango Code window at `agent`. A hidden window of the app (the one that reads the browser's old storage) is
+ * at the same address for a moment and has no bridge: the page that has it is the interface.
+ */
+export async function windowPage(port: number, agent: string, waitMs = 120_000): Promise<Page> {
+  const t0 = Date.now();
+  const rejected = new Set<string>();
+  for (;;) {
+    const candidate = await page(port, (t) => t.url.startsWith(agent) && !rejected.has(t.id), Math.max(1_000, waitMs - (Date.now() - t0)));
+    if (await candidate.evaluate(`typeof window.__MANGO_DESKTOP__ === "object"`).catch(() => false)) return candidate;
+    candidate.close();
+    rejected.add(candidate.id);
+    if (Date.now() - t0 > waitMs) throw new Error(`no page of the window at ${agent} on remote debugging ${port}`);
+    await Bun.sleep(300);
+  }
 }

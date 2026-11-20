@@ -7,6 +7,7 @@ use crate::choices::{Choices, SmallModels, WhereChoice};
 use crate::hardware::fixture::*;
 use crate::view::models_view;
 use mango_common::catalog::Sampling;
+use mango_common::Build;
 use mango_common::i18n::{lang, Lang};
 use std::path::PathBuf;
 
@@ -333,8 +334,8 @@ fn the_chosen_context_is_used_if_it_fits_and_never_goes_over_what_fits() {
     assert_eq!(v.verdict.place.unwrap().context, 65_536);
     assert_eq!(v.limits.context, [32_768, 65_536, largest], "the choices offered don't shrink with the choice made");
 
-    // More than fits, or more than the model's target: the most that fits.
-    for asked in [200_000, 262_144, 1_000_000] {
+    // More than fits: the most that fits.
+    for asked in [200_000, 262_144] {
         with_context(Some(asked));
         assert_eq!(plan(&w, "3.5-4b", &hw).unwrap().ctx, largest, "{asked}");
     }
@@ -361,6 +362,63 @@ fn the_contexts_offered_end_with_the_largest_that_fits() {
     assert_eq!(view_of(&w, "3.8", &three_gpus()).limits.context, [32_768, 65_536, 92_160]);
     // That doesn't fit: nothing to offer.
     assert!(view_of(&w, "toq", &pc(vec![], 8192)).limits.context.is_empty());
+}
+
+/// Nothing caps the context of the automatic choice but what the model holds and what the memory carries.
+#[test]
+fn the_automatic_context_reaches_the_models_maximum_when_it_fits() {
+    let w = world(false);
+    let big = pc(vec![nvidia(0, "NVIDIA GeForce RTX 4090", 24_576, (8, 9), (12, 6))], 65_536);
+    assert_eq!(plan(&w, "3.5-4b", &big).unwrap().ctx, 262_144);
+    assert_eq!(view_of(&w, "3.5-4b", &big).limits.context, [32_768, 65_536, 131_072, 262_144]);
+    // a model whose own maximum is lower keeps it
+    assert_eq!(plan(&w, "ling", &big).unwrap().ctx, 131_072);
+    assert_eq!(view_of(&w, "ling", &big).limits.context, [32_768, 65_536, 131_072]);
+}
+
+/// A context between the steps (typed, or reached with the plus) is the context of the plan, exactly.
+#[test]
+fn a_personal_context_is_the_one_of_the_plan() {
+    let w = world(false);
+    let hw = three_gpus();
+    choices::set_model(&w.paths, "3.5-4b", Choices { context: Some(100_000), ..Choices::default() }).unwrap();
+    let p = plan(&w, "3.5-4b", &hw).unwrap();
+    assert_eq!(p.ctx, 100_000);
+    assert!(has(&p.spec.args, ["-c", "100000"]), "{:?}", p.spec.args);
+    let v = view_of(&w, "3.5-4b", &hw);
+    assert_eq!(v.verdict.place.unwrap().context, 100_000);
+    assert_eq!(v.limits.context, [32_768, 65_536, 126_976], "the steps offered don't follow the choice");
+    assert_eq!(v.choices.context, Some(100_000));
+}
+
+/// Under the minimum, or over what the model holds, a choice is refused with a sentence and nothing is saved.
+#[test]
+fn a_context_under_the_minimum_or_over_the_models_maximum_is_refused() {
+    let w = world(false);
+    let ask = |key: &str, context| choices::set_model(&w.paths, key, Choices { context: Some(context), ..Choices::default() });
+    let under = ask("3.5-4b", 32_767).unwrap_err().to_string();
+    assert!(under.contains(&tr!("Almeno 32K token: con meno l'agente non ha spazio per lavorare.", "At least 32K tokens: with less the agent has no room to work.")), "{under}");
+    let over = ask("ling", 131_073).unwrap_err().to_string();
+    assert!(over.contains(&tr!("regge al massimo 128K token di contesto", "holds at most 128K tokens of context")), "{over}");
+    assert!(ask("3.5-4b", 262_145).is_err());
+    assert!(!w.paths.data.join(choices::FILE).exists(), "a refused choice leaves nothing behind");
+    // the limits themselves are valid
+    ask("3.5-4b", 32_768).unwrap();
+    ask("3.5-4b", 262_144).unwrap();
+    ask("ling", 131_072).unwrap();
+}
+
+/// A saved context larger than what the cards now hold is kept as chosen: the plan takes what fits, the view says both.
+#[test]
+fn a_saved_context_larger_than_the_new_hardware_holds_is_kept_and_the_effective_one_is_shown() {
+    let w = world(false);
+    write_choices(&w, r#"{ "models": { "3.5-4b": { "context": 262144 } } }"#);
+    let small = pc(vec![nvidia(0, "NVIDIA GeForce RTX 3050", 7000, (8, 6), (12, 6))], 16_384);
+    let p = plan(&w, "3.5-4b", &small).unwrap();
+    assert!((32_768..262_144).contains(&p.ctx), "{}", p.ctx);
+    let v = view_of(&w, "3.5-4b", &small);
+    assert_eq!((v.choices.context, v.verdict.place.unwrap().context), (Some(262_144), p.ctx));
+    assert_eq!(*v.limits.context.last().unwrap(), p.ctx, "the largest offered is what fits, not the choice");
 }
 
 // --- the PC of issue 2 ----------------------------------------------------------------------------------------
@@ -728,7 +786,7 @@ fn an_unreadable_file_is_an_error_and_is_not_overwritten() {
 #[test]
 fn what_is_written_is_read_back_and_only_the_differences_are_kept() {
     let w = world(false);
-    let mut mine = Choices { place: WhereChoice::Pick, gpus: vec![GTX_1080.into()], context: Some(65_536), style: choices::Style::Creative, reasoning: Some(false) };
+    let mut mine = Choices { place: WhereChoice::Pick, gpus: vec![GTX_1080.into()], context: Some(65_536), style: choices::Style::Creative, reasoning: Some(false), sampling: Sampling { temperature: Some(0.4), top_k: Some(10), ..Sampling::default() } };
     choices::set_model(&w.paths, "ling", mine.clone()).unwrap();
     choices::set_model(&w.paths, "3.5-4b", Choices { place: WhereChoice::Cpu, ..Choices::default() }).unwrap();
     choices::set_default(&w.paths, Some("ling")).unwrap();
@@ -803,6 +861,26 @@ fn the_files_of_the_user_are_named_and_the_downloaded_ones_are_not() {
     let own = |key: &str| views.iter().find(|v| v.key == key).unwrap().own_files.clone();
     assert_eq!(own("local-mine"), [local]);
     assert!(own("hf-mine").is_empty() && own("ling").is_empty(), "Mango Code downloads them");
+}
+
+/// A model whose downloaded files the user put in another folder says which one; the others say nothing.
+#[test]
+fn a_model_moved_to_another_folder_says_where() {
+    let w = world(false);
+    let file = load_models(&w.paths).unwrap();
+    let gguf = model_cfg(&file, "ling").unwrap().gguf.unwrap();
+    let fast = w._dir.path().join("fast disk");
+    touch(&fast.join("ling.gguf"));
+    mango_common::model_files::update(&w.paths.data, |all| {
+        drop(all.insert(gguf, mango_common::model_files::Place { at: fast.join("ling.gguf"), own: true }))
+    })
+    .unwrap();
+
+    let views = models_view(&w.paths, &three_gpus()).unwrap();
+    let placed = |key: &str| views.iter().find(|v| v.key == key).unwrap().placed_in.clone();
+    assert_eq!(placed("ling"), Some(fast.display().to_string()));
+    assert_eq!(placed("3.5-4b"), None);
+    assert!(views.iter().find(|v| v.key == "ling").unwrap().own_files.is_empty(), "Mango Code's own file, not the user's");
 }
 
 #[test]
@@ -944,6 +1022,64 @@ fn a_model_without_values_in_the_catalog_gets_only_what_the_user_chose() {
     assert_eq!(serde_json::Value::Object(choices::request_defaults(&paths, "m").unwrap()), serde_json::json!({ "temperature": 0.3 }));
 }
 
+/// The values of the style are chosen one by one: they win over the style's, only the ones chosen change, and the
+/// view shows what a request gets.
+#[test]
+fn the_values_chosen_win_over_the_style_and_over_the_catalog() {
+    let w = world(false);
+    let defaults = |key: &str| serde_json::Value::Object(choices::request_defaults(&w.paths, key).unwrap());
+    let own = Sampling { temperature: Some(0.5), top_k: Some(0), repeat_penalty: Some(1.2), ..Sampling::default() };
+    choices::set_model(&w.paths, "ling", Choices { sampling: own, ..Choices::default() }).unwrap();
+    assert_eq!(defaults("ling"), serde_json::json!({ "temperature": 0.5, "top_p": 0.95, "top_k": 0, "repeat_penalty": 1.2 }));
+    let hw = three_gpus();
+    assert_eq!(view_of(&w, "ling", &hw).sampling, Some(Sampling { temperature: Some(0.5), top_p: Some(0.95), top_k: Some(0), repeat_penalty: Some(1.2), ..Sampling::default() }));
+    // over a style that is not the model's own
+    choices::set_model(&w.paths, "ling", Choices { style: choices::Style::Precise, sampling: own, ..Choices::default() }).unwrap();
+    assert_eq!(defaults("ling")["temperature"], serde_json::json!(0.5));
+    choices::set_model(&w.paths, "ling", Choices { style: choices::Style::Precise, ..Choices::default() }).unwrap();
+    assert_eq!(defaults("ling")["temperature"], serde_json::json!(0.3));
+    assert_eq!(view_of(&w, "ling", &hw).sampling.unwrap().temperature, Some(0.3));
+    // a value for a field the catalog leaves empty
+    choices::set_model(&w.paths, "lfm", Choices { sampling: Sampling { top_p: Some(0.9), ..Sampling::default() }, ..Choices::default() }).unwrap();
+    assert_eq!(defaults("lfm"), serde_json::json!({ "temperature": 0.1, "top_p": 0.9, "top_k": 50, "repeat_penalty": 1.05 }));
+    // saved and read back
+    assert_eq!(choices::read(&w.paths).unwrap().models["lfm"].sampling.top_p, Some(0.9));
+    // the choices saved before the values existed read as they were
+    write_choices(&w, r#"{ "models": { "ling": { "style": "creative", "context": 65536 } } }"#);
+    let c = choices::read(&w.paths).unwrap();
+    assert_eq!(c.models["ling"].sampling, Sampling::default());
+    assert_eq!(defaults("ling")["temperature"], serde_json::json!(1.1));
+}
+
+/// Each value has its interval; a value outside it is refused with a sentence that names it, and the edges are valid.
+#[test]
+fn the_values_of_the_style_have_their_intervals() {
+    let w = world(false);
+    let set = |sampling: Sampling| choices::set_model(&w.paths, "ling", Choices { sampling, ..Choices::default() });
+    let refused = [
+        ("temperature", Sampling { temperature: Some(2.01), ..Sampling::default() }),
+        ("temperature", Sampling { temperature: Some(-0.01), ..Sampling::default() }),
+        ("top_p", Sampling { top_p: Some(1.01), ..Sampling::default() }),
+        ("top_p", Sampling { top_p: Some(-0.5), ..Sampling::default() }),
+        ("min_p", Sampling { min_p: Some(1.5), ..Sampling::default() }),
+        ("presence_penalty", Sampling { presence_penalty: Some(2.5), ..Sampling::default() }),
+        ("presence_penalty", Sampling { presence_penalty: Some(-2.5), ..Sampling::default() }),
+        ("repeat_penalty", Sampling { repeat_penalty: Some(0.0), ..Sampling::default() }),
+        ("repeat_penalty", Sampling { repeat_penalty: Some(-1.0), ..Sampling::default() }),
+    ];
+    for (name, sampling) in refused {
+        let e = set(sampling).unwrap_err().to_string();
+        assert!(e.contains(name) && e.contains("Ling"), "{name}: {e}");
+    }
+    assert!(set(Sampling { temperature: Some(f64::NAN), ..Sampling::default() }).is_err());
+    assert!(!w.paths.data.join(choices::FILE).exists());
+    set(Sampling { temperature: Some(0.0), top_p: Some(0.0), min_p: Some(0.0), top_k: Some(0), presence_penalty: Some(-2.0), repeat_penalty: Some(0.01) }).unwrap();
+    set(Sampling { temperature: Some(2.0), top_p: Some(1.0), min_p: Some(1.0), top_k: Some(100_000), presence_penalty: Some(2.0), repeat_penalty: Some(10.0) }).unwrap();
+    // a saved file with a value outside the interval is an error with a sentence, not the standard values in its place
+    write_choices(&w, r#"{ "models": { "ling": { "sampling": { "temperature": 5 } } } }"#);
+    assert!(choices::read(&w.paths).unwrap_err().to_string().contains(&tr!("Le tue scelte salvate non sono valide", "Your saved choices are not valid")));
+}
+
 // --- what the app tells about each model ----------------------------------------------------------------------
 
 /// A model as the app lists it: its name, what a download brings, whether it is on disk and can be used, whether it
@@ -992,6 +1128,7 @@ fn listed(key: &str, placement: Option<Placement>, present: bool) -> view::Model
         images: false,
         user: false,
         own_files: vec![],
+        placed_in: None,
         present,
         waits_engine: false,
         bytes: 1,
@@ -1182,4 +1319,53 @@ fn a_card_lent_to_another_job_is_out_of_the_plan_that_is_looked_at() {
     let used = with_used(2, 3500);
     assert_eq!(taken_before_start(&w.paths, &hw, &used, "bonsai2", &[1]).unwrap().map(|t| t.cards), Some(vec![2]));
     assert_eq!(taken_before_start(&w.paths, &hw, &used, "bonsai2", &[]).unwrap(), None, "with the 1080 back the 1660 SUPER is not used");
+}
+
+/// A model that runs on the processor of a PC with graphics cards is started with the processor-only build of official
+/// llama.cpp: the CUDA one, used with no card in sight, can close while it reads a prompt. The plan, the verdict's engine
+/// and the download all say the same build; the same model on the cards keeps the cards' build.
+#[test]
+fn a_model_on_the_processor_of_a_pc_with_cards_uses_the_processor_build() {
+    let w = world(false);
+    let hw = three_gpus();
+    let on_cards = plan(&w, "3.5-4b", &hw).unwrap();
+    assert!(on_cards.spec.exe.starts_with(w.paths.engines.join("llamacpp")) && !on_cards.spec.exe.starts_with(w.paths.engines.join("llamacpp").join("b12110-cpu")), "{:?}", on_cards.spec.exe);
+    assert_eq!(download_of(&w.paths, "3.5-4b", &hw).unwrap().build, Build::Cuda12);
+
+    choose(&w, "3.5-4b", WhereChoice::Cpu);
+    let p = plan(&w, "3.5-4b", &hw).unwrap();
+    assert!(is_on_cpu(&p), "{:?}", p.spec.args);
+    assert_eq!(p.spec.exe, w.paths.engines.join("llamacpp").join("b12110-cpu").join("llama-server.exe"));
+    assert_eq!(download_of(&w.paths, "3.5-4b", &hw).unwrap().build, Build::Cpu);
+    let entry = catalog_for(&w.paths, &hw).unwrap().0.into_iter().find(|e| e.key == "3.5-4b").unwrap();
+    assert_eq!(entry.engine, Some(("llamacpp".to_string(), Build::Cpu)));
+    assert_eq!(view_of(&w, "3.5-4b", &hw).verdict.place.map(|p| p.placement), Some(Placement::Cpu));
+
+    // Another model, which the cards keep, still has the cards' build.
+    assert_eq!(download_of(&w.paths, "3.5-2b", &hw).unwrap().build, Build::Cuda12);
+}
+
+/// The processor build is small and the PC already has the engine for its cards: a model on the processor whose build is
+/// not there yet waits for it like for an engine update (the app downloads it by itself); a PC without any build of the
+/// engine downloads it with the model, as ever.
+#[test]
+fn the_processor_build_missing_arrives_by_itself_on_a_pc_that_has_the_cards_engine() {
+    let w = world(false);
+    let hw = three_gpus();
+    choose(&w, "3.5-4b", WhereChoice::Cpu);
+    std::fs::remove_dir_all(w.paths.engines.join("llamacpp").join("b12110-cpu")).unwrap();
+    let v = view_of(&w, "3.5-4b", &hw);
+    assert!(!v.present && v.waits_engine, "present {} waits {}", v.present, v.waits_engine);
+    assert!(plan(&w, "3.5-4b", &hw).is_err(), "it does not start until the build is there");
+    let updates = engine_updates(&w.paths, &hw).unwrap();
+    assert_eq!(updates.len(), 1, "one build, one update: {updates:?}");
+    assert!(view_of(&w, &updates[0].model, &hw).waits_engine, "the model that carries it waits for it: {updates:?}");
+
+    std::fs::remove_dir_all(w.paths.engines.join("llamacpp")).unwrap();
+    for other in ["prism", "toq"] {
+        std::fs::remove_dir_all(w.paths.engines.join(other)).unwrap();
+    }
+    let v = view_of(&w, "3.5-4b", &hw);
+    assert!(!v.present && !v.waits_engine, "a PC with no engine at all: the model's download brings it");
+    assert!(engine_updates(&w.paths, &hw).unwrap().is_empty());
 }

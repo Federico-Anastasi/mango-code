@@ -934,22 +934,54 @@ fn without_cards_the_general_plan_runs_on_the_cpu() {
     assert_eq!(p.ctx, 131_072);
 }
 
-/// Official llama.cpp has no on-disk memory: the conversation is saved in the slot before stopping and, if the file
-/// is there, restored as soon as the engine is ready.
+/// Official llama.cpp has no on-disk memory: the manager keeps its slot files (the last conversation, the system prompt of the
+/// new ones), so the plan carries where, for which model and for which engine, and asks the engine for nothing at start or stop.
 #[test]
-fn the_general_plan_saves_the_conversation_and_restores_it_if_there() {
+fn the_general_plan_hands_the_slot_files_to_the_manager() {
     let t = Fake::small();
     let f = t.save();
     let hw = pc(vec![], 16_384);
     let p = build_plan(&t.paths, &f, None, 8080, &hw, &[], |_, _, _| panic!("GGUF read")).unwrap();
-    let save = p.spec.shutdown_post.as_ref().unwrap();
-    assert_eq!(save.url, "http://127.0.0.1:8080/slots/0?action=save");
-    assert_eq!(save.body, r#"{"filename":"4b.bin"}"#);
-    assert_eq!(p.spec.startup_post, None, "nothing to restore the first time");
-    std::fs::write(t.paths.data.join("slots").join("4b.bin"), b"state").unwrap();
-    let p = build_plan(&t.paths, &f, None, 8080, &hw, &[], |_, _, _| panic!("GGUF read")).unwrap();
-    let restore = p.spec.startup_post.unwrap();
-    assert_eq!((restore.url.as_str(), restore.body.as_str()), ("http://127.0.0.1:8080/slots/0?action=restore", r#"{"filename":"4b.bin"}"#));
+    assert_eq!((p.spec.shutdown_post.as_ref(), p.spec.startup_post.as_ref()), (None, None));
+    let slots = p.slots.as_ref().unwrap();
+    assert_eq!((slots.folder.as_path(), slots.memory.as_path(), slots.model.as_str()), (t.paths.data.join("slots").as_path(), t.paths.data.join("memory").as_path(), "4b"));
+    assert!(slots.folder.is_dir());
+    let a = &p.spec.args;
+    assert!(a.windows(2).any(|w| w[0] == "--slot-save-path" && std::path::Path::new(&w[1]) == slots.folder), "{a:?}");
+    // The same plan on another port is the same state; a profile keeps its own memory.
+    let again = build_plan(&t.paths, &f, None, 9090, &hw, &[], |_, _, _| panic!("GGUF read")).unwrap();
+    assert_eq!(again.slots.unwrap().signature, slots.signature);
+    assert_eq!(make_plan(&Fake::new(), &three_gpus()).unwrap().slots, None);
+}
+
+/// What a saved state depends on besides the text: the model file, the engine, the chat template and what shapes the
+/// cache. Not where the engine listens, its context, its threads, its paths or how it places the layers.
+#[test]
+fn the_signature_of_a_state_follows_the_model_the_engine_the_template_and_the_cache_and_nothing_else() {
+    let dir = tempfile::tempdir().unwrap();
+    let model = dir.path().join("m.gguf");
+    let template = dir.path().join("t.jinja");
+    std::fs::write(&model, b"abc").unwrap();
+    std::fs::write(&template, b"{{ messages }}").unwrap();
+    let template_arg = template.display().to_string();
+    let exe = Path::new(r"C:\engines\llamacpp\1-cpu\llama-server.exe");
+    let args = |extra: &[&str], port: &str, ctx: &str| -> Vec<String> {
+        ["-m", "x.gguf", "-c", ctx, "--port", port, "-t", "8", "--slot-save-path", r"C:\data\slots", "--chat-template-file", &template_arg]
+            .iter()
+            .chain(extra)
+            .map(|a| a.to_string())
+            .collect()
+    };
+    let base = slot_signature(exe, &model, &args(&["-fit", "off"], "8080", "65536"));
+    assert_eq!(base, slot_signature(exe, &model, &args(&["-fit", "off"], "9999", "131072")), "port and context are not the state");
+    assert_eq!(base, slot_signature(exe, &model, &args(&["-fit", "off", "-ngl", "all", "--metrics"], "8080", "65536")), "placing and watching are not");
+    assert_ne!(base, slot_signature(exe, &model, &args(&["-fit", "off", "-ctk", "q8_0"], "8080", "65536")), "the cache type is");
+    assert_ne!(base, slot_signature(Path::new(r"C:\engines\llamacpp\2-cpu\llama-server.exe"), &model, &args(&["-fit", "off"], "8080", "65536")), "the engine is");
+    std::fs::write(&template, b"{{ messages }} and more").unwrap();
+    let new_template = slot_signature(exe, &model, &args(&["-fit", "off"], "8080", "65536"));
+    assert_ne!(base, new_template, "the template is");
+    std::fs::write(&model, b"abcd").unwrap();
+    assert_ne!(new_template, slot_signature(exe, &model, &args(&["-fit", "off"], "8080", "65536")), "the model file is");
 }
 
 #[test]
@@ -1094,7 +1126,7 @@ fn the_small_catalog_models_on_the_three_cards() {
         let p = general::plan(&file, &model_cfg(&file, key).unwrap(), &three_gpus(), &[], &Scope::default()).unwrap();
         (p.ctx, p.gpus.iter().map(|g| g.index).collect::<Vec<_>>())
     };
-    assert_eq!(on("3.5-2b"), (131_072, vec![0]));
+    assert_eq!(on("3.5-2b"), (262_144, vec![0]));
     assert_eq!(on("3.5-4b"), (126_976, vec![0]));
 }
 
@@ -1131,14 +1163,16 @@ fn the_reason_counts_the_memory_of_the_cards_the_plan_uses() {
     assert_eq!(located.fit.map(|f| f.ctx), Some(131_072));
     assert!(reason.contains(&tr!("su 5,9 GB disponibili", "out of 5.9 GB available")), "{reason}");
     // the context is written as the settings write it, not as a raw number
-    assert!(reason.contains(&tr!("per 128k token", "for 128k tokens")) && !reason.contains("131072"), "{reason}");
+    assert!(reason.contains(&tr!("per 128K token", "for 128K tokens")) && !reason.contains("131072"), "{reason}");
 }
 
-/// A target context below the agent's minimum (the integration tests use 16384) stays as it is.
+/// The catalog's context is the maximum of a model that does not say its own; below the agent's minimum (the integration
+/// tests use 16384) it stays as it is.
 #[test]
 fn a_target_below_the_minimum_stays_its_own() {
     let mut t = Fake::small();
     t.catalog["ctx"] = 16_384.into();
+    t.catalog["models"]["4b"].as_object_mut().unwrap().remove("ctx");
     let f = t.save();
     let p = build_plan(&t.paths, &f, None, 8080, &pc(vec![], 16_384), &[], |_, _, _| unreachable!()).unwrap();
     assert_eq!(p.ctx, 16_384);
@@ -1161,8 +1195,8 @@ fn if_it_does_not_fit_the_error_says_how_much_is_missing_and_what_to_do() {
     assert_eq!(
         e,
         tr!(
-            "Il modello «Qwen3.5-4B» non ci sta in questo computer: servono almeno 3,1 GB (pesi e cache per 32k token) e la RAM ne ha 2,0. Scegli un modello più piccolo.",
-            "The model «Qwen3.5-4B» doesn't fit on this computer: at least 3.1 GB are needed (weights and cache for 32k tokens) and the RAM has 2.0. Choose a smaller model."
+            "Il modello «Qwen3.5-4B» non ci sta in questo computer: servono almeno 3,1 GB (pesi e cache per 32K token) e la RAM ne ha 2,0. Scegli un modello più piccolo.",
+            "The model «Qwen3.5-4B» doesn't fit on this computer: at least 3.1 GB are needed (weights and cache for 32K tokens) and the RAM has 2.0. Choose a smaller model."
         )
     );
     // a 2 GiB card doesn't count (nothing is left on it after the reserve); a 3 GiB one does, with what is left
@@ -1190,14 +1224,14 @@ fn toq_is_never_proposed_as_the_fastest() {
     assert!(c.values().any(|r| r.fastest), "{c:?}");
 }
 
-/// The card is too small for the model: it runs entirely on the processor, with the cards' build (already on disk) and
-/// the cards empty. Never a part here and a part there.
+/// The card is too small for the model: it runs entirely on the processor, with the processor-only build and the cards
+/// empty. Never a part here and a part there.
 #[test]
 fn when_the_card_is_not_enough_it_runs_entirely_on_the_processor() {
     let hw = pc(vec![nvidia(0, "NVIDIA GeForce GTX 1650", 4096, (7, 5), (12, 6))], 16_384);
     let p = general_plan(&hw, &[]).unwrap();
     all_on_cpu(&p);
-    assert!(p.spec.exe.parent().unwrap().ends_with("b12110-cuda-12"), "{:?}", p.spec.exe);
+    assert!(p.spec.exe.parent().unwrap().ends_with("b12110-cpu"), "{:?}", p.spec.exe);
     assert_eq!(p.ctx, 131_072);
     // Cards lent to another job don't touch a model that runs on the processor.
     let p = general_plan(&hw, &[0]).unwrap();
@@ -1284,12 +1318,15 @@ fn on_a_cpu_with_16gb_the_small_model_and_bonsai_fit() {
 fn with_a_24gb_card_all_the_models_fit() {
     let hw = pc(vec![nvidia(0, "NVIDIA GeForce RTX 4090", 24_564, (8, 9), (12, 6))], 65_536);
     let c = recommendations(&hw);
+    let file = load_models(&real_paths()).unwrap();
     for k in LOCAL_ORDER {
-        assert!(c[k].placement == Some(Placement::Gpu) && c[k].context == 131_072 && !c[k].profile, "{k}: {:?}", c[k]);
+        let max = model_cfg(&file, k).unwrap().max_context(&file);
+        assert!(c[k].placement == Some(Placement::Gpu) && (131_072.min(max)..=max).contains(&c[k].context) && !c[k].profile, "{k}: {:?}", c[k]);
     }
+    assert_eq!((c["3.6"].context, c["ling"].context), (262_144, 131_072), "no cap above the model's own maximum");
     assert!(c["toq"].reason.contains(&tr!("col suo motore", "its own engine")) && !c["toq"].reason.contains("toq"), "{}", c["toq"].reason);
     // the context as the interface writes it, never in tokens
-    let k = format!("{}k", (c["toq"].context + 512) / 1024);
+    let k = format!("{}K", (c["toq"].context + 512) / 1024);
     assert!(c["toq"].reason.contains(&k) && !c["toq"].reason.contains("token"), "{}", c["toq"].reason);
     assert_eq!(c["bonsai2"].bytes, BONSAI_Q2_0);
 }
@@ -1489,9 +1526,12 @@ fn real_plan(key: &str, hw: &Hardware) -> (EnginePlan, Paths, tempfile::TempDir)
         std::fs::write(p, b"").unwrap();
     }
     let version = if a.engine() == "toq" { "35e7256" } else { "b12110" };
-    let exe = paths.engines.join(a.engine()).join(format!("{version}-{}", a.build().as_str()));
-    std::fs::create_dir_all(&exe).unwrap();
-    std::fs::write(exe.join("llama-server.exe"), b"").unwrap();
+    // The processor build too: a model that ends up on the processor of a PC with cards runs with it.
+    for build in [a.build().as_str(), "cpu"] {
+        let exe = paths.engines.join(a.engine()).join(format!("{version}-{build}"));
+        std::fs::create_dir_all(&exe).unwrap();
+        std::fs::write(exe.join("llama-server.exe"), b"").unwrap();
+    }
     let plan = build_plan(&paths, &file, Some(key), 8080, hw, &[], |_, _, _| Ok(qwen38_27b())).unwrap();
     (plan, paths, dir)
 }
@@ -1820,4 +1860,27 @@ fn integrated_graphics_with_much_memory_is_the_card_of_the_plan() {
         let place = views.iter().find(|v| v.key == key).unwrap().verdict.place.clone();
         assert_eq!(place.map(|p| (p.placement, p.gpus)), Some((Placement::Gpu, vec![RADEON_8060S.to_string()])), "{key}");
     }
+}
+
+// --- a model whose file the user moved ----------------------------------------------------------------
+
+/// The file of a catalog model is in another folder (`model-files.json`): the plan opens it there, the model is on disk
+/// there and not in the models folder, and what is not in the map still opens from the models folder.
+#[test]
+fn a_model_moved_to_another_folder_starts_from_there() {
+    let t = Fake::small();
+    let elsewhere = t._dir.path().join("fast disk");
+    std::fs::create_dir_all(&elsewhere).unwrap();
+    std::fs::rename(t.paths.models.join("4b.gguf"), elsewhere.join("4b.gguf")).unwrap();
+    let hw = pc(vec![], 16_384);
+
+    let f = t.save();
+    let e = build_plan(&t.paths, &f, None, 8080, &hw, &[], |_, _, _| panic!("GGUF read")).unwrap_err().to_string();
+    assert!(e.contains(&tr!("non è sul disco", "is not on disk")), "without the map the file is missing: {e}");
+
+    let place = mango_common::model_files::Place { at: elsewhere.join("4b.gguf"), own: true };
+    mango_common::model_files::update(&t.paths.data, |places| drop(places.insert("4b.gguf".into(), place))).unwrap();
+    let f = t.save();
+    let p = build_plan(&t.paths, &f, None, 8080, &hw, &[], |_, _, _| panic!("GGUF read")).unwrap();
+    assert!(has(&p.spec.args, ["-m", &elsewhere.join("4b.gguf").display().to_string()]), "{:?}", p.spec.args);
 }

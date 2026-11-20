@@ -113,6 +113,11 @@ pub fn installed_program(paths: &Paths, engine: &str, build: Build) -> Option<Pa
     (build.cuda_major() == Some(12) && old.is_file()).then_some(old)
 }
 
+/// The engine is on the disk, in the catalog's version, for a build other than `build`.
+pub fn other_build_installed(paths: &Paths, engine: &str, build: Build) -> bool {
+    Build::ALL.into_iter().any(|b| b != build && installed_program(paths, engine, b).is_some())
+}
+
 /// An engine of the catalog has a version other than the catalog's on the disk for `build`: the app came with a new
 /// one, and that one is to be replaced. The two CUDA 12 builds take each other's place: a PC with a GTX 16 that had
 /// the plain one, the only one there was, now asks for its own.
@@ -501,6 +506,26 @@ mod tests {
         assert!(!before.exists(), "the version before goes");
         assert!(!older_engine(&p.paths, "prism", Build::Cuda12Gtx16));
         assert_eq!(installed_engine(&p.paths, "prism", Build::Cuda12), None, "one build is not the other");
+    }
+
+    /// Another build of the engine in the catalog's version, on the disk, is what tells that a build still to download is
+    /// small news for this PC; a version other than the catalog's, or nothing at all, is not.
+    #[test]
+    fn another_build_of_the_same_version_is_told_apart_from_nothing() {
+        let z = zip(&[("llama-server.exe", &system_exe("curl.exe"))]);
+        let p = fixture(&[("/cuda.zip", &z)], &[("llamacpp", "cuda-12", "/cuda.zip", None), ("llamacpp", "cpu", "/cuda.zip", None)]);
+        assert!(!other_build_installed(&p.paths, "llamacpp", Build::Cpu), "nothing on the disk");
+        let engine = |folder: &str| {
+            let dir = p.paths.engines.join("llamacpp").join(folder);
+            fs::create_dir_all(&dir).unwrap();
+            fs::write(dir.join(LLAMA_SERVER), b"exe").unwrap();
+        };
+        engine("v1.2.2-cuda-12");
+        assert!(!other_build_installed(&p.paths, "llamacpp", Build::Cpu), "the version before is not this version's");
+        engine("v1.2.3-cuda-12");
+        assert!(other_build_installed(&p.paths, "llamacpp", Build::Cpu));
+        assert!(!other_build_installed(&p.paths, "llamacpp", Build::Cuda12), "a build is not another build of itself");
+        assert!(!other_build_installed(&p.paths, "prism", Build::Cpu), "another engine");
     }
 
     /// In tests the check is only `--version`: the system executable standing in for the engine lists no GPUs.

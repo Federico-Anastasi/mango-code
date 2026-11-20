@@ -32,6 +32,11 @@ impl Sites {
         Ok(url.to_string())
     }
 
+    /// The ports of all the sites opened so far.
+    pub fn ports(&self) -> Vec<u16> {
+        self.ports.lock().unwrap().values().copied().collect()
+    }
+
     /// The port of the folder's site, opened the first time the folder is asked for.
     fn port(&self, root: &Path) -> std::io::Result<u16> {
         let mut ports = self.ports.lock().unwrap();
