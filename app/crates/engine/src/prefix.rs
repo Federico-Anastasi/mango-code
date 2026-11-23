@@ -2,7 +2,7 @@
 //! engines keep their own memory, `--cache-disk`).
 //!
 //! The first request of a conversation carries the system prompt (the app's instructions, the tools) and, last, the
-//! working folder and the date. The agent says how many bytes of the last system message come before them
+//! working folder and the date. The agent says how many bytes of the system message come before them
 //! (`STABLE_PROMPT`); the engine is asked for the conversation's tokens with and without what comes after, and what the
 //! two have in common is the *prefix*: the tokens every conversation with this model, whatever its folder or day, starts
 //! with. It is read once (`/completion` with `n_predict: 0`) and the slot saved as `<model>.prefix-<key>.bin`; a new
@@ -26,7 +26,7 @@ use std::net::TcpStream;
 use std::sync::{Mutex, MutexGuard, TryLockError};
 use std::time::{Duration, Instant, SystemTime};
 
-/// The header with the bytes of the last system message that come before the working folder and the date.
+/// The header with the bytes of the system message that come before the working folder and the date.
 pub const STABLE_PROMPT: &str = "X-Mango-Stable-Prompt";
 
 /// A prefix shorter than this is not worth a file.
@@ -90,8 +90,6 @@ impl std::error::Error for ClientGone {}
 /// A conversation request, read for what the prefix needs.
 struct Chat {
     body: Value,
-    /// How many system messages come first.
-    leading: usize,
     stable: usize,
     key: String,
     /// The request opens the conversation: a system prompt and the first message.
@@ -104,32 +102,27 @@ impl Chat {
     fn read(body: &[u8], stable: usize, signature: &str) -> Option<Chat> {
         let body: Value = serde_json::from_slice(body).ok()?;
         let messages = body["messages"].as_array()?;
-        let leading = messages.iter().take_while(|m| m["role"] == "system").count();
-        let mut texts: Vec<&str> = messages[..leading].iter().map(|m| m["content"].as_str()).collect::<Option<_>>()?;
-        let last = texts.pop()?;
-        if stable > last.len() || !last.is_char_boundary(stable) {
+        let first_message = messages.first().filter(|m| m["role"] == "system")?;
+        let system = first_message["content"].as_str()?;
+        if stable > system.len() || !system.is_char_boundary(stable) {
             return None;
         }
-        texts.push(&last[..stable]);
-        let first = messages.len() == leading + 1 && messages[leading]["role"] == "user";
-        let key = mango_common::sha256_hex(format!("{signature}\n{}\n{}\n{}", texts.join("\u{1}"), body["tools"], body["chat_template_kwargs"]).as_bytes());
-        Some(Chat { body, leading, stable, key, first })
+        let first = messages.len() == 2 && messages[1]["role"] == "user";
+        let key = mango_common::sha256_hex(format!("{signature}\n{}\n{}\n{}", &system[..stable], body["tools"], body["chat_template_kwargs"]).as_bytes());
+        Some(Chat { body, stable, key, first })
     }
 
     /// The tokens of the conversation's start as the engine's template makes them, with the whole system prompt and with
     /// the stable part only, each followed by a different first message: where they stop being equal is the prefix's end.
     fn tokens(&self, url: &str) -> Result<(Vec<Value>, Vec<Value>)> {
-        let system = self.body["messages"][self.leading - 1]["content"].as_str().unwrap_or_default();
+        let system = self.body["messages"][0]["content"].as_str().unwrap_or_default();
         let render = |system_text: &str, first: &str| -> Result<Vec<Value>> {
             let mut body = self.body.clone();
             let object = body.as_object_mut().context("the request is not an object")?;
             for field in ["stream", "stream_options", "max_tokens", "n_predict"] {
                 object.remove(field);
             }
-            let mut messages: Vec<Value> = self.body["messages"].as_array().map(|m| m[..self.leading].to_vec()).unwrap_or_default();
-            messages[self.leading - 1]["content"] = system_text.into();
-            messages.push(json!({ "role": "user", "content": first }));
-            body["messages"] = messages.into();
+            body["messages"] = json!([{ "role": "system", "content": system_text }, { "role": "user", "content": first }]);
             let prompt = ask(url, "/apply-template", &body, Some(QUICK), None)?["prompt"].as_str().context("the engine gave no prompt")?.to_string();
             let tokens = ask(url, "/tokenize", &json!({ "content": prompt, "add_special": true, "parse_special": true }), Some(QUICK), None)?;
             tokens["tokens"].as_array().cloned().context("the engine gave no tokens")
@@ -401,6 +394,7 @@ mod tests {
         assert!(first(vec![user("q")]));
         assert!(!first(vec![user("q"), json!({ "role": "assistant", "content": "a" }), user("q2")]));
         assert!(!first(vec![json!({ "role": "assistant", "content": "a" })]));
+        assert!(!first(vec![json!({ "role": "system", "content": "more rules" }), user("q")]), "the prompt is one message");
     }
 
     /// An engine that does not answer is let go when the request that asked for the work is gone: the «Stop» button must

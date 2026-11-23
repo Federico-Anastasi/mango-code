@@ -185,9 +185,6 @@ pub(crate) struct ModelCfg {
     pub about: Option<About>,
     /// The values recommended by whoever made the model.
     pub sampling: Option<Sampling>,
-    /// The model can think before it answers, and its chat template turns that on and off.
-    #[serde(default)]
-    pub reasoning: bool,
 }
 
 /// The image encoder's compute on a GPU, beyond its weights: an estimate, which with Qwen3.8's F16 weights (885 MiB)
@@ -225,7 +222,7 @@ impl ModelCfg {
 
     /// The weights `engine` opens and the image encoder are in the models' folder.
     pub fn weights_on_disk(&self, paths: &Paths, engine: &str) -> bool {
-        [self.gguf_for(engine), self.mmproj.as_deref()].into_iter().flatten().all(|rel| paths.models.join(rel).is_file())
+        [self.gguf_for(engine), self.mmproj.as_deref()].into_iter().flatten().all(|rel| mango_common::model_files::listed(&paths.models.join(rel)).is_some_and(|m| m.is_file()))
     }
 
     /// The memory it asks is an estimate (`ModelMemory::estimated`).
@@ -427,7 +424,7 @@ pub fn catalog_for(paths: &Paths, hw: &Hardware) -> Result<(Vec<ModelEntry>, Str
         let engine = cfg.engine_with(&assessed.setup);
         let mut missing = None;
         for rel in [cfg.gguf_for(engine), cfg.mmproj.as_deref()].into_iter().flatten() {
-            if !paths.models.join(rel).is_file() {
+            if !mango_common::model_files::listed(&paths.models.join(rel)).is_some_and(|m| m.is_file()) {
                 missing.get_or_insert(tr!("manca {}", "missing {}", paths.models.join(rel).display()));
             }
         }
@@ -491,7 +488,7 @@ pub fn download_of(paths: &Paths, key: &str, hw: &Hardware) -> Result<DownloadPl
             engine: IMAGE_ENGINE.to_string(),
             build: image_build(hw),
             bytes: cfg.files.iter().map(|f| f.size).sum(),
-            weights: cfg.files.iter().all(|f| paths.models.join(&f.path).is_file()),
+            weights: cfg.files.iter().all(|f| mango_common::model_files::listed(&paths.models.join(&f.path)).is_some_and(|m| m.is_file())),
             fits: Ok(()),
             label: cfg.label,
         });
@@ -604,7 +601,7 @@ pub fn default_to_save(paths: &Paths, entries: &[ModelEntry], remembered: Option
 
 /// The needed file must be there: otherwise a readable error with what to do.
 pub(crate) fn require(p: &Path, what: &str, remedy: &str) -> Result<()> {
-    if p.is_file() {
+    if mango_common::model_files::listed(p).is_some_and(|m| m.is_file()) {
         Ok(())
     } else {
         Err(user(&format!("{what} {remedy}"), format!("file not found: {}", p.display())))

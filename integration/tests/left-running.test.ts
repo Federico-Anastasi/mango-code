@@ -4,7 +4,7 @@
 // refused, and so is a Stop that is not JSON (a page of another site could send it without asking).
 // With PowerShell (the default shell) and with Git Bash, where `&` and a command that times out leave a program whose
 // parent has ended.
-// `bun test integration`.
+// `bun test --cwd integration`.
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import fs from "node:fs";

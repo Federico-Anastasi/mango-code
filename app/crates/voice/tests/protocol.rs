@@ -45,6 +45,17 @@ fn fixture() -> Fixture {
 impl Drop for Fixture {
     fn drop(&mut self) {
         // The service holds the model files: it stops before the folder is removed, and a folder that cannot be removed fails the test.
+        // The model loads in a thread the service does not wait for: until it has given up on the placeholder files it
+        // may still have them open, and Windows refuses to remove the folder.
+        if self.server.is_some() && !std::thread::panicking() {
+            for _ in 0..200 {
+                let r = raw(self.port, "GET /health HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n", b"");
+                if r.1["state"] != "loading" {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+        }
         drop(self.server.take());
         let removed = self.dir.take().unwrap().close();
         if !std::thread::panicking() {

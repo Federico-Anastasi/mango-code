@@ -7,7 +7,7 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import fs from "node:fs";
 import path from "node:path";
-import { page, type Page } from "./cdp";
+import { windowPage, type Page } from "./cdp";
 import { start, type Environment } from "./environment";
 
 let env: Environment;
@@ -37,8 +37,8 @@ async function settled() {
 }
 
 beforeAll(async () => {
-  env = await start([{ text: "Here I am." }], { window: true, otherModels: ["second"], context: 65536 });
-  p = await page(env.cdp!, () => true, 120_000);
+  env = await start([{ text: "Here I am." }], { window: true, otherModels: ["second"], context: 65536, reasoning: ["fake"] });
+  p = await windowPage(env.cdp!, env.agent, 120_000);
   await waitUntil(() => p.evaluate(`location.href === ${JSON.stringify(env.agent + "/")}`), "the window on the home");
 }, 200_000);
 
@@ -80,11 +80,11 @@ test("a context chosen for the model in use loads it again with that context; th
   expect(listed.limits.context.at(-1)).toBe(65536);
   expect(saved().models.fake).toMatchObject({ context: 32768, style: "creative" });
 
-  // Only how it writes changes: nothing to load again.
-  expect(await ask(`models.setChoices("fake", { where: "auto", gpus: [], context: 32768, style: "precise", reasoning: false })`)).toBe("ok");
+  // Only how it writes and whether it reasons change: nothing to load again.
+  expect(await ask(`models.setChoices("fake", { where: "auto", gpus: [], context: 32768, style: "precise", reasoning: "off" })`)).toBe("ok");
   await Bun.sleep(1500);
   expect(loads()).toBe(2);
-  expect((await model("fake")).choices).toMatchObject({ style: "precise", reasoning: false });
+  expect((await model("fake")).choices).toMatchObject({ style: "precise", reasoning: "off" });
 
   // A choice that makes no sense is refused with its sentence, and nothing is saved.
   const refused = JSON.parse(await ask(`models.setChoices("fake", { where: "pick", gpus: [], context: null, style: "recommended", reasoning: null })`));

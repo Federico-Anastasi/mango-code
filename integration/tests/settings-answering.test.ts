@@ -6,7 +6,7 @@
 
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import fs from "node:fs";
-import { page, type Page } from "./cdp";
+import { windowPage, type Page } from "./cdp";
 import { start, type Environment } from "./environment";
 
 // about twenty seconds of answer: time to open the settings and read the line, also on a busy computer
@@ -42,7 +42,7 @@ const chats = () =>
 
 beforeAll(async () => {
   env = await start([{ text: LONG }], { window: true, chunkMs: 100 });
-  p = await page(env.cdp!, () => true, 120_000);
+  p = await windowPage(env.cdp!, env.agent, 120_000);
   await waitUntil(() => p.evaluate(`location.href === ${JSON.stringify(env.agent + "/")}`), "the window on the Home");
   await waitUntil(async () => (await (await fetch(`${env.engine}/control/state`)).json()).model.phase === "ready", "the model ready", 120_000);
 }, 240_000);

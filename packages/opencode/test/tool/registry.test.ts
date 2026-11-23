@@ -17,8 +17,6 @@ import { InstanceState } from "@/effect/instance-state"
 import { ToolJsonSchema } from "@/tool/json-schema"
 import { MessageID, SessionID } from "@/session/schema"
 import { RuntimeFlags } from "@/effect/runtime-flags"
-import { ProviderV2 } from "@opencode-ai/core/provider"
-import { ModelV2 } from "@opencode-ai/core/model"
 import { MCP } from "@/mcp"
 import type { Tool as MCPToolDef } from "@modelcontextprotocol/sdk/types.js"
 
@@ -124,8 +122,6 @@ describe("tool.registry", () => {
       const agents = yield* Agent.Service
       const ids = yield* registry.ids()
       const tools = yield* registry.tools({
-        providerID: ProviderV2.ID.make("opencode"),
-        modelID: ModelV2.ID.make("test"),
         agent: yield* agents.defaultInfo(),
       })
       const execute = tools.find((tool) => tool.id === "execute")
@@ -141,12 +137,21 @@ describe("tool.registry", () => {
       const registry = yield* ToolRegistry.Service
       const agents = yield* Agent.Service
       const tools = yield* registry.tools({
-        providerID: ProviderV2.ID.make("opencode"),
-        modelID: ModelV2.ID.make("test"),
         agent: yield* agents.defaultInfo(),
       })
 
       expect(tools.map((tool) => tool.id)).not.toContain("execute")
+    }),
+  )
+
+  it.instance("offers edit and write, never apply_patch", () =>
+    Effect.gen(function* () {
+      const registry = yield* ToolRegistry.Service
+      const agents = yield* Agent.Service
+      const ids = (yield* registry.tools({ agent: yield* agents.defaultInfo() })).map((tool) => tool.id)
+      expect(ids).toContain("edit")
+      expect(ids).toContain("write")
+      expect(ids).not.toContain("apply_patch")
     }),
   )
 
@@ -157,8 +162,6 @@ describe("tool.registry", () => {
       const build = yield* agent.get("build")
       if (!build) throw new Error("build agent not found")
       const task = (yield* registry.tools({
-        providerID: ProviderV2.ID.make("opencode"),
-        modelID: ModelV2.ID.make("test"),
         agent: build,
       })).find((tool) => tool.id === "task")
 
@@ -335,8 +338,6 @@ describe("tool.registry", () => {
 
       const agents = yield* Agent.Service
       const promptTools = yield* registry.tools({
-        providerID: ProviderV2.ID.make("opencode"),
-        modelID: ModelV2.ID.make("test"),
         agent: yield* agents.defaultInfo(),
       })
       const promptTool = promptTools.find((tool) => tool.id === "sql")

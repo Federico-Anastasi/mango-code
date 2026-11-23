@@ -6,7 +6,6 @@ import { createEffect, createMemo, type Accessor } from "solid-js"
 import { selectProviderCatalog } from "./provider-catalog"
 
 export const popularProviders = ["anthropic", "openrouter"]
-const popularProviderSet = new Set(popularProviders)
 
 export function useProviders(directory: Accessor<string | undefined>) {
   const serverSync = useServerSync()
@@ -33,13 +32,6 @@ export function useProviders(directory: Accessor<string | undefined>) {
     all: () => providers().all,
     default: () => providers().default,
     defaultModel: () => providers().defaultModel,
-    popular: () =>
-      pipe(
-        providers().all,
-        Iterable.map(([, p]) => p),
-        Iterable.filter((p) => popularProviderSet.has(p.id)),
-        (v) => Array.from(v),
-      ),
     connected: () => {
       const connected = new Set(providers().connected)
       return pipe(
@@ -51,15 +43,7 @@ export function useProviders(directory: Accessor<string | undefined>) {
     },
     paid: () => {
       const connected = new Set(providers().connected)
-      const paid = [
-        ...Iterable.filter(
-          providers().all,
-          ([id]) =>
-            connected.has(id) &&
-            (id !== "opencode" || Object.values(providers().all.get(id)?.models ?? {}).some((m) => m.cost?.input)),
-        ),
-      ]
-      return paid
+      return [...Iterable.filter(providers().all, ([id]) => connected.has(id))]
     },
   }
 }

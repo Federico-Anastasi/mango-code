@@ -16,7 +16,6 @@ import { serverName, ServerConnection, useServer } from "@/context/server"
 import { useSDK } from "@/context/sdk"
 import { useSync } from "@/context/sync"
 import { useTabs } from "@/context/tabs"
-import { useProviders } from "@/hooks/use-providers"
 import { pathKey } from "@/utils/path-key"
 
 export function createPromptInputController(input: {
@@ -29,7 +28,6 @@ export function createPromptInputController(input: {
   const local = useLocal()
   const sdk = useSDK()
   const sync = useSync()
-  const providers = useProviders(() => sdk().directory)
   const view = layout.view(input.sessionKey)
   const agentsQuery = createQuery(() => input.queryOptions.agents(pathKey(sdk().directory)))
   const globalProvidersQuery = createQuery(() => input.queryOptions.providers(null))
@@ -47,7 +45,6 @@ export function createPromptInputController(input: {
       },
       model: {
         selection: input.model ?? local.model,
-        paid: providers.paid().length > 0,
         loading:
           (local.agent.visible() && agentsQuery.isLoading) ||
           providersQuery.isLoading ||

@@ -5,7 +5,6 @@
   "_image": "'image': the model makes images instead of writing. It is not in 'order' and is not among the models of a conversation; its engine is stable-diffusion.cpp ('sd' in mango-engines.json). 'diffusion' is the weights that draw, 'encoder' the model that reads the request, 'vae' the one that turns the result into pixels: paths relative to the models folder, each among 'files'. 'steps' and 'cfg_scale' are the values whoever made the model gives for it. 'license' is the license of the weights that draw. 'about' is the line under its name in the settings, in both languages, as for the models that write. 'image_default' is the model used for a picture when none is named.",
   "image_default": "z-image-turbo",
   "_about": "'about' is the one line the app shows under a model's name, in Italian and English; a model without it has no line. The line must be true on every computer: what depends on the PC (which model is the fastest here) is not written here.",
-  "_reasoning": "'reasoning': the model can think before it answers, and its chat template turns that on and off (enable_thinking): the app then offers the switch. A model of the user's has none: nobody knows its template.",
   "_sampling": "'sampling': the values recommended by whoever made the model (temperature, top_p, top_k, min_p, presence_penalty, repeat_penalty), those of the mode the model starts in with its chat template here (reasoning on for 3.6, 3.8, bonsai2, lfm, ling, toq; off for 3.5-4b and 3.5-2b, whose template turns it on only on request); a value the card does not give is missing. toq has no card of its own for this: it takes the base model's (Qwen3.8-27B).",
   "ctx": 131072,
   "_ctx": "A local model's 'ctx' is the maximum it supports (GGUF header): the general plan takes it and goes lower only if memory is not enough or the user chose less. This global 'ctx' is the maximum of a model that does not say its own. A profile has the context measured on its hardware.",
@@ -20,13 +19,11 @@
       "quant": "",
       "kind": "dense 27B / hybrid GDN / distilled trellis",
       "about": { "it": "Sperimentale, solo su richiesta.", "en": "Experimental, only on request." },
-      "reasoning": true,
       "sampling": { "temperature": 1.0, "top_p": 0.95, "top_k": 20, "min_p": 0.0, "presence_penalty": 0.0, "repeat_penalty": 1.0 },
       "gguf": "Qwen3.8-27B-TOQ-v1.gguf",
       "mmproj": "Qwen3.8-27B-GGUF/mmproj-F16.gguf",
       "repo": "federico-anastasi/Qwen3.8-27B-TOQ-v1",
       "revision": "e4de94a46218910d69d00dba313adc776b903034",
-      "chat_template": "qwen3.8-mango.jinja",
       "ctx": 262144,
       "requires_engine": "toq",
       "files": [
@@ -52,7 +49,6 @@
       "quant": "IQ4_XS 4.09bpw",
       "kind": "MoE 35B / 3B active",
       "about": { "it": "Il più capace. Legge anche le immagini.", "en": "The most capable. Also reads images." },
-      "reasoning": true,
       "sampling": { "temperature": 1.0, "top_p": 0.95, "top_k": 20, "min_p": 0.0, "presence_penalty": 1.5, "repeat_penalty": 1.0 },
       "gguf": "Qwen3.6-35B-A3B-MTP-GGUF/Qwen3.6-35B-A3B-UD-IQ4_XS.gguf",
       "mmproj": "Qwen3.6-35B-A3B-GGUF/mmproj-F16.gguf",
@@ -63,8 +59,6 @@
         { "path": "Qwen3.6-35B-A3B-GGUF/mmproj-F16.gguf", "size": 899283680, "sha256": "8971ee4f331ff0a4c609374f32984b3d4e6dc086c0aa35f1d637fad1829e887f", "repo": "unsloth/Qwen3.6-35B-A3B-GGUF", "revision": "a483e9e6cbd595906af30beda3187c2663a1118c" }
       ],
       "_gguf": "The file with the MTP head (one extra layer, +0.46 GiB): needed by the draft. The repo also has mmproj-F16.gguf, the same encoder as the file without the head.",
-      "chat_template": "qwen3.6-mango.jinja",
-      "_chat_template": "chat-templates/qwen3.6-mango.jinja is the GGUF's template with THREE lines added: a system message that is not the first is rendered in place instead of being silently dropped (~1600 prompt tokens would vanish), and the reasoning of past turns stays in the history (otherwise every new user message changes the previous turn and the engine re-reads all of it).",
       "ctx": 262144,
       "memory": {
         "kv_kib_token": 20,
@@ -118,7 +112,6 @@
       "quant": "UD-IQ4_XS",
       "kind": "dense 27B / hybrid GDN",
       "about": { "it": "Denso, forte sul codice. Legge anche le immagini.", "en": "Dense, strong at coding. Also reads images." },
-      "reasoning": true,
       "sampling": { "temperature": 1.0, "top_p": 0.95, "top_k": 20, "min_p": 0.0, "presence_penalty": 0.0, "repeat_penalty": 1.0 },
       "gguf": "Qwen3.8-27B-GGUF/Qwen3.8-27B-UD-IQ4_XS.gguf",
       "mmproj": "Qwen3.8-27B-GGUF/mmproj-F16.gguf",
@@ -129,8 +122,6 @@
         { "path": "Qwen3.8-27B-GGUF/mmproj-F16.gguf", "size": 927607488, "sha256": "cbb841a9ee0636b2ec172f5bb8df2ea8dfeb01e90fe7c6126581d662a0b4e43e" }
       ],
       "_license": "Apache-2.0, repo not gated.",
-      "chat_template": "qwen3.8-mango.jinja",
-      "_chat_template": "The GGUF template of this repo with ONE line changed: a system message that is not the first is rendered instead of raising 'System message must be at the beginning.', which would make every request with a system message in the middle answer 400. toq uses it too. It must be kept aligned if the GGUF changes.",
       "ctx": 262144,
       "memory": {
         "kv_kib_token": 64,
@@ -142,7 +133,6 @@
       "quant": "PQ2_0 ternary 2.13bpw",
       "kind": "dense 27B ternary / hybrid GDN / PrismML fork",
       "about": { "it": "Pesi a tre valori: poca memoria, tanto contesto.", "en": "Three-value weights: little memory, lots of context." },
-      "reasoning": true,
       "sampling": { "temperature": 1.0, "top_p": 0.95, "top_k": 20, "min_p": 0.05, "presence_penalty": 0.0, "repeat_penalty": 1.0 },
       "gguf": "Ternary-Bonsai-2-27B-gguf/Ternary-Bonsai-2-27B-PQ2_0.gguf",
       "mmproj": "Ternary-Bonsai-2-27B-gguf/Ternary-Bonsai-2-27B-mmproj-Q8_0.gguf",
@@ -154,8 +144,6 @@
         { "path": "Ternary-Bonsai-2-27B-gguf/Ternary-Bonsai-2-27B-mmproj-Q8_0.gguf", "size": 629246976, "sha256": "6807ede61d570bb86ba34b756a0fa109edc33668604de867c6ea6d8f1d631903" }
       ],
       "_files": "Two variants of the same weights, one per engine ('engine' of the file): Q2_0 for the official llama.cpp (CPU, CUDA, Vulkan: every PC without a profile), PQ2_0 for the three-GPU profile's prism fork, faster. Each PC downloads only the one for its engine; the encoder is needed by both.",
-      "chat_template": "bonsai2-mango.jinja",
-      "_chat_template": "Copy of the GGUF's template with TWO changes: a non-first system message is rendered instead of raising, and the reasoning of past turns stays in the history (see 3.6).",
       "ctx": 262144,
       "memory": {
         "kv_kib_token": 64,
@@ -167,7 +155,6 @@
       "quant": "Q4_0 QAD",
       "kind": "MoE 24B / 2.4B active / hybrid conv+GQA",
       "about": { "it": "Grande ma svelto.", "en": "Large but quick." },
-      "reasoning": true,
       "sampling": { "temperature": 0.1, "top_k": 50, "repeat_penalty": 1.05 },
       "gguf": "LFM2.5-24B-A2B-GGUF/LFM2.5-24B-A2B-QAD-Q4_0.gguf",
       "repo": "LiquidAI/LFM2.5-24B-A2B-GGUF",
@@ -176,8 +163,6 @@
         { "path": "LFM2.5-24B-A2B-GGUF/LFM2.5-24B-A2B-QAD-Q4_0.gguf", "size": 13578190880, "sha256": "d1c03f73ecaf61017d70419eec9e5dc0b05d50ae26c23d522829b934fbabf8a5" }
       ],
       "_thinking": "It always reasons (the template opens <think> at every turn) and cannot be turned off.",
-      "chat_template": "lfm2.5-mango.jinja",
-      "_chat_template": "Copy of the GGUF's template with ONE change: the reasoning of past turns stays in the history (see 3.6).",
       "ctx": 131072,
       "memory": {
         "kv_kib_token": 20,
@@ -190,7 +175,6 @@
       "quant": "Q4_K_M",
       "kind": "MoE 7.9B / 1.3B active / hybrid linear attention",
       "about": { "it": "Piccolo e veloce. Regge bene gli strumenti.", "en": "Small and fast. Handles tools well." },
-      "reasoning": true,
       "sampling": { "temperature": 1.0, "top_p": 0.95, "top_k": 20 },
       "gguf": "Ling-3.0-tiny-GGUF/Ling-3.0-tiny-Q4_K_M.gguf",
       "repo": "inclusionAI/Ling-3.0-tiny-GGUF",
@@ -198,7 +182,6 @@
       "files": [
         { "path": "Ling-3.0-tiny-GGUF/Ling-3.0-tiny-Q4_K_M.gguf", "size": 4823894944, "sha256": "246d67d45f5b0c7447ca0ce0bdb8b46b8a47b593c5068635dc16422c051d7be9" }
       ],
-      "_chat_template": "The GGUF's own template is used as it is: it already keeps the reasoning of past turns in the history and renders a system message that is not the first.",
       "ctx": 131072,
       "memory": {
         "kv_kib_token": 7,
@@ -211,14 +194,13 @@
       "quant": "Q4_K_M",
       "kind": "dense 4B / hybrid GDN",
       "about": { "it": "Leggero. Per domande semplici.", "en": "Light. For simple questions." },
-      "reasoning": true,
       "sampling": { "temperature": 0.7, "top_p": 0.8, "top_k": 20, "min_p": 0.0, "presence_penalty": 1.5, "repeat_penalty": 1.0 },
       "gguf": "Qwen3.5-4B-GGUF/Qwen3.5-4B-Q4_K_M.gguf",
       "mmproj": "Qwen3.5-4B-GGUF/mmproj-F16.gguf",
       "repo": "unsloth/Qwen3.5-4B-GGUF",
       "revision": "e87f176479d0855a907a41277aca2f8ee7a09523",
       "chat_template": "qwen3.5-mango.jinja",
-      "_chat_template": "The GGUF's template with TWO changes: the reasoning of past turns stays in the history and a non-first system message is rendered instead of raising (see 3.6).",
+      "_chat_template": "A speed optimization, declared: chat-templates/qwen3.5-mango.jinja is the GGUF's template with ONE line changed, so that the reasoning of past turns stays in the history. The original drops it before the last question: every new message changes the turn before and the engine reads it again (measured with Qwen3.5-4B after a long tool result: 12,255 tokens against 44). A model of the user's whose template is identical to the original (same SHA-256) gets the same file. Every other model runs with the template in its GGUF.",
       "ctx": 262144,
       "files": [
         { "path": "Qwen3.5-4B-GGUF/Qwen3.5-4B-Q4_K_M.gguf", "size": 2740937888, "sha256": "00fe7986ff5f6b463e62455821146049db6f9313603938a70800d1fb69ef11a4" },
@@ -235,7 +217,6 @@
       "quant": "Q4_K_M",
       "kind": "dense 2B / hybrid GDN",
       "about": { "it": "Il più piccolo. Per schede con poca memoria.", "en": "The smallest. For cards with little memory." },
-      "reasoning": true,
       "sampling": { "temperature": 1.0, "top_p": 1.0, "top_k": 20, "min_p": 0.0, "presence_penalty": 2.0, "repeat_penalty": 1.0 },
       "gguf": "Qwen3.5-2B-GGUF/Qwen3.5-2B-Q4_K_M.gguf",
       "repo": "unsloth/Qwen3.5-2B-GGUF",

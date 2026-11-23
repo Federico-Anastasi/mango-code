@@ -5,11 +5,10 @@ import { ButtonV2 } from "@opencode-ai/ui/v2/button-v2"
 import { Icon } from "@opencode-ai/ui/v2/icon"
 import { TooltipV2 } from "@opencode-ai/ui/v2/tooltip-v2"
 import type { ReferenceInfo } from "@opencode-ai/sdk/v2/client"
-import { createEffect, createMemo, on, Show } from "solid-js"
+import { createEffect, createMemo, createSignal, on, Show } from "solid-js"
 import { ModelSelectorPopoverV2 } from "@/components/dialog-select-model"
 import { inMangoDesktop } from "@/utils/mango-desktop"
 import { TeamSwitch } from "@/components/team-switch"
-import { DialogSelectModelUnpaidV2 } from "@/components/dialog-select-model-unpaid-v2"
 import type { PromptInputProps } from "@/components/prompt-input/contracts"
 import { normalizePromptHistoryEntry, promptLength, type PromptHistoryComment } from "@/components/prompt-input/history"
 import { createPersistedPromptInputHistory } from "@/components/prompt-input/history-store"
@@ -30,9 +29,12 @@ import { PromptVoiceButton } from "@/components/prompt-input/voice"
 import { showToast } from "@/utils/toast"
 import { MANGO_PROVIDER } from "@/utils/model-info"
 import { bringBackPending, failureText, useMango } from "@/context/mango"
-import { dismissReady, MangoStatusLine } from "@/components/mango-composer"
+import { dismissReady, MangoNoticeLine, MangoStatusLine } from "@/components/mango-composer"
 import { composerParts, ModelLabel, modelTag } from "@/components/mango-model-bar"
 import { conversationModel, messageWaits, noModel } from "@/utils/mango-state"
+import { reasoningControl, withReasoning, type ReasoningLevel } from "@/utils/mango-reasoning"
+import { mangoDesktopError } from "@/utils/mango-desktop"
+import { PromptReasoning } from "@/components/prompt-reasoning"
 import {
   createPromptPicture,
   PictureChoices,
@@ -83,9 +85,47 @@ export function PromptInputV2Composer(props: PromptInputV2ComposerProps) {
   })
 
   const picture = () => props.controller.picture
+  const selection = () => props.controller.model.selection
+  // the choice shown while the app saves it
+  const [asked, setAsked] = createSignal<ReasoningLevel>()
+  const reasoning = createMemo(() => {
+    if (props.controller.model.loading) return
+    const control = reasoningControl({
+      model: selection().current(),
+      catalog: mango.catalog(),
+      remote: mango.state()?.model.phase === "remote",
+      variants: selection().variant,
+    })
+    return control?.source === "local" && !mango.bridge()?.models ? undefined : control
+  })
+  const chooseReasoning = (value: string) => {
+    const control = reasoning()
+    const level = control?.levels.find((item) => item === value)
+    if (!control || !level) return
+    if (control.source === "team") return selection().variant.set(level)
+    setAsked(level)
+    void Promise.resolve(mango.bridge()?.models?.setChoices(control.key, withReasoning(control.choices, level)))
+      .then(() => mango.refresh())
+      .catch((error: unknown) =>
+        showToast({
+          variant: "error",
+          title: language.t("common.requestFailed"),
+          description: mangoDesktopError(error).message,
+        }),
+      )
+      .finally(() => setAsked(undefined))
+  }
   return (
     <div class="flex flex-col gap-3">
-      <Show when={picture().on()} fallback={<MangoStatusLine />}>
+      <Show
+        when={picture().on()}
+        fallback={
+          <>
+            <MangoStatusLine />
+            <MangoNoticeLine />
+          </>
+        }
+      >
         <Show when={picture().empty()}>
           <PictureNotice picture={picture()} />
         </Show>
@@ -94,7 +134,7 @@ export function PromptInputV2Composer(props: PromptInputV2ComposerProps) {
         controller={props.controller}
         borderUnderlay={props.borderUnderlay}
         class={props.class}
-        variantControlVisible={!props.controller.model.loading}
+        variantControlVisible={!props.controller.model.loading && !reasoning()}
         trailingControl={
           <PromptVoiceButton onText={dictation.final} onPartial={dictation.partial} onClear={dictation.clear} />
         }
@@ -116,17 +156,25 @@ export function PromptInputV2Composer(props: PromptInputV2ComposerProps) {
                 <TeamSwitch agents={props.controller.agents} />
                 <PromptInputV2ModelControl
                   loading={props.controller.model.loading}
-                  paid={props.controller.model.paid}
                   title={language.t("command.model.choose")}
                   model={props.controller.model.selection}
                   providerID={props.controller.model.selection.current()?.provider?.id}
                   modelName={modelLabel().name}
                   modelStatus={modelLabel().status}
                   onClose={props.controller.restoreFocus}
-                  onUnpaidClick={() =>
-                    dialog.show(() => <DialogSelectModelUnpaidV2 model={props.controller.model.selection} />)
-                  }
                 />
+                <Show when={reasoning()}>
+                  {(control) => (
+                    <PromptReasoning
+                      levels={control().levels}
+                      value={asked() ?? control().value}
+                      label={language.t("prompt.reasoning.label")}
+                      text={(level) => language.t(`prompt.reasoning.${level as ReasoningLevel}`)}
+                      onChange={chooseReasoning}
+                      onClose={props.controller.restoreFocus}
+                    />
+                  )}
+                </Show>
               </>
             }
           >
@@ -566,7 +614,6 @@ export function usePromptInputV2Controller(props: PromptInputV2ControllerProps):
 
 function PromptInputV2ModelControl(props: {
   loading: boolean
-  paid: boolean
   title: string
   model: PromptInputV2ComposerController["model"]["selection"]
   providerID?: string
@@ -574,7 +621,6 @@ function PromptInputV2ModelControl(props: {
   /** mango-code: what the model of this PC is doing, kept in view when the name is cut. */
   modelStatus?: string
   onClose: () => void
-  onUnpaidClick: () => void
 }) {
   const language = useLanguage()
   const mango = useMango()
@@ -644,43 +690,25 @@ function PromptInputV2ModelControl(props: {
   return (
     <Show when={!props.loading}>
       <TooltipV2 placement="top" gutter={4} value={props.title}>
-        <Show
-          when={props.paid}
-          fallback={
+        <ModelSelectorPopoverV2
+          model={props.model}
+          onPick={pick}
+          trigger={(triggerProps) => (
             <ButtonV2
-              data-action="prompt-model"
-              data-control-type="dialog"
+              {...triggerProps}
               variant="ghost-muted"
               size="normal"
+              style={{ height: "28px" }}
               class="min-w-0 max-w-[220px] justify-start ![font-weight: 400] group"
               classList={{ "animate-in fade-in": shouldAnimate() }}
-              style={{ height: "28px" }}
-              onClick={props.onUnpaidClick}
+              data-action="prompt-model"
+              data-control-type="popover"
             >
               {content()}
             </ButtonV2>
-          }
-        >
-          <ModelSelectorPopoverV2
-            model={props.model}
-            onPick={pick}
-            trigger={(triggerProps) => (
-              <ButtonV2
-                {...triggerProps}
-                variant="ghost-muted"
-                size="normal"
-                style={{ height: "28px" }}
-                class="min-w-0 max-w-[220px] justify-start ![font-weight: 400] group"
-                classList={{ "animate-in fade-in": shouldAnimate() }}
-                data-action="prompt-model"
-                data-control-type="popover"
-              >
-                {content()}
-              </ButtonV2>
-            )}
-            onClose={props.onClose}
-          />
-        </Show>
+          )}
+          onClose={props.onClose}
+        />
       </TooltipV2>
     </Show>
   )

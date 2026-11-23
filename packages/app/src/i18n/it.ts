@@ -45,9 +45,6 @@ export const dict = {
   "dialog.provider.group.popular": "Popolari",
   "dialog.provider.group.other": "Altro",
   "dialog.provider.custom.label": "Provider personalizzato compatibile con OpenAI",
-  "dialog.provider.tag.recommended": "Consigliato",
-  "dialog.provider.opencode.tagline": "Modelli affidabili e ottimizzati",
-  "dialog.provider.opencodeGo.tagline": "Abbonamento economico per tutti",
   "dialog.provider.anthropic.note": "Accesso diretto ai modelli Claude, inclusi Pro e Max",
   "dialog.provider.openai.note": "Modelli GPT veloci e potenti per attività generiche di IA",
   "dialog.model.select.title": "Seleziona modello",
@@ -56,10 +53,6 @@ export const dict = {
   "dialog.model.manage": "Gestisci modelli",
   "dialog.model.manage.description": "Personalizza quali modelli appaiono nel selettore del modello.",
   "dialog.model.manage.provider.toggle": "Attiva o disattiva tutti i modelli {{provider}}",
-  "dialog.model.unpaid.freeModels.title": "Modelli gratuiti forniti da OpenCode",
-  "dialog.model.unpaid.addMore.title": "Aggiungi altri modelli dai provider più diffusi",
-  "dialog.model.unpaid.viewMoreProviders": "Scopri oltre 70 provider",
-  "dialog.provider.viewAll": "Mostra altri provider",
   "provider.connect.title": "Connetti {{provider}}",
   "provider.connect.title.anthropicProMax": "Accedi con Claude Pro/Max",
   "provider.connect.selectMethod": "Seleziona il metodo di accesso per {{provider}}.",
@@ -74,13 +67,6 @@ export const dict = {
   "provider.connect.apiKey.label": "Chiave API di {{provider}}",
   "provider.connect.apiKey.placeholder": "Chiave API",
   "provider.connect.apiKey.required": "È richiesta la chiave API",
-  "provider.connect.opencodeZen.line1":
-    "OpenCode Zen offre l'accesso a una selezione di modelli affidabili e ottimizzati per gli agenti di programmazione.",
-  "provider.connect.opencodeZen.line2":
-    "Con una sola chiave API avrai accesso a modelli come Claude, GPT, Gemini, GLM e altri.",
-  "provider.connect.opencodeZen.visit.prefix": "Visita ",
-  "provider.connect.opencodeZen.visit.link": "opencode.ai/zen",
-  "provider.connect.opencodeZen.visit.suffix": " per ottenere la tua chiave API.",
   "provider.connect.oauth.code.visit.prefix": "Visita ",
   "provider.connect.oauth.code.visit.link": "questo collegamento",
   "provider.connect.oauth.code.visit.suffix":
@@ -134,13 +120,7 @@ export const dict = {
   "provider.custom.error.required": "Necessario",
   "provider.custom.error.duplicate": "Duplicato",
   "provider.custom.unavailable": "I provider personalizzati non sono disponibili su questo server",
-  "model.tag.free": "Gratuito",
   "model.tag.latest": "Più recente",
-  "model.provider.anthropic": "Anthropic",
-  "model.provider.openai": "OpenAI",
-  "model.provider.google": "Google",
-  "model.provider.xai": "xAI",
-  "model.provider.meta": "Meta",
   "model.input.text": "testo",
   "model.input.image": "immagine",
   "model.input.audio": "audio",
@@ -268,6 +248,12 @@ export const dict = {
   "settings.team.error.save": "Non riesco a salvare: {{message}}",
   "settings.team.error.load": "Non riesco a leggere le impostazioni del Team: {{message}}",
   "prompt.team": "Team",
+  "prompt.reasoning.label": "Ragionamento",
+  "prompt.reasoning.off": "Spento",
+  "prompt.reasoning.on": "Acceso",
+  "prompt.reasoning.low": "Basso",
+  "prompt.reasoning.medium": "Medio",
+  "prompt.reasoning.high": "Alto",
   "settings.prompt.tokens": "{{count}} token",
   "settings.prompt.notMeasured": "non misurato",
   "settings.prompt.kind.base": "Prompt di base",
@@ -521,7 +507,6 @@ export const dict = {
   "dialog.releaseNotes.action.next": "Avanti",
   "dialog.releaseNotes.action.hideFuture": "Non mostrarli in futuro",
   "dialog.releaseNotes.media.alt": "Anteprima delle novità",
-  "dialog.usageExceeded.dontShowAgain": "Non mostrare più",
 
   "context.breakdown.title": "Ripartizione del contesto",
   "context.breakdown.note":
@@ -690,6 +675,7 @@ export const dict = {
   "home.sessions.group.yesterday": "Ieri",
   "home.sessions.group.older": "Meno recenti",
   "session.untitled": "Nuova conversazione",
+  "session.project.none": "Nessun progetto",
   "titlebar.history": "Home",
   "titlebar.history.tooltip": "Progetti e conversazioni",
   "home.session.rename.title": "Rinomina conversazione",
@@ -1356,6 +1342,11 @@ export const dict = {
   "settings.models.sampling.range.above0": "maggiore di 0",
   "settings.models.reasoning.title": "Ragionamento",
   "settings.models.reasoning.description": "Pensa prima di rispondere. Più lento, sbaglia meno.",
+  "settings.models.reasoning.off": "Spento",
+  "settings.models.reasoning.on": "Acceso",
+  "settings.models.reasoning.low": "Basso",
+  "settings.models.reasoning.medium": "Medio",
+  "settings.models.reasoning.high": "Alto",
   "settings.models.remove.action": "Togli dal computer · libera {{size}}",
   "settings.models.remove.title": "Togli «{{name}}» dal computer?",
   "settings.models.remove.body": "Libera fino a {{size}} sul disco.",
@@ -1521,11 +1512,10 @@ export const dict = {
   "mango.mcp.browser": "Browser",
   "mango.mcp.documents": "Documenti",
   "mango.mcp.search": "Ricerca",
-  // mango-code: the interface merged with the settings (the time of the update check)
+  // mango-code: the time of the update check in Settings
   "settings.help.update.checkedToday": "Aggiornato. Ultimo controllo oggi alle {{time}}.",
   "settings.help.update.checkedOn": "Aggiornato. Ultimo controllo il {{date}} alle {{time}}.",
-  // mango-code: the corrections of the merged interface (the engine the app came with, models that cannot be read,
-  // a memory that is estimated)
+  // mango-code: the engine the app came with, models that cannot be read, a memory that is estimated
   "mango.engine.updating": "Aggiorno il motore",
   "mango.engine.paused": "L'aggiornamento del motore è in pausa",
   "mango.engine.failed": "L'aggiornamento del motore non è riuscito: {{error}}",
@@ -1577,7 +1567,7 @@ export const dict = {
   "settings.models.estimated": "memoria stimata",
   // mango-code: a model on the computer that waits for the new engine (components/settings-page/models.tsx)
   "settings.models.waitsEngine": "Aspetta il motore nuovo",
-  // mango-code: the bar, the composer and the Home after the first round in the real window
+  // mango-code: the bar, the composer and the Home
   "mango.bar.status.loading": "carico, {{seconds}} s",
   "mango.bar.status.downloading": "scarico {{percent}}%",
   "mango.bar.status.lent": "schede prestate",

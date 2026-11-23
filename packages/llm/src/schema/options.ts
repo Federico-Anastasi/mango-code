@@ -163,7 +163,7 @@ export namespace ModelDefaults {
   }
 }
 
-export const ModelToolSchemaCompatibility = Schema.Literals(["gemini", "moonshot"])
+export const ModelToolSchemaCompatibility = Schema.Literals(["moonshot"])
 export type ModelToolSchemaCompatibility = Schema.Schema.Type<typeof ModelToolSchemaCompatibility>
 
 export class ModelCompatibility extends Schema.Class<ModelCompatibility>("LLM.ModelCompatibility")({

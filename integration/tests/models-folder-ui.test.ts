@@ -9,7 +9,7 @@ import { afterAll, beforeAll, expect, test } from "bun:test";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { page, type Page } from "./cdp";
+import { windowPage, type Page } from "./cdp";
 import { answer } from "./dialog";
 import { start, type Environment } from "./environment";
 
@@ -73,7 +73,7 @@ const clickWhenShown = (selector: string) =>
   })`);
 
 async function windowOnTheHome() {
-  p = await page(env.cdp!, () => true, 120_000);
+  p = await windowPage(env.cdp!, env.agent, 120_000);
   await waitUntil(() => p.evaluate(`location.href === ${JSON.stringify(env.agent + "/")}`), "the window on the home");
 }
 

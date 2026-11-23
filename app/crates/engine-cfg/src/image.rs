@@ -107,7 +107,7 @@ fn default_of(paths: &Paths, file: &crate::catalog::ModelsFile) -> Option<String
 static IGNORED: Mutex<Option<String>> = Mutex::new(None);
 
 fn files_on_disk(paths: &Paths, cfg: &ModelCfg) -> bool {
-    cfg.files.iter().all(|f| paths.models.join(&f.path).is_file())
+    cfg.files.iter().all(|f| mango_common::model_files::listed(&paths.models.join(&f.path)).is_some_and(|m| m.is_file()))
 }
 
 fn files_bytes(cfg: &ModelCfg) -> u64 {
@@ -200,7 +200,7 @@ pub fn image_plan_for(paths: &Paths, key: &str, port: u16, hw: &Hardware) -> Res
         )
     })?;
     let files = [&image.diffusion, &image.encoder, &image.vae].map(|rel| paths.models.join(rel));
-    if let Some(missing) = files.iter().find(|f| !f.is_file()) {
+    if let Some(missing) = files.iter().find(|f| !mango_common::model_files::listed(f).is_some_and(|m| m.is_file())) {
         return Err(user(
             &tr!("Il modello «{}» non è ancora su questo computer.", "The model «{}» is not on this computer yet.", cfg.label),
             format!("missing {}", missing.display()),

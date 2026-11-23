@@ -9,7 +9,7 @@ import { afterAll, beforeAll, expect, test } from "bun:test";
 import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
-import { page, type Page } from "./cdp";
+import { windowPage, type Page } from "./cdp";
 import { start, type Environment } from "./environment";
 
 let env: Environment;
@@ -58,7 +58,7 @@ async function mouseClick(selector: string) {
 
 beforeAll(async () => {
   env = await start([{ text: "ok" }], { window: true });
-  p = await page(env.cdp!, () => true, 120_000);
+  p = await windowPage(env.cdp!, env.agent, 120_000);
   await waitUntil(() => p.evaluate(`location.href === ${JSON.stringify(env.agent + "/")}`), "the window on the Home", 120_000);
   hwnd = powershell(`(Get-Process -Id ${env.app.pid}).MainWindowHandle`);
   expect(hwnd).not.toBe("0");

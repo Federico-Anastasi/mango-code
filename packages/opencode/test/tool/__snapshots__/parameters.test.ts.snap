@@ -1,21 +1,5 @@
 // Bun Snapshot v1, https://bun.sh/docs/test/snapshots
 
-exports[`tool parameters JSON Schema (wire shape) apply_patch 1`] = `
-{
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "properties": {
-    "patchText": {
-      "description": "The full patch text that describes all changes to be made",
-      "type": "string",
-    },
-  },
-  "required": [
-    "patchText",
-  ],
-  "type": "object",
-}
-`;
-
 exports[`tool parameters JSON Schema (wire shape) bash 1`] = `
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",

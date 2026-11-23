@@ -10,7 +10,7 @@ export type Proposal = { model: string; label: string; where: Where }
 export type ModelState =
   | { phase: "none" }
   | { phase: "loading"; model: string; label: string; seconds: number; where: Where | null }
-  | { phase: "ready"; model: string; label: string; where: Where }
+  | { phase: "ready"; model: string; label: string; where: Where; notice: string | null }
   | { phase: "failed"; model: string; label: string; reason: string; taken: string | null; proposal: Proposal | null }
   | { phase: "lent"; model: string; label: string }
   | { phase: "remote"; models: string[]; reachable: boolean }
@@ -71,8 +71,12 @@ export type CatalogEntry = {
   verdict: Verdict
   recommended: boolean
   choices: MangoModelChoices
-  /** The choices possible here: places, contexts offered with the current choice, whether it can reason. */
-  limits: { where: MangoModelChoices["where"][]; context: number[]; reasoning: boolean }
+  /**
+   * The choices possible here: places, contexts offered with the current choice, and the levels of reasoning the model's
+   * template offers: `["off", "on"]` or `["low", "medium", "high"]`, none when it offers nothing (or the model is not on the
+   * computer yet).
+   */
+  limits: { where: MangoModelChoices["where"][]; context: number[]; reasoning: string[] }
   sampling: Sampling | null
 }
 
@@ -135,7 +139,7 @@ export function parseModelState(value: unknown): ModelState {
     case "ready": {
       const where = parseWhere(raw.where)
       if (!model || !label || !where) break
-      return { phase: "ready", model, label, where }
+      return { phase: "ready", model, label, where, notice: text(raw.notice) ?? null }
     }
     case "failed": {
       if (!model || !label) break
@@ -202,6 +206,7 @@ export function parseState(value: unknown): MangoState | undefined {
 const SPEEDS = new Set(["very_slow", "slow", "fair", "quick"])
 const WHERE_CHOICES = new Set(["auto", "one", "all", "cpu", "pick"])
 const STYLES = new Set(["recommended", "precise", "creative"])
+const REASONING_LEVELS = new Set(["off", "on", "low", "medium", "high"])
 
 /**
  * The models that read: one without its verdict, its choices or its limits is left out (the settings could not show it
@@ -289,7 +294,7 @@ function parseChoices(value: unknown): MangoModelChoices | undefined {
   const raw = record(value)
   if (!raw || !WHERE_CHOICES.has(raw.where as string) || !STYLES.has(raw.style as string)) return
   if (raw.context !== null && count(raw.context) === undefined) return
-  if (raw.reasoning !== null && typeof raw.reasoning !== "boolean") return
+  if (raw.reasoning !== null && !REASONING_LEVELS.has(raw.reasoning as string)) return
   const sampling = parseSampling(raw.sampling)
   if (!sampling) return
   return {
@@ -297,7 +302,7 @@ function parseChoices(value: unknown): MangoModelChoices | undefined {
     gpus: strings(raw.gpus),
     context: raw.context as number | null,
     style: raw.style as MangoModelChoices["style"],
-    reasoning: raw.reasoning as boolean | null,
+    reasoning: raw.reasoning as string | null,
     sampling,
   }
 }
@@ -309,7 +314,7 @@ function parseLimits(value: unknown): CatalogEntry["limits"] | undefined {
   return {
     where: raw.where as MangoModelChoices["where"][],
     context: raw.context as number[],
-    reasoning: raw.reasoning === true,
+    reasoning: strings(raw.reasoning).filter((level) => REASONING_LEVELS.has(level)),
   }
 }
 

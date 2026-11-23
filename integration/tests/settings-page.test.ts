@@ -3,16 +3,15 @@
 // instructions that opens on its entries with their weight in tokens, the switch that turns each one off for all
 // projects, the "only this project" choice. General and Help: the alerts, and the switch of the automatic update.
 // Models: the model on the computer with its choices, and «Gestisci i modelli…» of the model menu that opens the
-// section. Fake engine. The screenshots stay in
-// %TEMP%\mango-settings*.png. `bun test integration`, after `cargo build -p mango-code -p engine` in app/;
+// section. Fake engine. The screenshots are kept in
+// the environment's folder, or in the one `MANGO_TEST_SCREENSHOTS` names. `bun test --cwd integration`, after `cargo build -p mango-code -p engine` in app/;
 // `MANGO_OPENCODE=<folder with web\mango-code.exe>` tries a separate build of the agent.
 
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { MangoCode, find } from "../client/mango-code";
-import { start, type Environment } from "./environment";
+import { saveScreenshot, start, type Environment } from "./environment";
 import { page, type Page } from "./cdp";
 import { resizeWindow } from "./window";
 
@@ -27,7 +26,7 @@ const read = async () => (await fetch(url())).json();
 const entry = (s: any, type: string, name: string) => s.items.find((v: any) => v.type === type && v.name === name);
 const shot = async (name: string) => {
   const r = await p.send("Page.captureScreenshot", { format: "png" });
-  fs.writeFileSync(path.join(os.tmpdir(), `${name}.png`), Buffer.from(r.result.data, "base64"));
+  saveScreenshot(env, name, r.result.data);
 };
 
 beforeAll(async () => {

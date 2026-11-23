@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { dict as en } from "@/i18n/en"
 import { parseState } from "@/utils/mango-state"
 import { arrivingParts, barDescription, barDownload, barParts, barTone, composerParts, modelTag } from "./mango-model-bar"
-import { downloadParts, etaText, fitsText, onWhere, queueText, statusLine } from "./mango-text"
+import { downloadParts, etaText, fitsText, onWhere, queueText, stateNotice, statusLine } from "./mango-text"
 
 // The English sentences of the app, filled like the interface fills them.
 const t = ((key: string, params?: Record<string, string | number>) =>
@@ -324,5 +324,20 @@ describe("no model on the computer", () => {
     expect(line(state({ phase: "none" }, [paused]))?.kind).toBe("text")
     // models on the disk and none in use: nothing to say
     expect(line(state({ phase: "none" }))).toBeUndefined()
+  })
+})
+
+describe("the engine's notice", () => {
+  const ready = state({ phase: "ready", model: "3.6", label: "Qwen", where })
+  const says = (notice: unknown) => stateNotice(state({ phase: "ready", model: "3.6", label: "Qwen", where, notice }))
+
+  test("it is the line the state carries", () => {
+    expect(says("Memory of the cards not read.")).toBe("Memory of the cards not read.")
+  })
+
+  test("a state with no line, an empty one or one that is not text has no notice", () => {
+    expect(stateNotice(ready)).toBeUndefined()
+    expect(says("  ")).toBeUndefined()
+    expect(says(3)).toBeUndefined()
   })
 })

@@ -11,7 +11,7 @@ import fs from "node:fs";
 import http from "node:http";
 import net from "node:net";
 import path from "node:path";
-import { page, type Page } from "./cdp";
+import { windowPage, type Page } from "./cdp";
 import { start, type Environment } from "./environment";
 import { resizeWindow } from "./window";
 
@@ -66,7 +66,7 @@ const file = (id: string) => path.join(env.modelsDir, `${id}.gguf`);
 const readJson = (f: string) => JSON.parse(fs.readFileSync(f, "utf8"));
 
 async function windowOnTheHome() {
-  p = await page(env.cdp!, () => true, 120_000);
+  p = await windowPage(env.cdp!, env.agent, 120_000);
   await waitUntil(() => p.evaluate(`location.href === ${JSON.stringify(env.agent + "/")}`), "the window on the home");
 }
 

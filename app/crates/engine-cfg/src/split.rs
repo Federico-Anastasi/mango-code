@@ -1,7 +1,7 @@
 //! Splitting the layers across the graphics cards: a pure function (no I/O), so it can be tested with fake
-//! configurations. A generalized port of `motore/mappa_strati.py` from the trellis bench.
+//! configurations.
 //!
-//! Structure (the measured one, «configuration A» of the engine's README):
+//! Structure (the one measured on the three-card TOQ profile):
 //! - the **main card** holds the full-attention layers with their context cache, the output head and the prompt
 //!   reading work (`prefill_main`: the tensor units are there); it is the card with the highest compute
 //!   capability, at equal capability the one with more VRAM;
@@ -24,6 +24,7 @@ use mango_common::tr;
 pub const MIB: u64 = 1 << 20;
 /// Memory that Windows (screen, DWM) and the CUDA context take from each card. Measured from the engine
 /// log: 3060 Ti 8191 - 7128 free = 1063 MiB, 1660 S 6143 - 5134 = 1009 MiB.
+/// Measured on NVIDIA cards with CUDA only: it stands for the cards of the other brands until it is measured there.
 pub(crate) const SYSTEM_RESERVE_MIB: u64 = 1100;
 /// Margin above the measurement: the user's desktop may take more than ours.
 const SAFETY_MARGIN_MIB: u64 = 256;
@@ -147,7 +148,7 @@ fn fits_pair(shape: &ModelShape, ctx: u32, main: &Gpu, sec: &Gpu, mtp: Mtp, extr
         Mtp::Secondary => (0, mtp_bytes(shape, ctx)),
     };
     let budget = capacity(sec).checked_sub(COMPUTE_OTHER_MIB * MIB + mtp_sec)?;
-    // The secondary takes the last DeltaNets (contiguous, as in `mappa_strati.py`).
+    // The secondary takes the last DeltaNets, contiguous.
     let mut used = 0;
     let mut n_sec = 0;
     for l in rec.iter().rev() {
@@ -319,7 +320,7 @@ pub(crate) mod fixture {
         ]
     }
 
-    /// The measured `LLAMA_LAYER_DEVICES` (configuration A, `mappa_strati.py 0`), copied from `mango-models.json`.
+    /// The measured `LLAMA_LAYER_DEVICES` of the three-card TOQ profile, copied from `mango-models.json`.
     pub const MAP_A: &str = "1,1,1,0,1,1,1,0,1,1,1,0,1,1,1,0,1,1,1,0,1,1,1,0,1,1,1,0,1,1,1,0,1,1,1,0,1,1,1,0,1,1,1,0,1,1,1,0,1,1,1,0,1,1,1,0,1,1,1,0,1,1,1,0,0,0";
 }
 

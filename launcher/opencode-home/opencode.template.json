@@ -35,13 +35,7 @@
           "temperature": true,
           "interleaved": "reasoning_content",
           "limit": { "context": 0, "output": 0 },
-          "cost": { "input": 0, "output": 0, "cache_read": 0, "cache_write": 0 },
-          "variants": {
-            "low": { "disabled": true },
-            "medium": { "disabled": true },
-            "high": { "disabled": true }
-          },
-          "_variants": "No variants: the model always reasons, and without variants the web UI shows no selector next to the model."
+          "cost": { "input": 0, "output": 0, "cache_read": 0, "cache_write": 0 }
         }
       }
     },
@@ -61,7 +55,13 @@
           "modalities": { "input": {{OR_INPUT_MODALITIES}}, "output": ["text"] },
           "temperature": true,
           "limit": { "context": {{OR_CTX}}, "output": {{OR_OUTPUT}} },
-          "cost": { "input": {{OR_COST_IN}}, "output": {{OR_COST_OUT}}, "cache_read": {{OR_COST_CACHE}} }
+          "cost": { "input": {{OR_COST_IN}}, "output": {{OR_COST_OUT}}, "cache_read": {{OR_COST_CACHE}} },
+          "variants": {
+            "low": { "reasoning": { "effort": "low" } },
+            "medium": { "reasoning": { "effort": "medium" } },
+            "high": { "reasoning": { "effort": "high" } }
+          },
+          "_variants": "The levels the Team's model offers in the chat: OpenRouter's own field, `reasoning.effort`, which the OpenAI-compatible client sends as it is. Only here: a local model reads its levels from its chat template, not from the agent."
         }
       }
     }

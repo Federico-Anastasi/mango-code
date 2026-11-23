@@ -11,7 +11,7 @@ import fs from "node:fs";
 import http from "node:http";
 import net from "node:net";
 import path from "node:path";
-import { page, type Page } from "./cdp";
+import { windowPage, type Page } from "./cdp";
 import { start, type Environment } from "./environment";
 
 const MIB = 1024 * 1024;
@@ -66,7 +66,7 @@ async function mouseClick(selector: string) {
 
 beforeAll(async () => {
   env = await start([{ text: "Eccomi." }], { window: true, noModels: true, otherModels: ["second"], files, env: { MANGO_HF_URL: base } });
-  p = await page(env.cdp!, () => true, 120_000);
+  p = await windowPage(env.cdp!, env.agent, 120_000);
   await waitUntil(() => p.evaluate(`location.href === ${JSON.stringify(env.agent + "/")} && !!document.querySelector('[data-component="mango-welcome"]')`), "the welcome on the Home", 120_000);
 }, 240_000);
 

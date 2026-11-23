@@ -61,7 +61,9 @@ pub fn update(data: &Path, change: impl FnOnce(&mut Places)) -> Result<()> {
         },
         false => std::fs::create_dir_all(data).and_then(|_| crate::write_durable(&file, serde_json::to_string_pretty(&File { files: places })?)),
     };
-    saved.map_err(|e| anyhow::Error::new(e).context(user_text(&tr!("Non riesco a salvare dove stanno i file dei modelli.", "I can't save where the model files are."), file.display())))
+    saved.map_err(|e| anyhow::Error::new(e).context(user_text(&tr!("Non riesco a salvare dove stanno i file dei modelli.", "I can't save where the model files are."), file.display())))?;
+    crate::catalog::changed(data);
+    Ok(())
 }
 
 fn unreadable() -> String {
@@ -97,6 +99,40 @@ pub(crate) fn apply(model: &mut Value, places: &Places) {
             true => file.insert("relocated".into(), true.into()),
             false => file.remove("sha256"),
         };
+    }
+}
+
+/// A model's file as its folder lists it, without opening the file: while an engine reads a model, opening that file
+/// waits until the read ends (tens of seconds from a mechanical disk), and asking whether it is there must not wait. A
+/// file that is a symbolic link is followed, which opens the file it leads to.
+pub fn listed(path: &Path) -> Option<std::fs::Metadata> {
+    let name = path.file_name()?.to_string_lossy().to_lowercase();
+    let folder = path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
+    // Windows compares names without regard to case, also beyond ASCII.
+    let entry = std::fs::read_dir(folder).ok()?.flatten().find(|e| e.file_name().to_string_lossy().to_lowercase() == name)?;
+    let meta = entry.metadata().ok()?;
+    if meta.file_type().is_symlink() {
+        return std::fs::metadata(path).ok();
+    }
+    Some(meta)
+}
+
+#[cfg(test)]
+mod listed_tests {
+    use super::listed;
+
+    #[test]
+    fn a_file_is_found_from_its_folder_with_its_size() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("Model-Q4.gguf");
+        std::fs::write(&file, b"GGUF1234").unwrap();
+        assert!(listed(&file).is_some_and(|m| m.is_file() && m.len() == 8));
+        assert!(listed(&dir.path().join("model-q4.GGUF")).is_some(), "a name differs only in case on Windows");
+        std::fs::write(dir.path().join("Übersicht.gguf"), b"x").unwrap();
+        assert!(listed(&dir.path().join("übersicht.gguf")).is_some(), "also beyond ASCII");
+        assert!(listed(&dir.path().join("other.gguf")).is_none());
+        assert!(listed(&dir.path().join("missing-folder").join("x.gguf")).is_none());
+        assert!(listed(dir.path()).is_some_and(|m| m.is_dir()));
     }
 }
 

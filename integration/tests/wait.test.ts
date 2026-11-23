@@ -1,16 +1,15 @@
 // The GPU loan tied to whoever asks, seen from the web UI inside the app's window (WebView2 CDP): while a process
 // holds the GPUs, under the conversation it says the model is waiting for them and who they are lent to; when that
 // process exits the engine restarts by itself and the answer arrives. The model is the fake engine.
-// `bun test integration`, after `cargo build -p mango-code -p engine` in app/. The screenshot of the page stays in
-// %TEMP%\mango-wait.png.
+// `bun test --cwd integration`, after `cargo build -p mango-code -p engine` in app/. The screenshot of the page is kept in
+// the environment's folder, or in the one `MANGO_TEST_SCREENSHOTS` names.
 
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { spawn } from "node:child_process";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { MangoCode, find } from "../client/mango-code";
-import { start, type Environment } from "./environment";
+import { saveScreenshot, start, type Environment } from "./environment";
 import { page, type Page } from "./cdp";
 
 let env: Environment;
@@ -66,7 +65,7 @@ test("while the GPUs are lent the page says so, and when the holder exits the an
   expect(row.split("Il modello aspetta le schede video").length - 1).toBeGreaterThanOrEqual(2);
   expect(row).not.toContain("Sto leggendo la richiesta");
   const shot = await p.send("Page.captureScreenshot", { format: "png" });
-  fs.writeFileSync(path.join(os.tmpdir(), "mango-wait.png"), Buffer.from(shot.result.data, "base64"));
+  saveScreenshot(env, "mango-wait", shot.result.data);
   expect(events).not.toContain("session.idle");
 
   // The holder exits without resuming: the manager restarts by itself and the conversation continues.

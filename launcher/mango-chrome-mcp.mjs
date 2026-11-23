@@ -14,11 +14,11 @@
 //   2. Fallback, when there is no panel: a browser of its own, started now with an empty profile (no logins).
 //
 // The user's own Chrome (their profile, their logins) is the exception, and the agent has to ask for it on purpose:
-// `new_page` with `userChrome: true`, when the user turned on "Use my Chrome" in the app settings and Chrome has remote
+// `new_page` with `userChrome: true`, when the user turned on "Also in my Chrome" in the app settings and Chrome has remote
 // debugging on (turned on by hand in chrome://inspect; Chrome shows a banner at every connection). The page is
 // always a NEW tab there, and `navigate_page` with an address only works on a tab the agent opened itself in this
 // session: it never sends a tab of the user's to an address (see `route` and `prepare`). When the connection to that Chrome
-// fails, or the user turns "Use my Chrome" off, the server goes back to the agent's browser.
+// fails, or the user turns "Also in my Chrome" off, the server goes back to the agent's browser.
 //
 // WHY A WRAPPER AND NOT FLAGS IN THE CONFIG. The flags are static, the choice is not: it depends on
 // what is running at that moment. And the MCP server with --browserUrl on a dead port doesn't fall
@@ -112,7 +112,7 @@ function panelPort() {
   return Number.isInteger(p) && p > 0 ? p : 0;
 }
 
-// "Use my Chrome": the user's choice, in a file re-read at every server start (so changing it
+// "Also in my Chrome": the user's choice, in a file re-read at every server start (so changing it
 // doesn't require restarting the agent).
 function myChrome() {
   const f = process.env.MANGO_BROWSER_CHOICE;
@@ -144,13 +144,13 @@ async function showsMangoCode(port) {
 // Where a page without userChrome goes, in the sentences the agent reads.
 const AGENTS_BROWSER = "the app's panel (or the agent's own browser if there is no panel)";
 
-// The user's Chrome, when "Use my Chrome" is on and its remote debugging answers. Otherwise `{ refusal }`: the sentence the
+// The user's Chrome, when "Also in my Chrome" is on and its remote debugging answers. Otherwise `{ refusal }`: the sentence the
 // agent gets back, which says what to do instead of silently opening the page somewhere else.
 async function usersChrome() {
   if (!myChrome()) {
     return {
       refusal:
-        'The user has not allowed the use of their Chrome ("Use my Chrome" in the settings, "Usa il mio Chrome" in Italian). Open the page without userChrome: it opens in ' +
+        'The user has not allowed the use of their Chrome ("Also in my Chrome" in Settings › Agent, "Anche nel mio Chrome" in Italian). Open the page without userChrome: it opens in ' +
         AGENTS_BROWSER +
         ". If the page needs the user's sign-ins, tell the user to turn that setting on.",
     };
@@ -490,7 +490,7 @@ function asFunction(code) {
 // The tool calls run one at a time, and the choice of the browser runs inside the same turn as the call it is for: two
 // `new_page` sent together can never land in the browser chosen for the other one.
 // The server leaves the user's Chrome for the agent's browser when a call cannot connect to it (Chrome closed, its "Allow
-// remote debugging?" denied or left unanswered) and when the user turns "Use my Chrome" off: re-read at every call.
+// remote debugging?" denied or left unanswered) and when the user turns "Also in my Chrome" off: re-read at every call.
 // In the user's Chrome the agent never takes over a tab of the user's: `navigate_page` with an address works only on the
 // tabs this server opened there (`agentTabs`).
 {
@@ -507,7 +507,7 @@ function asFunction(code) {
     AGENTS_BROWSER +
     ". To use their Chrome again, ask the user to open it and accept the request, then open the page with new_page and userChrome: true.";
   const TURNED_OFF =
-    'The user turned off "Use my Chrome": the connection to their Chrome is closed and its tabs cannot be used any more. Pages now open in ' +
+    'The user turned off "Also in my Chrome": the connection to their Chrome is closed and its tabs cannot be used any more. Pages now open in ' +
     AGENTS_BROWSER +
     ": open the page there with new_page, or call list_pages.";
 
@@ -556,7 +556,7 @@ function asFunction(code) {
     const guard = await serial.acquire();
     try {
       const turnedOff = current.users && !myChrome();
-      if (turnedOff) await switchTo(await agentsPlace(), '"Use my Chrome" turned off');
+      if (turnedOff) await switchTo(await agentsPlace(), '"Also in my Chrome" turned off');
       if (turnedOff && this.tool.name !== "new_page") return refuse(TURNED_OFF);
       if (this.tool.name === "new_page") {
         // our parameter, not the tool's: the tool rejects what is not in its own schema

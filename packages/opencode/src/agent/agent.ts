@@ -4,7 +4,7 @@ import { Config } from "@/config/config"
 import { serviceUse } from "@opencode-ai/core/effect/service-use"
 import { Provider } from "@/provider/provider"
 
-import { generateObject, type ModelMessage } from "ai"
+import { generateObject } from "ai"
 import { Truncate } from "@/tool/truncate"
 
 import PROMPT_GENERATE from "./generate.txt"
@@ -48,7 +48,6 @@ export const Info = Schema.Struct({
   variant: Schema.optional(Schema.String),
   prompt: Schema.optional(Schema.String),
   options: Schema.Record(Schema.String, Schema.Unknown),
-  steps: Schema.optional(Schema.Finite),
 }).annotate({ identifier: "Agent" })
 export type Info = DeepMutable<Schema.Schema.Type<typeof Info>>
 
@@ -268,7 +267,6 @@ const layer = Layer.effect(
           item.color = value.color ?? item.color
           item.hidden = value.hidden ?? item.hidden
           item.name = value.name ?? item.name
-          item.steps = value.steps ?? item.steps
           item.options = mergeDeep(item.options, value.options ?? {})
           item.permission = Permission.merge(item.permission, Permission.fromConfig(value.permission ?? {}))
         }
@@ -371,7 +369,7 @@ const layer = Layer.effect(
           },
           temperature: 0.3,
           messages: [
-            ...system.map((item): ModelMessage => ({ role: "system", content: item })),
+            { role: "system", content: system.join("\n") },
             {
               role: "user",
               content: `Create an agent configuration based on this request: "${input.description}".\n\nIMPORTANT: The following identifiers already exist and must NOT be used: ${existing.map((i) => i.name).join(", ")}\n  Return ONLY the JSON object, no other text, do not wrap in backticks`,

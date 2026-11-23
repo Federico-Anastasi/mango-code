@@ -1,0 +1,540 @@
+{
+  "note": "The chat templates of real models, as the GGUF headers of the repos below hold them (`repo` at `revision`, read from `file`). `expect` is what a template legitimately does with the agent's requests: how it opens the assistant's turn, the parts of a request it does not write (`drops`) and the conversations it rejects (`rejects`). Whatever else the render test finds is a defect of the request. A license that asks for its text to travel with the copy has it in `license_file`, next to the template.",
+  "templates": [
+    {
+      "id": "qwen2.5",
+      "family": "Qwen 2.5",
+      "repo": "Qwen/Qwen2.5-0.5B-Instruct-GGUF",
+      "revision": "9217f5db79a29953eb74d5343926648285ec7e67",
+      "file": "qwen2.5-0.5b-instruct-q2_k.gguf",
+      "sha256": "d5495a1e5db0611132a97e46a65dbb64a642a499421228b9c8b93229097fa9a4",
+      "license": "apache-2.0",
+      "bos_token": "",
+      "eos_token": "<|im_end|>",
+      "expect": {
+        "opening": "<|im_start|>assistant\n",
+        "note": "Writes no reasoning.",
+        "drops": [
+          "reasoning"
+        ],
+        "rejects": []
+      }
+    },
+    {
+      "id": "qwen3",
+      "family": "Qwen 3",
+      "repo": "Qwen/Qwen3-0.6B-GGUF",
+      "revision": "23749fefcc72300e3a2ad315e1317431b06b590a",
+      "file": "Qwen3-0.6B-Q8_0.gguf",
+      "sha256": "57f1fd00f0013a2be96aa79b857391f27e23df5b5f847072b524c897e24d0361",
+      "license": "apache-2.0",
+      "bos_token": "",
+      "eos_token": "<|im_end|>",
+      "expect": {
+        "opening": "<|im_start|>assistant\n",
+        "note": "Writes the reasoning of the turns after the last user message only.",
+        "drops": [
+          "reasoning"
+        ],
+        "rejects": []
+      }
+    },
+    {
+      "id": "qwen3.5",
+      "family": "Qwen 3.5",
+      "repo": "bartowski/Qwen_Qwen3.5-2B-GGUF",
+      "revision": "7d26695454df6de5fbcce2e58681e62dae06ce43",
+      "file": "Qwen_Qwen3.5-2B-IQ2_M.gguf",
+      "sha256": "273d8e0e683b885071fb17e08d71e5f2a5ddfb5309756181681de4f5a1822d80",
+      "license": "apache-2.0",
+      "bos_token": "",
+      "eos_token": "<|im_end|>",
+      "expect": {
+        "opening": "<|im_start|>assistant\n",
+        "note": "Writes the reasoning of the turns after the last user message only. Rejects a system message that is not the first.",
+        "drops": [
+          "reasoning"
+        ],
+        "rejects": []
+      }
+    },
+    {
+      "id": "qwen3.6",
+      "family": "Qwen 3.6",
+      "repo": "bartowski/Qwen_Qwen3.6-35B-A3B-GGUF",
+      "revision": "5c2410d71524f4f72b023ce8daf7a80528226d5f",
+      "file": "mtp-Qwen_Qwen3.6-35B-A3B-Q4_0.gguf",
+      "sha256": "e84f32a23fdda27689f868aa4a1a5621f41133e51a48d7f3efcbea2839574259",
+      "license": "apache-2.0",
+      "bos_token": "",
+      "eos_token": "<|im_end|>",
+      "expect": {
+        "opening": "<|im_start|>assistant\n",
+        "note": "Writes the reasoning of the turns after the last user message only (`preserve_thinking` keeps the rest). Rejects a system message that is not the first.",
+        "drops": [
+          "reasoning"
+        ],
+        "rejects": []
+      }
+    },
+    {
+      "id": "mistral-v0.3",
+      "family": "Mistral 7B v0.3",
+      "repo": "bartowski/Mistral-7B-Instruct-v0.3-GGUF",
+      "revision": "61fd4167fff3ab01ee1cfe0da183fa27a944db48",
+      "file": "Mistral-7B-Instruct-v0.3-IQ1_S.gguf",
+      "sha256": "26a59556925c987317ce5291811ba3b7f32ec4c647c400c6cc7e3a9993007ba7",
+      "license": "apache-2.0",
+      "bos_token": "<s>",
+      "eos_token": "</s>",
+      "expect": {
+        "opening": "[/INST]",
+        "note": "Has no system role (the engine puts the system message in the first user message) and no tools or tool role: it rejects a conversation with tool calls.",
+        "drops": [
+          "tools"
+        ],
+        "rejects": [
+          {
+            "scenarios": [
+              "tool-result",
+              "long-with-reminders",
+              "reasoning"
+            ],
+            "message": "Conversation roles must alternate"
+          }
+        ]
+      }
+    },
+    {
+      "id": "mixtral",
+      "family": "Mixtral 8x7B v0.1",
+      "repo": "TheBloke/Mixtral-8x7B-Instruct-v0.1-GGUF",
+      "revision": "fa1d3835c5d45a3a74c0b68805fcdc133dba2b6a",
+      "file": "mixtral-8x7b-instruct-v0.1.Q2_K.gguf",
+      "sha256": "26a59556925c987317ce5291811ba3b7f32ec4c647c400c6cc7e3a9993007ba7",
+      "license": "apache-2.0",
+      "bos_token": "<s>",
+      "eos_token": "</s>",
+      "expect": {
+        "opening": "[/INST]",
+        "note": "Has no system role (the engine puts the system message in the first user message) and no tools or tool role: it rejects a conversation with tool calls.",
+        "drops": [
+          "tools"
+        ],
+        "rejects": [
+          {
+            "scenarios": [
+              "tool-result",
+              "long-with-reminders",
+              "reasoning"
+            ],
+            "message": "Conversation roles must alternate"
+          }
+        ]
+      }
+    },
+    {
+      "id": "phi3",
+      "family": "Phi 3",
+      "repo": "microsoft/Phi-3-mini-4k-instruct-gguf",
+      "revision": "a64113399c2f6b8ad3e11c394733a2ddadaa7f33",
+      "file": "Phi-3-mini-4k-instruct-q4.gguf",
+      "sha256": "268b6082ceb7176dc6ed80557a2f7837f9f0339592fbee677d405a553af15f88",
+      "license": "mit",
+      "bos_token": "<s>",
+      "eos_token": "<|endoftext|>",
+      "expect": {
+        "opening": "<|assistant|>",
+        "note": "A plain chat format: no system role, tools, calls or results, no reasoning.",
+        "drops": [
+          "system",
+          "tools",
+          "calls",
+          "results",
+          "reasoning"
+        ],
+        "rejects": []
+      }
+    },
+    {
+      "id": "phi4",
+      "family": "Phi 4",
+      "repo": "microsoft/phi-4-gguf",
+      "revision": "6edc2ef6664b739a8e11e62f2672ff6afe0c15ac",
+      "file": "phi-4-TQ1_0.gguf",
+      "sha256": "fe4120415a3858b873955c92ce3a103a95bc97c2cb00b72e62659aaf0f891ee5",
+      "license": "mit",
+      "bos_token": "<|endoftext|>",
+      "eos_token": "<|im_end|>",
+      "expect": {
+        "opening": "<|im_start|>assistant<|im_sep|>",
+        "note": "Has the system role but no tools, calls or results (the tool role is ignored), no reasoning.",
+        "drops": [
+          "tools",
+          "calls",
+          "results",
+          "reasoning"
+        ],
+        "rejects": []
+      }
+    },
+    {
+      "id": "deepseek-r1-distill",
+      "family": "DeepSeek R1 distill",
+      "repo": "bartowski/DeepSeek-R1-Distill-Qwen-1.5B-GGUF",
+      "revision": "9cc28b17e86fa2415fcb070f8ee5ec27c965aa61",
+      "file": "DeepSeek-R1-Distill-Qwen-1.5B-IQ2_M.gguf",
+      "sha256": "b6835114b7303ddd78919a82e4d9f7d8c26ed0d7dfc36beeb12d524f6144eab1",
+      "license": "apache-2.0",
+      "bos_token": "<｜begin▁of▁sentence｜>",
+      "eos_token": "<｜end▁of▁sentence｜>",
+      "expect": {
+        "opening": "<｜Assistant｜>",
+        "note": "Has no tools; takes the last system message as the system prompt; opens no turn after tool results; writes no reasoning.",
+        "drops": [
+          "reasoning",
+          "tools",
+          "opening-after-results"
+        ],
+        "rejects": []
+      }
+    },
+    {
+      "id": "deepseek-v3",
+      "family": "DeepSeek V3",
+      "repo": "lmstudio-community/DeepSeek-V3-0324-GGUF",
+      "revision": "cdcaced0811035e25af83157b4ded8813ef4d47e",
+      "file": "DeepSeek-V3-0324-Q8_0-00001-of-00020.gguf",
+      "sha256": "22e97ba043dacf9df1f071a9de9d2bb6b0757491f16e96e810834b86e1641286",
+      "license": "mit",
+      "bos_token": "<｜begin▁of▁sentence｜>",
+      "eos_token": "<｜end▁of▁sentence｜>",
+      "expect": {
+        "opening": "<｜Assistant｜>",
+        "note": "Has no tools; opens no turn after tool results; writes no reasoning.",
+        "drops": [
+          "reasoning",
+          "tools",
+          "opening-after-results"
+        ],
+        "rejects": []
+      }
+    },
+    {
+      "id": "glm4",
+      "family": "GLM 4",
+      "repo": "bartowski/THUDM_GLM-4-9B-0414-GGUF",
+      "revision": "211924cd949e153b1017ed635e5b127d0b594e6f",
+      "file": "THUDM_GLM-4-9B-0414-IQ2_M.gguf",
+      "sha256": "854b703e44ca06bdb196cc471c728d15dbab61e744fe6cdce980086b61646ed1",
+      "license": "mit",
+      "bos_token": "",
+      "eos_token": "<|endoftext|>",
+      "expect": {
+        "opening": "<|assistant|>",
+        "note": "Writes no calls and no results (it reads an `observation` role), no reasoning.",
+        "drops": [
+          "reasoning",
+          "calls",
+          "results"
+        ],
+        "rejects": []
+      }
+    },
+    {
+      "id": "glm4.7",
+      "family": "GLM 4.7",
+      "repo": "bartowski/zai-org_GLM-4.7-Flash-GGUF",
+      "revision": "464d07505b441959737cd04d900f047469614c8d",
+      "file": "zai-org_GLM-4.7-Flash-IQ2_XXS.gguf",
+      "sha256": "d63ad536c3c81880043e22ec7fd08db42b4d8fb7c89c7138bc562bfa25281375",
+      "license": "mit",
+      "bos_token": "",
+      "eos_token": "<|endoftext|>",
+      "expect": {
+        "opening": "<|assistant|>",
+        "note": "Writes no reasoning of earlier turns.",
+        "drops": [
+          "reasoning"
+        ],
+        "rejects": []
+      }
+    },
+    {
+      "id": "hermes2-pro",
+      "family": "Hermes 2 Pro",
+      "repo": "NousResearch/Hermes-2-Pro-Mistral-7B-GGUF",
+      "revision": "594e3e33f57a2b8693972e6bf48ae4eff404f170",
+      "file": "Hermes-2-Pro-Mistral-7B.Q2_K.gguf",
+      "sha256": "153280e3ff55d19da1398bdb3914ee2a51b80429bfaedde11d7d216c39db80f3",
+      "license": "apache-2.0",
+      "bos_token": "<s>",
+      "eos_token": "<|im_end|>",
+      "expect": {
+        "opening": "<|im_start|>assistant\n",
+        "note": "A plain ChatML: no tools, no calls, no reasoning.",
+        "drops": [
+          "reasoning",
+          "tools",
+          "calls"
+        ],
+        "rejects": []
+      }
+    },
+    {
+      "id": "hermes4.3",
+      "family": "Hermes 4.3",
+      "repo": "NousResearch/Hermes-4.3-36B-GGUF",
+      "revision": "9ce6f623874b8e9cb7617c399b67cec820b7a594",
+      "file": "hermes-4_3_36b-Q3_K_M.gguf",
+      "sha256": "89116c1ac22ce005afdf1772cb40644c1529af6a91300cf655566d10274d4175",
+      "license": "apache-2.0",
+      "bos_token": "",
+      "eos_token": "<|im_end|>",
+      "expect": {
+        "opening": "<|start_header_id|>assistant<|end_header_id|>\n\n",
+        "note": "Writes no reasoning of earlier turns.",
+        "drops": [
+          "reasoning"
+        ],
+        "rejects": []
+      }
+    },
+    {
+      "id": "granite3.3",
+      "family": "Granite 3.3",
+      "repo": "ibm-granite/granite-3.3-2b-instruct-GGUF",
+      "revision": "7cdf86ccd1f1bb3491c9b7017b033f2e51367397",
+      "file": "granite-3.3-2b-instruct-Q2_K.gguf",
+      "sha256": "8a58e18acd9ca00a43a285fe6ba3760efbda06b5ab7fb57875bfacd72957ed5e",
+      "license": "apache-2.0",
+      "bos_token": "",
+      "eos_token": "<|end_of_text|>",
+      "expect": {
+        "opening": "<|start_of_role|>assistant",
+        "note": "Writes no calls (the model writes them in the text), no reasoning.",
+        "drops": [
+          "reasoning",
+          "calls"
+        ],
+        "rejects": []
+      }
+    },
+    {
+      "id": "granite4",
+      "family": "Granite 4",
+      "repo": "ibm-granite/granite-4.0-micro-GGUF",
+      "revision": "55cded3dcb8ab9f0fdd5373f4e960ffb7fda1c61",
+      "file": "granite-4.0-micro-Q2_K.gguf",
+      "sha256": "9524df67b77a7b25a2dfee898f75b316a157eb9d855b51e32aeac79d7c8a83ce",
+      "license": "apache-2.0",
+      "bos_token": "",
+      "eos_token": "<|end_of_text|>",
+      "expect": {
+        "opening": "<|start_of_role|>assistant<|end_of_role|>",
+        "note": "Writes no reasoning of earlier turns.",
+        "drops": [
+          "reasoning"
+        ],
+        "rejects": []
+      }
+    },
+    {
+      "id": "ling",
+      "family": "Ling 3",
+      "repo": "inclusionAI/Ling-3.0-tiny-GGUF",
+      "revision": "01b850e29ed5b44e2b810160ff980a9bb353296f",
+      "file": "Ling-3.0-tiny-Q4_K_M.gguf",
+      "sha256": "eb6226c94ae38058f875d159f86a206b3a165828c0e7d6bda664ae14667f798a",
+      "license": "mit",
+      "bos_token": "",
+      "eos_token": "<|role_end|>",
+      "expect": {
+        "opening": "<role>ASSISTANT</role>",
+        "drops": [],
+        "rejects": []
+      }
+    },
+    {
+      "id": "mistral-nemo",
+      "family": "Mistral Nemo",
+      "repo": "bartowski/Mistral-Nemo-Instruct-2407-GGUF",
+      "revision": "a2dd64a0a76ea1bdb2bb6ab6fa5496b003c7c908",
+      "file": "Mistral-Nemo-Instruct-2407-IQ2_M.gguf",
+      "sha256": "e4676cb56dffea7782fd3e2b577cfaf1e123537e6ef49b3ec7caa6c095c62272",
+      "license": "apache-2.0",
+      "bos_token": "<s>",
+      "eos_token": "</s>",
+      "expect": {
+        "opening": "[/INST]",
+        "note": "Writes the system message inside the last user message, so it is lost once a tool call ends the conversation, and opens no turn after tool results. Writes no reasoning.",
+        "drops": [
+          "system",
+          "opening-after-results",
+          "reasoning"
+        ],
+        "rejects": []
+      }
+    },
+    {
+      "id": "phi4-mini",
+      "family": "Phi 4 mini",
+      "repo": "bartowski/microsoft_Phi-4-mini-instruct-GGUF",
+      "revision": "7ff82c2aaa4dde30121698a973765f39be5288c0",
+      "file": "microsoft_Phi-4-mini-instruct-IQ2_M.gguf",
+      "sha256": "febf589225c9728ab791f52e8897d7607a823d45368f0a4c92fa68997b40cce9",
+      "license": "mit",
+      "bos_token": "<|endoftext|>",
+      "eos_token": "<|end|>",
+      "expect": {
+        "opening": "<|assistant|>",
+        "note": "Lists no tools and writes no calls, no reasoning.",
+        "drops": [
+          "tools",
+          "calls",
+          "reasoning"
+        ],
+        "rejects": []
+      }
+    },
+    {
+      "id": "gpt-oss",
+      "family": "gpt-oss",
+      "repo": "ggml-org/gpt-oss-20b-GGUF",
+      "revision": "41e8a94d15d62070b36cf4553a0250717ecf46b8",
+      "file": "eagle3-gpt-oss-20b-Q8_0.gguf",
+      "sha256": "a4c9919cbbd4acdd51ccffe22da049264b1b73e59055fa58811a99efbd7c8146",
+      "license": "apache-2.0",
+      "bos_token": "<|startoftext|>",
+      "eos_token": "<|return|>",
+      "expect": {
+        "opening": "<|start|>assistant",
+        "reasoning_field": "thinking",
+        "note": "Takes the first system message as its instructions; writes the reasoning of the final turn only.",
+        "drops": [
+          "reasoning"
+        ],
+        "rejects": []
+      }
+    },
+    {
+      "id": "llama3.1",
+      "family": "Llama 3.1",
+      "repo": "bartowski/Meta-Llama-3.1-8B-Instruct-GGUF",
+      "revision": "bf5b95e96dac0462e2a09145ec66cae9a3f12067",
+      "file": "Meta-Llama-3.1-8B-Instruct-IQ2_M.gguf",
+      "sha256": "e10ca381b1ccc5cf9db52e371f3b6651576caee0a630b452e2816b2d404d4b65",
+      "license": "llama3.1",
+      "license_file": "llama3.1.LICENSE.txt",
+      "bos_token": "<|begin_of_text|>",
+      "eos_token": "<|eot_id|>",
+      "expect": {
+        "opening": "<|start_header_id|>assistant<|end_header_id|>\n\n",
+        "note": "Writes no reasoning.",
+        "drops": [
+          "reasoning"
+        ],
+        "rejects": []
+      }
+    },
+    {
+      "id": "llama3.2",
+      "family": "Llama 3.2",
+      "repo": "bartowski/Llama-3.2-1B-Instruct-GGUF",
+      "revision": "067b946cf014b7c697f3654f621d577a3e3afd1c",
+      "file": "Llama-3.2-1B-Instruct-IQ3_M.gguf",
+      "sha256": "5816fce10444e03c2e9ee1ef8a4a1ea61ae7e69e438613f3b17b69d0426223a4",
+      "license": "llama3.2",
+      "license_file": "llama3.2.LICENSE.txt",
+      "bos_token": "<|begin_of_text|>",
+      "eos_token": "<|eot_id|>",
+      "expect": {
+        "opening": "<|start_header_id|>assistant<|end_header_id|>\n\n",
+        "note": "Writes no reasoning.",
+        "drops": [
+          "reasoning"
+        ],
+        "rejects": []
+      }
+    },
+    {
+      "id": "gemma2",
+      "family": "Gemma 2",
+      "repo": "bartowski/gemma-2-2b-it-GGUF",
+      "revision": "855f67caed130e1befc571b52bd181be2e858883",
+      "file": "gemma-2-2b-it-IQ3_M.gguf",
+      "sha256": "ecd6ae513fe103f0eb62e8ab5bfa8d0fe45c1074fa398b089c93a7e70c15cfd6",
+      "license": "gemma",
+      "license_file": "gemma.LICENSE.txt",
+      "bos_token": "<bos>",
+      "eos_token": "<eos>",
+      "expect": {
+        "opening": "<start_of_turn>model\n",
+        "note": "Has no system role (the engine puts the system message in the first user message) and no tools or tool role: it rejects a conversation with tool calls.",
+        "drops": [
+          "tools"
+        ],
+        "rejects": [
+          {
+            "scenarios": [
+              "tool-result",
+              "long-with-reminders",
+              "reasoning"
+            ],
+            "message": "Conversation roles must alternate"
+          }
+        ]
+      }
+    },
+    {
+      "id": "gemma3",
+      "family": "Gemma 3",
+      "repo": "lmstudio-community/gemma-3-1b-it-GGUF",
+      "revision": "a029b19eb98005eb2d2d91d7c09de52194874be5",
+      "file": "gemma-3-1b-it-Q3_K_L.gguf",
+      "sha256": "7de1c58e208eda46e9c7f86397df37ec49883aeece39fb961e0a6b24088dd3c4",
+      "license": "gemma",
+      "license_file": "gemma.LICENSE.txt",
+      "bos_token": "<bos>",
+      "eos_token": "<end_of_turn>",
+      "expect": {
+        "opening": "<start_of_turn>model\n",
+        "note": "Takes the system message as a prefix of the first user message; has no tools and no tool role: it rejects a conversation with tool calls.",
+        "drops": [
+          "tools"
+        ],
+        "rejects": [
+          {
+            "scenarios": [
+              "tool-result",
+              "long-with-reminders",
+              "reasoning"
+            ],
+            "message": "Conversation roles must alternate"
+          }
+        ]
+      }
+    },
+    {
+      "id": "lfm2.5",
+      "family": "LFM 2.5",
+      "repo": "LiquidAI/LFM2.5-1.2B-Instruct-GGUF",
+      "revision": "8ed288026e23958ad9dfa92d53ed773a8eee7125",
+      "file": "LFM2.5-1.2B-Instruct-Q4_0.gguf",
+      "sha256": "f05bf4b967dc993bdc7a2fe6e43759ee218eb0eb340d68b063e1c4f8ad148176",
+      "license": "other (LFM Open License v1.0)",
+      "license_file": "lfm.LICENSE.txt",
+      "bos_token": "<|startoftext|>",
+      "eos_token": "<|im_end|>",
+      "expect": {
+        "opening": "<|im_start|>assistant\n",
+        "note": "Writes no calls (the model writes them in the text) and no reasoning of earlier turns.",
+        "drops": [
+          "calls",
+          "reasoning"
+        ],
+        "rejects": []
+      }
+    }
+  ]
+}

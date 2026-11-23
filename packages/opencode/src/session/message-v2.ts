@@ -429,7 +429,15 @@ export const toModelMessagesEffect = Effect.fnUntraced(function* (
   return boundImages(
     yield* Effect.promise(() =>
       convertToModelMessages(
-        result.filter((msg) => msg.parts.some((part) => part.type !== "step-start")),
+        result
+          .filter((msg) => msg.parts.some((part) => part.type !== "step-start"))
+          // some chat templates refuse two user messages in a row
+          .reduce<UIMessage[]>((merged, msg) => {
+            const previous = merged.at(-1)
+            if (previous?.role === "user" && msg.role === "user") previous.parts.push(...msg.parts)
+            else merged.push(msg)
+            return merged
+          }, []),
         {
           //@ts-expect-error (convertToModelMessages expects a ToolSet but only actually needs tools[name]?.toModelOutput)
           tools,

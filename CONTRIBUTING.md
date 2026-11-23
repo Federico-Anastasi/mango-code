@@ -29,6 +29,10 @@ cd integration; bun test                           # end-to-end, with a fake eng
 cd launcher/mango-documents; bun test              # the document tools
 ```
 
+Every test that needs no graphics card, except the end-to-end ones of `integration/`, runs on GitHub too, in `.github/workflows/prove.yml` (Actions, "prove", Run
+workflow, on any branch), with the typecheck (`bun run typecheck` from the root) and the tests of the agent
+(`cd packages/opencode; bun run test`) and of the other packages, each from its own folder.
+
 Tests don't run from the repository root: run them from the folders above. On a fresh clone `cargo test --workspace`
 stops until the installer's resources folder exists (the build script creates it with the installer; for the tests an
 empty one is enough): `New-Item -ItemType Directory -Force app/scripts/staging/resources`.

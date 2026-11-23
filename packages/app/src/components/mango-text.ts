@@ -184,3 +184,9 @@ export function statusLine(
     }),
   }
 }
+
+/** The one-line notice the engine's state may carry: the model runs, the user should know. */
+export function stateNotice(state: MangoState) {
+  if (state.model.phase !== "ready") return
+  return state.model.notice?.trim() || undefined
+}

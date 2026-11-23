@@ -1,5 +1,5 @@
 // The web UI inside the app's window, driven like a user (WebView2 CDP): the questions dialog. It opens a window for
-// a few seconds; the model is the fake engine. `bun test integration`, after
+// a few seconds; the model is the fake engine. `bun test --cwd integration`, after
 // `cargo build -p mango-code -p engine` in app/.
 
 import { afterAll, beforeAll, expect, test } from "bun:test";

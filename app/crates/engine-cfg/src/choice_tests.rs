@@ -786,7 +786,7 @@ fn an_unreadable_file_is_an_error_and_is_not_overwritten() {
 #[test]
 fn what_is_written_is_read_back_and_only_the_differences_are_kept() {
     let w = world(false);
-    let mut mine = Choices { place: WhereChoice::Pick, gpus: vec![GTX_1080.into()], context: Some(65_536), style: choices::Style::Creative, reasoning: Some(false), sampling: Sampling { temperature: Some(0.4), top_k: Some(10), ..Sampling::default() } };
+    let mut mine = Choices { place: WhereChoice::Pick, gpus: vec![GTX_1080.into()], context: Some(65_536), style: choices::Style::Creative, reasoning: Some("off".into()), sampling: Sampling { temperature: Some(0.4), top_k: Some(10), ..Sampling::default() } };
     choices::set_model(&w.paths, "ling", mine.clone()).unwrap();
     choices::set_model(&w.paths, "3.5-4b", Choices { place: WhereChoice::Cpu, ..Choices::default() }).unwrap();
     choices::set_default(&w.paths, Some("ling")).unwrap();
@@ -978,21 +978,105 @@ fn the_catalog_lines_and_sampling_are_the_ones_approved() {
     }
 }
 
+/// Gives the model `key` of the world a GGUF whose chat template is `template`.
+fn give_template(w: &World, key: &str, template: &str) {
+    let file = load_models(&w.paths).unwrap();
+    let cfg = model_cfg(&file, key).unwrap();
+    crate::fixtures::write_gguf_with_template(&w.paths.models.join(cfg.gguf.unwrap()), template);
+}
+
 /// The style of the answers and the reasoning become fields of the requests: the catalog's own values, another
-/// temperature for «precise» and «creative», nothing for a model the catalog says nothing about.
+/// temperature for «precise» and «creative», the reasoning of the past turns kept in the history for every model, and the
+/// level the user chose under the name the model's template reads.
 #[test]
 fn the_style_and_the_reasoning_are_what_a_request_gets_when_it_does_not_say() {
     let w = world(false);
+    give_template(&w, "ling", crate::fixtures::SWITCH_TEMPLATE);
+    give_template(&w, "3.8", crate::fixtures::EFFORT_TEMPLATE);
     let defaults = |key: &str| serde_json::Value::Object(choices::request_defaults(&w.paths, key).unwrap());
-    assert_eq!(defaults("ling"), serde_json::json!({ "temperature": 1.0, "top_p": 0.95, "top_k": 20 }));
-    choices::set_model(&w.paths, "ling", Choices { style: choices::Style::Precise, reasoning: Some(false), ..Choices::default() }).unwrap();
-    assert_eq!(defaults("ling"), serde_json::json!({ "temperature": 0.3, "top_p": 0.95, "top_k": 20, "chat_template_kwargs": { "enable_thinking": false } }));
-    choices::set_model(&w.paths, "ling", Choices { style: choices::Style::Creative, reasoning: Some(true), ..Choices::default() }).unwrap();
+    let kept = serde_json::json!({ "preserve_thinking": true });
+    assert_eq!(defaults("ling"), serde_json::json!({ "temperature": 1.0, "top_p": 0.95, "top_k": 20, "chat_template_kwargs": kept }));
+    choices::set_model(&w.paths, "ling", Choices { style: choices::Style::Precise, reasoning: Some("off".into()), ..Choices::default() }).unwrap();
+    assert_eq!(
+        defaults("ling"),
+        serde_json::json!({ "temperature": 0.3, "top_p": 0.95, "top_k": 20, "chat_template_kwargs": { "preserve_thinking": true, "enable_thinking": false } })
+    );
+    choices::set_model(&w.paths, "ling", Choices { style: choices::Style::Creative, reasoning: Some("on".into()), ..Choices::default() }).unwrap();
     assert_eq!(defaults("ling")["temperature"], serde_json::json!(1.1));
-    assert_eq!(defaults("ling")["chat_template_kwargs"], serde_json::json!({ "enable_thinking": true }));
-    // the choices of a model are its own
-    assert_eq!(defaults("lfm"), serde_json::json!({ "temperature": 0.1, "top_k": 50, "repeat_penalty": 1.05 }));
+    assert_eq!(defaults("ling")["chat_template_kwargs"], serde_json::json!({ "preserve_thinking": true, "enable_thinking": true }));
+    // a model with levels: `reasoning_effort`, and `high` is what its template calls the highest
+    for (chosen, sent) in [("low", "low"), ("medium", "medium"), ("high", "xhigh")] {
+        choices::set_model(&w.paths, "3.8", Choices { reasoning: Some(chosen.into()), ..Choices::default() }).unwrap();
+        assert_eq!(defaults("3.8")["chat_template_kwargs"], serde_json::json!({ "preserve_thinking": true, "reasoning_effort": sent }), "{chosen}");
+    }
+    // the choices of a model are its own; one whose template offers nothing gets only the reasoning of the past turns
+    assert_eq!(defaults("lfm"), serde_json::json!({ "temperature": 0.1, "top_k": 50, "repeat_penalty": 1.05, "chat_template_kwargs": kept }));
     assert!(choices::request_defaults(&w.paths, "ghost").is_err());
+}
+
+/// A choice saved before the levels is a boolean: it is read as on or off, becomes a string at the next write, and
+/// means the highest or the lowest level to a model that has levels.
+#[test]
+fn a_choice_of_reasoning_saved_as_a_boolean_is_read_and_written_as_a_string() {
+    let w = world(false);
+    give_template(&w, "ling", crate::fixtures::SWITCH_TEMPLATE);
+    give_template(&w, "3.8", crate::fixtures::EFFORT_TEMPLATE);
+    write_choices(&w, r#"{ "models": { "ling": { "reasoning": false }, "3.8": { "reasoning": true }, "3.6": { "reasoning": null } } }"#);
+    let read = choices::read(&w.paths).unwrap();
+    assert_eq!((read.models["ling"].reasoning.as_deref(), read.models["3.8"].reasoning.as_deref(), read.models["3.6"].reasoning.as_deref()), (Some("off"), Some("on"), None));
+    let kwargs = |key: &str| choices::request_defaults(&w.paths, key).unwrap()["chat_template_kwargs"].clone();
+    assert_eq!(kwargs("ling"), serde_json::json!({ "preserve_thinking": true, "enable_thinking": false }));
+    assert_eq!(kwargs("3.8"), serde_json::json!({ "preserve_thinking": true, "reasoning_effort": "xhigh" }));
+    let hw = three_gpus();
+    assert_eq!(view_of(&w, "3.8", &hw).choices.reasoning.as_deref(), Some("high"), "the view says a level the model has");
+    assert_eq!(view_of(&w, "ling", &hw).choices.reasoning.as_deref(), Some("off"));
+    // the next write
+    choices::set_default(&w.paths, Some("ling")).unwrap();
+    let text = std::fs::read_to_string(w.paths.data.join(choices::FILE)).unwrap();
+    assert!(text.contains(r#""reasoning": "off""#) && text.contains(r#""reasoning": "on""#) && !text.contains(r#""reasoning": false"#) && !text.contains(r#""reasoning": true"#), "{text}");
+    // a name that is not a level is not a choice
+    write_choices(&w, r#"{ "models": { "ling": { "reasoning": "maximum" } } }"#);
+    assert!(choices::read(&w.paths).unwrap_err().to_string().contains(&tr!("Le tue scelte salvate non sono valide", "Your saved choices are not valid")));
+}
+
+/// A choice the model's template does not offer (a level a model that only has a switch does not know, a choice left from
+/// another model) is not sent, and the view does not show it.
+#[test]
+fn a_choice_the_template_does_not_offer_is_not_sent() {
+    let w = world(false);
+    give_template(&w, "ling", crate::fixtures::SWITCH_TEMPLATE);
+    choices::set_model(&w.paths, "ling", Choices { reasoning: Some("medium".into()), ..Choices::default() }).unwrap();
+    assert_eq!(choices::request_defaults(&w.paths, "ling").unwrap()["chat_template_kwargs"], serde_json::json!({ "preserve_thinking": true }));
+    assert_eq!(view_of(&w, "ling", &three_gpus()).choices.reasoning, None);
+}
+
+/// A chat request does not read the disk: the defaults of a model are kept until a file they come from is written by the app.
+#[test]
+fn the_request_defaults_are_kept_until_the_choices_or_the_models_are_written() {
+    let w = world(false);
+    let defaults = choices::ModelDefaults::new(w.paths.clone());
+    let temperature = |key: &str| defaults.get(key).unwrap().get("temperature").cloned();
+    assert_eq!(temperature("ling"), Some(serde_json::json!(1.0)));
+    // the file is changed behind the app's back: the request is still given what is in memory
+    write_choices(&w, r#"{ "models": { "ling": { "style": "creative" } } }"#);
+    assert_eq!(temperature("ling"), Some(serde_json::json!(1.0)));
+    // whoever writes the choices says so
+    choices::set_model(&w.paths, "ling", Choices { style: choices::Style::Precise, ..Choices::default() }).unwrap();
+    assert_eq!(temperature("ling"), Some(serde_json::json!(0.3)));
+
+    // a model of the user's is not known before it is added; once added, and again when its entry is replaced, its defaults follow
+    assert!(defaults.get("mine").is_err());
+    let entry = |gguf: &str| serde_json::json!({ "label": "Mine", "gguf": gguf, "files": [{ "path": gguf, "size": 1 }], "memory": { "kv_kib_token": 1, "state_mib": 0 } });
+    let kwargs = |key: &str| defaults.get(key).unwrap()["chat_template_kwargs"].clone();
+    crate::fixtures::write_gguf_with_template(&w.paths.models.join("plain.gguf"), "{% for m in messages %}{{ m.content }}{% endfor %}");
+    crate::fixtures::write_gguf_with_template(&w.paths.models.join("thinks.gguf"), crate::fixtures::SWITCH_TEMPLATE);
+    mango_common::catalog::add_user(&w.paths, "mine", entry("plain.gguf")).unwrap();
+    choices::set_model(&w.paths, "mine", Choices { reasoning: Some("off".into()), ..Choices::default() }).unwrap();
+    assert_eq!(kwargs("mine"), serde_json::json!({ "preserve_thinking": true }), "the model does not reason: its switch adds nothing");
+    mango_common::catalog::add_user(&w.paths, "mine", entry("thinks.gguf")).unwrap();
+    assert_eq!(kwargs("mine"), serde_json::json!({ "preserve_thinking": true, "enable_thinking": false }));
+    mango_common::catalog::remove_user(&w.paths, "mine").unwrap();
+    assert!(defaults.get("mine").is_err());
 }
 
 /// «Precise» is 0.3, but never warmer than the catalog: a model made to answer at 0.1 stays at 0.1.
@@ -1005,7 +1089,7 @@ fn precise_is_never_above_the_temperature_of_the_catalog() {
     assert_eq!(choices::request_defaults(&w.paths, "lfm").unwrap()["temperature"], serde_json::json!(1.1));
 }
 
-/// A model of the user's has no values in the catalog: the recommended style adds nothing, the others their temperature.
+/// A model of the user's has no values in the catalog: the recommended style adds no sampling value, the others their temperature.
 #[test]
 fn a_model_without_values_in_the_catalog_gets_only_what_the_user_chose() {
     // A catalog of its own, in a temporary folder: `data_only` reads the real one.
@@ -1014,12 +1098,13 @@ fn a_model_without_values_in_the_catalog_gets_only_what_the_user_chose() {
     let paths = Paths { dist: r.join("dist"), engines: r.join("e"), models: r.join("m"), opencode: r.join("o"), data: r.join("data") };
     std::fs::create_dir_all(&paths.dist).unwrap();
     std::fs::write(paths.dist.join("mango-models.json"), r#"{ "ctx": 8192, "default": "m", "order": ["m"], "models": { "m": { "label": "M", "gguf": "m.gguf" } } }"#).unwrap();
-    assert!(choices::request_defaults(&paths, "m").unwrap().is_empty());
+    let kept = serde_json::json!({ "preserve_thinking": true });
+    assert_eq!(serde_json::Value::Object(choices::request_defaults(&paths, "m").unwrap()), serde_json::json!({ "chat_template_kwargs": kept }));
     choices::set_model(&paths, "m", Choices { style: choices::Style::Creative, ..Choices::default() }).unwrap();
-    assert_eq!(serde_json::Value::Object(choices::request_defaults(&paths, "m").unwrap()), serde_json::json!({ "temperature": 1.1 }));
-    // the catalog does not say it reasons: a reasoning chosen for it (left from an older catalog) adds nothing
-    choices::set_model(&paths, "m", Choices { style: choices::Style::Precise, reasoning: Some(true), ..Choices::default() }).unwrap();
-    assert_eq!(serde_json::Value::Object(choices::request_defaults(&paths, "m").unwrap()), serde_json::json!({ "temperature": 0.3 }));
+    assert_eq!(serde_json::Value::Object(choices::request_defaults(&paths, "m").unwrap()), serde_json::json!({ "temperature": 1.1, "chat_template_kwargs": kept }));
+    // its file is not on the disk, so its template offers nothing: a reasoning chosen for it adds nothing
+    choices::set_model(&paths, "m", Choices { style: choices::Style::Precise, reasoning: Some("on".into()), ..Choices::default() }).unwrap();
+    assert_eq!(serde_json::Value::Object(choices::request_defaults(&paths, "m").unwrap()), serde_json::json!({ "temperature": 0.3, "chat_template_kwargs": kept }));
 }
 
 /// The values of the style are chosen one by one: they win over the style's, only the ones chosen change, and the
@@ -1030,7 +1115,8 @@ fn the_values_chosen_win_over_the_style_and_over_the_catalog() {
     let defaults = |key: &str| serde_json::Value::Object(choices::request_defaults(&w.paths, key).unwrap());
     let own = Sampling { temperature: Some(0.5), top_k: Some(0), repeat_penalty: Some(1.2), ..Sampling::default() };
     choices::set_model(&w.paths, "ling", Choices { sampling: own, ..Choices::default() }).unwrap();
-    assert_eq!(defaults("ling"), serde_json::json!({ "temperature": 0.5, "top_p": 0.95, "top_k": 0, "repeat_penalty": 1.2 }));
+    assert_eq!(defaults("ling")["top_k"], serde_json::json!(0));
+    assert_eq!(defaults("ling")["repeat_penalty"], serde_json::json!(1.2));
     let hw = three_gpus();
     assert_eq!(view_of(&w, "ling", &hw).sampling, Some(Sampling { temperature: Some(0.5), top_p: Some(0.95), top_k: Some(0), repeat_penalty: Some(1.2), ..Sampling::default() }));
     // over a style that is not the model's own
@@ -1041,7 +1127,7 @@ fn the_values_chosen_win_over_the_style_and_over_the_catalog() {
     assert_eq!(view_of(&w, "ling", &hw).sampling.unwrap().temperature, Some(0.3));
     // a value for a field the catalog leaves empty
     choices::set_model(&w.paths, "lfm", Choices { sampling: Sampling { top_p: Some(0.9), ..Sampling::default() }, ..Choices::default() }).unwrap();
-    assert_eq!(defaults("lfm"), serde_json::json!({ "temperature": 0.1, "top_p": 0.9, "top_k": 50, "repeat_penalty": 1.05 }));
+    assert_eq!(defaults("lfm")["top_p"], serde_json::json!(0.9));
     // saved and read back
     assert_eq!(choices::read(&w.paths).unwrap().models["lfm"].sampling.top_p, Some(0.9));
     // the choices saved before the values existed read as they were
@@ -1090,7 +1176,7 @@ fn the_models_view_says_what_is_on_disk_and_what_a_download_brings() {
     let hw = three_gpus();
     let v = view_of(&w, "3.6", &hw);
     assert_eq!((v.label.as_str(), v.images, v.user, v.present, v.on_request), ("Qwen3.6-35B-A3B", true, false, true, false));
-    assert!(v.bytes > 10_000_000_000 && v.limits.reasoning, "{v:?}");
+    assert!(v.bytes > 10_000_000_000, "{v:?}");
     assert!(view_of(&w, "toq", &hw).on_request);
     // Without its weights it is not there; without its engine neither.
     let file = load_models(&w.paths).unwrap();
@@ -1136,7 +1222,7 @@ fn listed(key: &str, placement: Option<Placement>, present: bool) -> view::Model
         verdict: Verdict { fits: placement.is_some(), place: placement.map(|placement| Where { placement, gpus: vec![], context: 4096 }), reason: String::new(), speed: None, fastest: false, estimated: false },
         recommended: false,
         on_request: false,
-        limits: Limits { places: vec![], context: vec![], reasoning: false },
+        limits: Limits { places: vec![], context: vec![], reasoning: vec![] },
         tailored: false,
         choices: Choices::default(),
     }
@@ -1271,6 +1357,35 @@ fn a_measured_setup_does_not_start_where_another_program_holds_one_of_its_cards(
     assert_eq!(taken(&with_used(0, 2000), &[]), None, "a large desktop: 900 MiB over the reserve");
     assert_eq!(taken(&[], &[]), None, "nothing read: it starts as before");
     assert_eq!(taken(&with_used(1, 4915), &[1]), None, "a card lent to another job is held by that job");
+}
+
+/// The memory of a Radeon counts like that of an NVIDIA card: 15 GB of the RX 7800 XT's 16 held by another program leave no
+/// room for a model that fits with the card free, and the sentence names the card; with the card free it starts, and the
+/// desktop's share and a large desktop do not keep it from starting.
+#[test]
+fn a_radeon_held_by_another_program_does_not_start_a_model_that_fits_with_it_free() {
+    let w = world(false);
+    let hw = pc(vec![other(0, "AMD Radeon RX 7800 XT", Vendor::Amd, 16_368)], 32_768);
+    assert_eq!(cards(&plan(&w, "3.5-4b", &hw).unwrap()), ["AMD Radeon RX 7800 XT"], "with the card free the model is on it");
+    let taken = |mib: u64| taken_before_start(&w.paths, &hw, &[(0, mib, 16_368)], "3.5-4b", &[]).unwrap();
+
+    let held = taken(15_360).expect("the Radeon is taken");
+    assert_eq!(held.cards, [0]);
+    assert_eq!(
+        held.sentence,
+        tr!(
+            "Sulla AMD Radeon RX 7800 XT un altro programma sta usando {}: per questo modello non resta abbastanza memoria.",
+            "On the AMD Radeon RX 7800 XT another program is using {}: there is not enough memory left for this model.",
+            gb("15.0 GB")
+        )
+    );
+    assert_eq!(taken(500), None, "the desktop");
+    assert_eq!(taken(2_000), None, "a large desktop: 900 MiB over the reserve");
+
+    // Chosen to run on the card, the model that failed does not fit beside the other program, and the sentence is the same.
+    choose(&w, "3.5-4b", WhereChoice::All);
+    let after = view::after_failure(&w.paths, &hw, &[(0, 15_360, 16_368)], "3.5-4b", None, None).unwrap();
+    assert_eq!(after.taken, Some(held.sentence));
 }
 
 /// A plan computed from the memory (official llama.cpp, on one card here) starts as long as what the other programs leave

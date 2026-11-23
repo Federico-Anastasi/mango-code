@@ -84,6 +84,11 @@ import { useSDK } from "@/context/sdk"
 import { useSync } from "@/context/sync"
 import { notifySessionTabsRemoved } from "@/components/titlebar-session-events"
 import { sessionTitle } from "@/utils/session-title"
+import { useLayout } from "@/context/layout"
+import { useDefaultProjectFolders } from "@/hooks/use-default-project"
+import { projectForSession } from "@/pages/layout/helpers"
+import { projectLabel } from "@/utils/default-project"
+import { SessionProject } from "./session-project"
 import { scheduleConnectedMeasure } from "./measure"
 import { observeElementOffsetReconnectAware } from "./observe-element-offset"
 import { createTimelineProjection } from "./projection"
@@ -390,6 +395,8 @@ export function MessageTimeline(props: {
   const sdk = useSDK()
   const sync = useSync()
   const settings = useSettings()
+  const layout = useLayout()
+  const defaultFolders = useDefaultProjectFolders()
   const command = useCommand()
   const dialog = useDialog()
   const sessionArchive = useSessionArchive()
@@ -420,6 +427,15 @@ export function MessageTimeline(props: {
     return sync().session.get(id)
   })
   const titleValue = createMemo(() => info()?.title)
+  const projectName = createMemo(() => {
+    const session = info()
+    if (!session) return
+    return projectLabel({
+      directory: session.directory,
+      project: projectForSession(session, layout.projects.list()),
+      folders: defaultFolders(),
+    })
+  })
   const titleLabel = createMemo(() => sessionTitle(titleValue(), language.t("session.untitled")))
   const shareUrl = createMemo(() => info()?.share?.url)
   // Session sharing was discontinued; keep the share menu and popover hidden.
@@ -475,7 +491,7 @@ export function MessageTimeline(props: {
   })
   // on a phone the title is in the top bar (with the menu of the conversation): the row of the page appears only to rename
   const phone = createMediaQuery("(max-width: 767px)")
-  const showHeader = createMemo(() => !!(titleValue() || parentID()) && (!phone() || title.editing))
+  const showHeader = createMemo(() => !!info() && (!phone() || title.editing))
   const projection = createTimelineProjection({
     messages: sessionMessages,
     userMessages: () => props.userMessages,
@@ -2155,7 +2171,10 @@ export function MessageTimeline(props: {
                       /
                     </span>
                   </Show>
-                  <Show when={childTitle() || title.editing}>
+                  <Show when={!parentID() && !title.editing}>
+                    <SessionProject name={projectName()} none={language.t("session.project.none")} />
+                  </Show>
+                  <Show when={(parentID() && childTitle()) || title.editing}>
                     <Show
                       when={title.editing}
                       fallback={

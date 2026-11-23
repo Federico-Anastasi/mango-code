@@ -851,6 +851,39 @@ it.instance("loop continues when finish is tool-calls", () =>
   }),
 )
 
+it.instance("the request has one system message first and no assistant message written in advance, also with a step limit set", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useServerConfig((url) => ({ ...providerCfg(url), agent: { build: { steps: 1 } } }))
+    const prompt = yield* SessionPrompt.Service
+    const sessions = yield* Session.Service
+    const session = yield* sessions.create({
+      title: "Pinned",
+      permission: [{ permission: "*", pattern: "*", action: "allow" }],
+    })
+    yield* prompt.prompt({
+      sessionID: session.id,
+      agent: "build",
+      noReply: true,
+      parts: [{ type: "text", text: "hello" }],
+    })
+    yield* llm.tool("first", { value: "first" })
+    yield* llm.text("second")
+
+    yield* prompt.loop({ sessionID: session.id })
+
+    const inputs = yield* llm.inputs
+    expect(inputs).toHaveLength(2)
+    inputs.forEach((input) => {
+      const messages = input.messages
+      if (!Array.isArray(messages)) throw new Error("expected LLM messages")
+      expect(messages.map((message) => message.role).filter((role) => role === "system")).toEqual(["system"])
+      expect(messages[0]?.role).toBe("system")
+      expect(messages.at(-1)?.role).not.toBe("assistant")
+      expect(JSON.stringify(messages)).not.toContain("MAXIMUM STEPS")
+    })
+  }),
+)
+
 it.instance("loop cuts an answer that goes on with blank lines, tells the model and asks it again", () =>
   Effect.gen(function* () {
     const { llm } = yield* useServerConfig(providerCfg)

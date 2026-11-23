@@ -57,7 +57,9 @@ one that costs tens of seconds of GPU.
 
 - **The engine's cache comes first.** `compaction.prune` is off: it replaced old tool outputs once they passed ~40k
   tokens, which changed the old part of the conversation and made the engine re-read everything after it. For the
-  same reason the chat templates keep the reasoning of past turns (`preserve_thinking` true by default).
+  same reason the manager sends `chat_template_kwargs.preserve_thinking: true` with every chat request, so the chat templates
+  keep the reasoning of past turns (a template that does not read it ignores it; only the Qwen3.5 template, which does
+  not have it, is replaced by `chat-templates/qwen3.5-mango.jinja`).
 - **Few tools in the prefill**: the tool definitions are paid for at every turn. Capturing the real request, they weighed
   twice the system prompt, and `chrome-devtools` alone was 25,429 characters over 29 tools; the 13 that are duplicates or
   useless here are cut at the source.
@@ -96,12 +98,12 @@ agent `team` of the app's server, dev and agents are hidden `opencode serve` pro
 2. otherwise a browser of its own, started now, with an empty profile (no logins).
 
 **Your Chrome** is the exception, and the agent has to ask for it: `new_page` with `userChrome: true`, for a page that
-needs your sign-ins. It works if you turned on "Use my Chrome" in the app and Chrome's remote debugging is active; if not,
+needs your sign-ins. It works if you turned on "Also in my Chrome" in the app and Chrome's remote debugging is active; if not,
 the call is refused with a sentence that says what to do, and the page is not opened anywhere else. In your Chrome the
 page is always a new tab, and `navigate_page` with an address works only on the tabs the agent opened itself in this
 session: it never sends one of your own tabs to an address. The choice is made again at every `new_page`. If the
 connection to your Chrome fails (Chrome closed, its "Allow remote debugging?" denied or left unanswered) or you turn
-"Use my Chrome" off, the agent drops it and goes back to the panel.
+"Also in my Chrome" off, the agent drops it and goes back to the panel.
 
 A file path given to a browser tool with no folder before it (`filePath`: `mail\last-run.json`) is taken from the project
 folder; one that leaves the project is refused.
@@ -158,7 +160,7 @@ context measured on its hardware. The agent's config uses the **effective** ctx 
 
 ## Gotchas and useful truths
 
-- **Thinking is on by default**: it makes the model better at programming, at the price of time on short messages.
+- **Most catalog models reason by default** (the pill beside the model chooses): it makes the model better at programming, at the price of time on short messages.
 - **KV cache:** the context lives ONLY in the KV caches. A new turn goes through the model only for the new tokens; the
   past is read from the cache (prefix reuse, safe, doesn't mix). With a profile, disk memory (`--cache-disk`) keeps the
   conversations even after an engine restart; with the general plan the manager keeps the system prompt and the one that
@@ -211,7 +213,7 @@ context measured on its hardware. The agent's config uses the **effective** ctx 
 | `mango-models.json` | **the models**: paths, HF repos with sha256, maximum context, memory; the ones that make images are marked `image` and stay out of `order`. Single source |
 | `mango-engines.json` | the engines to download: official llama.cpp, our two forks, and stable-diffusion.cpp (`sd`) for the models that make images, with url, size and sha256 of every build |
 | `profiles/3060ti-1080-1660s/` | **the profiles for the RTX 3060 Ti + GTX 1080 + GTX 1660 SUPER**: for each model engine, arguments, env, context and measured notes. The app reads them (`engine-cfg`) |
-| `chat-templates/` | the Jinja chat templates passed to llama-server, one per model |
+| `chat-templates/` | the one Jinja chat template passed to llama-server instead of a model's own: Qwen3.5's, with the reasoning of past turns kept. Every other model runs with the template in its GGUF |
 | `opencode/` | the agent built from the repo, `web/mango-code.exe` (`app/scripts/build-agent.ps1`). Generated, gitignored |
 | `mango-paths.json` | where binaries and weights are on THIS machine. Optional, written by hand, gitignored. When it names the models folder, the user cannot choose another one in the settings |
 | `package.json` | the node dependencies (readability, jsdom, turndown, chrome-devtools-mcp, document libraries) |

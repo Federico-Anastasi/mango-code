@@ -16,7 +16,6 @@ import { SessionCompaction } from "./compaction"
 import { SystemPrompt } from "./system"
 import { Instruction } from "./instruction"
 import { Plugin, pluginNameOf } from "../plugin"
-import { MAX_STEPS_PROMPT } from "@opencode-ai/core/session/runner/max-steps"
 import { ToolRegistry } from "@/tool/registry"
 import { MCP } from "../mcp"
 import { LSP } from "@/lsp/lsp"
@@ -1519,8 +1518,6 @@ const layer = Layer.effect(
             yield* events.publish(Session.Event.Error, { sessionID, error: error.toObject() })
             throw error
           }
-          const maxSteps = agent.steps ?? Infinity
-          const isLastStep = step >= maxSteps
           // mango-code: the skills put on disk since the conversation began are announced once, in the user's message:
           // the list in the system prompt stays as it was, so the engine keeps its cache of it.
           if (step === 1 && !Permission.disabled(["skill"], agent.permission).has("skill")) {
@@ -1625,10 +1622,7 @@ const layer = Layer.effect(
               parentSessionID: session.parentID,
               system,
               env,
-              messages: [
-                ...modelMsgs,
-                ...(isLastStep ? [{ role: "assistant" as const, content: MAX_STEPS_PROMPT }] : []),
-              ],
+              messages: modelMsgs,
               tools,
               model,
               toolChoice: format.type === "json_schema" ? "required" : undefined,
@@ -1935,7 +1929,7 @@ const layer = Layer.effect(
       items.push({
         kind: "base",
         name: "base",
-        text: [...(agent.prompt ? [agent.prompt] : SystemPrompt.provider(model)), ...env].join("\n"),
+        text: [...(agent.prompt ? [agent.prompt] : [SystemPrompt.base]), ...env].join("\n"),
       })
 
       const byServer = new Map<string, string[]>()

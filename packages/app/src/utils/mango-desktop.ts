@@ -12,8 +12,8 @@ export type MangoModelChoices = {
   /** `null`: the largest that fits. */
   context: number | null
   style: "recommended" | "precise" | "creative"
-  /** `null`: as the model wants. */
-  reasoning: boolean | null
+  /** A level the model's template offers (`limits.reasoning`): `off` or `on`, or `low`, `medium` or `high`. `null`: as the model wants, which is its last level. */
+  reasoning: string | null
   /** The values the user chose one by one, over the style's; a missing one is the style's. */
   sampling: Sampling
 }
@@ -161,7 +161,7 @@ export type MangoDesktop = {
   engineRemote?: MangoEngineRemote
   /** The "Preview" panel (native browser inside the window). Only in the desktop app. */
   preview?: MangoPreview
-  /** "Use my Chrome" in the settings: the choice applies to the next browser request. */
+  /** "Also in my Chrome" in the settings: the choice applies to the next browser request. */
   chrome?: MangoChrome
   /** The Team: the OpenRouter key and the choices of the "Team" settings page. */
   team?: MangoTeam

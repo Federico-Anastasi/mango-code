@@ -32,20 +32,31 @@ export async function page(port: number, choose: (t: { url: string; type: string
     ws.onerror = ko;
   });
   let n = 0;
-  const pending = new Map<number, (v: any) => void>();
+  const pending = new Map<number, { ok: (v: any) => void; ko: (e: Error) => void }>();
+  // A page that goes away (the app's hidden window, a page replaced by another) answers nothing more: what waits for it fails.
+  let closed = false;
+  ws.onclose = () => {
+    closed = true;
+    for (const waiting of pending.values()) waiting.ko(new Error(`the page ${target.url} closed`));
+    pending.clear();
+  };
   const console: string[] = [];
   const handlers: { method: string; handler: (params: any) => void }[] = [];
   ws.onmessage = (m) => {
     const v = JSON.parse(String(m.data));
     for (const h of handlers) if (h.method === v.method) h.handler(v.params);
-    if (v.id) pending.get(v.id)?.(v);
+    if (v.id) {
+      pending.get(v.id)?.ok(v);
+      pending.delete(v.id);
+    }
     else if (v.method === "Runtime.consoleAPICalled") console.push(`${v.params.type}: ${v.params.args.map((a: any) => a.value ?? a.description ?? "").join(" ")}`);
     else if (v.method === "Runtime.exceptionThrown") console.push(`EXCEPTION: ${v.params.exceptionDetails?.exception?.description ?? v.params.exceptionDetails?.text}`);
   };
   const send = (method: string, params: object = {}) =>
-    new Promise<any>((ok) => {
+    new Promise<any>((ok, ko) => {
+      if (closed) return ko(new Error(`the page ${target.url} closed`));
       const id = ++n;
-      pending.set(id, ok);
+      pending.set(id, { ok, ko });
       ws.send(JSON.stringify({ id, method, params }));
     });
   await send("Runtime.enable");

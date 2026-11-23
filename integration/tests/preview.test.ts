@@ -1,6 +1,6 @@
 // The agent's browser is the app's Preview panel: when the agent opens a page, the page ends up there and not in
 // a window outside the app. Real window, without the test's remote debugging (it applies to all the process's
-// WebView2s and would replace the panel's port); the model is the fake engine. `bun test integration`.
+// WebView2s and would replace the panel's port); the model is the fake engine. `bun test --cwd integration`.
 
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import fs from "node:fs";

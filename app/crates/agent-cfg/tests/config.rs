@@ -324,7 +324,7 @@ fn process_port_environment_and_health() {
     assert_eq!(env("MANGO_SETTINGS"), Some(&*paths.data.join("settings.json").to_string_lossy()));
     assert_eq!(env("MANGO_SYSTEM_LANGUAGE"), Some(mango_common::i18n::system_lang().code()));
     assert_eq!(env("MANGO_VOICE_URL"), Some("http://127.0.0.1:4097"));
-    // The agent's browser: the app's panel, by port; the «Use my Chrome» choice by file. The port lives in the
+    // The agent's browser: the app's panel, by port; the «Also in my Chrome» choice by file. The port lives in the
     // process environment and not in the config written to disk.
     assert_eq!(env("MANGO_PANEL_CDP"), Some("51789"));
     assert_eq!(env("MANGO_BROWSER_CHOICE"), Some(r"C:\data\browser.json"));
@@ -481,6 +481,12 @@ fn team_on_manager_and_cloud_models() {
     assert_eq!(or["models"][id]["modalities"]["input"], json!(["text", "image"]));
     assert_eq!(or["models"][id]["limit"]["context"], json!(1048576));
     assert_eq!(or["models"][id]["cost"]["input"], json!(0.15));
+    // the Team's model has the levels of OpenRouter's reasoning field; a local model has none: its levels are its template's
+    assert_eq!(
+        or["models"][id]["variants"],
+        json!({ "low": { "reasoning": { "effort": "low" } }, "medium": { "reasoning": { "effort": "medium" } }, "high": { "reasoning": { "effort": "high" } } })
+    );
+    assert!(got["provider"]["mango"]["models"]["toq"].get("variants").is_none());
     // the Team plugin is the distribution's (where it has node_modules next to it)
     let plugin = got["plugin"].as_array().unwrap();
     assert_eq!(plugin.len(), 1);

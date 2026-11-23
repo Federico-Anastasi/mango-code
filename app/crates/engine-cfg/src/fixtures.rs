@@ -14,7 +14,7 @@ pub(crate) struct Fake {
     pub profile: Value,
 }
 
-/// The catalog with the sole `toq` entry as it is today (without the tune, which lives in the profile).
+/// A catalog with only a `toq` entry (without the tune, which lives in the profile).
 fn toq_catalog() -> Value {
     json!({
       "ctx": 131072, "default": "toq", "order": ["toq"],
@@ -124,4 +124,37 @@ impl Fake {
     pub fn toq(&mut self) -> &mut Value {
         &mut self.catalog["models"]["toq"]
     }
+}
+
+/// A chat template with a switch for the reasoning, as the Qwen3.5 and Qwen3.6 ones have it: `enable_thinking` false closes
+/// the thinking before the answer begins.
+pub(crate) const SWITCH_TEMPLATE: &str = "{%- for m in messages %}<|im_start|>{{ m.role }}
+{{ m.content }}<|im_end|>
+{%- endfor %}
+{%- if add_generation_prompt %}<|im_start|>assistant
+{%- if enable_thinking is defined and enable_thinking is false %}<think>
+
+</think>
+
+{%- else %}<think>
+{%- endif %}
+{%- endif %}";
+
+/// A chat template with levels for the reasoning, as the Qwen3.8 one has them: `reasoning_effort` low, medium or xhigh
+/// (`high` is another name for xhigh), the highest by default; any other value is refused.
+pub(crate) const EFFORT_TEMPLATE: &str = "{%- for m in messages %}<|im_start|>{{ m.role }}
+{{ m.content }}<|im_end|>
+{%- endfor %}
+{%- set effort = reasoning_effort | default('xhigh') %}
+{%- if effort == 'high' %}{% set effort = 'xhigh' %}{% endif %}
+{%- if effort not in ('xhigh', 'medium', 'low') %}{{- raise_exception('Unexpected reasoning effort ' ~ reasoning_effort) }}{% endif %}
+{%- if add_generation_prompt %}<|im_start|>assistant
+<think>
+Effort: {{ effort }}
+{%- endif %}";
+
+/// A GGUF at `path` whose header carries `template` as its chat template.
+pub(crate) fn write_gguf_with_template(path: &std::path::Path, template: &str) {
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    crate::gguf::test_util::write_with(path, "llama", &[("llama.block_count", 1)], &[("tokenizer.chat_template", template)], &[], &[("blk.0.attn_k.weight", 8)]);
 }

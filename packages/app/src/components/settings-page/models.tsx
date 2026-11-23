@@ -33,6 +33,14 @@ const WHERE_LABELS = {
   pick: "settings.models.where.pick",
 } as const
 
+const REASONING_LABELS = {
+  off: "settings.models.reasoning.off",
+  on: "settings.models.reasoning.on",
+  low: "settings.models.reasoning.low",
+  medium: "settings.models.reasoning.medium",
+  high: "settings.models.reasoning.high",
+} as const
+
 /** The titles of a model's own choices: a search result for one of them opens the first model, where they are. */
 const FIELDS = [
   "settings.models.where.title",
@@ -458,18 +466,27 @@ const PresentModel: Component<
             onShowValues={props.onShowValues}
           />
 
-          <Show when={props.model.limits.reasoning}>
+          <Show when={props.model.limits.reasoning.length}>
             <div class="settings-page-field">
               <b data-slot="settings-field-title">{language.t("settings.models.reasoning.title")}</b>
-              <label class="settings-page-inline">
-                <Switch
-                  checked={props.model.choices.reasoning ?? true}
-                  disabled={!models() || props.busy}
-                  onChange={(checked) => void choose({ reasoning: checked })}
-                  data-action="settings-model-reasoning"
-                />
-                <span>{language.t("settings.models.reasoning.description")}</span>
-              </label>
+              <SegmentedControlV2
+                value={props.model.choices.reasoning ?? props.model.limits.reasoning.at(-1)}
+                disabled={!models() || props.busy}
+                onChange={(value) => {
+                  if (value) void choose({ reasoning: value })
+                }}
+                data-action="settings-model-reasoning"
+                aria-label={language.t("settings.models.reasoning.title")}
+              >
+                <For each={props.model.limits.reasoning}>
+                  {(level) => (
+                    <SegmentedControlItemV2 value={level}>
+                      {language.t(REASONING_LABELS[level as keyof typeof REASONING_LABELS])}
+                    </SegmentedControlItemV2>
+                  )}
+                </For>
+              </SegmentedControlV2>
+              <small>{language.t("settings.models.reasoning.description")}</small>
             </div>
           </Show>
 

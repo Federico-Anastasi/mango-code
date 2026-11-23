@@ -596,10 +596,10 @@ fn control_server(app: &AppHandle, paths: &Paths) -> Result<EngineManager> {
         Box::new(engine_cfg::gpu_memory),
         &paths.logs(),
     );
-    // The style of the answers and the reasoning the user chose for each model: read at every request, so a change
-    // applies from the next answer without loading the model again.
-    let p = paths.clone();
-    m.set_request_defaults(Box::new(move |key| engine_cfg::choices::request_defaults(&p, key)));
+    // The style of the answers and the reasoning the user chose for each model: kept in memory and renewed when the
+    // choices or the models change, so a change applies from the next answer without loading the model again.
+    let defaults = engine_cfg::choices::ModelDefaults::new(paths.clone());
+    m.set_request_defaults(Box::new(move |key| defaults.get(key)));
     // A model that goes on the cards does not start where other programs hold the memory it counts on: «Riprova» starts it
     // anyway. In development builds `MANGO_ROOM_CHECK_OFF` leaves the check out: the fake models of the integration tests
     // have a plan on this PC's real cards, which another program may be using.
@@ -1128,25 +1128,22 @@ mod tests {
 
     #[test]
     fn a_port_taken_between_the_choice_and_the_bind_gives_another_start() {
-        let preferred = free();
-        let thief = std::cell::RefCell::new(None);
-        let (mut stops, mut told) = (0, Vec::new());
+        // Another program binds the port the app has just chosen, before the agent does. It holds it from the start:
+        // a port freed and bound again could go to a test running alongside in between.
+        let thief = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let preferred = thief.local_addr().unwrap().port();
+        let (mut choices, mut stops, mut told) = (0, 0, Vec::new());
         let port = start_on_a_free_port(
-            || choose_port(preferred, None),
-            |port| {
-                // another program binds the port the app has just chosen, before the agent does
-                if thief.borrow().is_none() {
-                    *thief.borrow_mut() = Some(std::net::TcpListener::bind(("127.0.0.1", port)).unwrap());
-                    anyhow::bail!("address in use");
-                }
-                Ok(port)
+            || {
+                choices += 1;
+                if choices == 1 { preferred } else { choose_port(preferred, None) }
             },
+            |port| if port == preferred { anyhow::bail!("address in use") } else { Ok(port) },
             || stops += 1,
             |port, attempt| told.push((port, attempt)),
         )
         .unwrap();
         assert_ne!(port, preferred);
-        assert!(std::net::TcpListener::bind(("127.0.0.1", port)).is_ok(), "the port of the second start is free");
         assert_eq!((stops, told), (1, vec![(preferred, 1)]));
     }
 

@@ -176,7 +176,7 @@ describe("tool.task", () => {
         const build = yield* agent.get("build")
         const registry = yield* ToolRegistry.Service
         const get = Effect.fnUntraced(function* () {
-          const tools = yield* registry.tools({ ...ref, agent: build })
+          const tools = yield* registry.tools({ agent: build })
           return tools.find((tool) => tool.id === TaskTool.id)?.description ?? ""
         })
         const first = yield* get()
@@ -218,7 +218,7 @@ describe("tool.task", () => {
         const build = yield* agent.get("build")
         const registry = yield* ToolRegistry.Service
         const description =
-          (yield* registry.tools({ ...ref, agent: build })).find((tool) => tool.id === TaskTool.id)?.description ?? ""
+          (yield* registry.tools({ agent: build })).find((tool) => tool.id === TaskTool.id)?.description ?? ""
 
         expect(description).toContain("- alpha: Alpha agent")
         expect(description).not.toContain("- zebra: Zebra agent")

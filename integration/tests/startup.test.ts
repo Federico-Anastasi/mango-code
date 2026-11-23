@@ -9,7 +9,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { MangoCode, find, notReady } from "../client/mango-code";
-import { page, type Page } from "./cdp";
+import { windowPage, type Page } from "./cdp";
 import { start, type Environment } from "./environment";
 
 const readJson = (f: string) => JSON.parse(fs.readFileSync(f, "utf8"));
@@ -33,7 +33,7 @@ async function waitUntil(condition: () => Promise<boolean> | boolean, what: stri
 
 /** The window once it shows the home of the web UI. */
 async function home(e: Environment) {
-  const p = await page(e.cdp!, () => true, 120_000);
+  const p = await windowPage(e.cdp!, e.agent, 120_000);
   await waitUntil(() => p.evaluate(`location.href === ${JSON.stringify(e.agent + "/")}`), "the window on the home");
   return p;
 }
@@ -45,7 +45,7 @@ afterAll(() => {
   for (const e of opened) e.close();
   Bun.sleepSync(1500);
   fs.rmSync(projectsRoot, { recursive: true, force: true });
-});
+}, 30_000);
 
 test("with no model on the computer the window opens on the home, and the agent knows every model of the catalog", async () => {
   const e = await start([{ text: "unused" }], { window: true, noModels: true, otherModels: ["second"] });
@@ -77,6 +77,7 @@ test("with a model on the computer the home is there before the model is ready, 
     window: true,
     modelLoading: true,
     otherModels: ["second"],
+    reasoning: ["second"],
     // The fake engine takes 10 s to load a model: the window reaches the home well before, also on a busy computer.
     env: { FAKE_ENGINE_START_MS: "10000", MANGO_PROJECTS_FOLDER: projectsRoot },
   });
@@ -174,6 +175,26 @@ test("the control server picks another model without waiting for it, tells a sta
   expect((await controlState(env)).model.model).toBe("second");
 }, 200_000);
 
+test("a choice made while a model loads is saved at once, without waiting for the load", async () => {
+  const w = await home(env);
+  await control(env, "model/use", { model: "fake" });
+  await waitUntil(async () => (await controlState(env)).model.phase === "loading", "the model loading");
+  const t0 = Date.now();
+  const answer = await w.evaluate(
+    `window.__MANGO_DESKTOP__.models.setChoices("fake", { where: "auto", gpus: [], context: null, style: "precise", reasoning: null }).then(() => "ok", (e) => JSON.stringify(e))`,
+  );
+  const took = Date.now() - t0;
+  expect(answer).toBe("ok");
+  expect((await controlState(env)).model.phase).toBe("loading");
+  expect(took).toBeLessThan(2000);
+  expect(readJson(path.join(env.data, "choices.json")).models.fake.style).toBe("precise");
+  await waitUntil(async () => (await controlState(env)).model.phase === "ready", "the model loaded");
+  // the next test begins with the other model in use
+  await control(env, "model/use", { model: "second" });
+  await waitUntil(async () => (await controlState(env)).model.phase === "ready" && (await controlState(env)).model.model === "second", "the other model in use again");
+  w.close();
+}, 200_000);
+
 test("the style of the answers and the reasoning chosen for a model reach the engine with the next message, without loading it again", async () => {
   fs.writeFileSync(path.join(env.data, "choices.json"), JSON.stringify({ default: "second", models: { second: { style: "precise", reasoning: false } } }));
   /** How many times the engine loaded a model: a line of the manager's log each. */
@@ -185,7 +206,7 @@ test("the style of the answers and the reasoning chosen for a model reach the en
   }
   const sent = chats(env).filter((r) => JSON.stringify(r.body).includes("Say something")).at(-1)!.body;
   expect(sent.temperature).toBe(0.3);
-  expect(sent.chat_template_kwargs).toEqual({ enable_thinking: false });
+  expect(sent.chat_template_kwargs).toEqual({ enable_thinking: false, preserve_thinking: true });
   expect(loads()).toBe(before);
 }, 120_000);
 

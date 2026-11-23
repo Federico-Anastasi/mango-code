@@ -21,7 +21,6 @@ export type PromptInputControls = {
   }
   model: {
     selection: ReturnType<typeof useLocal>["model"]
-    paid: boolean
     loading: boolean
   }
   session: {

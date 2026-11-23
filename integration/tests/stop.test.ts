@@ -1,6 +1,6 @@
 // "Stop" must close the request to the model, not only the conversation: otherwise the engine keeps generating for
 // nobody and the next conversation waits. The fake engine writes a long text in slow pieces and records when the
-// client closes the connection. `bun test integration`.
+// client closes the connection. `bun test --cwd integration`.
 
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import fs from "node:fs";

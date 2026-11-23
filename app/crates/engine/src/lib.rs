@@ -20,7 +20,7 @@ pub mod remote;
 pub mod loan;
 
 use anyhow::{bail, Context, Result};
-use engine_cfg::EnginePlan;
+use engine_cfg::{EnginePlan, Gpu};
 use mango_common::{tail, tr, user_error};
 use serde::Serialize;
 use std::fs::File;
@@ -218,6 +218,9 @@ pub struct PublicState {
     /// the one the conversations stay on. It goes when the engine is on that model again, when a request that is not a
     /// side one starts a model, when a model is picked, or when that model is taken off the computer.
     pub conversation_model: Option<String>,
+    /// One line for the user about the running model, in the app's language: the memory of its cards could not be read,
+    /// so nobody looked at whether another program holds it. The model runs; the line stays as long as it does.
+    pub notice: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -279,6 +282,8 @@ struct Running {
     plan: EnginePlan,
     child: Child,
     slot: Option<Arc<prefix::Slot>>,
+    /// See `PublicState::notice`.
+    notice: Option<String>,
 }
 
 #[derive(Default)]
@@ -804,7 +809,11 @@ impl EngineManager {
                     self.stop_process(a);
                 }
                 let room = if check { self.room_for(&plan, excluded.as_deref().unwrap_or_default()) } else { Ok(()) };
-                room.and_then(|()| self.start_process(plan, tick))
+                let notice = self.unread_cards(&plan);
+                room.and_then(|()| self.start_process(plan, tick)).map(|mut a| {
+                    a.notice = notice;
+                    a
+                })
             }
         };
         let mut s = self.lock();
@@ -872,8 +881,7 @@ impl EngineManager {
     }
 
     /// Before `plan` starts on the cards: when other programs hold memory it counts on, it does not start (`TakenByOthers`).
-    /// Memory that cannot be read, or a check that does not answer, start it as before: a measure that is missing does not
-    /// block the start. On the GPUs of an engine of ours stopped less than `FREED_WITHIN` ago the memory is read again until
+    /// A check that fails is logged (`room`) and does not keep it from starting. On the GPUs of an engine of ours stopped less than `FREED_WITHIN` ago the memory is read again until
     /// that has passed: what the engine still holds there is not another program's. `lent`: the GPUs lent to another job.
     fn room_for(&self, plan: &EnginePlan, lent: &[u32]) -> Result<()> {
         let Some(check) = self.0.room.get() else { return Ok(()) };
@@ -882,10 +890,6 @@ impl EngineManager {
         }
         loop {
             let used = (self.0.measure)();
-            if used.is_empty() {
-                self.log(serde_json::json!({ "event": "room", "model": plan.key, "error": "the memory of the cards cannot be read: it starts without looking" }));
-                return Ok(());
-            }
             let taken = match check(&plan.key, lent, &used) {
                 Ok(None) => return Ok(()),
                 Ok(Some(taken)) => taken,
@@ -911,6 +915,24 @@ impl EngineManager {
             }
             std::thread::sleep(Duration::from_millis(250));
         }
+    }
+
+    /// The line for the user when the memory of a card `plan` counts on cannot be read: the model starts anyway, since nothing
+    /// says that another program holds it, and the user is told that nobody looked. Nothing without the room check, which is
+    /// what reads the cards.
+    fn unread_cards(&self, plan: &EnginePlan) -> Option<String> {
+        self.0.room.get()?;
+        let used = (self.0.measure)();
+        let unread: Vec<&Gpu> = plan.gpus_used.iter().filter(|g| used.iter().all(|u| u.0 != g.index)).collect();
+        if unread.is_empty() {
+            return None;
+        }
+        let cards = unread.iter().map(|g| g.name.as_str()).collect::<Vec<_>>().join(", ");
+        self.log(serde_json::json!({ "event": "room", "model": plan.key, "error": "the memory of the cards cannot be read", "gpus": unread.iter().map(|g| g.index).collect::<Vec<_>>() }));
+        Some(tr!(
+            "Non riesco a leggere la memoria delle schede ({cards}): non so se un altro programma la sta usando.",
+            "I can't read the memory of the cards ({cards}): I can't tell whether another program is using it."
+        ))
     }
 
     fn start_process(&self, plan: EnginePlan, tick: &mut dyn FnMut(u64)) -> Result<Running> {
@@ -939,7 +961,7 @@ impl EngineManager {
             self.log(serde_json::json!({ "event": "slot files", "model": plan.key, "note": note }));
         }
         let slot = plan.slots.clone().map(|c| Arc::new(prefix::Slot::new(c)));
-        let mut a = Running { plan, child, slot };
+        let mut a = Running { plan, child, slot, notice: None };
         match wait_healthy(&mut a, &log, tick, &|| self.lock().stop_load) {
             Ok(()) => {
                 let loaded = t0.elapsed();
@@ -1162,6 +1184,7 @@ impl EngineManager {
                     failed: s.failed.clone(),
                     chosen: s.chosen.clone(),
                     conversation_model: s.conversation_model.clone(),
+                    notice: s.running.as_ref().and_then(|a| a.notice.clone()),
                 },
                 s.running.is_some(),
             )
@@ -1521,6 +1544,13 @@ mod tests {
             json!({ "temperature": 0.3, "top_k": 5, "chat_template_kwargs": { "enable_thinking": false } })
         );
         assert_eq!(add(json!({ "chat_template_kwargs": { "enable_thinking": null } }), fields.clone())["chat_template_kwargs"], json!({ "enable_thinking": false }));
+        // the level the user chose and the reasoning of the past turns kept: the request's own level wins
+        let levels = json!({ "chat_template_kwargs": { "preserve_thinking": true, "reasoning_effort": "xhigh" } });
+        assert_eq!(add(json!({ "model": "a" }), levels.clone())["chat_template_kwargs"], json!({ "preserve_thinking": true, "reasoning_effort": "xhigh" }));
+        assert_eq!(
+            add(json!({ "chat_template_kwargs": { "reasoning_effort": "low" } }), levels)["chat_template_kwargs"],
+            json!({ "reasoning_effort": "low", "preserve_thinking": true })
+        );
     }
 
     /// A request that already says all the defaults, an image of a few MB included, passes byte for byte: nothing to add,

@@ -4,18 +4,17 @@
 // renewed key), the way back to the engine of the PC, and C, an app that already works and moves to A's engine and back.
 // Everything goes through the bridge of the window (`engineShare`, `engineRemote`), as the settings use it: the app's own page
 // only shows the error of a start, and there the way back to this PC's engine. No GPU and no real model; the firewall is not
-// tried (127.0.0.1). The photos are in %TEMP%\mango-engine-remote-*.png, of the window as it opens.
+// tried (127.0.0.1). The photos of the window as it opens are kept in the environment's folder, or in the one `MANGO_TEST_SCREENSHOTS` names.
 
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import http from "node:http";
 import net from "node:net";
-import os from "node:os";
 import path from "node:path";
 import { MangoCode, find, type Step } from "../client/mango-code";
-import { page, type Page } from "./cdp";
-import { start, type Environment } from "./environment";
+import { page, windowPage, type Page } from "./cdp";
+import { saveScreenshot, start, type Environment } from "./environment";
 
 const SAID = "Hello from the shared engine.";
 const OWN = "Hello from my own engine.";
@@ -57,9 +56,9 @@ function filesWith(dir: string, key: string, except: string[], found: string[] =
   return found;
 }
 
-const shot = async (p: Page, name: string) => {
+const shot = async (env: Environment, p: Page, name: string) => {
   const r = await p.send("Page.captureScreenshot", { format: "png" });
-  fs.writeFileSync(path.join(os.tmpdir(), `mango-engine-remote-${name}.png`), Buffer.from(r.result.data, "base64"));
+  saveScreenshot(env, `mango-engine-remote-${name}`, r.result.data);
 };
 
 // What a download would ask (the files of the models stand in for Hugging Face here): nothing may come.
@@ -122,11 +121,11 @@ let pb: Page;
 test("B: with no model yet the app opens on its home, and pasting a code is what the bridge offers besides the models", async () => {
   B = await start([{ text: "unused" }], { window: true, noModels: true, env: { MANGO_HF_URL: neverUrl } });
   opened.push(B);
-  pb = await page(B.cdp!, () => true, 120_000);
+  pb = await windowPage(B.cdp!, B.agent, 120_000);
   await waitUntil(() => pb.evaluate(`location.href.startsWith('${B.agent}')`), "the window on the web UI");
   expect(await (await fetch(`${B.engine}/control/state`)).json()).toMatchObject({ model: { phase: "none" }, default_model: null });
   expect(await pb.evaluate(`typeof window.__MANGO_DESKTOP__.engineRemote.connect`)).toBe("function");
-  await shot(pb, "primo-avvio");
+  await shot(B, pb, "primo-avvio");
 }, 200_000);
 
 test("B: a text that is not a code, a wrong key and a PC that does not answer each say what to do", async () => {
@@ -246,7 +245,7 @@ test("B: the chat names the PC whose model answers", async () => {
   await pb.send("Page.navigate", { url: `${B.agent}/${b64(B.project)}/session/${lastSession}` });
   await waitUntil(() => pb.evaluate(`document.body.innerText.includes("Fake model · sull'altro PC")`), "the model with the PC in the chat");
   await Bun.sleep(500);
-  await shot(pb, "chat");
+  await shot(B, pb, "chat");
 }, 60_000);
 
 test("B: the state says which engine is in use, and the window never holds the key", async () => {
@@ -375,7 +374,7 @@ test("C: if A is off at the next start the page says so and one button goes back
   expect(sentence).not.toContain(key);
   expect(await pc.evaluate(visible("local-engine"))).toBe(true);
   expect(await pc.evaluate(`document.getElementById('local-engine').innerText`)).toBe("Torna al motore di questo PC");
-  await shot(pc, "errore-avvio");
+  await shot(C, pc, "errore-avvio");
 
   await pc.evaluate(`document.getElementById('local-engine').click()`);
   await waitUntil(async () => !!(await find(C.data)), "C ready on its own engine", 180_000);

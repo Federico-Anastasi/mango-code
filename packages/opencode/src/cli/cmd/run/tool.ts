@@ -17,7 +17,6 @@ import path from "path"
 import stripAnsi from "strip-ansi"
 import type { ToolPart } from "@opencode-ai/sdk/v2"
 import type * as Tool from "@/tool/tool"
-import type { ApplyPatchTool } from "@/tool/apply_patch"
 import type { ShellTool as BashTool } from "@/tool/shell"
 import type { EditTool } from "@/tool/edit"
 import type { GlobTool } from "@/tool/glob"
@@ -96,7 +95,6 @@ type ToolDefs = {
   bash: typeof BashTool
   write: typeof WriteTool
   edit: typeof EditTool
-  apply_patch: typeof ApplyPatchTool
   batch: Tool.Info
   task: typeof TaskTool
   todowrite: typeof TodoWriteTool
@@ -400,21 +398,6 @@ function runSkill(p: ToolProps<typeof SkillTool>): ToolInline {
   }
 }
 
-function runPatch(p: ToolProps<typeof ApplyPatchTool>): ToolInline {
-  const files = p.metadata.files?.length ?? 0
-  if (files === 0) {
-    return {
-      icon: "%",
-      title: "Patch",
-    }
-  }
-
-  return {
-    icon: "%",
-    title: `Patch ${files} file${files === 1 ? "" : "s"}`,
-  }
-}
-
 function runQuestion(p: ToolProps<typeof QuestionTool>): ToolInline {
   const total = list(p.frame.input.questions).length
   return {
@@ -479,24 +462,6 @@ function runPlanExit(p: ToolProps<typeof PlanExitTool>): ToolInline {
   }
 }
 
-type PatchFile = Tool.InferMetadata<typeof ApplyPatchTool>["files"][number]
-
-function patchTitle(file: PatchFile): string {
-  const rel = file.relativePath
-  const from = file.filePath
-  if (file.type === "add") {
-    return `# Created ${rel || toolPath(from)}`
-  }
-  if (file.type === "delete") {
-    return `# Deleted ${rel || toolPath(from)}`
-  }
-  if (file.type === "move") {
-    return `# Moved ${toolPath(from)} -> ${rel || toolPath(file.movePath)}`
-  }
-
-  return `# Patched ${rel || toolPath(from)}`
-}
-
 function snapWrite(p: ToolProps<typeof WriteTool>): ToolSnapshot | undefined {
   const file = p.input.filePath || ""
   const content = p.input.content || ""
@@ -528,43 +493,6 @@ function snapEdit(p: ToolProps<typeof EditTool>): ToolSnapshot | undefined {
         file,
       },
     ],
-  }
-}
-
-function snapPatch(p: ToolProps<typeof ApplyPatchTool>): ToolSnapshot | undefined {
-  const files = list<PatchFile>(p.frame.meta.files)
-  if (files.length === 0) {
-    return undefined
-  }
-
-  const items = files.flatMap((file) => {
-    if (!file || typeof file !== "object") {
-      return []
-    }
-
-    const diff = typeof file.patch === "string" ? file.patch : ""
-    if (!diff.trim()) {
-      return []
-    }
-
-    const name = file.movePath || file.filePath || file.relativePath
-    return [
-      {
-        title: patchTitle(file),
-        diff,
-        file: name,
-        deletions: typeof file.deletions === "number" ? file.deletions : 0,
-      },
-    ]
-  })
-
-  if (items.length === 0) {
-    return undefined
-  }
-
-  return {
-    kind: "diff",
-    items,
   }
 }
 
@@ -697,59 +625,6 @@ function scrollWriteStart(_: ToolProps<typeof WriteTool>): string {
 
 function scrollEditStart(_: ToolProps<typeof EditTool>): string {
   return ""
-}
-
-function scrollPatchStart(_: ToolProps<typeof ApplyPatchTool>): string {
-  return ""
-}
-
-function patchLine(file: PatchFile): string {
-  const type = file.type
-  const rel = file.relativePath
-  const from = file.filePath
-
-  if (type === "add") {
-    return `+ Created ${rel || toolPath(from)}`
-  }
-
-  if (type === "delete") {
-    return `- Deleted ${rel || toolPath(from)}`
-  }
-
-  if (type === "move") {
-    return `→ Moved ${toolPath(from)} → ${rel || toolPath(file.movePath)}`
-  }
-
-  return `~ Patched ${rel || toolPath(from)}`
-}
-
-function scrollPatchFinal(p: ToolProps<typeof ApplyPatchTool>): string {
-  if (p.frame.status === "error") {
-    return fail(p.frame)
-  }
-
-  const files = list<PatchFile>(p.frame.meta.files)
-  if (files.length === 0) {
-    const time = span(p.frame.state)
-    if (!time) {
-      return "patch"
-    }
-
-    return `patch · ${time}`
-  }
-
-  const show_updates = !files.some((file) => file?.type && file.type !== "update")
-  const shown = files.filter((file) => show_updates || file.type !== "update")
-  const rows = shown.slice(0, 6).map(patchLine)
-  if (shown.length > 6) {
-    rows.push(`... and ${shown.length - 6} more`)
-  }
-
-  if (rows.length > 0) {
-    return rows.join("\n")
-  }
-
-  return patchLine(files[0]!)
 }
 
 function scrollTaskStart(_: ToolProps<typeof TaskTool>): string {
@@ -1067,19 +942,6 @@ const TOOL_RULES = {
       start: scrollEditStart,
     },
     permission: permEdit,
-  },
-  apply_patch: {
-    view: {
-      output: false,
-      final: true,
-      snap: "diff",
-    },
-    run: runPatch,
-    snap: snapPatch,
-    scroll: {
-      start: scrollPatchStart,
-      final: scrollPatchFinal,
-    },
   },
   batch: {
     view: {

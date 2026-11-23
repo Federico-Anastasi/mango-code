@@ -10,7 +10,7 @@ import { afterAll, beforeAll, expect, test } from "bun:test";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { page, type Page } from "./cdp";
+import { windowPage, type Page } from "./cdp";
 import { start, type Environment } from "./environment";
 
 let env: Environment;
@@ -39,7 +39,7 @@ const started = () =>
   );
 
 async function windowOnTheHome() {
-  p = await page(env.cdp!, () => true, 120_000);
+  p = await windowPage(env.cdp!, env.agent, 120_000);
   await waitUntil(() => p.evaluate(`location.href === ${JSON.stringify(env.agent + "/")}`), "the window on the home");
 }
 
@@ -166,7 +166,7 @@ test("a folder with files of its own is used as it is, and the app starts again 
 
   const closed = readJson(serviceFile()).pid;
   // The app ends right after the command: its answer may never arrive.
-  void dir(`use(${JSON.stringify(mine)})`);
+  void dir(`use(${JSON.stringify(mine)})`).catch(() => {});
   await restarted(closed);
 
   expect(await answer("state()")).toMatchObject({ path: mine, chosen: true });
@@ -223,7 +223,7 @@ test("a move that leaves something behind waits until the user has seen what, an
   expect(asked.status, "the engine does not start on the old folder while the app waits").toBe(422);
   expect(await running()).toBe(false);
 
-  void dir("restart()");
+  void dir("restart()").catch(() => {});
   await restarted(closed);
   expect(await answer("state()")).toMatchObject({ path: target, chosen: true, moving: { status: "idle" } });
   expect(await dir("restart()"), "the new app has no move to finish").toMatch(/Nessuno spostamento da concludere|No move to finish/);

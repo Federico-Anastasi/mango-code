@@ -1301,15 +1301,45 @@ fn a_model_without_room_beside_another_program_does_not_start_until_retry() {
     assert_eq!(b.m.state().failed.map(|f| f.model), None);
 }
 
-/// Memory that cannot be read does not block the start: the model starts as before, and the log says it was not looked at.
+/// Memory that cannot be read does not stop the model: it starts, and the state carries one line that says nobody looked at
+/// whether another program holds it. The line goes with the engine: one started when the cards can be read again has none.
 #[test]
-fn a_model_starts_as_before_when_the_memory_cannot_be_read() {
-    let (b, checks) = fixture_with_cards(cards(&[]), 300);
+fn a_model_starts_when_the_memory_of_its_cards_cannot_be_read_and_the_state_says_so() {
+    let used = cards(&[]);
+    let (b, checks) = fixture_with_cards(used.clone(), 300);
     b.m.choose("b");
     until("«b» running", Duration::from_secs(5), || b.running("b"));
-    assert_eq!(count(&checks), 0);
+    let s = b.m.state();
+    assert_eq!(s.failed.map(|f| f.model), None);
+    let notice = s.notice.expect("the state carries the line");
+    assert_eq!(notice, tr!("Non riesco a leggere la memoria delle schede (GPU 0, GPU 1, GPU 2): non so se un altro programma la sta usando.", "I can't read the memory of the cards (GPU 0, GPU 1, GPU 2): I can't tell whether another program is using it."));
     let log = std::fs::read_to_string(b._dir.path().join("manager.log")).unwrap();
     assert!(log.contains("\"event\":\"room\"") && log.contains("cannot be read"), "{log}");
+    assert_eq!(b.text("b"), "I am the engine b", "the model answers");
+    assert_eq!(count(&checks), 1, "the check still looks at what can be read");
+
+    // the next start reads the cards again
+    *used.lock().unwrap() = cards(&[(0, 300), (1, 0), (2, 0)]).lock().unwrap().clone();
+    b.m.choose("a");
+    until("«a» running", Duration::from_secs(5), || b.running("a"));
+    assert_eq!(b.m.state().notice, None);
+}
+
+/// Only the cards the model counts on matter: «a» uses GPUs 0 and 2, GPU 1 is not read and says nothing; without GPU 2 «a»
+/// starts, and the line says which card.
+#[test]
+fn only_the_cards_of_the_model_are_named_in_the_line() {
+    let used = cards(&[(0, 300), (2, 0)]);
+    let (b, checks) = fixture_with_cards(used.clone(), 300);
+    b.m.choose("a");
+    until("«a» running", Duration::from_secs(5), || b.running("a"));
+    assert_eq!((count(&checks), b.m.state().notice), (1, None));
+
+    used.lock().unwrap().pop();
+    b.m.choose("b");
+    until("«b» running", Duration::from_secs(5), || b.running("b"));
+    let notice = b.m.state().notice.unwrap();
+    assert!(notice.contains("(GPU 1, GPU 2)"), "{notice}");
 }
 
 /// The engine of «a» that the switch stops still holds GPU 0 when «b» looks: that is not another program, and «b» starts

@@ -93,8 +93,8 @@ environment variable `MANGO_ENGINE_KEY` (the config reads it as `{env:MANGO_ENGI
 | request | answer |
 |---|---|
 | `GET /mango/models` | `200` `{"models": [{"key", "label", "context", "images"}], "running": "<key>"|null}`: the models that are on that PC and fit, and the one that is running. **This is also how the key is checked**: `200` the code is right, `401` the key is wrong (a new one was made, or it is off), `403` the address was not numeric or an `Origin` was sent; a connection that is refused or times out means the PC is off, Mango Code is not open there or sharing is off |
-| `POST /v1/chat/completions` (and the other `/v1/*`) | as on the PC's own engine: `"model"` is one of the keys above, the reply streams. The manager adds to every chat request that does not carry them, from the apps of that PC as from other PCs, the sampling values (`temperature`, `top_p`, ...) and `chat_template_kwargs.enable_thinking` the user chose there for that model (a `null` counts as missing); a request that carries them all passes untouched. A model that is not on that PC: `422` with the sentence; another app holds the cards: `503` |
-| `GET /health`, `/props`, `/metrics`, `/slots`, `/engine` | the reads of the engine and of the manager (`/engine`: phase, loans) |
+| `POST /v1/chat/completions` (and the other `/v1/*`) | as on the PC's own engine: `"model"` is one of the keys above, the reply streams. The manager adds to every chat request that does not carry them, from the apps of that PC as from other PCs, the sampling values (`temperature`, `top_p`, ...) and `chat_template_kwargs` (`enable_thinking` or `reasoning_effort`, as the model's template reads it, the level the user chose there for that model; `preserve_thinking: true` always) (a `null` counts as missing); a request that carries them all passes untouched. A model that is not on that PC: `422` with the sentence; another app holds the cards: `503` |
+| `GET /health`, `/props`, `/metrics`, `/slots`, `/engine` | the reads of the engine and of the manager (`/engine`: phase, loans, and `notice`, one line about the running model, such as the memory of its cards not being readable, or `null`) |
 | anything else (`/engine/release`, `/engine/resume`, `/engine/model`, `POST /slots`, `POST /props`, a path with `..` or `%`) | `403`: the cards and the engine's writes stay for the apps on that PC |
 
 The key is checked before the body is read, is not passed on to `llama-server`, and a client that does not finish its
@@ -338,7 +338,7 @@ The local model holds the GPUs. Whoever needs to do heavy work on the same GPUs 
 
 | what | call (on the `engine` address) |
 |---|---|
-| state | `GET /engine` → `{ phase, model, name, context, gpus: [{index, name, memory_used_mib, memory_total_mib}], released_gpus, all_released, loans: [{gpus, pid, who, since}], requests_in_flight, error, loading, failed, chosen, conversation_model }` (`loading`: while `starting`, `{model, name, context, gpus: [names], seconds}`; `failed`: the last start that failed, `{model, reason, taken}`, where `taken` is the sentence that says which card another program holds when the manager did not start the model for that, otherwise null; `chosen`: the model the user picked that has not begun to load yet; `conversation_model`: see "Side requests" below) |
+| state | `GET /engine` → `{ phase, model, name, context, gpus: [{index, name, memory_used_mib, memory_total_mib}], released_gpus, all_released, loans: [{gpus, pid, who, since}], requests_in_flight, error, loading, failed, chosen, conversation_model, notice }` (`loading`: while `starting`, `{model, name, context, gpus: [names], seconds}`; `failed`: the last start that failed, `{model, reason, taken}`, where `taken` is the sentence that says which card another program holds when the manager did not start the model for that, otherwise null; `chosen`: the model the user picked that has not begun to load yet; `conversation_model`: see "Side requests" below; `notice`: one line about the running model, such as the memory of its cards not being readable, or null) |
 | release | `POST /engine/release` `{ "gpus": [0, 2], "pid"?: 1234 }` (without `gpus`: all) → the state, when the GPUs are free |
 | resume | `POST /engine/resume` → the state, when the model is ready |
 | load a model | `POST /engine/model` `{ "model": "toq" }` → the state, when it is ready; a model that does not start (unknown, missing files) leaves the previous one running, with `error` saying why |
@@ -420,9 +420,9 @@ profiles' folders count together): the system prompt of a new conversation is re
 `<model>.prefix-<key>.bin`, and a new conversation, a restart or a return to the model restores it and reads only what is its
 own; the conversation that was open when the engine stopped is saved as `<model>.bin` (only if one ran since the engine
 started) and reloaded at the next start. A client that sends the header `X-Mango-Stable-Prompt: <n>` with its chat request, `n`
-being the number of bytes of its last system message that come before what changes from one conversation to the next (the
-working folder, the date), gets the same for its prompt; without the header the request goes through as it is. One conversation
-at a time uses the engine's slot: the requests wait their turn in the manager.
+being the number of bytes of its system message (the request has one, first) that come before what changes from one
+conversation to the next (the working folder, the date), gets the same for its prompt; without the header the request
+goes through as it is. One conversation at a time uses the engine's slot: the requests wait their turn in the manager.
 
 **Log**: every `POST /engine/…` leaves a JSON line in `<data>\logs\manager.log` (`time` local, `route`, `body`, `status`,
 `duration_ms`, `error` if not 200, `address` and `user_agent` of the caller): to know who released or resumed and when, a

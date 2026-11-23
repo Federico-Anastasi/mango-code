@@ -1,13 +1,14 @@
 //! «Other models»: a GGUF chosen by the user (on Hugging Face or on the computer) becomes an entry of
 //! `user-models.json`. Here lives what the app says before adding it: whether it fits in the PC's memory (the same
 //! estimate as the recommended models, `general.rs`) and whether the model's conversation format holds up to what
-//! Mango Code sends it (tools and a system message in the middle of the conversation).
+//! Mango Code sends it.
 
+use crate::chat_template::{probe, Probe};
 use crate::catalog::{load_models, ModelCfg, ModelsFile, Origin};
 use crate::choices::Scope;
 use crate::general::{evaluate, Placement, AUTO_CTX};
 use crate::speed::{cpu_speed, Speed};
-use crate::gguf::{ends_too_early, model_memory, not_gguf, parse_header, parse_piece, read_header, GgufHeader, GgufMemory};
+use crate::gguf::{active_permille, ends_too_early, model_memory, not_gguf, parse_header, parse_piece, read_header, GgufHeader, GgufMemory};
 use crate::hardware::{choose_build, Hardware};
 use crate::split::MIN_CTX;
 use crate::user;
@@ -15,13 +16,10 @@ use anyhow::{bail, Result};
 use mango_common::download::hugging_face::{self, image_encoder, is_encoder, piece, variants, HfFile, Reference, Repo, Variant};
 use mango_common::catalog::Recognition;
 use mango_common::{tr, Paths};
-use minijinja::value::{Kwargs, Serde};
-use minijinja::{Environment, Error, ErrorKind};
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
 
 /// Something to know about a model before adding it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -39,59 +37,173 @@ fn caution(text: String) -> Warning {
     Warning { severe: false, text }
 }
 
-/// Two tools in the list; the first is the one called in the test conversation.
-const CALLED_TOOL: &str = "read_file";
-const LISTED_ONLY_TOOL: &str = "search_text";
-const PARAMETER: &str = "test_path.txt";
-const RESULT: &str = "TOOL_RESULT";
-const REMINDER: &str = "MID_CONVERSATION_REMINDER";
+/// The requests the agent really sends, as the engine receives them (`tests/requests`).
+const FIRST_TURN: &str = include_str!("../tests/requests/first-turn.json");
+const AFTER_TOOL: &str = include_str!("../tests/requests/tool-result.json");
+const WITH_REASONING: &str = include_str!("../tests/requests/reasoning.json");
 
-/// How a conversation-format test goes.
-enum Probe {
-    /// The model wrote the conversation.
-    Text(String),
-    /// The template itself rejected the conversation (`raise_exception`), with its message.
-    Rejects(String),
-    /// The template uses something that can't be run here: it says nothing about the model.
-    Unverifiable(String),
+/// A moment of a conversation with the agent.
+#[derive(Clone, Copy)]
+pub(crate) enum Turn {
+    /// The first request: the instructions and the question.
+    First,
+    /// The model has called a tool and the conversation goes on with its result.
+    AfterTool,
+    /// The reasoning of the earlier answers goes back to the model with the conversation.
+    WithReasoning,
 }
 
-/// Tests the conversation format (the GGUF's Jinja template) with what Mango Code really sends: the list of tools,
-/// a call already made with its result, and a system message in the middle of the conversation.
-pub fn check_template(template: Option<&str>) -> Vec<Warning> {
-    let Some(template) = template else {
-        return vec![severe(tr!(
-            "Il file non contiene il formato della conversazione: il motore ne userà uno generico e il modello probabilmente non saprà usare gli strumenti.",
-            "The file doesn't contain the conversation format: the engine will use a generic one and the model probably won't know how to use tools."
-        ))];
-    };
-    let mut warnings = Vec::new();
-    let with_tools = probe(template, &conversation(false));
-    match &with_tools {
-        Probe::Rejects(m) => warnings.push(severe(tr!(
-            "Il formato della conversazione di questo modello rifiuta una conversazione con gli strumenti («{m}»): Mango Code non potrà usarlo come assistente.",
-            "This model's conversation format rejects a conversation with tools («{m}»): Mango Code won't be able to use it as an assistant."
-        ))),
-        Probe::Unverifiable(e) => warnings.push(caution(unverifiable(&tr!("gli strumenti", "tools"), e))),
-        Probe::Text(t) => warnings.extend(tools_in_text(t)),
+impl Turn {
+    pub(crate) fn request(self) -> Value {
+        let text = match self {
+            Turn::First => FIRST_TURN,
+            Turn::AfterTool => AFTER_TOOL,
+            Turn::WithReasoning => WITH_REASONING,
+        };
+        serde_json::from_str(text).expect("the requests in tests/requests are JSON")
     }
-    // If the first test can't even be written, the same cause would stop this one too.
-    if matches!(with_tools, Probe::Text(_)) {
-        match probe(template, &conversation(true)) {
-            Probe::Rejects(m) => warnings.push(severe(tr!(
-                "Il formato della conversazione di questo modello rifiuta un messaggio di sistema a metà conversazione («{m}»), che Mango Code manda per i promemoria: le conversazioni lunghe si interromperanno con un errore.",
-                "This model's conversation format rejects a system message in the middle of the conversation («{m}»), which Mango Code sends for reminders: long conversations will break with an error."
-            ))),
-            Probe::Unverifiable(e) => {
-                warnings.push(caution(unverifiable(&tr!("i messaggi di sistema a metà conversazione", "system messages in the middle of the conversation"), &e)))
-            }
-            Probe::Text(t) if !t.contains(REMINDER) => warnings.push(caution(tr!(
-                "Il formato della conversazione di questo modello scarta i messaggi di sistema a metà conversazione: i promemoria di Mango Code non arriverebbero al modello.",
-                "This model's conversation format discards system messages in the middle of the conversation: Mango Code's reminders wouldn't reach the model."
-            ))),
-            Probe::Text(_) => {}
+
+    /// What it means for the user that the model's format refuses this request, with the message it gave.
+    fn rejected(self, m: &str) -> Warning {
+        severe(match self {
+            Turn::First => tr!(
+                "Il formato della conversazione di questo modello rifiuta la prima richiesta di Mango Code («{m}»): ogni conversazione si interromperà subito con un errore.",
+                "This model's conversation format rejects the first request Mango Code sends it («{m}»): every conversation will break right away with an error."
+            ),
+            Turn::AfterTool => tr!(
+                "Il formato della conversazione di questo modello rifiuta la richiesta che Mango Code manda dopo che il modello ha usato uno strumento («{m}»): la prima risposta arriva, ma la conversazione si interromperà con un errore appena il modello userà uno strumento.",
+                "This model's conversation format rejects the request Mango Code sends after the model has used a tool («{m}»): the first answer comes, but the conversation will break with an error as soon as the model uses a tool."
+            ),
+            Turn::WithReasoning => tr!(
+                "Il formato della conversazione di questo modello rifiuta il ragionamento che Mango Code gli rimanda con la conversazione («{m}»): la conversazione si interromperà con un errore dopo la prima risposta in cui il modello ragiona.",
+                "This model's conversation format rejects the reasoning Mango Code sends back with the conversation («{m}»): the conversation will break with an error after the first answer in which the model reasons."
+            ),
+        })
+    }
+}
+
+/// A request written by a template.
+struct Rendered {
+    request: Value,
+    /// The arguments of the calls went to the template as objects (see `render`).
+    objects: bool,
+    text: String,
+}
+
+impl Rendered {
+    /// Whether the template writes something else when `edit` takes something out of the request: if not, it doesn't use it.
+    fn changes(&self, template: &str, edit: impl FnOnce(&mut Value)) -> bool {
+        let mut request = self.request.clone();
+        edit(&mut request);
+        match probe(template, &context(&request, self.objects)) {
+            Probe::Text(text) => text != self.text,
+            _ => true,
         }
     }
+
+    /// The same request written with the arguments of the calls as objects, if the template can.
+    fn with_objects(&self, template: &str) -> Option<Rendered> {
+        match probe(template, &context(&self.request, true)) {
+            Probe::Text(text) => Some(Rendered { request: self.request.clone(), objects: true, text }),
+            _ => None,
+        }
+    }
+}
+
+fn blank_arguments(request: &mut Value) {
+    messages(request).flat_map(|m| m["tool_calls"].as_array_mut().into_iter().flatten()).for_each(|c| c["function"]["arguments"] = "{}".into());
+}
+
+fn messages(request: &mut Value) -> impl Iterator<Item = &mut Value> {
+    request["messages"].as_array_mut().into_iter().flatten()
+}
+
+/// What a template is given for a request: the messages and the tools. `objects`: the arguments of the calls, which the
+/// agent sends as a string of JSON, as objects.
+pub(crate) fn context(request: &Value, objects: bool) -> Value {
+    let mut context = json!({ "messages": request["messages"], "add_generation_prompt": true, "bos_token": "<s>", "eos_token": "</s>" });
+    if let Some(tools) = request.get("tools") {
+        context["tools"] = tools.clone();
+    }
+    if objects {
+        for call in messages(&mut context).flat_map(|m| m["tool_calls"].as_array_mut().into_iter().flatten()) {
+            if let Some(arguments) = call["function"]["arguments"].as_str().and_then(|a| serde_json::from_str::<Value>(a).ok()) {
+                call["function"]["arguments"] = arguments;
+            }
+        }
+    }
+    context
+}
+
+/// Writes the request with the template, the arguments of the calls as the agent sends them (a string); if the template
+/// can't (it reads them as an object, `arguments | items`, or refuses a string), as objects, which is how the engine
+/// gives them to the templates that need it.
+fn render(template: &str, request: &Value) -> (Probe, bool) {
+    match probe(template, &context(request, false)) {
+        Probe::Text(text) => (Probe::Text(text), false),
+        first => match probe(template, &context(request, true)) {
+            Probe::Text(text) => (Probe::Text(text), true),
+            _ => (first, false),
+        },
+    }
+}
+
+/// Tests the conversation format (the GGUF's Jinja template) with what Mango Code really sends: the first request, the
+/// one after a tool has been called and the one that brings the reasoning back.
+pub fn check_template(template: Option<&str>) -> Vec<Warning> {
+    match template {
+        Some(template) => check(template, Turn::request),
+        None => vec![severe(tr!(
+            "Il file non contiene il formato della conversazione: il motore ne userà uno generico e il modello probabilmente non saprà usare gli strumenti.",
+            "The file doesn't contain the conversation format: the engine will use a generic one and the model probably won't know how to use tools."
+        ))],
+    }
+}
+
+/// `check_template` with the requests `requests` gives for each turn. What the template rejects stops the test: the same
+/// cause would stop the next ones too.
+fn check(template: &str, requests: impl Fn(Turn) -> Value) -> Vec<Warning> {
+    let rendered = |turn: Turn| {
+        let request = requests(turn);
+        match render(template, &request) {
+            (Probe::Text(text), objects) => Ok(Rendered { request, objects, text }),
+            (Probe::Rejects(m), _) => Err(turn.rejected(&m)),
+            (Probe::Unverifiable(e), _) => Err(caution(unverifiable(&tr!("le richieste di Mango Code", "Mango Code's requests"), &e))),
+        }
+    };
+    let first = match rendered(Turn::First) {
+        Ok(first) => first,
+        Err(warning) => return vec![warning],
+    };
+    if !first.changes(template, |r| drop(r.as_object_mut().and_then(|o| o.remove("tools")))) {
+        return vec![severe(tr!(
+            "Questo modello non sa chiamare gli strumenti: il suo formato della conversazione non li elenca al modello.",
+            "This model can't call tools: its conversation format doesn't list them to the model."
+        ))];
+    }
+    let after_tool = match rendered(Turn::AfterTool) {
+        Ok(after_tool) => after_tool,
+        Err(warning) => return vec![warning],
+    };
+    let mut warnings = Vec::new();
+    if !after_tool.changes(template, |r| messages(r).for_each(|m| drop(m.as_object_mut().and_then(|o| o.remove("tool_calls"))))) {
+        warnings.push(severe(tr!(
+            "Il formato della conversazione di questo modello ignora le chiamate agli strumenti già fatte: il modello non vedrebbe ciò che ha già provato.",
+            "This model's conversation format ignores the tool calls already made: the model wouldn't see what it has already tried."
+        )));
+    } else if !after_tool.changes(template, blank_arguments) && after_tool.with_objects(template).is_none_or(|objects| !objects.changes(template, blank_arguments)) {
+        warnings.push(severe(tr!(
+            "Il formato della conversazione di questo modello perde i parametri delle chiamate agli strumenti.",
+            "This model's conversation format loses the parameters of the tool calls."
+        )));
+    }
+    if !after_tool.changes(template, |r| messages(r).filter(|m| m["role"] == "tool").for_each(|m| m["content"] = "".into())) {
+        warnings.push(severe(tr!(
+            "Il formato della conversazione di questo modello ignora i risultati degli strumenti: il modello non saprebbe cosa è successo.",
+            "This model's conversation format ignores the tool results: the model wouldn't know what happened."
+        )));
+    }
+    warnings.extend(rendered(Turn::WithReasoning).err());
     warnings
 }
 
@@ -100,67 +212,6 @@ fn unverifiable(what: &str, error: &str) -> String {
         "Non sono riuscito a controllare come il modello gestisce {what} ({error}): provalo prima di fidarti.",
         "I couldn't check how the model handles {what} ({error}): try it before trusting it."
     )
-}
-
-/// What must appear in the text written by the template for tools to work.
-fn tools_in_text(t: &str) -> Vec<Warning> {
-    if !t.contains(LISTED_ONLY_TOOL) {
-        return vec![severe(tr!(
-            "Questo modello non sa chiamare gli strumenti: il suo formato della conversazione non li elenca al modello.",
-            "This model can't call tools: its conversation format doesn't list them to the model."
-        ))];
-    }
-    let mut v = Vec::new();
-    // The name appears in the list and in the call already made.
-    if t.matches(CALLED_TOOL).count() < 2 {
-        v.push(severe(tr!(
-            "Il formato della conversazione di questo modello ignora le chiamate agli strumenti già fatte: il modello non vedrebbe ciò che ha già provato.",
-            "This model's conversation format ignores the tool calls already made: the model wouldn't see what it has already tried."
-        )));
-    } else if !t.contains(PARAMETER) {
-        v.push(severe(tr!(
-            "Il formato della conversazione di questo modello perde i parametri delle chiamate agli strumenti.",
-            "This model's conversation format loses the parameters of the tool calls."
-        )));
-    }
-    if !t.contains(RESULT) {
-        v.push(severe(tr!(
-            "Il formato della conversazione di questo modello ignora i risultati degli strumenti: il modello non saprebbe cosa è successo.",
-            "This model's conversation format ignores the tool results: the model wouldn't know what happened."
-        )));
-    }
-    v
-}
-
-/// The test conversation, as the agent sends it: a system message, a question, a call with its result, then (in the
-/// middle, or as an answer) a message and the new question.
-fn conversation(system_in_the_middle: bool) -> serde_json::Value {
-    let message_after = if system_in_the_middle {
-        json!({ "role": "system", "content": REMINDER })
-    } else {
-        json!({ "role": "assistant", "content": "ANSWER_ONE" })
-    };
-    json!({
-        "messages": [
-            { "role": "system", "content": "INITIAL_SYSTEM" },
-            { "role": "user", "content": "QUESTION_ONE" },
-            { "role": "assistant", "content": "", "tool_calls": [
-                { "id": "call_1", "type": "function", "function": { "name": CALLED_TOOL, "arguments": { "path": PARAMETER } } }
-            ] },
-            { "role": "tool", "tool_call_id": "call_1", "name": CALLED_TOOL, "content": RESULT },
-            message_after,
-            { "role": "user", "content": "QUESTION_TWO" }
-        ],
-        "tools": [
-            { "type": "function", "function": { "name": CALLED_TOOL, "description": "Reads a file.",
-                "parameters": { "type": "object", "properties": { "path": { "type": "string" } }, "required": ["path"] } } },
-            { "type": "function", "function": { "name": LISTED_ONLY_TOOL, "description": "Searches a text.",
-                "parameters": { "type": "object", "properties": { "text": { "type": "string" } }, "required": ["text"] } } }
-        ],
-        "add_generation_prompt": true,
-        "bos_token": "<s>",
-        "eos_token": "</s>"
-    })
 }
 
 // --- the analysis of a model -----------------------------------------------------------------------------------
@@ -208,8 +259,7 @@ pub struct Proposal {
     pub context: Option<u32>,
     /// The cards it would take, by name; none on the processor or if it doesn't fit.
     pub gpus: Vec<String>,
-    /// How fast it would write, if it runs on the processor. The model is taken as dense: all its weights are read for each
-    /// token, so a MoE from outside the catalog is said slower than it is.
+    /// How fast it would write, if it runs on the processor.
     pub speed: Option<Speed>,
     pub reason: String,
     /// The one to propose (`recommend`): on the cards the largest that fits with 64,000 tokens of context, never F16,
@@ -233,15 +283,39 @@ pub struct WithImages {
     pub entry: Value,
 }
 
+/// The SHA-256 of the conversation format the Qwen3.5 GGUFs carry, and the file in `launcher/chat-templates` that replaces it: the
+/// same text with the reasoning of the past turns kept in the history. The original drops it before the last question, so
+/// every new message changes the turn before and the engine reads it again (12,255 tokens instead of 44 after a long tool
+/// result).
+const QWEN35_ORIGINAL_SHA256: &str = "7f0e529032c25183bcd66c7f238da2d377f43be754a94e2725a58c4e16d2ed67";
+const QWEN35_KEEPING_REASONING: &str = "qwen3.5-mango.jinja";
+
 /// What of a GGUF's header a user model needs.
 struct Info {
     memory: GgufMemory,
     template: Option<String>,
+    /// In a MoE, the thousandths of the weights read for each token (`active_permille`).
+    active_permille: Option<u64>,
 }
 
 impl Info {
     fn from_header(h: &GgufHeader) -> Info {
-        Info { memory: model_memory(h), template: h.strings.get("tokenizer.chat_template").cloned() }
+        let template = h.strings.get("tokenizer.chat_template").cloned();
+        Info { memory: model_memory(h), template, active_permille: active_permille(h) }
+    }
+
+    /// What the entry says of the model beyond its files, as the catalog says it of its own: the context it holds, the
+    /// conversation format that keeps its reasoning (`QWEN35_ORIGINAL_SHA256`) and what a MoE reads for each token.
+    fn describe(&self, entry: &mut Value) {
+        if let Some(c) = self.ctx() {
+            entry["ctx"] = c.into();
+        }
+        if self.template.as_deref().is_some_and(|t| mango_common::sha256_hex(t.as_bytes()) == QWEN35_ORIGINAL_SHA256) {
+            entry["chat_template"] = QWEN35_KEEPING_REASONING.into();
+        }
+        if let Some(permille) = self.active_permille {
+            entry["active_permille"] = permille.into();
+        }
     }
 
     /// The entry's `memory`; an estimate keeps what the header lacked, for whoever reads the file.
@@ -261,7 +335,8 @@ impl Info {
         }
     }
 
-    /// What to know before adding it: that the memory is estimated, if it is, and how the conversation format holds.
+    /// What to know before adding it: that the memory is estimated, if it is, that the model holds less context than the
+    /// agent needs, and how the conversation format holds.
     fn warnings(&self) -> Vec<Warning> {
         let estimate = self.memory.estimated.as_ref().map(|_| {
             caution(tr!(
@@ -269,7 +344,13 @@ impl Info {
                 "I don't know this kind of model yet: its memory is estimated from the file's size, with a safe margin and a small context."
             ))
         });
-        estimate.into_iter().chain(check_template(self.template.as_deref())).collect()
+        let short = self.memory.ctx_max.filter(|&held| held < MIN_CTX).map(|held| {
+            caution(tr!(
+                "Questo modello regge al massimo {held} token di contesto, meno dei {MIN_CTX} che servono all'agente di Mango Code: non avrà spazio per lavorare.",
+                "This model holds at most {held} tokens of context, fewer than the {MIN_CTX} Mango Code's agent needs: it won't have room to work."
+            ))
+        });
+        estimate.into_iter().chain(short).chain(check_template(self.template.as_deref())).collect()
     }
 }
 
@@ -344,10 +425,10 @@ fn analyze_repo(paths: &Paths, hw: &Hardware, repo: &Repo, start: &dyn Fn(&HfFil
             Some(e) => {
                 let entry = hf_entry(repo, &name, v, Some(e), &info);
                 let (placement, context, gpus, reason) = verdict(&catalog, hw, &scope, &entry)?;
-                Some(WithImages { bytes: v.bytes() + e.size, placement, context, gpus, speed: speed_on(placement, v.bytes()), reason, entry })
+                Some(WithImages { bytes: v.bytes() + e.size, placement, context, gpus, speed: speed_on(placement, v.bytes(), info.active_permille), reason, entry })
             }
         };
-        proposals.push(Proposal { name: v.name.clone(), key, bytes: v.bytes(), placement, context, gpus, speed: speed_on(placement, v.bytes()), reason, recommended: false, entry, with_images });
+        proposals.push(Proposal { name: v.name.clone(), key, bytes: v.bytes(), placement, context, gpus, speed: speed_on(placement, v.bytes(), info.active_permille), reason, recommended: false, entry, with_images });
     }
     recommend(&mut proposals);
     Ok(Analysis { name, source: "hugging-face".into(), gated: repo.gated, estimated: info.memory.estimated.is_some(), variants: proposals, warnings: info.warnings() })
@@ -454,9 +535,7 @@ pub fn analyze_local(paths: &Paths, hw: &Hardware, path: &Path) -> Result<Analys
     let entry = |encoder: Option<&HfFile>| {
         let mut files: Vec<Value> = pieces.iter().zip(&sizes).map(|(p, size)| json!({ "path": p.display().to_string(), "size": size })).collect();
         let mut entry = json!({ "label": name, "kind": "File on this computer", "gguf": pieces[0].display().to_string(), "origin": "local", "memory": info.memory_json() });
-        if let Some(c) = info.ctx() {
-            entry["ctx"] = c.into();
-        }
+        info.describe(&mut entry);
         if let Some(e) = encoder {
             entry["mmproj"] = e.path.as_str().into();
             files.push(json!({ "path": e.path, "size": e.size }));
@@ -470,12 +549,12 @@ pub fn analyze_local(paths: &Paths, hw: &Hardware, path: &Path) -> Result<Analys
         Some(e) => {
             let entry = entry(Some(&e));
             let (placement, context, gpus, reason) = verdict(&catalog, hw, &scope, &entry)?;
-            Some(WithImages { bytes: bytes + e.size, placement, context, gpus, speed: speed_on(placement, bytes), reason, entry })
+            Some(WithImages { bytes: bytes + e.size, placement, context, gpus, speed: speed_on(placement, bytes, info.active_permille), reason, entry })
         }
     };
     let entry = entry(None);
     let (placement, context, gpus, reason) = verdict(&catalog, hw, &scope, &entry)?;
-    let proposal = Proposal { name: name.clone(), key, bytes, placement, context, gpus, speed: speed_on(placement, bytes), reason, recommended: true, entry, with_images };
+    let proposal = Proposal { name: name.clone(), key, bytes, placement, context, gpus, speed: speed_on(placement, bytes, info.active_permille), reason, recommended: true, entry, with_images };
     Ok(Analysis { name, source: "local".into(), gated: false, estimated: info.memory.estimated.is_some(), variants: vec![proposal], warnings: info.warnings() })
 }
 
@@ -617,9 +696,9 @@ pub fn add(paths: &Paths, key: &str, mut entry: Value) -> Result<Added> {
     Ok(Added::User)
 }
 
-/// The band of a model of `weights` bytes, if it runs on the processor.
-fn speed_on(placement: Option<Placement>, weights: u64) -> Option<Speed> {
-    (placement == Some(Placement::Cpu)).then(|| cpu_speed(weights))
+/// The band of a model of `weights` bytes, if it runs on the processor; a MoE reads only `active_permille` of them.
+fn speed_on(placement: Option<Placement>, weights: u64, active_permille: Option<u64>) -> Option<Speed> {
+    (placement == Some(Placement::Cpu)).then(|| cpu_speed(weights * active_permille.unwrap_or(1000) / 1000))
 }
 
 /// Whether the model `entry` fits `hw` (without the cards the user leaves out, which `scope` names), where, with what
@@ -646,9 +725,7 @@ fn hf_entry(repo: &Repo, name: &str, v: &Variant, images: Option<&HfFile>, info:
         "label": format!("{name} · {}", v.name), "quant": v.name, "kind": "Hugging Face", "origin": "hugging-face",
         "gguf": files[0]["path"], "repo": repo.id, "revision": repo.revision, "memory": info.memory_json(),
     });
-    if let Some(c) = info.ctx() {
-        entry["ctx"] = c.into();
-    }
+    info.describe(&mut entry);
     if let Some(e) = images {
         let e = file(e);
         entry["mmproj"] = e["path"].clone();
@@ -670,31 +747,6 @@ fn slug(text: &str) -> String {
     s.split('-').filter(|p| !p.is_empty()).collect::<Vec<_>>().join("-")
 }
 
-fn probe(template: &str, context: &serde_json::Value) -> Probe {
-    // `raise_exception` is the function templates use to reject a conversation: if it is what fails, we know from the
-    // message it received, and not from how the rendering ends.
-    let rejection: Arc<Mutex<Option<String>>> = Arc::default();
-    let mut env = Environment::new();
-    env.set_unknown_method_callback(minijinja_contrib::pycompat::unknown_method_callback);
-    let r = rejection.clone();
-    env.add_function("raise_exception", move |message: String| -> Result<String, Error> {
-        *r.lock().unwrap() = Some(message.clone());
-        Err(Error::new(ErrorKind::InvalidOperation, message))
-    });
-    env.add_function("strftime_now", |_format: String| "2026-01-01".to_string());
-    // minijinja's doesn't accept the parameters Hugging Face templates pass (`ensure_ascii`...).
-    env.add_filter("tojson", |value: minijinja::Value, _params: Kwargs| -> Result<String, Error> {
-        serde_json::to_string(&value).map_err(|e| Error::new(ErrorKind::InvalidOperation, e.to_string()))
-    });
-    match env.render_str(template, Serde(context)) {
-        Ok(t) => Probe::Text(t),
-        Err(e) => match rejection.lock().unwrap().take() {
-            Some(m) => Probe::Rejects(m),
-            None => Probe::Unverifiable(e.to_string().lines().next().unwrap_or_default().to_string()),
-        },
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -704,9 +756,8 @@ mod tests {
         std::fs::read_to_string(&f).unwrap_or_else(|e| panic!("{}: {e}", f.display()))
     }
 
-    /// A ChatML format that knows tools and rejects a system message that isn't the first, like the original
-    /// Qwen3.5 template.
-    const LIKE_QWEN: &str = r#"
+    /// A ChatML format that knows tools, as the real ones do for what the agent sends.
+    const CHATML: &str = r#"
 {%- if tools %}<|im_start|>system
 # Tools
 {%- for tool in tools %}
@@ -714,7 +765,6 @@ mod tests {
 {%- endfor %}<|im_end|>
 {% endif -%}
 {%- for m in messages %}
-{%- if m.role == 'system' and not loop.first %}{{- raise_exception('System message must be at the beginning.') }}{%- endif %}
 {%- if m.role == 'system' %}<|im_start|>system
 {{ m.content }}<|im_end|>
 {% elif m.role == 'user' %}<|im_start|>user
@@ -731,29 +781,147 @@ mod tests {
 {%- if add_generation_prompt %}<|im_start|>assistant
 {% endif %}"#;
 
-    /// Like `LIKE_QWEN`, but the system message in the middle renders.
-    fn tolerant_like_qwen() -> String {
-        LIKE_QWEN.replace("{{- raise_exception('System message must be at the beginning.') }}", "")
+    /// Like the original Qwen3.5 template: a system message that isn't the first is refused.
+    fn wants_the_system_message_first() -> String {
+        let refusal = "{%- if m.role == 'system' and not loop.first %}{{- raise_exception('System message must be at the beginning.') }}{%- endif %}";
+        CHATML.replacen("{%- for m in messages %}", &format!("{{%- for m in messages %}}\n{refusal}"), 1)
+    }
+
+    /// The request with all its system text in one message, as an agent that sends one.
+    fn one_system_message(mut request: Value) -> Value {
+        let messages = request["messages"].as_array_mut().unwrap();
+        let leading = messages.iter().take_while(|m| m["role"] == "system").count();
+        let text = messages.drain(..leading).map(|m| m["content"].as_str().unwrap().to_string()).collect::<Vec<_>>().join("\n");
+        messages.insert(0, json!({ "role": "system", "content": text }));
+        request
+    }
+
+    /// The request with its system text in two consecutive messages, as an agent whose plugins add text to the prompt sends it.
+    fn two_system_messages(request: Value) -> Value {
+        let mut request = one_system_message(request);
+        let messages = request["messages"].as_array_mut().unwrap();
+        let text = messages[0]["content"].as_str().unwrap().to_string();
+        let (head, tail) = text.split_once('\n').unwrap();
+        messages[0]["content"] = head.into();
+        messages.insert(1, json!({ "role": "system", "content": tail }));
+        request
     }
 
     #[test]
-    fn mango_codes_templates_hold_tools_and_system_in_the_middle() {
-        for name in ["qwen3.5-mango.jinja", "qwen3.6-mango.jinja", "qwen3.8-mango.jinja", "bonsai2-mango.jinja"] {
-            assert_eq!(check_template(Some(&mango(name))), [], "{name}");
+    fn the_template_that_keeps_the_reasoning_holds_what_the_agent_sends() {
+        assert_eq!(check(&mango(QWEN35_KEEPING_REASONING), |turn| one_system_message(turn.request())), []);
+    }
+
+    /// The file that replaces the Qwen3.5 template is that template with one line changed: with the line put back, its
+    /// SHA-256 is the one by which the original is recognized in a model's GGUF.
+    #[test]
+    fn the_qwen35_template_that_keeps_the_reasoning_differs_from_the_original_by_one_line() {
+        let ours = mango(QWEN35_KEEPING_REASONING);
+        let kept = "{%- if preserve_thinking is undefined or preserve_thinking is true or loop.index0 > ns.last_query_index %}";
+        assert_eq!(ours.matches(kept).count(), 1);
+        let original = ours.replace(kept, "{%- if loop.index0 > ns.last_query_index %}");
+        assert_eq!(mango_common::sha256_hex(original.as_bytes()), QWEN35_ORIGINAL_SHA256);
+    }
+
+    /// Whether what `template` writes for the conversation that brings the reasoning back (with one system message, as the
+    /// agent sends it) holds the reasoning of the first answers, with `preserve_thinking` as given; the template's message if
+    /// it refuses the conversation.
+    fn keeps_the_past_reasoning(template: &str, preserve_thinking: Option<bool>) -> Result<bool, String> {
+        let request = one_system_message(Turn::WithReasoning.request());
+        let mut refused = String::new();
+        for objects in [false, true] {
+            let mut context = context(&request, objects);
+            if let Some(preserve) = preserve_thinking {
+                context["preserve_thinking"] = preserve.into();
+            }
+            match probe(template, &context) {
+                Probe::Text(text) => return Ok(text.contains("The greeting is in the project, so the tool will give it.")),
+                Probe::Rejects(m) | Probe::Unverifiable(m) => refused = m,
+            }
+        }
+        Err(refused)
+    }
+
+    /// The reason the Qwen3.5 template is replaced: the original writes the reasoning of the turns before the last question
+    /// out of the conversation, so each new message changes the turn before it and the engine reads it again. The
+    /// replacement keeps it, with the variable and without it.
+    #[test]
+    fn the_qwen35_template_that_keeps_the_reasoning_does_and_the_original_does_not() {
+        let ours = mango(QWEN35_KEEPING_REASONING);
+        let original = ours.replace("preserve_thinking is undefined or preserve_thinking is true or ", "");
+        assert_eq!(mango_common::sha256_hex(original.as_bytes()), QWEN35_ORIGINAL_SHA256);
+        assert_eq!(keeps_the_past_reasoning(&original, Some(true)), Ok(false), "the original does not read the variable");
+        assert_eq!(keeps_the_past_reasoning(&original, None), Ok(false));
+        assert_eq!(keeps_the_past_reasoning(&ours, Some(true)), Ok(true));
+        assert_eq!(keeps_the_past_reasoning(&ours, None), Ok(true));
+        assert_eq!(keeps_the_past_reasoning(&ours, Some(false)), Ok(false), "a request that asks not to keep it is obeyed");
+    }
+
+    /// By hand, on the templates the real GGUFs carry (only their headers are read): `MANGO_TEST_KEEP="<a.gguf>;<b.gguf>"
+    /// cargo test -p engine-cfg --lib other_models::tests::real_templates -- --ignored --nocapture`. With one system
+    /// message and `preserve_thinking`, each writes the conversation without refusing it and holds the earlier reasoning.
+    #[test]
+    #[ignore = "reads real GGUFs from the disk: MANGO_TEST_KEEP says which"]
+    fn real_templates_keep_the_reasoning_of_past_turns_with_preserve_thinking() {
+        let files = std::env::var("MANGO_TEST_KEEP").expect("MANGO_TEST_KEEP");
+        for file in files.split(';').filter(|f| !f.is_empty()) {
+            let template = read_header(Path::new(file)).unwrap().strings.remove("tokenizer.chat_template").expect("a chat template");
+            let kept = keeps_the_past_reasoning(&template, Some(true));
+            println!("{file}: with preserve_thinking {kept:?}, without it {:?}", keeps_the_past_reasoning(&template, None));
+            assert_eq!(kept, Ok(true), "{file}");
         }
     }
 
     #[test]
-    fn a_tolerant_template_passes() {
-        assert_eq!(check_template(Some(&tolerant_like_qwen())), []);
+    fn the_fixtures_have_the_shapes_the_checks_read() {
+        let first = Turn::First.request();
+        assert!(first["messages"].as_array().unwrap().iter().filter(|m| m["role"] == "system").count() >= 1);
+        let after_tool = Turn::AfterTool.request();
+        assert_eq!(after_tool["messages"].as_array().unwrap().last().unwrap()["role"], "tool");
+        assert!(after_tool["messages"].as_array().unwrap().iter().any(|m| m["tool_calls"][0]["function"]["arguments"].is_string()));
+        assert!(Turn::WithReasoning.request()["messages"].as_array().unwrap().iter().any(|m| m["reasoning_content"].is_string()));
+    }
+
+    /// The template of the original Qwen3.5 refuses a second system message: with two the very first request fails.
+    #[test]
+    fn a_template_that_wants_the_system_message_first_rejects_the_first_request_if_the_agent_sends_two() {
+        let a = check(&wants_the_system_message_first(), |turn| two_system_messages(turn.request()));
+        assert_eq!(a.len(), 1, "{a:?}");
+        assert!(a[0].severe);
+        assert!(a[0].text.contains(&tr!("prima richiesta", "first request")) && a[0].text.contains("System message must be at the beginning."), "{}", a[0].text);
+        assert!(!a[0].text.contains(&tr!("conversazioni lunghe", "long conversations")), "{}", a[0].text);
     }
 
     #[test]
-    fn a_template_that_rejects_system_in_the_middle_is_severe_and_says_what_it_answers() {
-        let a = check_template(Some(LIKE_QWEN));
+    fn the_same_template_holds_if_the_agent_sends_one_system_message() {
+        let a = check(&wants_the_system_message_first(), |turn| one_system_message(turn.request()));
+        assert_eq!(a, []);
+    }
+
+    #[test]
+    fn a_template_that_refuses_the_conversation_after_a_tool_says_it_breaks_when_the_model_uses_one() {
+        let t = CHATML.replace("{%- if m.role == 'system' %}", "{%- if m.role == 'tool' %}{{- raise_exception('Unexpected role tool.') }}{%- endif %}\n{%- if m.role == 'system' %}");
+        let a = check_template(Some(&t));
         assert_eq!(a.len(), 1, "{a:?}");
-        assert!(a[0].severe);
-        assert!(a[0].text.contains(&tr!("messaggio di sistema", "system message")) && a[0].text.contains("System message must be at the beginning."), "{}", a[0].text);
+        assert!(a[0].severe && a[0].text.contains(&tr!("dopo che il modello ha usato uno strumento", "after the model has used a tool")), "{}", a[0].text);
+    }
+
+    /// The agent sends the reasoning back from the first answer that called a tool: a template that refuses it breaks there.
+    #[test]
+    fn a_template_that_refuses_the_reasoning_sent_back_breaks_when_the_model_uses_a_tool() {
+        let t = CHATML.replace("{%- if m.role == 'system' %}", "{%- if m.reasoning_content is defined %}{{- raise_exception('No reasoning in the history.') }}{%- endif %}\n{%- if m.role == 'system' %}");
+        let a = check_template(Some(&t));
+        assert_eq!(a.len(), 1, "{a:?}");
+        let text = &a[0].text;
+        assert!(a[0].severe && text.contains(&tr!("dopo che il modello ha usato uno strumento", "after the model has used a tool")) && text.contains("No reasoning in the history."), "{text}");
+    }
+
+    /// llama.cpp hands the calls to a template that needs their arguments as an object as an object: a template that reads
+    /// them as one is not wrong because the agent sends them as a string.
+    #[test]
+    fn a_template_that_reads_the_arguments_as_an_object_holds() {
+        let t = CHATML.replace("{{ call.function.arguments | tojson }}", "{% for name, value in call.function.arguments | items %}{{ name }}={{ value }};{% endfor %}");
+        assert_eq!(check_template(Some(&t)), []);
     }
 
     #[test]
@@ -773,11 +941,11 @@ mod tests {
     }
 
     #[test]
-    fn a_template_that_discards_system_in_the_middle_warns_without_being_severe() {
-        let t = tolerant_like_qwen().replace("{%- if m.role == 'system' %}", "{%- if m.role == 'system' and loop.first %}");
+    fn a_template_that_writes_the_calls_without_their_parameters_is_severe() {
+        let t = CHATML.replace("{{ call.function.arguments | tojson }}", "");
         let a = check_template(Some(&t));
         assert_eq!(a.len(), 1, "{a:?}");
-        assert!(!a[0].severe && a[0].text.contains(&tr!("promemoria", "reminders")), "{}", a[0].text);
+        assert!(a[0].severe && a[0].text.contains(&tr!("parametri", "parameters")), "{}", a[0].text);
     }
 
     #[test]
@@ -786,6 +954,16 @@ mod tests {
         assert_eq!(a.len(), 1);
         assert!(a[0].severe && a[0].text.contains(&tr!("formato della conversazione", "conversation format")), "{}", a[0].text);
     }
+
+    const THINKING: &str = r#"{% for m in messages %}<|im_start|>{{ m.role }}
+{{ m.content }}<|im_end|>
+{% endfor %}{% if add_generation_prompt %}<|im_start|>assistant
+{% if enable_thinking is defined and enable_thinking is false %}<think>
+
+</think>
+
+{% else %}<think>
+{% endif %}{% endif %}"#;
 
     // --- the analysis of a model ------------------------------------------------------------------------------
 
@@ -864,7 +1042,7 @@ mod tests {
     fn quantizations_split_between_those_that_fit_and_those_that_do_not() {
         let t = Fake::small();
         t.save();
-        let g = write_gguf(t.paths.models.as_path(), "example.gguf", Some(&tolerant_like_qwen()));
+        let g = write_gguf(t.paths.models.as_path(), "example.gguf", Some(CHATML));
         let a = analyze_test(&t, &pc(vec![], 8192), &test_repo(), &g);
 
         assert_eq!(a.name, "Qwen3-4B");
@@ -1136,7 +1314,7 @@ mod tests {
         let t = Fake::small();
         t.save();
         let elsewhere = tempfile::tempdir().unwrap();
-        let g = write_gguf(elsewhere.path(), "My Model.Q4_K_M.gguf", Some(&tolerant_like_qwen()));
+        let g = write_gguf(elsewhere.path(), "My Model.Q4_K_M.gguf", Some(CHATML));
         let hw = pc(vec![], 8192);
 
         let a = analyze_local(&t.paths, &hw, &g).unwrap();
@@ -1184,7 +1362,7 @@ mod tests {
         t.save();
         let d = tempfile::tempdir().unwrap();
         let first = d.path().join("Hybrid-Q4_K_M-00001-of-00002.gguf");
-        test_util::write_with(&first, "qwen35", &HYBRID, &[("tokenizer.chat_template", tolerant_like_qwen().as_str())], &[], &[("blk.0.ssm_out.weight", 300), ("blk.1.attn_k.weight", 500)]);
+        test_util::write_with(&first, "qwen35", &HYBRID, &[("tokenizer.chat_template", CHATML)], &[], &[("blk.0.ssm_out.weight", 300), ("blk.1.attn_k.weight", 500)]);
         let second = d.path().join("Hybrid-Q4_K_M-00002-of-00002.gguf");
         test_util::write_with(&second, "", &[("split.no", 1)], &[], &[], &[("blk.2.ssm_out.weight", 400), ("blk.3.attn_k.weight", 600)]);
         let sizes = [&first, &second].map(|p| std::fs::metadata(p).unwrap().len());
@@ -1283,7 +1461,7 @@ mod tests {
         let p = d.path().join("Newarch-Q4_K_M.gguf");
         let ints = [("newarch.block_count", 4), ("newarch.context_length", 262_144), ("newarch.embedding_length", 2048)];
         let tensors = [("blk.0.attn_k.weight", 100), ("blk.1.attn_k.weight", 100), ("blk.2.attn_k.weight", 100), ("blk.3.attn_k.weight", 100)];
-        test_util::write_with(&p, "newarch", &ints, &[("tokenizer.chat_template", tolerant_like_qwen().as_str())], &[], &tensors);
+        test_util::write_with(&p, "newarch", &ints, &[("tokenizer.chat_template", CHATML)], &[], &tensors);
         let hw = pc(vec![], 8192);
 
         let a = analyze_local(&t.paths, &hw, &p).unwrap();
@@ -1489,6 +1667,112 @@ mod tests {
             println!("{e}");
             assert!(e.to_string().starts_with(&tr!("Il tuo token di Hugging Face non è valido o è scaduto", "Your Hugging Face token is not valid or has expired")), "{e}");
         }
+    }
+
+    /// A MoE like Qwen3-30B-A3B in miniature: 36 layers of attention and one tensor with all the experts, 2 of 8 chosen.
+    fn write_moe(dir: &Path, template: Option<&str>) -> PathBuf {
+        let p = dir.join("moe.gguf");
+        let ints = [
+            ("llama.block_count", 36),
+            ("llama.context_length", 40960),
+            ("llama.embedding_length", 2560),
+            ("llama.attention.head_count", 32),
+            ("llama.attention.head_count_kv", 8),
+            ("llama.expert_count", 8),
+            ("llama.expert_used_count", 2),
+        ];
+        let mut tensors: Vec<(String, u64)> = (0..36).map(|i| (format!("blk.{i}.attn_k.weight"), 160)).collect();
+        tensors.push(("blk.0.ffn_up_exps.weight".into(), 5760));
+        let t: Vec<(&str, u64)> = tensors.iter().map(|(n, b)| (n.as_str(), *b)).collect();
+        let strings: Vec<(&str, &str)> = template.map(|t| ("tokenizer.chat_template", t)).into_iter().collect();
+        test_util::write_with(&p, "llama", &ints, &strings, &[], &t);
+        p
+    }
+
+    /// What the catalog writes by hand, the entry of a model added reads from the file: the thousandths of the weights a
+    /// MoE reads for each token (the rest of the model plus the experts it chooses).
+    #[test]
+    fn a_moe_added_by_the_user_says_how_much_it_reads_for_each_token() {
+        let t = Fake::small();
+        t.save();
+        let g = write_moe(&t.paths.models, Some(THINKING));
+        let size = std::fs::metadata(&g).unwrap().len();
+        let repo = Repo { files: vec![HfFile { path: "Qwen3-4B-Q4_K_M.gguf".into(), size, sha256: "a".repeat(64) }], ..test_repo() };
+        let a = analyze_test(&t, &pc(vec![], 32_768), &repo, &g);
+        let v = &a.variants[0];
+        // 36 x 160 of attention, 5760 of experts, 2 of 8 read: (5760 + 1440) / 11520
+        assert_eq!(v.entry["active_permille"], 625);
+        assert!(v.entry.get("reasoning").is_none() && v.entry.get("chat_template").is_none(), "{}", v.entry);
+        assert_eq!(analyze_local(&t.paths, &pc(vec![], 32_768), &g).unwrap().variants[0].entry["active_permille"], 625);
+    }
+
+    #[test]
+    fn a_moe_on_the_processor_is_as_fast_as_what_it_reads() {
+        let cpu = Some(Placement::Cpu);
+        assert_eq!(speed_on(cpu, 6 * GIB, None), Some(Speed::Slow), "dense: all the weights are read");
+        assert_eq!(speed_on(cpu, 6 * GIB, Some(625)), Some(Speed::Fair));
+        assert_eq!(speed_on(None, 6 * GIB, Some(625)), None);
+    }
+
+    #[test]
+    fn a_dense_model_has_no_expert_share() {
+        let t = Fake::small();
+        t.save();
+        let g = write_gguf(&t.paths.models, "dense.gguf", Some(CHATML));
+        let repo = Repo { files: vec![f("Qwen3-4B-Q4_K_M.gguf", 6.0)], ..test_repo() };
+        let v = analyze_test(&t, &pc(vec![], 32_768), &repo, &g).variants.remove(0);
+        assert!(v.entry.get("active_permille").is_none(), "{}", v.entry);
+        assert_eq!(v.speed, Some(Speed::Slow));
+    }
+
+    /// A model of the user's whose conversation format is the Qwen3.5 original, recognized by its SHA-256, gets the format
+    /// that keeps the reasoning, like the catalog's Qwen3.5; any other format stays the model's own.
+    #[test]
+    fn a_model_added_with_the_qwen35_template_gets_the_one_that_keeps_the_reasoning() {
+        let t = Fake::small();
+        t.save();
+        let kept = "{%- if preserve_thinking is undefined or preserve_thinking is true or loop.index0 > ns.last_query_index %}";
+        let original = mango(QWEN35_KEEPING_REASONING).replace(kept, "{%- if loop.index0 > ns.last_query_index %}");
+        let repo = Repo { files: vec![f("Qwen3.5-9B-Q4_K_M.gguf", 6.0)], ..test_repo() };
+        let qwen = write_gguf(&t.paths.models, "qwen35.gguf", Some(&original));
+        let analysis = analyze_test(&t, &pc(vec![], 32_768), &repo, &qwen);
+        assert_eq!(analysis.variants[0].entry["chat_template"], QWEN35_KEEPING_REASONING);
+        assert_eq!(analyze_local(&t.paths, &pc(vec![], 32_768), &qwen).unwrap().variants[0].entry["chat_template"], QWEN35_KEEPING_REASONING);
+        // the same text with one character added is another template: the model's own
+        let other = write_gguf(&t.paths.models, "other.gguf", Some(&format!("{original} ")));
+        assert!(analyze_test(&t, &pc(vec![], 32_768), &repo, &other).variants[0].entry.get("chat_template").is_none());
+        assert!(analyze_local(&t.paths, &pc(vec![], 32_768), &other).unwrap().variants[0].entry.get("chat_template").is_none());
+    }
+
+    /// The agent's instructions alone take about 14,000 tokens: a model that holds less than the least Mango Code works
+    /// with is told before it is added.
+    #[test]
+    fn a_model_that_holds_less_context_than_the_agent_needs_is_told() {
+        let t = Fake::small();
+        t.save();
+        let write = |context: u32| {
+            let p = t.paths.models.join(format!("c{context}.gguf"));
+            let ints = [("llama.block_count", 2), ("llama.context_length", context), ("llama.embedding_length", 256), ("llama.attention.head_count", 4), ("llama.attention.head_count_kv", 2)];
+            test_util::write_with(&p, "llama", &ints, &[("tokenizer.chat_template", CHATML)], &[], &[("blk.0.attn_k.weight", 64), ("blk.1.attn_k.weight", 64)]);
+            p
+        };
+        let small = analyze_local(&t.paths, &pc(vec![], 8192), &write(8192)).unwrap();
+        assert_eq!(small.warnings.len(), 1, "{:?}", small.warnings);
+        assert!(!small.warnings[0].severe && small.warnings[0].text.contains("8192") && small.warnings[0].text.contains("32768"), "{}", small.warnings[0].text);
+        assert_eq!(analyze_local(&t.paths, &pc(vec![], 8192), &write(32_768)).unwrap().warnings, []);
+    }
+
+    /// The `generation` blocks of Hugging Face templates write nothing: with them the template is tried like any other.
+    #[test]
+    fn the_generation_blocks_of_a_template_do_not_keep_it_from_being_tried() {
+        let marked = CHATML
+            .replace("{% elif m.role == 'assistant' %}<|im_start|>assistant", "{% elif m.role == 'assistant' %}{%- generation -%}<|im_start|>assistant")
+            .replace("{% elif m.role == 'tool' %}", "{%- endgeneration %}{% elif m.role == 'tool' %}");
+        assert!(marked.contains("{%- generation -%}") && marked.contains("{%- endgeneration %}"));
+        assert_eq!(check_template(Some(CHATML)), []);
+        assert_eq!(check_template(Some(&marked)), []);
+        let text = "{% if a %}x{% endif %} {# {% not closed";
+        assert_eq!(crate::chat_template::without_generation_tags(text), text);
     }
 
     #[test]

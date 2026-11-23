@@ -22,7 +22,7 @@ const program = Effect.gen(function* () {
 })
 ```
 
-Run `LLMClient.stream(request)` instead of `generate` when you want incremental `LLMEvent`s. The event stream is provider-neutral — same shape across OpenAI Chat, OpenAI Responses, Anthropic Messages, Gemini, Bedrock Converse, and any OpenAI-compatible deployment.
+Run `LLMClient.stream(request)` instead of `generate` when you want incremental `LLMEvent`s. The event stream is provider-neutral — same shape across OpenAI Chat, OpenAI Responses, Anthropic Messages, and any OpenAI-compatible deployment.
 
 ## Public API
 
@@ -35,7 +35,7 @@ Run `LLMClient.stream(request)` instead of `generate` when you want incremental 
 
 ## Caching
 
-Prompt caching is **on by default**. Every `LLMRequest` resolves to `cache: "auto"` unless the caller opts out with `cache: "none"`. Each protocol translates `CacheHint`s to its wire format (`cache_control` on Anthropic, `cachePoint` on Bedrock; OpenAI and Gemini do implicit caching server-side and don't need inline markers — auto is a no-op there).
+Prompt caching is **on by default**. Every `LLMRequest` resolves to `cache: "auto"` unless the caller opts out with `cache: "none"`. Each protocol translates `CacheHint`s to its wire format (`cache_control` on Anthropic; OpenAI does implicit caching server-side and doesn't need inline markers — auto is a no-op there).
 
 ### Auto placement
 
@@ -61,7 +61,7 @@ cache: {
   tools?: boolean,
   system?: boolean,
   messages?: "latest-user-message" | "latest-assistant" | { tail: number },
-  ttlSeconds?: number,         // ≥ 3600 → 1h on Anthropic/Bedrock; else 5m
+  ttlSeconds?: number,         // ≥ 3600 → 1h on Anthropic; else 5m
 }
 ```
 
@@ -84,9 +84,7 @@ LLM.request({
 | Protocol                | `cache: "auto"`                                                           |
 | ----------------------- | ------------------------------------------------------------------------- |
 | Anthropic Messages      | emits up to 3 `cache_control` markers (4-breakpoint cap enforced)         |
-| Bedrock Converse        | emits up to 3 `cachePoint` blocks (4-breakpoint cap enforced)             |
 | OpenAI Chat / Responses | no-op (implicit caching above 1024 tokens)                                |
-| Gemini                  | no-op (implicit caching on 2.5+; explicit `CachedContent` is out-of-band) |
 
 Normalized cache usage is read back into `response.usage.cacheReadInputTokens` and `cacheWriteInputTokens` across every provider.
 
@@ -95,23 +93,20 @@ Normalized cache usage is read back into `response.usage.cacheReadInputTokens` a
 Provider facades configure endpoint/auth/deployment details first, then expose model selectors that take only a model or deployment id. The selected model carries the executable route value used at runtime.
 
 ```ts
-import { OpenAI, CloudflareAIGateway } from "@opencode-ai/llm/providers"
+import { OpenAI, OpenRouter } from "@opencode-ai/llm/providers"
 
 const openai = OpenAI.configure({ apiKey: process.env.OPENAI_API_KEY }).responses("gpt-4o-mini")
-const gateway = CloudflareAIGateway.configure({
-  accountId: process.env.CLOUDFLARE_ACCOUNT_ID,
-  gatewayApiKey: process.env.CLOUDFLARE_API_TOKEN,
-}).model("workers-ai/@cf/meta/llama-3.1-8b-instruct")
+const router = OpenRouter.configure({ apiKey: process.env.OPENROUTER_API_KEY }).model("openai/gpt-4o-mini")
 ```
 
-Included providers: OpenAI, Anthropic, Google (Gemini), Amazon Bedrock, Azure OpenAI, Cloudflare AI Gateway, Cloudflare Workers AI, GitHub Copilot, OpenRouter, xAI, plus generic OpenAI-compatible helpers for DeepSeek, Cerebras, Groq, Fireworks, Together, etc.
+Included providers: OpenAI, Anthropic, OpenRouter, plus generic OpenAI-compatible helpers for DeepSeek, Cerebras, Groq, Fireworks, Together, etc.
 
 ## Provider options & HTTP overlays
 
 Three escape hatches in order of stability:
 
 1. **`generation`** — portable knobs (`maxTokens`, `temperature`, `topP`, `topK`, penalties, seed, stop).
-2. **`providerOptions: { <provider>: {...} }`** — typed-at-the-facade provider-specific knobs (OpenAI `promptCacheKey`, Anthropic `thinking`, Gemini `thinkingConfig`, OpenRouter routing).
+2. **`providerOptions: { <provider>: {...} }`** — typed-at-the-facade provider-specific knobs (OpenAI `promptCacheKey`, Anthropic `thinking`, OpenRouter routing).
 3. **`http: { body, headers, query }`** — last-resort serializable overlays merged into the final HTTP request. Reach for this only when a stable typed path doesn't yet exist.
 
 Route/provider defaults are overridden by request-level values for each axis.

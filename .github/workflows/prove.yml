@@ -1,0 +1,142 @@
+# The tests that need neither a graphics card nor the network, in a workflow of their own: `release` calls it before
+# anything is built, and it can be started by hand (on any branch, with no tag) to see the result before a tag is
+# pushed. It has no secrets and no environment. Left out: the engines' own tests, which need the models, the
+# end-to-end tests of integration/ (the app's window does not show a page to the debugger on the hosted runner), and the
+# packages that are not part of the product (the upstream console, the desktop shell, the Slack bot).
+name: prove
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  rust:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    env:
+      # bindgen for whisper.cpp (voice dictation)
+      LIBCLANG_PATH: C:\Program Files\LLVM\bin
+      CARGO_TERM_COLOR: never
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master, 2026-10-16
+        with:
+          toolchain: 1.98.1
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: app
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.4
+
+      - name: Node packages of the launcher and of the agent's plugins
+        run: |
+          foreach ($dir in "launcher", "launcher/opencode-home") {
+            Push-Location $dir
+            npm ci --no-audit --no-fund
+            if ($LASTEXITCODE) { throw "npm ci failed in $dir" }
+            Pop-Location
+          }
+
+      - name: Rust
+        run: |
+          # tauri-build wants the staging folder to exist; build.ps1 fills it later
+          New-Item -ItemType Directory -Force app/scripts/staging/resources | Out-Null
+          Push-Location app
+          cargo test --workspace --locked
+          if ($LASTEXITCODE) { throw "cargo test failed" }
+
+      # the release scripts, and the list of Rust crates in LICENSES/ against Cargo.lock
+      - name: Release scripts
+        run: |
+          node --test "app/scripts/*.test.mjs"
+          if ($LASTEXITCODE) { throw "the release scripts' tests failed" }
+
+      - name: Document tools
+        working-directory: launcher/mango-documents
+        run: |
+          bun test
+          if ($LASTEXITCODE) { throw "the document tools' tests failed" }
+
+  typecheck:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    env:
+      HUSKY: "0"
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.4
+      - name: Packages
+        run: |
+          bun install --frozen-lockfile
+          if ($LASTEXITCODE) { throw "bun install failed" }
+      - name: Typecheck
+        run: |
+          bun run typecheck
+          if ($LASTEXITCODE) { throw "the typecheck failed" }
+
+  # Each package's own `test` script, from its folder (the root refuses to run tests). Left out: the packages the
+  # product does not ship (the upstream console, desktop shell, Slack bot, SDK and code generator).
+  packages:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: agent
+            dirs: packages/opencode
+          - name: core
+            dirs: packages/core
+          - name: interface
+            dirs: packages/app packages/ui packages/session-ui
+          - name: libraries
+            dirs: packages/llm packages/codemode packages/client packages/http-recorder packages/effect-drizzle-sqlite
+    name: ${{ matrix.name }}
+    env:
+      HUSKY: "0"
+      DIRS: ${{ matrix.dirs }}
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.4
+
+      - name: Packages
+        run: |
+          bun install --frozen-lockfile
+          if ($LASTEXITCODE) { throw "bun install failed" }
+
+      - name: Tests
+        run: |
+          $failed = @()
+          foreach ($dir in $env:DIRS -split " ") {
+            Push-Location $dir
+            bun run test
+            if ($LASTEXITCODE) { $failed += $dir }
+            Pop-Location
+          }
+          if ($failed) { throw "tests failed in: $($failed -join ', ')" }

@@ -60,6 +60,16 @@ export interface Environment {
   close: () => void;
 }
 
+/**
+ * Keeps a screenshot a test took (a PNG in base64) in the environment's folder, which goes away with the environment, or
+ * in the folder `MANGO_TEST_SCREENSHOTS` names, to look at it afterwards.
+ */
+export function saveScreenshot(env: Environment, name: string, data: string) {
+  const folder = process.env.MANGO_TEST_SCREENSHOTS ?? env.root;
+  fs.mkdirSync(folder, { recursive: true });
+  fs.writeFileSync(path.join(folder, `${name}.png`), Buffer.from(data, "base64"));
+}
+
 /** Stops the app with all its processes (the engine, the agent, WebView2) and waits until it is gone. */
 function stopTree(app: ChildProcess) {
   spawnSync("taskkill", ["/PID", String(app.pid), "/T", "/F"]);
@@ -134,12 +144,14 @@ export function writeLanguage(data: string, language = "it") {
  * revision `main`). `imageModels`: models that make images, after the fake one that writes, the first the catalog's
  * default for pictures; each has three files (`<id>-d.gguf`, `<id>-e.gguf`, `<id>-v.safetensors`, 1000 bytes each unless
  * `bytes` or `files` say otherwise) and `imagePresent` says which of them are already on disk. The image engine is the
- * fake one of app/crates/images (`fake-sd.exe`), installed for every build.
+ * fake one of app/crates/images (`fake-sd.exe`), installed for every build. `vision`: the fake model sees images (it has a
+ * multimodal projector, an empty file). `strict`: the fake engine refuses what the strictest chat templates of real models
+ * refuse (see fake-engine.rs), as an engine with such a model does.
  *
  * `start` returns when the app is in use: the agent answers (`service.json`) and, if a model is on disk, it is loaded,
  * so a test talks to it at once. `modelLoading`: it returns as soon as the agent answers, while the model still loads.
  */
-type Options = { freeModelsFolder?: boolean; onRequest?: string[]; window?: boolean; args?: string[]; otherModels?: string[]; bytes?: Record<string, number>; chunkMs?: number; noDebug?: boolean; env?: Record<string, string>; context?: number; noModels?: boolean; modelLoading?: boolean; files?: Record<string, { size: number; sha256: string }>; imageModels?: string[]; imagePresent?: string[] };
+type Options = { freeModelsFolder?: boolean; onRequest?: string[]; window?: boolean; args?: string[]; otherModels?: string[]; bytes?: Record<string, number>; chunkMs?: number; noDebug?: boolean; env?: Record<string, string>; context?: number; noModels?: boolean; modelLoading?: boolean; files?: Record<string, { size: number; sha256: string }>; imageModels?: string[]; imagePresent?: string[]; vision?: boolean; strict?: boolean; reasoning?: string[] };
 
 /**
  * Removes the environment's folder (hundreds of MB). Its files (WebView2's above all) stay locked for a few seconds after
@@ -210,14 +222,41 @@ async function startIn(
   const others = options.otherModels ?? [];
   const empty = options.noModels === true;
   if (!empty) for (const id of ["fake", ...others]) fs.writeFileSync(path.join(models, `${id}.gguf`), "");
-  const fakeModel = (gguf: string, label: string, size = 1000, onRequest = false) => {
+  // Models whose chat template has the on/off switch of their reasoning: the app reads the levels it offers from there.
+  if (!empty && options.reasoning?.length) {
+    const text = (s: string) => {
+      const bytes = Buffer.from(s, "utf8");
+      const size = Buffer.alloc(8);
+      size.writeBigUInt64LE(BigInt(bytes.length));
+      return Buffer.concat([size, bytes]);
+    };
+    const u32 = (n: number) => {
+      const b = Buffer.alloc(4);
+      b.writeUInt32LE(n);
+      return b;
+    };
+    const u64 = (n: number) => {
+      const b = Buffer.alloc(8);
+      b.writeBigUInt64LE(BigInt(n));
+      return b;
+    };
+    const template =
+      "{%- for m in messages %}<|im_start|>{{ m.role }}\n{{ m.content }}<|im_end|>\n{%- endfor %}" +
+      "{%- if add_generation_prompt %}<|im_start|>assistant\n{%- if enable_thinking is defined and enable_thinking is false %}<think>\n\n</think>\n\n{%- else %}<think>\n{%- endif %}{%- endif %}";
+    const string = (key: string, value: string) => Buffer.concat([text(key), u32(8), text(value)]);
+    const gguf = Buffer.concat([Buffer.from("GGUF"), u32(3), u64(0), u64(2), string("general.architecture", "llama"), string("tokenizer.chat_template", template)]);
+    for (const id of options.reasoning) fs.writeFileSync(path.join(models, `${id}.gguf`), gguf);
+  }
+  if (!empty && options.vision) fs.writeFileSync(path.join(models, "fake-mmproj.gguf"), "");
+  const fakeModel = (gguf: string, label: string, size = 1000, onRequest = false, vision = false) => {
     const id = gguf.replace(/\.gguf$/, "");
     const file = options.files?.[id];
     return {
       label,
       gguf,
       ...(file ? { repo: `test/${id}`, revision: "main" } : {}),
-      files: [{ path: gguf, size: file?.size ?? size, sha256: file?.sha256 ?? "0".repeat(64) }],
+      files: [{ path: gguf, size: file?.size ?? size, sha256: file?.sha256 ?? "0".repeat(64) }, ...(vision ? [{ path: "fake-mmproj.gguf", size: 1000, sha256: "0".repeat(64) }] : [])],
+      ...(vision ? { mmproj: "fake-mmproj.gguf" } : {}),
       memory: { kv_kib_token: 1, state_mib: 0 },
       // the fake models reason, as most of the catalog: the reasoning chosen for them reaches the requests
       reasoning: true,
@@ -245,7 +284,7 @@ async function startIn(
       order: ["fake", ...others],
       ...(pictures.length ? { image_default: pictures[0] } : {}),
       models: {
-        fake: fakeModel("fake.gguf", "Fake model"),
+        fake: fakeModel("fake.gguf", "Fake model", 1000, false, options.vision),
         ...Object.fromEntries(others.map((id) => [id, fakeModel(`${id}.gguf`, `Model ${id}`, options.bytes?.[id], options.onRequest?.includes(id))])),
         ...Object.fromEntries(pictures.map((id) => [id, pictureModel(id)])),
       },
@@ -276,6 +315,7 @@ async function startIn(
     FAKE_ENGINE_SCRIPT: scriptFile,
     FAKE_ENGINE_LOG: engineLog,
     FAKE_ENGINE_CHUNK_MS: String(options.chunkMs ?? 20),
+    ...(options.strict ? { FAKE_ENGINE_STRICT: "1" } : {}),
     // The fake models have a plan on this PC's real cards: what another program holds there must not keep them from starting.
     MANGO_ROOM_CHECK_OFF: "1",
     // Where the app makes a project, and the folder of the conversations without one: never the user's Documents.

@@ -186,7 +186,7 @@ test("a capture that fails leaves the empty area and says so in the log", async 
       responseCode: 400,
       responseHeaders: [{ name: "Tauri-Response", value: "error" }, { name: "Content-Type", value: "application/json" }, { name: "Access-Control-Allow-Origin", value: "*" }],
       body: btoa(JSON.stringify({ code: "io", message: "no picture" })),
-    });
+    }).catch(() => {});
   });
   try {
     await mouseClick('[data-action="titlebar-model"]');

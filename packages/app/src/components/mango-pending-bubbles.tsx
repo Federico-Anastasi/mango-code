@@ -10,7 +10,7 @@ import { useMango } from "@/context/mango"
 import { pendingText } from "@/utils/mango-pending"
 import { canSend } from "@/utils/mango-state"
 
-/** How much of a message the X names: «Riordina le fatture di…». */
+/** How much of a message the X names: «Sort the invoices of…». */
 const NAMED = 40
 
 /**

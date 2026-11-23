@@ -8,6 +8,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { MangoCode, find } from "../client/mango-code";
 import { start, type Environment } from "./environment";
+import { systemMessages } from "./requests";
 
 const SCRIPT = [{ tool: "skill", arguments: { name: "kettle" } }, { text: "Done — end" }];
 
@@ -15,7 +16,7 @@ let env: Environment;
 let mc: MangoCode;
 
 beforeAll(async () => {
-  env = await start(SCRIPT);
+  env = await start(SCRIPT, { strict: true });
   mc = new MangoCode((await find(env.data))!);
 }, 200_000);
 
@@ -34,9 +35,6 @@ const chatRequests = () =>
     .filter(Boolean)
     .map((l) => JSON.parse(l))
     .filter((r) => r.route.startsWith("/v1/chat/completions") && r.body.tools?.length);
-
-const systemText = (body: any): string =>
-  body.messages.filter((m: any) => m.role === "system").map((m: any) => (typeof m.content === "string" ? m.content : JSON.stringify(m.content))).join("\n");
 
 const lastUserText = (body: any): string => {
   const user = body.messages.filter((m: any) => m.role === "user").at(-1);
@@ -67,7 +65,7 @@ test("a skill that is not there yet is neither listed nor loaded", async () => {
   open = await mc.createSession(env.project);
   const steps = await runTurn(open, "How do you descale the kettle?");
   expect(loaded(steps)).toBeUndefined();
-  systemBefore = systemText(chatRequests().at(-1)!.body);
+  systemBefore = systemMessages(chatRequests().at(-1)!.body)[0];
   expect(systemBefore).not.toContain("kettle");
   expect(await commandNames()).not.toContain("kettle");
   expect(await settingsSkills()).not.toContain("kettle");
@@ -85,17 +83,17 @@ test("a skill added while the app is open is in the «/» menu and on the settin
 test("the conversation already open is told about the skill added meanwhile, once, and its system prompt does not change", async () => {
   await runTurn(open, "And now?");
   const body = chatRequests().at(-1)!.body;
-  expect(systemText(body)).toBe(systemBefore);
+  expect(systemMessages(body)[0]).toBe(systemBefore);
   expect(lastUserText(body)).toContain("How to descale a kettle.");
 
   await runTurn(open, "Thanks.");
   const next = chatRequests().at(-1)!.body;
-  expect(systemText(next)).toBe(systemBefore);
+  expect(systemMessages(next)[0]).toBe(systemBefore);
   expect(lastUserText(next)).not.toContain("kettle");
 }, 120_000);
 
 test("a new conversation lists the skill added while the app was open and loads it", async () => {
   const steps = await runTurn(await mc.createSession(env.project), "How do you descale the kettle?");
   expect(loaded(steps)?.output).toContain("white vinegar");
-  expect(systemText(chatRequests().at(-1)!.body)).toContain("How to descale a kettle.");
+  expect(systemMessages(chatRequests().at(-1)!.body)[0]).toContain("How to descale a kettle.");
 }, 120_000);

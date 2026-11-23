@@ -6,15 +6,14 @@
 // window also gets the event `mango-settings`. The tests ask it with a second start of the app and
 // `--test-tray-settings` (development builds only), which runs what the icon's menu runs (`tray::open_settings`).
 // How the app starts with a model, and with `--service`, is in startup.test.ts.
-// `bun test integration/tests/first-run.test.ts`, after `cargo build -p mango-code -p engine` in app/.
-// The screenshots stay in %TEMP%\mango-first-run-*.png.
+// `bun test --cwd integration tests/first-run.test.ts`, after `cargo build -p mango-code -p engine` in app/.
+// The screenshots are kept in the environment's folder, or in the one `MANGO_TEST_SCREENSHOTS` names.
 
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import fs from "node:fs";
 import net from "node:net";
-import os from "node:os";
 import path from "node:path";
-import { start, type Environment } from "./environment";
+import { saveScreenshot, start, type Environment } from "./environment";
 import { page, type Page } from "./cdp";
 
 const appWindow = (t: { url: string }) => t.url.includes("tauri.localhost") || t.url.startsWith("tauri://");
@@ -31,7 +30,7 @@ async function waitUntil(condition: () => Promise<boolean> | boolean, what: stri
 
 const screenshot = async (p: Page, name: string) => {
   const r = await p.send("Page.captureScreenshot", { format: "png" });
-  fs.writeFileSync(path.join(os.tmpdir(), `mango-first-run-${name}.png`), Buffer.from(r.result.data, "base64"));
+  saveScreenshot(env, `mango-first-run-${name}`, r.result.data);
 };
 
 // The engine's port, taken by "another program" until the test lets it go: the start fails on it. (The agent's port is not

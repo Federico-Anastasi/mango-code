@@ -1,8 +1,6 @@
 const model_id = "claude-3-7-sonnet"
 
 export const popularProviders = [
-  "opencode",
-  "opencode-go",
   "anthropic",
   "github-copilot",
   "openai",
@@ -25,8 +23,6 @@ const provider = {
 }
 
 const popular = [
-  { id: "opencode", name: "OpenCode Zen", models: {} },
-  { id: "opencode-go", name: "OpenCode Go", models: {} },
   { id: "openai", name: "OpenAI", models: {} },
   provider,
   { id: "google", name: "Google", models: {} },
@@ -51,6 +47,5 @@ export function useProviders() {
     default: () => ({ anthropic: model_id }),
     connected: () => [provider],
     paid: () => [provider],
-    popular: () => popular,
   }
 }

@@ -10,6 +10,7 @@
 //!
 //! A model that makes images has a plan of its own (`image.rs`), with the image engine.
 
+pub mod chat_template;
 pub mod other_models;
 pub mod choices;
 mod catalog;
@@ -19,8 +20,11 @@ pub mod hardware;
 mod image;
 pub mod memory;
 mod profiles;
+mod reasoning;
 #[cfg(test)]
 mod fixtures;
+#[cfg(test)]
+mod template_texts;
 mod speed;
 mod split;
 mod view;
@@ -90,7 +94,7 @@ const STATE_FLAGS: [&str; 2] = ["--swa-full", "--jinja"];
 /// build), the model file, the chat template file (it decides the tokens) and `STATE_ARGS`.
 fn slot_signature(exe: &Path, gguf: &Path, args: &[String]) -> String {
     let stamp = |file: &Path| {
-        std::fs::metadata(file).map_or((0, 0), |m| {
+        mango_common::model_files::listed(file).map_or((0, 0), |m| {
             (m.len(), m.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map_or(0, |d| d.as_nanos()))
         })
     };

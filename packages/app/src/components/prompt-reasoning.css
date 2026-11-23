@@ -1,0 +1,53 @@
+/* The pill under the box: the gauge and the current value, outlined; raised while its levels are open. */
+[data-action="prompt-reasoning"] {
+  box-sizing: border-box;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 12px 0 9px;
+  border: 1px solid var(--mango-line);
+  border-radius: var(--mango-radius-full);
+  background: transparent;
+  color: var(--mango-text-muted);
+  font-family: var(--mango-font-text);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 20px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+[data-action="prompt-reasoning"]:where(:hover),
+[data-action="prompt-reasoning"][aria-expanded="true"] {
+  color: var(--mango-text);
+}
+
+[data-action="prompt-reasoning"][aria-expanded="true"] {
+  background: var(--mango-raised);
+}
+
+[data-action="prompt-reasoning"]:where(:focus-visible) {
+  outline: 2px solid var(--mango-action-text);
+  outline-offset: 2px;
+}
+
+/* The levels are the suite's segmented control, as in the bar. */
+[data-component="prompt-reasoning-control"] {
+  z-index: 50;
+  outline: none;
+}
+
+[data-component="prompt-reasoning-control"] [data-slot="segmented-control-v2"] {
+  width: auto;
+  height: 28px;
+}
+
+[data-component="prompt-reasoning-control"] [data-slot="segmented-control-v2-item"] {
+  flex: none;
+  height: 22px;
+  padding: 0 10px;
+  font-size: 12px;
+}

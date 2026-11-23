@@ -1,6 +1,7 @@
+import { createResource } from "solid-js"
 import { useLanguage } from "@/context/language"
 import { usePlatform } from "@/context/platform"
-import { defaultProjectDirectory } from "@/utils/default-project"
+import { defaultProjectDirectory, defaultProjectFolders } from "@/utils/default-project"
 import { mangoDesktopError } from "@/utils/mango-desktop"
 import { showToast } from "@/utils/toast"
 
@@ -25,4 +26,19 @@ export function useDefaultProject() {
       })
     }
   }
+}
+
+/** The folders that hold the conversations with no project, as keys to compare with a conversation's folder. */
+export function useDefaultProjectFolders() {
+  const platform = usePlatform()
+  const [folders] = createResource(async () => {
+    const [en, it] = await Promise.all([import("@/i18n/en"), import("@/i18n/it")])
+    // if the folder cannot be read, a conversation of the default folder is shown under that folder's name
+    const root = await Promise.resolve(platform.projectsFolder?.()).catch(() => undefined)
+    return defaultProjectFolders(root, [
+      en.dict["project.default.name"],
+      it.dict["project.default.name"],
+    ])
+  })
+  return () => folders() ?? []
 }

@@ -17,7 +17,7 @@ import http from "node:http";
 import net from "node:net";
 import path from "node:path";
 import { MangoCode, find } from "../client/mango-code";
-import { page, type Page } from "./cdp";
+import { page, windowPage, type Page } from "./cdp";
 import { FAKE_ENGINE_EXE, start, type Environment } from "./environment";
 
 let env: Environment;
@@ -97,7 +97,7 @@ beforeAll(async () => {
   mc = new MangoCode((await find(env.data))!);
   // a conversation of an earlier day: the app does not open it
   await mc.createSession(env.project, { title: "Fatture di ottobre" });
-  p = await page(env.cdp!, () => true, 120_000);
+  p = await windowPage(env.cdp!, env.agent, 120_000);
 }, 240_000);
 
 afterAll(() => {
@@ -299,15 +299,16 @@ test("after an update of the app that brings a new engine, it arrives by itself:
     // Models: one row brings the engine, named after it; the models that wait for it stay in their rows, with
     // «Aspetta il motore nuovo», none among those to download
     await p.evaluate(`window.dispatchEvent(new CustomEvent("mango-settings", { detail: { section: "models" } }))`);
-    await waitUntil(() => exists('[data-component="settings-models"] [data-download-row]'), "Settings › Models");
+    // the download's row comes with the state, the models' rows with the list read after it
+    await waitUntil(async () => (await exists('[data-component="settings-models"] [data-download-row]')) && (await exists('[data-model-row="second"]')), "Settings › Models");
     expect(await count("[data-download-row]")).toBe(1);
     expect(await p.evaluate(`document.querySelector('[data-download-row]').innerText`)).toContain("llama.cpp");
     for (const key of ["fake", "second"]) {
       expect(await count(`[data-model-row="${key}"]`)).toBe(1);
       expect(await p.evaluate(`document.querySelector('[data-model-row="${key}"]').innerText`)).toContain("Aspetta il motore nuovo");
     }
-    // a model on the computer that does not fit says so with its row closed
-    expect(await count('[data-model-row="huge"] [data-slot="settings-model-no-fit"]')).toBe(1);
+    // a model on the computer that does not fit says so with its row closed, once the hardware is read
+    await waitUntil(async () => (await count('[data-model-row="huge"] [data-slot="settings-model-no-fit"]')) === 1, "«huge» does not fit");
     expect(await count('[data-model-row="fake"] [data-slot="settings-model-no-fit"]')).toBe(0);
     await photo("7b-modelli-aspettano");
 

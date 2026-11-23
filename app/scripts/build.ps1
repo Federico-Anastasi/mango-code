@@ -37,14 +37,17 @@ if ($Phase -ne "Sign") {
     if ($Version) { $config.version = $Version }
     if ($InsecureUpdates) { $config.plugins = @{ updater = @{ dangerousInsecureTransportProtocol = $true } } }
 
+    # Tauri merges --config into tauri.conf.json (a file: a JSON on the PowerShell command line loses its quotes)
+    $merge = Join-Path ([IO.Path]::GetTempPath()) "mango-tauri-config.json"
     Push-Location "$app\src-tauri"
     try {
-        # Tauri merges --config into tauri.conf.json (a file: a JSON on the PowerShell command line loses its quotes)
-        $merge = Join-Path ([IO.Path]::GetTempPath()) "mango-tauri-config.json"
         $config | ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8 $merge
         cargo tauri build --config $merge -- --locked
         if ($LASTEXITCODE) { throw "cargo tauri build failed" }
-    } finally { Pop-Location }
+    } finally {
+        Pop-Location
+        Remove-Item $merge -ErrorAction SilentlyContinue
+    }
 }
 
 if ($Phase -ne "Build") {

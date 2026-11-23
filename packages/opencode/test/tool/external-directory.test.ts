@@ -114,6 +114,13 @@ describe("tool.assertExternalDirectory", () => {
           const outerTmp = yield* tmpdirScoped()
           yield* Effect.promise(() => Bun.write(path.join(outerTmp, "outside.txt"), "x"))
 
+          // A path without a drive is resolved on the drive of the process's folder: that is the drive of the file here.
+          const previous = process.cwd()
+          yield* Effect.acquireRelease(
+            Effect.sync(() => process.chdir(outerTmp)),
+            () => Effect.sync(() => process.chdir(previous)),
+          )
+
           const target = path.join(outerTmp, "outside.txt")
           const alt = target
             .replace(/^[A-Za-z]:/, "")

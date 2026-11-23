@@ -30,8 +30,8 @@ the download and the service with a pretence of the same duration (tests and pic
 
 | where | what |
 |---|---|
-| `src-tauri/` | window, startup (`lib.rs`), process supervisor, native bridge for the web UI (`bridge.rs`), Preview panel (`preview.rs`), the folders served to it as sites (`sites.rs`), "Use my Chrome" (`chrome.rs`), dictation (`dictation.rs`), the control server's routes (`control.rs`), the downloads in the background (`downloads.rs`), the user's choices about the models and the computer and taking a model off it (`model_choices.rs`), the models the agent knows, told again when they change (`agent_models.rs`), the engine of another PC (`engine_remote.rs`), "Other models" (`other_models.rs`), the Team (`team.rs`), automatic updates (`updater.rs`), zoom of the window (`zoom.rs`), problem reports (`report.rs`), tray (`tray.rs`: "Open", "Settings…", "Quit") |
-| `crates/engine` | the engine manager on 47080: starts the model the request asks for, adds to the chat requests that do not say them the style and the reasoning the user chose, loads the running model again when the user's choices change its plan, remembers the model the conversations stay on while a request marked as a side one has the engine on another, keeps the official engine's slot files (the system prompt of a new conversation, read once; the last conversation, saved before stopping: `prefix.rs`), releases and resumes the GPUs (`/engine/*`), rejects web pages; `share.rs` shares it with the user's other PCs (below, "The engine for your other PCs") and `remote.rs` is the other side, the code of another PC checked and kept ("Using the engine of another PC"). Also `fake-engine` (the tests), `mango-bench` (the speeds of the catalog models), `mango-tune` (tuning: measures a tune, keeps the log, writes the profile; the `optimize/` skill uses it), `mango-launch` (`-p "request"`: one request from a script to the running app, `docs/INTEGRATION.md`) and `off-screen` (a command on a Windows desktop nobody sees: the integration tests without their windows on the screen) |
+| `src-tauri/` | window, startup (`lib.rs`), process supervisor, native bridge for the web UI (`bridge.rs`), Preview panel (`preview.rs`), the folders served to it as sites (`sites.rs`), "Also in my Chrome" (`chrome.rs`), dictation (`dictation.rs`), the control server's routes (`control.rs`), the downloads in the background (`downloads.rs`), the user's choices about the models and the computer and taking a model off it (`model_choices.rs`), the models the agent knows, told again when they change (`agent_models.rs`), the engine of another PC (`engine_remote.rs`), "Other models" (`other_models.rs`), the Team (`team.rs`), automatic updates (`updater.rs`), zoom of the window (`zoom.rs`), problem reports (`report.rs`), tray (`tray.rs`: "Open", "Settings…", "Quit") |
+| `crates/engine` | the engine manager on 47080: starts the model the request asks for, adds to the chat requests that do not say them the style and the reasoning the user chose (and `preserve_thinking`, always), loads the running model again when the user's choices change its plan, remembers the model the conversations stay on while a request marked as a side one has the engine on another, keeps the official engine's slot files (the system prompt of a new conversation, read once; the last conversation, saved before stopping: `prefix.rs`), releases and resumes the GPUs (`/engine/*`), rejects web pages; `share.rs` shares it with the user's other PCs (below, "The engine for your other PCs") and `remote.rs` is the other side, the code of another PC checked and kept ("Using the engine of another PC"). Also `fake-engine` (the tests), `mango-bench` (the speeds of the catalog models), `mango-tune` (tuning: measures a tune, keeps the log, writes the profile; the `optimize/` skill uses it), `mango-launch` (`-p "request"`: one request from a script to the running app, `docs/INTEGRATION.md`) and `off-screen` (a command on a Windows desktop nobody sees: the integration tests without their windows on the screen) |
 | `crates/images` | the image manager: one picture at a time, drawn by a server of the image engine (`sd-server`, stable-diffusion.cpp) that stays on between the pictures of a conversation about images and is started and stopped for a single picture; it takes the card from the engine manager while it draws (a model that writes there is put aside and comes back), tells how far the picture is step by step with a small preview, and stops a picture on request. `jobs.rs` gives each picture a number to follow it by; `routes.rs` is the routes under `/control/image` on the engine manager's port (`docs/INTEGRATION.md`, "Pictures") |
 | `crates/mango-common` | paths (`Paths::discover`), data folder, service file, `Build` (the build of an engine: `cpu`, `vulkan`, `cuda-12`, `cuda-13`, and `cuda-12-gtx16` of our forks for the GTX 16 family), the app's language (`i18n`); `network` (the addresses of the home network and of Tailscale, for the phone and for the shared engine) and the key helpers (`random_hex`, `equal_ct`); `download`: download of engines (`mango-engines.json`: llama.cpp, our forks, and `sd` for the models that make images) and models (`mango-models.json`) with resume and sha256, plus Hugging Face (`download/hugging_face.rs`: search, links, GGUF files with hash); `credentials`: the keys in the Windows Credential Manager |
 | `crates/engine-cfg` | the PC's hardware (`hardware.rs`: GPUs of any vendor, CPU, RAM, build to use), the optimized profile if it applies (`profiles.rs`, `launcher/profiles/`) or the general plan with the official llama.cpp (`general.rs`), the recommended models (`recommended`), the split of layers across GPUs (`split.rs`), the plan of a model that makes images (`image.rs`: the image engine, the model's files, the card it draws on) |
@@ -76,14 +76,14 @@ of the engine, the downloads, the sizes and the removal find the file there; rem
 it again puts it there. A GGUF chosen on the computer that is the very file of a catalog model (same name, size and hash) is not
 added to the user's list: the model keeps its settings and runs from that file, which is never downloaded or deleted.
 
-**In the settings** (`packages/app/src/components/settings-page/models-folder.tsx`): the card «Il resto» of Settings › Computer
-has the row «Cartella dei modelli» (the folder, how much the models take and on which disk, «Cambia…»). The Windows folder picker
+**In the settings** (`packages/app/src/components/settings-page/models-folder.tsx`): the card «The rest» of Settings › Computer
+has the row «Models folder» (the folder, how much the models take and on which disk, «Change…»). The Windows folder picker
 opens, then the row asks what the preview says (size, free space, same disk or not, the warning for a network or removable
-drive, what stops, that the app starts again) with «Annulla» and «Sposta»; a destination with files of its own offers «Usa questa
-cartella» instead; one that cannot be used says why. While it moves the row shows the bar, the bytes and «Annulla» (not once the old
+drive, what stops, that the app starts again) with «Cancel» and «Move»; a destination with files of its own offers «Use this
+folder» instead; one that cannot be used says why. While it moves the row shows the bar, the bytes and «Cancel» (not once the old
 files are being removed); a move that fails, is cancelled or waits for the app to start again is told in the row. In a model's
-detail in Settings › Models, «Sposta questo modello…» does the same for that model's files (the app goes on), the row says where
-its files are when they are not in the models folder (`placed_in` of `/mango/models`), and «Riporta nella cartella dei modelli»
+detail in Settings › Models, «Move this model…» does the same for that model's files (the app goes on), the row says where
+its files are when they are not in the models folder (`placed_in` of `/mango/models`), and «Put back in the models folder»
 puts them back. Models whose files the user chose, or that the user added, do not have it.
 
 ## Language
@@ -152,8 +152,8 @@ updated (a new version of it came with the app), the app waits for it as long as
 queued or running, and loads the default as soon as the engine is on the disk (not when the files of the download that
 brought it end), also if a message to the agent had made its start fail meanwhile;
 if the download fails, is paused or cancelled, or none was queued, it loads another model that is ready (never one being
-taken off the computer). Under each name the menu says where the model runs and with how much context («2 schede ·
-128K», «Processore · 128K»; a model of another PC has its PC in its name): the app gives the facts from its control
+taken off the computer). Under each name the menu says where the model runs and with how much context («2 cards ·
+128K», «Processor · 128K»; a model of another PC has its PC in its name): the app gives the facts from its control
 server (`/control/models`, `/control/state`), which the web UI reads through the agent's `GET /mango/models` and
 `GET /mango/state` (the agent forwards them to `MANGO_CONTROL_URL`). A model marked `on_request` is never preselected nor
 called the fastest. A model marked `fallback` in the catalog (Qwen3.5-2B, for 4 GB cards) is proposed, and called the
@@ -230,8 +230,11 @@ the sentence that says so.
 **A start that fails** (the model does not load) is `failed` in the control server's state, with the sentence and, when there is
 one, a model on the disk that fits now (`proposal`, `engine_cfg::after_failure`, read once for each failure in `control.rs`): the
 default if it fits, otherwise the first in the catalog. If the model fits this computer but another program holds the memory of its
-card (read with NVML while no model of Mango Code is on the cards), a sentence of its own (`taken`) names the card and how much it
-holds.
+card (read while no model of Mango Code is on the cards: NVML for the NVIDIA cards, Windows' counters of the memory dedicated to
+each graphics adapter for every other brand), a sentence of its own (`taken`) names the card and how much it holds. A model that
+goes on the cards starts even when the memory of one of them cannot be read: nothing says that another program holds it, so
+it is not held back, and the state of the running model (`ready`) carries one line, `notice` (`engine::PublicState::notice`), that
+says nobody looked: «I can't read the memory of the cards (…): I can't tell whether another program is using it.»
 
 ## Other models
 
@@ -255,10 +258,20 @@ tensors name) isn't refused: what is missing takes the most a layer can ask (K a
 say, or twice the model's width), the context is the smallest the agent works with (`split::MIN_CTX`),
 `memory.estimated` keeps what was missing (and `startup.log` says it when the model is added), and the analysis and
 the verdict say `estimated`.
-The warnings come from the conversation format inside the GGUF (`tokenizer.chat_template`), tried with a
-conversation that has the tool list, a call with its result and a system message in the middle: if the
-template rejects it (`raise_exception`), ignores the tools or drops that message, the warning says so under the model. A template the tester cannot run gives "could not check", never a
-verdict. "Add" writes the entry in `<data>\user-models.json` (`mango_common::catalog::add_user`) and the
+The warnings come from the conversation format inside the GGUF (`tokenizer.chat_template`), tried with the requests the
+agent really sends (`engine-cfg/tests/requests`: the first request, the one after a tool has been called, the one that
+brings the reasoning back): if the template rejects one of them (`raise_exception`), ignores the tools, the calls, their
+parameters or their results, the warning says which moment of the conversation breaks. The arguments of the calls go to
+the template as the agent sends them (a string) and, if it cannot take that, as objects, as the engine gives them to the
+templates that need it. A template the tester cannot run gives "could not check", never a verdict. A model that holds
+fewer tokens of context than `split::MIN_CTX` gets a warning too.
+What the catalog writes by hand for its models, the entry of a model added reads from the file: `active_permille` of a MoE
+(the rest of the model plus `expert_used_count` of `expert_count` of the expert tensors, `gguf::active_permille`), which
+the speed band on the processor uses. What the reasoning offers (a switch, levels, nothing) is read from the template of
+the GGUF on the disk, for a model of the user's as for the catalog's (`reasoning.rs`): `enable_thinking` gives off and on,
+`reasoning_effort` gives low, medium and high. A model whose template is the Qwen3.5 original (by its SHA-256) gets the
+entry `chat_template: qwen3.5-mango.jinja`, the same template with one line changed so that the reasoning of the past
+turns stays in the history. "Add" writes the entry in `<data>\user-models.json` (`mango_common::catalog::add_user`) and the
 page comes back with the new model already ticked; from there the download is the usual one (`install_model`,
 with resume and sha256 from Hugging Face, at the revision read). A file on the computer stays where it is: the entry remembers its
 path. "Remove from the list" removes the entry, not the files.
@@ -555,7 +568,7 @@ model wrote the Unix way (`/home/user/site/index.html`) names the file in the pr
 reloads the page by itself, once after the last of a series (`preview-panel.tsx`; the rule in
 `packages/app/src/utils/preview-reload.ts`): for a `file://` page, a file in its folder or below it; for a page of a server on this computer
 (`localhost`, `127.x`, `::1`, so also the sites of `sites.rs`), a file of the web (html, css, scripts, json, pictures). The
-agent says which files: its `write`, `edit` and `apply_patch` tools at once (`file.watcher.updated`), and what a command of
+agent says which files: its `write` and `edit` tools at once (`file.watcher.updated`), and what a command of
 its shell changed in the project at the end of the step (the step's `patch` part). A file changed by another program, or by
 a command outside the project, does not reload it: "Reload" does.
 
@@ -621,8 +634,8 @@ a running exe: rename the old one, copy the new one, and what is already open st
 
 What it brings compared to opencode:
 
-- **Four model providers only**: the agent carries the local engine (`mango`), OpenAI-compatible endpoints, Anthropic and
-  OpenRouter, with no subscription logins and no provider-specific plugin or loader. The app enables the local engine,
+- **Two model providers only**: the agent carries the local engine (`mango`) and OpenRouter, both through the
+  OpenAI-compatible client, with no subscription logins and no provider-specific plugin or loader. The app enables the local engine,
   and OpenRouter when the Team has a key (`enabled_providers` in the configuration it writes).
 - **Embedded, offline web UI**: the server never forwards it from `app.opencode.ai`; Mango Code brand, light or dark as Windows is until the user picks one,
   the colours of `suite/tokens.css`; `?project=<folder>` opens that folder as a project.
@@ -630,7 +643,7 @@ What it brings compared to opencode:
   only from the same server's web UI or from the app. CORS is not enough: a "simple" request starts from any
   page, and the agent has the shell.
 - **Folder of the `x-opencode-directory` header decoded** on all routes (`workspace-routing.ts`).
-- **In the interface**: Preview panel (the agent's browser next to the chat), "Use my Chrome", live dictation
+- **In the interface**: Preview panel (the agent's browser next to the chat), "Also in my Chrome", live dictation
   (`/mango/voice/*`), progress of the prompt read and prefill and decode speed per reply (from the engine's
   `timings`), documents and attachments read as text, titles from the user's words, history with
   "Archived", only the product's commands (`OPENCODE_DISABLE_BUILTIN_COMMANDS`).
@@ -641,7 +654,7 @@ What it brings compared to opencode:
   `GET`/`PUT /mango/settings` and the settings' Agent section (`settings-page/agent.tsx`); the `PUT` passes only from the page.
 - **Rules per path**: the `tool.execute.after` hook also receives `messageID` and the turn's history; the plugin
   `mango-project` brings in one with `paths:` once per conversation.
-- **Shorter descriptions of the base tools** (13,696 → 7,096 characters), **the brand** (`logo.tsx`, favicon).
+- **Shorter descriptions of the base tools**, **the brand** (`logo.tsx`, favicon).
 - **The model, the models and the computer** (`shared/mango-control.ts`): `GET /mango/state`, `/mango/models`,
   `/mango/computer`, `POST /mango/model/use`, `/mango/model/retry` go to the app's control server (`MANGO_CONTROL_URL`,
   always on this PC) and return its status and body; `503` if it does not answer within 10 s.
@@ -674,6 +687,32 @@ staging installs the plugin packages from; without it `npm install` there goes u
 `bun test integration` from the root does not start: opencode's `bunfig.toml` points the tests to a folder that does not exist,
 to prevent running them from the root. `--cwd integration` runs them from inside.
 
+The screenshots some integration tests take are kept in the folder of the environment they start, which goes away with it;
+`MANGO_TEST_SCREENSHOTS=<folder>` keeps them there to be looked at.
+
+### The agent's requests and the chat templates
+
+Whether a model accepts what the agent sends depends on its chat template, so the tests use the real request and real templates:
+
+- `integration/tests/capture-requests.test.ts` runs six scenarios (first turn, a tool's result, a long run with the
+  reminders, after a summary, an image, earlier reasoning) and compares the body each sends to `/v1/chat/completions` with
+  the fixture in `app/crates/engine-cfg/tests/requests/`. `UPDATE_FIXTURES=1` writes them again, after a change of the
+  request that is meant.
+- `cargo test -p engine-cfg --test templates_render` renders every fixture with the original chat templates of many model
+  families (`app/crates/engine-cfg/tests/templates/`, with `templates.json`: the repo and revision each text comes from, its
+  license, and what the template legitimately refuses or leaves out). A template that rejects a request, or silently loses
+  a message, a tool, a call or a result, fails the test.
+- `cargo test -p engine-cfg template_texts -- --ignored` checks that the committed texts are the ones in the GGUF headers
+  of their repos (only the headers are read); with `UPDATE_TEMPLATES=1` it follows the repos to their latest revision and
+  rewrites them.
+- `cargo test -p engine-cfg --test templates_render -- --ignored the_engine` asks a real `llama-server` which requests each
+  template accepts and checks that the test's renderer agrees. It needs the processor build of the engine and any tiny GGUF
+  (`MANGO_TEST_LLAMA_SERVER`, `MANGO_TEST_TINY_GGUF`); it never uses a graphics card.
+- The fake engine refuses like the strictest of those templates when it starts with `FAKE_ENGINE_STRICT=1` (the `strict`
+  option of `start` in `integration/tests/environment.ts`): more than one system message or one that is not first, turns that
+  do not alternate, a result without its call. The tests that look at what the model receives start it that way, and
+  `systemMessages` (`integration/tests/requests.ts`) checks that a request has a single system message, first.
+
 The staging takes the files named in `prepare-installer.mjs`, the folders only with the files tracked by git, the node
 packages that are really needed and `<opencode>\web\mango-code.exe`. It rejects secrets, generated configs, logs, weights, engines and
 NVIDIA libraries: the installer is a base one, the engines are downloaded at first run. Development from source does not change
@@ -692,6 +731,17 @@ Uninstalling asks whether to free the space: if yes, it deletes `models\` (dicta
 question says so and where they are, for whoever wants to delete them by hand. A models folder chosen in Settings, or a
 model put in a folder of its own, is outside the data folder and is not deleted. `windows/hooks.test.mjs` runs the
 deletion on a copy (`node --test app/src-tauri/windows/hooks.test.mjs`, needs the `makensis` that `tauri build` downloads).
+
+### Tests on GitHub
+
+`.github/workflows/prove.yml` holds every test that needs neither a graphics card nor the network, in parallel jobs on
+a Windows runner: `cargo test --workspace`, the release scripts' tests, the document tools' tests, the typecheck of the
+whole monorepo, the tests of the agent (`packages/opencode`) and of the packages it ships (`packages/core`,
+`packages/app`, `packages/ui`, `packages/session-ui`, `packages/llm`, `packages/codemode`, `packages/client`,
+`packages/http-recorder`, `packages/effect-drizzle-sqlite`), each with its own `test` script from its folder.
+`release.yml` calls it before anything is built, so a failing test stops a release before the key is read. It also runs
+on its own (Actions, "prove", Run workflow), on any branch and without a tag, to see the result before a tag is pushed.
+Not in it: the engines' own tests (they need the models), the end-to-end tests of `integration/` (on the hosted runner the app's window shows no page to the debugger) and the packages that are not part of the product.
 
 ## Looking and measuring
 
@@ -753,11 +803,10 @@ local build carries the PC's paths inside its binaries):
    `release-notes/v<version>.md` with a `**Changed since …**` list: it is the text of `latest.json`'s notes.
    `node app/scripts/check-version.mjs` checks all of this; the workflow runs it with `--tag`, so the tag must be
    `v` + the version;
-2. push the tag `v<version>`: the workflow waits for the maintainer's approval on the `release` environment, which
-   holds the signing key (`TAURI_SIGNING_PRIVATE_KEY`, `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`);
-3. it runs the tests that need neither a graphics card nor the network (`cargo test --workspace`, the release
-   scripts' tests, the list of Rust crates against `Cargo.lock`, the document tools' tests), builds the agent and
-   the installer with
+2. push the tag `v<version>`: the workflow runs the tests first (`.github/workflows/prove.yml`, see "Tests on GitHub"
+   above) and only when they pass waits for the maintainer's approval on the `release` environment, which holds the
+   signing key (`TAURI_SIGNING_PRIVATE_KEY`, `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`);
+3. with the key out of reach it builds the agent and the installer with
    `scripts\build.ps1 -Phase Build` (no key in the environment), signs it with `-Phase Sign` (the only step that reads
    the key), checks the signature with `scripts\verify-signature.mjs`, writes `latest.json` with
    `scripts\update-manifest.mjs`, creates the release as a draft with the installer, its `.sig`, `latest.json` and the

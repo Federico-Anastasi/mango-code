@@ -33,8 +33,8 @@ it.instance("subagent permissions take precedence over parent agent restrictions
 
     expect(planAgent).toBeDefined()
     expect(generalAgent).toBeDefined()
-    // Sanity: the plan agent itself blocks edit. (Note: `write` and
-    // `apply_patch` route through the `edit` permission at the runtime
+    // Sanity: the plan agent itself blocks edit. (Note: `write`
+    // routes through the `edit` permission at the runtime
     // tool layer — see Permission.disabled / EDIT_TOOLS.)
     expect(Permission.evaluate("edit", "/some/file.ts", planAgent!.permission).action).toBe("deny")
 
@@ -50,7 +50,7 @@ it.instance("subagent permissions take precedence over parent agent restrictions
     const effective = Permission.merge(generalAgent!.permission, subagentSessionPermission)
 
     expect(Permission.evaluate("edit", "/some/file.ts", effective).action).not.toBe("deny")
-    expect(Permission.disabled(["edit", "write", "apply_patch"], effective)).toEqual(new Set())
+    expect(Permission.disabled(["edit", "write"], effective)).toEqual(new Set())
   }),
 )
 
@@ -88,7 +88,7 @@ it.instance(
 
       expect(Permission.evaluate("edit", "/some/file.ts", planAgent!.permission).action).toBe("deny")
       expect(Permission.evaluate("edit", "/some/file.ts", effective).action).toBe("allow")
-      expect(Permission.disabled(["edit", "write", "apply_patch"], effective)).toEqual(new Set())
+      expect(Permission.disabled(["edit", "write"], effective)).toEqual(new Set())
     }),
   {
     config: {
@@ -134,7 +134,7 @@ it.effect("subagent self permissions are preserved", () =>
     expect(Permission.evaluate("bash", "git status", effective).action).toBe("allow")
     expect(Permission.evaluate("task", "worker", effective).action).toBe("allow")
     expect(Permission.evaluate("task", "other", effective).action).toBe("deny")
-    expect(Permission.disabled(["edit", "write", "apply_patch"], effective)).toEqual(new Set())
+    expect(Permission.disabled(["edit", "write"], effective)).toEqual(new Set())
   }),
 )
 

@@ -779,7 +779,7 @@ describe("tool.shell permissions", () => {
                 expect(
                   yield* fail(
                     {
-                      command: 'Get-Content "C:../outside.txt"',
+                      command: `Get-Content "${path.parse(tmp).root.slice(0, 2)}../outside.txt"`,
                     },
                     capture(requests, err),
                   ),

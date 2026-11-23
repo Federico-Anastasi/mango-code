@@ -1,4 +1,4 @@
-// "Use my Chrome": with the choice on and Chrome's remote debugging active, a `new_page` that asks for it (`userChrome: true`)
+// "Also in my Chrome": with the choice on and Chrome's remote debugging active, a `new_page` that asks for it (`userChrome: true`)
 // opens a new tab in that Chrome and not in the panel, through the whole chain: app, agent, tool definition, browser server.
 // In place of the user's Chrome, a windowless Chrome with a temporary profile and its `DevToolsActivePort` in a fake
 // LOCALAPPDATA. Without the request every page goes to the panel, and the tabs the user has are never taken over:
@@ -60,7 +60,7 @@ afterAll(() => {
   }
 });
 
-test("with \"Use my Chrome\" the agent opens a page in the user's Chrome when it asks for it", async () => {
+test("with \"Also in my Chrome\" the agent opens a page in the user's Chrome when it asks for it", async () => {
   const id = await mc.createSession(env.project);
   const steps = [];
   for await (const p of mc.turn(id, env.project, "Open the page", { model: "fake" })) steps.push(p);

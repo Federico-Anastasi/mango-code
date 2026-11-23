@@ -22,7 +22,6 @@ import { EffectPromise } from "@/effect/promise"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import { isRecord } from "@/util/record"
 import { optional } from "@opencode-ai/core/schema"
-import { ProviderTransform } from "./transform"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { ModelV2 } from "@opencode-ai/core/model"
 import { ModelStatus } from "./model-status"
@@ -129,17 +128,10 @@ type BundledSDK = {
 // mango-code: only these providers' libraries are built into the agent; any other package named in a configuration is
 // installed on demand.
 const BUNDLED_PROVIDERS: Record<string, () => Promise<(opts: any) => BundledSDK>> = {
-  "@ai-sdk/anthropic": () => import("@ai-sdk/anthropic").then((m) => m.createAnthropic),
   "@ai-sdk/openai-compatible": () => import("@ai-sdk/openai-compatible").then((m) => m.createOpenAICompatible),
-  "@openrouter/ai-sdk-provider": () => import("@openrouter/ai-sdk-provider").then((m) => m.createOpenRouter),
 }
 
 const PROVIDER_OPTIONS: Record<string, Record<string, any>> = {
-  anthropic: {
-    headers: {
-      "anthropic-beta": "interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14",
-    },
-  },
   openrouter: {
     headers: {
       "HTTP-Referer": "https://opencode.ai/",
@@ -404,7 +396,7 @@ function cost(c: ModelsDev.Model["cost"]): Model["cost"] {
 }
 
 function fromModelsDevModel(provider: ModelsDev.Provider, model: ModelsDev.Model): Model {
-  const base: Model = {
+  return {
     id: ModelV2.ID.make(model.id),
     providerID: ProviderV2.ID.make(provider.id),
     name: model.name,
@@ -446,13 +438,6 @@ function fromModelsDevModel(provider: ModelsDev.Provider, model: ModelsDev.Model
     },
     release_date: model.release_date ?? "",
     variants: {},
-  }
-
-  const variants = ProviderTransform.reasoningVariants(model, base) ?? ProviderTransform.variants(base)
-
-  return {
-    ...base,
-    variants: mapValues(variants, (v) => v),
   }
 }
 
@@ -657,7 +642,8 @@ const layer = Layer.effect(
                 interleaved:
                   (typeof model.interleaved === "string" ? { field: model.interleaved } : model.interleaved) ??
                   existingModel?.capabilities.interleaved ??
-                  (!existingModel && apiNpm === "@ai-sdk/openai-compatible" && apiID.includes("deepseek")
+                  // The Team's DeepSeek model on OpenRouter wants its reasoning sent back on every assistant turn.
+                  (!existingModel && providerID === "openrouter" && apiID.includes("deepseek")
                     ? { field: "reasoning_content" }
                     : false),
               },
@@ -680,14 +666,7 @@ const layer = Layer.effect(
               release_date: model.release_date ?? existingModel?.release_date ?? "",
               variants: {},
             }
-            // Configured reasoning options replace the catalog variants; configured variants still apply on top.
-            const variants =
-              model.reasoning_options !== undefined
-                ? (ProviderTransform.reasoningVariants(model, parsedModel) ?? ProviderTransform.variants(parsedModel))
-                : existingModel?.api.npm === parsedModel.api.npm
-                  ? (existingModel.variants ?? ProviderTransform.variants(parsedModel))
-                  : ProviderTransform.variants(parsedModel)
-            const merged = mergeDeep(variants, model.variants ?? {})
+            const merged = mergeDeep(existingModel?.variants ?? {}, model.variants ?? {})
             parsedModel.variants = mapValues(
               pickBy(merged, (v) => !v.disabled),
               (v) => omit(v, ["disabled"]),
@@ -772,13 +751,6 @@ const layer = Layer.effect(
           for (const [modelID, model] of Object.entries(provider.models)) {
             model.api.id = model.api.id ?? model.id ?? modelID
 
-            if (
-              // These chat aliases are invalid for the special handling in the
-              // built-in providers below, but custom providers may support them.
-              (modelID === "gpt-5-chat-latest" && providerID === ProviderV2.ID.openrouter) ||
-              (providerID === ProviderV2.ID.openrouter && modelID === "openai/gpt-5-chat")
-            )
-              delete provider.models[modelID]
             if (model.status === "alpha" && !runtimeFlags.enableExperimentalModels) delete provider.models[modelID]
             if (model.status === "deprecated") delete provider.models[modelID]
             if (
@@ -786,10 +758,6 @@ const layer = Layer.effect(
               (configProvider?.whitelist && !configProvider.whitelist.includes(modelID))
             )
               delete provider.models[modelID]
-
-            if (model.variants === undefined) {
-              model.variants = mapValues(ProviderTransform.variants(model), (v) => v)
-            }
 
             const configVariants = configProvider?.models?.[modelID]?.variants
             if (configVariants && model.variants) {
@@ -1044,15 +1012,9 @@ const layer = Layer.effect(
   }),
 )
 
-const priority = ["gpt-5", "claude-sonnet-4", "big-pickle", "gemini-3-pro"]
 const smallModelFamilyPriority = ["gemini-flash", "gpt-nano", "claude-haiku"]
 export function sort<T extends { id: string }>(models: T[]) {
-  return sortBy(
-    models,
-    [(model) => priority.findIndex((filter) => model.id.includes(filter)), "desc"],
-    [(model) => (model.id.includes("latest") ? 0 : 1), "asc"],
-    [(model) => model.id, "desc"],
-  )
+  return sortBy(models, [(model) => (model.id.includes("latest") ? 0 : 1), "asc"], [(model) => model.id, "desc"])
 }
 
 export function parseModel(model: string) {

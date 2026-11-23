@@ -1,6 +1,5 @@
 import type { JsonSchema, ModelToolSchemaCompatibility } from "../../schema"
 import { isRecord } from "../../utils/record"
-import { GeminiToolSchema } from "./gemini-tool-schema"
 
 const removeNullSchemas = (value: unknown): unknown => {
   if (Array.isArray(value)) return value.map(removeNullSchemas)
@@ -63,23 +62,18 @@ const openAI = (schema: JsonSchema): JsonSchema => {
   return isRecord(normalized) ? normalized : { type: "object" }
 }
 
-const gemini = (schema: JsonSchema): JsonSchema => GeminiToolSchema.convert(schema) ?? {}
-
 const modelCompatibility = (
   schema: JsonSchema,
   compatibility: ModelToolSchemaCompatibility | undefined,
 ): JsonSchema => {
   if (compatibility === undefined) return schema
   switch (compatibility) {
-    case "gemini":
-      return gemini(schema)
     case "moonshot":
       return moonshot(schema)
   }
 }
 
 export const ToolSchemaProjection = {
-  gemini,
   modelCompatibility,
   moonshot,
   openAI,

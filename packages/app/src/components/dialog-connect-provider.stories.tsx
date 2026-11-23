@@ -60,10 +60,6 @@ export const ApiKey = {
   render: renderConnection("openrouter", [{ type: "api", label: "API key" }]),
 }
 
-export const OpenCodeZen = {
-  render: renderConnection("opencode", [{ type: "api", label: "API key" }]),
-}
-
 export const LoginMethods = {
   render: renderConnection("openai", [
     { type: "oauth", label: "ChatGPT Pro/Plus (browser)" },

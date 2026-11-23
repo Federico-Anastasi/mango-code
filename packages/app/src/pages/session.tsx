@@ -97,7 +97,6 @@ import { extractPromptFromParts } from "@/utils/prompt"
 import { readCommentMetadata } from "@/utils/comment-note"
 import { formatServerError, isLocalSessionNotFoundError, isSessionNotFoundError } from "@/utils/server-errors"
 import { legacySessionHref, requireServerKey, sessionHref } from "@/utils/session-route"
-import { useUsageExceededDialogs } from "./session/usage-exceeded-dialogs"
 import { createSessionOwnership } from "./session/session-ownership"
 import { createSessionLineage } from "./session/session-lineage"
 import { folderKey } from "@/utils/path-key"
@@ -1968,8 +1967,6 @@ export default function Page() {
     if (scrollStateFrame !== undefined) cancelAnimationFrame(scrollStateFrame)
     if (fillFrame !== undefined) cancelAnimationFrame(fillFrame)
   })
-
-  useUsageExceededDialogs()
 
   const sessionErrorFallback = (error: unknown, reset: () => void) => {
     createEffect(on(sessionKey, reset, { defer: true }))

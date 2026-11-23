@@ -2,14 +2,12 @@
 // in its name, and the conversation shows the plan's sentence at once (what happened, what to do), without the
 // retries the agent makes for transient errors. Fake engine, no GPU used.
 // `bun test --cwd integration tests/does-not-fit.test.ts`, after `cargo build -p mango-code -p engine` in app/.
-// The screenshot stays in %TEMP%\mango-does-not-fit.png.
+// The screenshot is kept in the environment's folder, or in the one `MANGO_TEST_SCREENSHOTS` names.
 
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { MangoCode, find } from "../client/mango-code";
-import { start, type Environment } from "./environment";
+import { saveScreenshot, start, type Environment } from "./environment";
 import { page, type Page } from "./cdp";
 
 // The Italian sentence of the plan.
@@ -65,7 +63,7 @@ test("chosen in the web UI, the conversation shows at once why it does not start
     text = await p.evaluate("document.body.innerText");
   }
   const r = await p.send("Page.captureScreenshot", { format: "png" });
-  fs.writeFileSync(path.join(os.tmpdir(), "mango-does-not-fit.png"), Buffer.from(r.result.data, "base64"));
+  saveScreenshot(env, "mango-does-not-fit", r.result.data);
   expect(text).toContain(`Il modello «Model huge» ${SENTENCE}`);
   expect(text).toContain("Scegli un modello più piccolo.");
   // The engine stays on the previous model, and the manager's state says why.

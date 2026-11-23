@@ -22,18 +22,21 @@ import { normalizeForSnapshot, PATH_SEP } from "../../lib/snapshot"
 //   1. The harness's `oc-cli-XXX` subdir under TMPDIR collapses to `<HOME>`.
 //      `PATH_SEP` matches `/` and `\\` so the rule works on POSIX + Windows.
 //
-//   2. yargs wraps the `[string] [default: "..."]` clause based on the
-//      pre-normalized default's character length, so different random home
-//      path widths produce different leading-whitespace counts (or even
-//      line-wraps onto a fresh line on Windows). `\s+` matches both forms.
+//   2. yargs wraps the `[string] [default: "..."]` clause by the width of the
+//      pre-normalized default, which is as long as the temporary folder: the
+//      line can break before `[string]`, after `default:` or inside the path.
+//      The breaks are taken out before the path is replaced.
 function normalize(text: string): string {
-  return normalizeForSnapshot(text, {
+  const unwrapped = text.replace(/\s+\[string\] \[default:\s*"([^"]*)"\]/g, (match, value: string) => {
+    const joined = value.replace(/\r?\n\s*/g, "")
+    return joined.includes("oc-cli-") ? ` [string] [default: "${joined}"]` : match
+  })
+  return normalizeForSnapshot(unwrapped, {
     pathReplacements: [
       // Mixed-case [A-Za-z0-9] because node's mkdtemp suffix is mixed-case
       // (the harness now uses FileSystem.makeTempDirectoryScoped under the
       // hood). A `[a-z0-9]+` regex would leave uppercase chars trailing.
       [new RegExp(`<TMPDIR>${PATH_SEP}oc-cli-[A-Za-z0-9]+`, "g"), "<HOME>"],
-      [/\s+\[string\] \[default: "<HOME>"\]/g, ' [string] [default: "<HOME>"]'],
     ],
   })
 }

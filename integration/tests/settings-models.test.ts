@@ -98,7 +98,7 @@ async function settled(model: string) {
 }
 
 beforeAll(async () => {
-  env = await start([{ text: "Eccomi." }], { window: true, context: 65536, otherModels: ["second", "third", "huge", "giant"], bytes: { huge: 10 * 2 ** 40, giant: 10 * 2 ** 40 }, files, env: { MANGO_HF_URL: base } });
+  env = await start([{ text: "Eccomi." }], { window: true, context: 65536, reasoning: ["fake"], otherModels: ["second", "third", "huge", "giant"], bytes: { huge: 10 * 2 ** 40, giant: 10 * 2 ** 40 }, files, env: { MANGO_HF_URL: base } });
   // the third model and the giant one are not on the computer: they are among the tested ones, to download
   fs.rmSync(path.join(env.modelsDir, "third.gguf"));
   fs.rmSync(path.join(env.modelsDir, "giant.gguf"));
@@ -136,7 +136,9 @@ test("the models are in three lists: on the computer, on their way, tested ones 
   expect(reason.text).toContain("non ci sta in questo computer");
   expect(reason.inside).toBe(true);
   expect(await rowText("giant")).not.toContain("Scarica");
-  // where the models are: the space they use, with the way to open the folder (not opened here)
+  // where the models are: the space they use, with the way to open the folder (not opened here); the computer's
+  // reading comes after the list
+  await waitUntil(() => exists('[data-slot="settings-models-disk"]'), "the space used by the models", 30_000);
   expect(await p.evaluate(`document.querySelector('[data-slot="settings-models-disk"]').innerText`)).toMatch(/Spazio usato dai modelli: .+ su /);
   expect(await exists('[data-action="settings-models-folder"]')).toBe(true);
 }, 60_000);
@@ -170,16 +172,18 @@ test("where a model runs, how much it remembers and whether it reasons are its o
   await waitUntil(() => (saved().models?.fake?.context ?? null) === null, "the most that fits saved");
   await settled("fake");
 
-  // the reasoning: the fake model reasons, as most of the catalog
-  const reasoning = `${row("fake")} [data-action="settings-model-reasoning"] input`;
-  expect(await p.evaluate(`document.querySelector(${JSON.stringify(reasoning)}).checked`)).toBe(true);
-  await p.evaluate(`document.querySelector(${JSON.stringify(reasoning)}).click()`);
-  await waitUntil(() => saved().models?.fake?.reasoning === false, "reasoning off saved");
-  await waitUntil(() => p.evaluate(`document.querySelector(${JSON.stringify(reasoning)}).checked === false`) as Promise<boolean>, "the page shows it");
+  // the reasoning: the fake model's template has the switch, and nothing chosen is its last level, on
+  const level = (name: string) => `${row("fake")} [data-action="settings-model-reasoning"] button[data-slot="segmented-control-v2-item"]:nth-child(${name === "off" ? 1 : 2})`;
+  const pressed = (name: string) => p.evaluate(`document.querySelector(${JSON.stringify(level(name))}).getAttribute("aria-pressed") === "true"`) as Promise<boolean>;
+  expect(await p.evaluate(`[...document.querySelectorAll(${JSON.stringify(`${row("fake")} [data-action="settings-model-reasoning"] button`)})].map((b) => b.textContent.trim())`)).toEqual(["Spento", "Acceso"]);
+  expect(await pressed("on")).toBe(true);
+  await mouseClick(level("off"));
+  await waitUntil(() => saved().models?.fake?.reasoning === "off", "reasoning off saved");
+  await waitUntil(() => pressed("off"), "the page shows it");
   // the row's controls are off while its command ends (the view is read again first): a click then would be lost
-  await waitUntil(() => p.evaluate(`document.querySelector(${JSON.stringify(reasoning)}).disabled === false`) as Promise<boolean>, "the switch ready again");
-  await p.evaluate(`document.querySelector(${JSON.stringify(reasoning)}).click()`);
-  await waitUntil(() => (saved().models?.fake?.reasoning ?? null) !== false, "reasoning back");
+  await waitUntil(() => p.evaluate(`document.querySelector(${JSON.stringify(level("on"))}).disabled === false`) as Promise<boolean>, "the control ready again");
+  await mouseClick(level("on"));
+  await waitUntil(() => saved().models?.fake?.reasoning === "on", "reasoning on saved");
 }, 240_000);
 
 test("«Usa come predefinito» makes another model the default and, with no conversation answering, loads it at once", async () => {

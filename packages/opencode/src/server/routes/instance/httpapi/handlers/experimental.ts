@@ -91,12 +91,8 @@ export const experimentalHandlers = HttpApiBuilder.group(InstanceHttpApi, "exper
       return true
     })
 
-    const tool = Effect.fn("ExperimentalHttpApi.tool")(function* (ctx: { query: typeof ToolListQuery.Type }) {
-      const list = yield* registry.tools({
-        providerID: ctx.query.provider,
-        modelID: ctx.query.model,
-        agent: yield* agents.defaultInfo(),
-      })
+    const tool = Effect.fn("ExperimentalHttpApi.tool")(function* () {
+      const list = yield* registry.tools({ agent: yield* agents.defaultInfo() })
       return list.map((item) => ({
         id: item.id,
         description: item.description,

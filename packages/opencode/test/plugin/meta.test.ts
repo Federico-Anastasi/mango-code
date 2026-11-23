@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import fs from "fs/promises"
+import os from "os"
 import path from "path"
 import { pathToFileURL } from "url"
 
@@ -111,7 +112,9 @@ describe("plugin.meta", () => {
     process.env.OPENCODE_PLUGIN_META_FILE = path.join(tmp.path, "state", "plugin-meta.json")
     const file = process.env.OPENCODE_PLUGIN_META_FILE!
     const spec = pathToFileURL(tmp.extra.file).href
-    const n = 12
+    // Every process starts a whole Bun runtime: more of them than the processors can run together only slows the
+    // test down, the contention on the file is the same.
+    const n = Math.min(12, Math.max(4, os.availableParallelism() * 2))
 
     const out = await Promise.all(
       Array.from({ length: n }, () =>
@@ -133,5 +136,5 @@ describe("plugin.meta", () => {
 
     const saved = await map<{ spec: string; load_count: number }>(file)
     expect(Object.values(saved).find((item) => item.spec === spec)?.load_count).toBe(n)
-  }, 20_000)
+  }, 60_000)
 })

@@ -13,9 +13,13 @@
 //!   (`prompt_tokens`, of which `prompt_tokens_details.cached_tokens` already cached) and written
 //!   (`completion_tokens`, of which `reasoning_tokens` of reasoning); a step sets them with `"token": {"prompt": N,
 //!   "completion": M, "cache": K, "reasoning": R}`, without it they are all zero;
+//!   any step may carry `"reasoning": "..."`, said before the text or the call as `reasoning_content`, like a model that thinks;
 //!   two forms of step are outside the numbering: `{"summary": "..."}` answers the requests that offer no tools
 //!   (the conversation summary, the title), `{"if": "...", "text": "..."}` those in which that text appears (usually
 //!   the summary, after it has entered the conversation);
+//! * with `FAKE_ENGINE_STRICT=1`, `POST /v1/chat/completions` and `POST /apply-template` answer 500 with a `Jinja Exception`, like
+//!   llama-server with the strictest chat template of real models (see `strict_rejection`), to every request such a template would
+//!   refuse; without it the engine accepts any conversation;
 //! * `POST /test/crash` → the process exits with code 3 (an engine crash);
 //! * `POST /tokenize` `{"content": "..."}` → `{"tokens": [...]}` with one token per word (separated by spaces), its
 //!   number a hash of the word: the fixed rule used to test token-based measurements;
@@ -74,6 +78,7 @@ fn main() {
         .ok()
         .map(|f| serde_json::from_str(&std::fs::read_to_string(&f).expect("script")).expect("script JSON"));
     let _ = std::fs::write("llama.log", "");
+    let strict = std::env::var("FAKE_ENGINE_STRICT").is_ok_and(|v| v == "1");
     let hybrid = std::env::var("FAKE_ENGINE_HYBRID").is_ok_and(|v| v == "1");
     let read_ms: f64 = std::env::var("FAKE_ENGINE_READ_MS").ok().and_then(|v| v.parse().ok()).unwrap_or(0.0);
     let memory_file = value("--cache-disk").map(|d| std::path::Path::new(&d).join("fake.json"));
@@ -120,9 +125,10 @@ fn main() {
                     let _ = req.respond(Response::from_string(json!({ "tokens": tokens }).to_string()).with_header(json_h));
                 }
                 (Method::Post, "/apply-template") => {
-                    let r = match v["messages"].as_array() {
-                        Some(_) => Response::from_string(json!({ "prompt": render(&v, true) }).to_string()).with_header(json_h),
-                        None => Response::from_string(r#"{"error":{"message":"messages is required"}}"#).with_status_code(400).with_header(json_h),
+                    let r = match (v["messages"].as_array(), strict.then(|| strict_rejection(&v)).flatten()) {
+                        (Some(_), Some(message)) => jinja_exception(message).with_header(json_h),
+                        (Some(_), None) => Response::from_string(json!({ "prompt": render(&v, true) }).to_string()).with_header(json_h),
+                        (None, _) => Response::from_string(r#"{"error":{"message":"messages is required"}}"#).with_status_code(400).with_header(json_h),
                     };
                     let _ = req.respond(r);
                 }
@@ -191,6 +197,10 @@ fn main() {
                     let _ = req.respond(Response::from_string(r.to_string()).with_header(json_h));
                 }
                 (Method::Post, "/v1/chat/completions") => {
+                    if let Some(message) = strict.then(|| strict_rejection(&v)).flatten() {
+                        let _ = req.respond(jinja_exception(message).with_header(json_h));
+                        return;
+                    }
                     let prompt = tokenize(&render(&v, true));
                     let reread = read_prompt(&mut memory.lock().unwrap(), &prompt, hybrid);
                     std::thread::sleep(Duration::from_secs_f64(reread as f64 * read_ms / 1000.0));
@@ -256,6 +266,49 @@ fn main() {
             }
         });
     }
+}
+
+/// What the strictest chat templates of real models refuse in a conversation, as llama-server reports it: a system message
+/// that is not the first (Qwen 3.5 and 3.6), a conversation without a user message and a role they don't know (Qwen 3.5),
+/// user and assistant turns that don't alternate once tool calls and results are left out (Mistral Nemo), a result with no
+/// call before it and an assistant message that has both text and reasoning next to its calls (gpt-oss).
+fn strict_rejection(request: &Value) -> Option<&'static str> {
+    let messages = request["messages"].as_array()?;
+    let role = |m: &Value| m["role"].as_str().unwrap_or_default().to_string();
+    let has_calls = |m: &Value| m["tool_calls"].as_array().is_some_and(|c| !c.is_empty());
+    if messages.iter().skip(1).any(|m| role(m) == "system") {
+        return Some("System message must be at the beginning.");
+    }
+    if messages.iter().any(|m| !matches!(role(m).as_str(), "system" | "user" | "assistant" | "tool")) {
+        return Some("Unexpected message role.");
+    }
+    if !messages.iter().any(|m| role(m) == "user") {
+        return Some("No user query found in messages.");
+    }
+    let turns = messages.iter().filter(|m| role(m) != "system" && role(m) != "tool" && !has_calls(m));
+    if turns.enumerate().any(|(i, m)| (role(m) == "user") != (i % 2 == 0)) {
+        return Some("After the optional system message, conversation roles must alternate user/assistant/user/assistant/...");
+    }
+    let mut calls_before = false;
+    for m in messages {
+        match role(m).as_str() {
+            "tool" if !calls_before => return Some("Message has tool role, but there was no previous assistant message with a tool call!"),
+            "assistant" if has_calls(m) => {
+                calls_before = true;
+                if !text_of(&m["content"]).is_empty() && m["reasoning_content"].as_str().is_some_and(|r| !r.is_empty()) {
+                    return Some("Cannot pass both content and thinking in an assistant message with tool calls!");
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// The reply of llama-server to a request whose template raised an exception.
+fn jinja_exception(message: &str) -> Response<std::io::Cursor<Vec<u8>>> {
+    let body = json!({ "error": { "code": 500, "message": format!("Error: Jinja Exception: {message}"), "type": "server_error" } });
+    Response::from_string(body.to_string()).with_status_code(500)
 }
 
 /// The tokens in the slot, and how many of them are in the on-disk memory file.
@@ -334,15 +387,15 @@ fn write_line(file: &str, line: &Value) {
 /// The streaming events (OpenAI format) of a script step.
 fn events(step: &Value) -> Vec<Value> {
     let delta = |d: Value, finish: Option<&str>| json!({ "choices": [{ "index": 0, "delta": d, "finish_reason": finish }] });
+    let mut v: Vec<Value> = step["reasoning"].as_str().into_iter().flat_map(|r| r.split_inclusive(' ')).map(|p| delta(json!({ "reasoning_content": p }), None)).collect();
     if let Some(name) = step["tool"].as_str() {
         let arguments = step["arguments"].to_string();
-        return vec![
-            delta(json!({ "tool_calls": [{ "index": 0, "id": "call_fake", "type": "function", "function": { "name": name, "arguments": arguments } }] }), None),
-            delta(json!({}), Some("tool_calls")),
-        ];
+        v.push(delta(json!({ "tool_calls": [{ "index": 0, "id": "call_fake", "type": "function", "function": { "name": name, "arguments": arguments } }] }), None));
+        v.push(delta(json!({}), Some("tool_calls")));
+        return v;
     }
     let text = step["text"].as_str().unwrap_or("");
-    let mut v: Vec<Value> = text.split_inclusive(' ').map(|p| delta(json!({ "content": p }), None)).collect();
+    v.extend(text.split_inclusive(' ').map(|p| delta(json!({ "content": p }), None)));
     v.push(delta(json!({}), Some(step["finish"].as_str().unwrap_or("stop"))));
     v
 }
@@ -363,10 +416,58 @@ fn timings(request: &Value, decode_tok_s: f64) -> Value {
 }
 
 fn whole_reply(step: &Value, usage: Value) -> Value {
-    let message = match step["tool"].as_str() {
+    let mut message = match step["tool"].as_str() {
         Some(name) => json!({ "role": "assistant", "content": null, "tool_calls": [{ "id": "call_fake", "type": "function", "function": { "name": name, "arguments": step["arguments"].to_string() } }] }),
         None => json!({ "role": "assistant", "content": step["text"] }),
     };
+    if step["reasoning"].is_string() {
+        message["reasoning_content"] = step["reasoning"].clone();
+    }
     let finish = if step["tool"].is_string() { "tool_calls" } else { step["finish"].as_str().unwrap_or("stop") };
     json!({ "choices": [{ "index": 0, "message": message, "finish_reason": finish }], "usage": usage })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn calls() -> Value {
+        json!([{ "id": "call_1", "type": "function", "function": { "name": "read", "arguments": "{}" } }])
+    }
+
+    #[test]
+    fn a_conversation_with_tools_passes() {
+        let request = json!({ "messages": [
+            { "role": "system", "content": "Rules." },
+            { "role": "user", "content": "Read it." },
+            { "role": "assistant", "content": "", "tool_calls": calls(), "reasoning_content": "I will read it." },
+            { "role": "tool", "tool_call_id": "call_1", "content": "text" },
+            { "role": "assistant", "content": "Done." },
+            { "role": "user", "content": "And then?" },
+        ] });
+        assert_eq!(strict_rejection(&request), None);
+    }
+
+    #[test]
+    fn what_the_strictest_templates_refuse_is_refused() {
+        let user = json!({ "role": "user", "content": "Hi." });
+        let system = json!({ "role": "system", "content": "Rules." });
+        let assistant = json!({ "role": "assistant", "content": "Hello." });
+        let result = json!({ "role": "tool", "tool_call_id": "call_1", "content": "text" });
+        let developer = json!({ "role": "developer", "content": "x" });
+        let mixed = json!({ "role": "assistant", "content": "Reading.", "reasoning_content": "Thinking.", "tool_calls": calls() });
+        let cases = [
+            (vec![&system, &system, &user], "System message must be at the beginning."),
+            (vec![&system, &user, &system], "System message must be at the beginning."),
+            (vec![&system], "No user query found in messages."),
+            (vec![&developer, &user], "Unexpected message role."),
+            (vec![&system, &user, &user], "After the optional system message, conversation roles must alternate user/assistant/user/assistant/..."),
+            (vec![&system, &assistant, &user], "After the optional system message, conversation roles must alternate user/assistant/user/assistant/..."),
+            (vec![&user, &result], "Message has tool role, but there was no previous assistant message with a tool call!"),
+            (vec![&user, &mixed, &result], "Cannot pass both content and thinking in an assistant message with tool calls!"),
+        ];
+        for (messages, said) in cases {
+            assert_eq!(strict_rejection(&json!({ "messages": messages })), Some(said));
+        }
+    }
 }

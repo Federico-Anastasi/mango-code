@@ -167,7 +167,7 @@ class Server {
     servers.push(this);
   }
 
-  /** The user flips "Use my Chrome" in the app. */
+  /** The user flips "Also in my Chrome" in the app. */
   choose(myChrome: boolean) {
     fs.writeFileSync(this.choice, JSON.stringify({ myChrome }));
   }
@@ -230,7 +230,7 @@ class Server {
 
 const text = (answer: { content: { text?: string }[] }) => answer.content.map((c) => c.text ?? "").join("\n");
 
-test("with \"Use my Chrome\" on, every page the agent opens goes to the panel, sites of the internet included", async () => {
+test("with \"Also in my Chrome\" on, every page the agent opens goes to the panel, sites of the internet included", async () => {
   const server = await new Server("local", true).start();
   const file = path.join(root, "made-by-agent.html");
   fs.writeFileSync(file, "<!doctype html><title>made by the agent</title>FILE");
@@ -357,7 +357,7 @@ test("a failed connection to the user's Chrome, denied or never answered, puts t
   }
 }, 90_000);
 
-test("the user's Chrome closed while connected, or \"Use my Chrome\" turned off, sends the server back to the panel", async () => {
+test("the user's Chrome closed while connected, or \"Also in my Chrome\" turned off, sends the server back to the panel", async () => {
   // their Chrome closes: the next call says so and the one after works in the panel
   const closing = await chrome(USER_TO_CLOSE);
   const server = await new Server("closed", true, { localAppData: localAppData("closed", closing.active) }).start();
@@ -378,8 +378,8 @@ test("the user's Chrome closed while connected, or \"Use my Chrome\" turned off,
   switching.choose(false);
   const off = await switching.call("list_pages");
   expect(off.isError, text(off)).toBe(true);
-  expect(text(off)).toContain('turned off "Use my Chrome"');
-  expect(switching.log()).toContain('"Use my Chrome" turned off');
+  expect(text(off)).toContain('turned off "Also in my Chrome"');
+  expect(switching.log()).toContain('"Also in my Chrome" turned off');
   expect((await switching.call("new_page", { url: `http://myapp.test:${SITE}/switch-after` })).isError).toBeFalsy();
   expect(await titles(PANEL)).toContain("site /switch-after");
   expect(await addresses(USER)).toEqual(userBefore);

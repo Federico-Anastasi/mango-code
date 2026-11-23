@@ -9,7 +9,7 @@ import fs from "node:fs";
 import http from "node:http";
 import net from "node:net";
 import path from "node:path";
-import { page, type Page } from "./cdp";
+import { windowPage, type Page } from "./cdp";
 import { start, type Environment } from "./environment";
 
 const MIB = 1024 * 1024;
@@ -55,7 +55,7 @@ const engineStarts = () => (fs.existsSync(env.engineLog) ? fs.readFileSync(env.e
 
 beforeAll(async () => {
   env = await start([{ text: "Here I am." }], { window: true, freeModelsFolder: true, otherModels: ["second"], files, env: { MANGO_HF_URL: base } });
-  p = await page(env.cdp!, () => true, 120_000);
+  p = await windowPage(env.cdp!, env.agent, 120_000);
   await waitUntil(() => p.evaluate(`location.href === ${JSON.stringify(env.agent + "/")}`), "the window on the home");
   // The file of the second model the environment wrote is a stub of another size: the model is downloaded in full.
   fs.rmSync(path.join(env.modelsDir, "second.gguf"));

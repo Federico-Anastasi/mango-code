@@ -578,7 +578,7 @@ describe("session.message-v2.toModelMessage", () => {
       },
     ]
 
-    const result = ProviderTransform.message(await MessageV2.toModelMessages(input, anthropicModel), anthropicModel, {})
+    const result = ProviderTransform.message(await MessageV2.toModelMessages(input, anthropicModel), anthropicModel)
     expect(result).toHaveLength(3)
     expect(result[2].role).toBe("tool")
     expect(result[2].content[0]).toMatchObject({
@@ -982,6 +982,76 @@ describe("session.message-v2.toModelMessage", () => {
     expect(await MessageV2.toModelMessages(input, model)).toStrictEqual([])
   })
 
+  test("two user messages in a row become one, parts in order: an answer that failed between them", async () => {
+    const input: SessionV1.WithParts[] = [
+      { info: userInfo("m-user-1"), parts: [{ ...basePart("m-user-1", "u1"), type: "text", text: "first" }] as SessionV1.Part[] },
+      {
+        info: assistantInfo(
+          "m-assistant",
+          "m-user-1",
+          new SessionV1.APIError({ message: "boom", isRetryable: true }).toObject() as SessionV1.APIError,
+        ),
+        parts: [{ ...basePart("m-assistant", "a1"), type: "text", text: "lost" }] as SessionV1.Part[],
+      },
+      { info: userInfo("m-user-2"), parts: [{ ...basePart("m-user-2", "u2"), type: "text", text: "second" }] as SessionV1.Part[] },
+      { info: assistantInfo("m-assistant-2", "m-user-2"), parts: [] },
+      { info: userInfo("m-user-3"), parts: [{ ...basePart("m-user-3", "u3"), type: "text", text: "third" }] as SessionV1.Part[] },
+    ]
+
+    expect(await MessageV2.toModelMessages(input, model)).toStrictEqual([
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "first" },
+          { type: "text", text: "second" },
+          { type: "text", text: "third" },
+        ],
+      },
+    ])
+  })
+
+  test("the images of a tool result sent as a user message join the user message that follows", async () => {
+    const compatibleModel: Provider.Model = {
+      ...model,
+      api: { ...model.api, npm: "@ai-sdk/openai-compatible" },
+      capabilities: { ...model.capabilities, attachment: true, input: { ...model.capabilities.input, image: true } },
+    }
+    const input: SessionV1.WithParts[] = [
+      { info: userInfo("m-user-1"), parts: [{ ...basePart("m-user-1", "u1"), type: "text", text: "read it" }] as SessionV1.Part[] },
+      {
+        info: assistantInfo("m-assistant", "m-user-1"),
+        parts: [
+          {
+            ...basePart("m-assistant", "a1"),
+            type: "tool",
+            callID: "call-1",
+            tool: "read",
+            state: {
+              status: "completed",
+              input: { filePath: "/tmp/screenshot.png" },
+              output: "Image read successfully",
+              title: "Read",
+              metadata: {},
+              time: { start: 0, end: 1 },
+              attachments: [
+                { ...basePart("m-assistant", "f1"), type: "file", mime: "image/png", filename: "screenshot.png", url: "data:image/png;base64,aGVsbG8=" },
+              ],
+            },
+          },
+        ] as SessionV1.Part[],
+      },
+      { info: userInfo("m-user-2"), parts: [{ ...basePart("m-user-2", "u2"), type: "text", text: "and now?" }] as SessionV1.Part[] },
+    ]
+
+    const messages = await MessageV2.toModelMessages(input, compatibleModel)
+    expect(messages.map((message) => message.role)).toEqual(["user", "assistant", "tool", "user"])
+    expect(messages[3]?.content).toMatchObject([
+      { type: "text", text: MessageV2.SYNTHETIC_ATTACHMENT_PROMPT },
+      { type: "file", filename: "screenshot.png" },
+      { type: "text", text: "and now?" },
+    ])
+  })
+
   test("includes aborted assistant messages only when they have non-step-start/reasoning content", async () => {
     const assistantID1 = "m-assistant-1"
     const assistantID2 = "m-assistant-2"
@@ -1030,79 +1100,6 @@ describe("session.message-v2.toModelMessage", () => {
         content: [
           { type: "reasoning", text: "thinking", providerOptions: undefined },
           { type: "text", text: "partial answer" },
-        ],
-      },
-    ])
-  })
-
-  test("preserves OpenRouter reasoning details through provider transform", async () => {
-    const assistantID = "m-assistant"
-    const openrouterModel: Provider.Model = {
-      ...model,
-      id: ModelV2.ID.make("deepseek/deepseek-v4-pro"),
-      providerID: ProviderV2.ID.make("openrouter"),
-      api: {
-        id: "deepseek/deepseek-v4-pro",
-        url: "https://openrouter.ai/api/v1",
-        npm: "@openrouter/ai-sdk-provider",
-      },
-      capabilities: {
-        ...model.capabilities,
-        reasoning: true,
-        interleaved: { field: "reasoning_details" },
-      },
-    }
-    const reasoningDetails = [
-      {
-        type: "reasoning.text",
-        text: "thinking",
-        format: "unknown",
-        index: 0,
-      },
-    ]
-    const input: SessionV1.WithParts[] = [
-      {
-        info: assistantInfo(assistantID, "m-parent", undefined, {
-          providerID: openrouterModel.providerID,
-          modelID: openrouterModel.id,
-        }),
-        parts: [
-          {
-            ...basePart(assistantID, "a1"),
-            type: "reasoning",
-            text: "thinking",
-            time: { start: 0 },
-            metadata: {
-              openrouter: {
-                reasoning_details: reasoningDetails,
-              },
-            },
-          },
-          {
-            ...basePart(assistantID, "a2"),
-            type: "text",
-            text: "answer",
-          },
-        ] as SessionV1.Part[],
-      },
-    ]
-
-    expect(
-      ProviderTransform.message(await MessageV2.toModelMessages(input, openrouterModel), openrouterModel, {}),
-    ).toStrictEqual([
-      {
-        role: "assistant",
-        content: [
-          {
-            type: "reasoning",
-            text: "thinking",
-            providerOptions: {
-              openrouter: {
-                reasoning_details: reasoningDetails,
-              },
-            },
-          },
-          { type: "text", text: "answer" },
         ],
       },
     ])
@@ -1865,9 +1862,9 @@ describe("session.message-v2.fromError: this PC's engine that closes in the midd
     const result = MessageV2.fromError(reset(), { providerID: mango })
     const loading = /ricaricando|loading it again/
     expect((result as { data: { message: string } }).data.message).not.toMatch(loading)
-    expect(SessionRetry.retryable(result, "mango")?.message).toMatch(loading)
+    expect(SessionRetry.retryable(result)?.message).toMatch(loading)
     const other = MessageV2.fromError(reset(), { providerID: ProviderV2.ID.make("openrouter") })
-    expect(SessionRetry.retryable(other, "openrouter")?.message).toBe("Connection reset by server")
+    expect(SessionRetry.retryable(other)?.message).toBe("Connection reset by server")
   })
 
   test("another provider, or a connection that was never made, keeps its own message", () => {

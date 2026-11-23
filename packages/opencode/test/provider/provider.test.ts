@@ -108,7 +108,6 @@ it.instance("provider loaded from env variable", () =>
     // Provider should retain its connection source even if custom loaders
     // merge additional options.
     expect(providers[ProviderV2.ID.anthropic].source).toBe("env")
-    expect(providers[ProviderV2.ID.anthropic].options.headers["anthropic-beta"]).toBeDefined()
   }),
 )
 
@@ -237,18 +236,18 @@ experimentalModels.instance(
 )
 
 it.instance(
-  "custom DeepSeek openai-compatible model defaults interleaved reasoning field",
+  "DeepSeek on OpenRouter defaults the interleaved reasoning field, on other providers it is explicit",
   Effect.gen(function* () {
     const providers = yield* list
     const provider = providers[ProviderV2.ID.make("custom-provider")]
-    expect(provider.models["deepseek-r1"].capabilities.interleaved).toEqual({ field: "reasoning_content" })
+    expect(providers[ProviderV2.ID.openrouter].models["deepseek/deepseek-test"].capabilities.interleaved).toEqual({
+      field: "reasoning_content",
+    })
+    expect(provider.models["deepseek-r1"].capabilities.interleaved).toBe(false)
     expect(provider.models["deepseek-details"].capabilities.interleaved).toEqual({ field: "reasoning_details" })
     expect(provider.models["deepseek-text"].capabilities.interleaved).toEqual({ field: "reasoning_text" })
     expect(provider.models["custom-reasoning"].capabilities.interleaved).toEqual({ field: "vendor_reasoning" })
     expect(provider.models["custom-model"].capabilities.interleaved).toBe(false)
-    expect(
-      providers[ProviderV2.ID.make("custom-anthropic-provider")].models["deepseek-r1"].capabilities.interleaved,
-    ).toBe(false)
   }),
   {
     config: {
@@ -266,11 +265,10 @@ it.instance(
           },
           options: { apiKey: "custom-key" },
         },
-        "custom-anthropic-provider": {
-          name: "Custom Anthropic Provider",
-          npm: "@ai-sdk/anthropic",
-          api: "https://api.custom.com/v1",
-          models: { "deepseek-r1": { name: "DeepSeek R1" } },
+        openrouter: {
+          npm: "@ai-sdk/openai-compatible",
+          api: "https://openrouter.ai/api/v1",
+          models: { "deepseek/deepseek-test": { name: "DeepSeek Test" } },
           options: { apiKey: "custom-key" },
         },
       },
@@ -576,54 +574,6 @@ it.instance(
 )
 
 it.instance(
-  "model config reasoning options replace catalog variants under configured variants",
-  Effect.gen(function* () {
-    yield* set("ANTHROPIC_API_KEY", "test-api-key")
-    const providers = yield* list
-    const models = providers[ProviderV2.ID.anthropic].models
-    expect(Object.keys(models["claude-sonnet-4-6"].variants ?? {})).toEqual(["low", "high"])
-    expect(models["claude-sonnet-4-6"].variants?.high).toMatchObject({ effort: "high", extra: true })
-    expect(models["claude-fixed"].variants).toEqual({})
-  }),
-  {
-    config: {
-      provider: {
-        anthropic: {
-          models: {
-            "claude-sonnet-4-6": {
-              reasoning_options: [{ type: "effort", values: ["low", "high"] }],
-              variants: { high: { extra: true } },
-            },
-            "claude-fixed": { id: "claude-sonnet-4-6", reasoning: true, reasoning_options: [] },
-          },
-        },
-      },
-    },
-  },
-)
-
-it.instance(
-  "model config regenerates variants when overriding the provider package",
-  Effect.gen(function* () {
-    yield* set("ANTHROPIC_API_KEY", "test-api-key")
-    const providers = yield* list
-    const model = providers[ProviderV2.ID.anthropic].models["claude-sonnet-4-6"]
-    expect(model.variants?.low).toEqual({ reasoningEffort: "low" })
-    expect(model.variants?.max).toBeUndefined()
-  }),
-  {
-    config: {
-      provider: {
-        anthropic: {
-          npm: "@ai-sdk/openai-compatible",
-          models: { "claude-sonnet-4-6": { name: "Claude via OpenAI" } },
-        },
-      },
-    },
-  },
-)
-
-it.instance(
   "disabled_providers prevents loading even with env var",
   Effect.gen(function* () {
     yield* set("OPENAI_API_KEY", "test-openai-key")
@@ -822,7 +772,7 @@ it.instance(
   { config: { small_model: "anthropic/not-a-real-model" } },
 )
 
-test("provider.sort prioritizes preferred models", () => {
+test("provider.sort puts the latest first and ranks no model by its name", () => {
   const models = [
     { id: "random-model", name: "Random" },
     { id: "claude-sonnet-4-latest", name: "Claude Sonnet 4" },
@@ -830,11 +780,12 @@ test("provider.sort prioritizes preferred models", () => {
     { id: "other-model", name: "Other" },
   ] as any[]
 
-  const sorted = Provider.sort(models)
-  expect(sorted[0].id).toContain("sonnet-4")
-  expect(sorted[0].id).toContain("latest")
-  expect(sorted[sorted.length - 1].id).not.toContain("gpt-5")
-  expect(sorted[sorted.length - 1].id).not.toContain("sonnet-4")
+  expect(Provider.sort(models).map((model) => model.id)).toEqual([
+    "claude-sonnet-4-latest",
+    "random-model",
+    "other-model",
+    "gpt-5-turbo",
+  ])
 })
 
 it.instance(
@@ -1256,8 +1207,6 @@ it.instance(
     // Custom options should be merged
     expect(providers[ProviderV2.ID.anthropic].options.timeout).toBe(30000)
     expect(providers[ProviderV2.ID.anthropic].options.headers["X-Custom"]).toBe("custom-value")
-    // anthropic custom loader adds its own headers, they should coexist
-    expect(providers[ProviderV2.ID.anthropic].options.headers["anthropic-beta"]).toBeDefined()
   }),
   {
     config: {
@@ -1427,69 +1376,6 @@ test("models.dev normalization fills required response fields", () => {
   expect(model.release_date).toBe("")
 })
 
-test("models.dev reasoning options replace generated variants and unsupported toggles fall back", () => {
-  const provider = {
-    id: "reasoning",
-    name: "Reasoning",
-    env: [],
-    npm: "@ai-sdk/openai",
-    models: {
-      explicit: {
-        id: "gpt-5.4",
-        name: "Explicit",
-        reasoning: true,
-        reasoning_options: [{ type: "effort", values: ["low"] }],
-        limit: { context: 128_000, output: 64_000 },
-      },
-      empty: {
-        id: "gpt-5.4",
-        name: "Empty",
-        reasoning: true,
-        reasoning_options: [],
-        limit: { context: 128_000, output: 64_000 },
-      },
-      fallback: {
-        id: "gpt-5.4",
-        name: "Fallback",
-        reasoning: true,
-        reasoning_options: [{ type: "toggle" }],
-        limit: { context: 128_000, output: 64_000 },
-      },
-      override: {
-        id: "gemini-3-pro",
-        name: "Override",
-        reasoning: true,
-        reasoning_options: [{ type: "effort", values: ["high"] }],
-        provider: { npm: "@ai-sdk/openai-compatible" },
-        limit: { context: 128_000, output: 64_000 },
-        experimental: { modes: { fast: {} } },
-      },
-      anthropicCompatible: {
-        id: "k3",
-        name: "Anthropic Compatible",
-        reasoning: true,
-        reasoning_options: [{ type: "effort", values: ["max"] }],
-        provider: { npm: "@ai-sdk/anthropic" },
-        limit: { context: 1_048_576, output: 131_072 },
-      },
-    },
-  } as unknown as ModelsDev.Provider
-
-  const models = Provider.fromModelsDevProvider(provider).models
-  expect(models.explicit.variants).toEqual({
-    low: {
-      reasoningEffort: "low",
-      reasoningSummary: "auto",
-      include: ["reasoning.encrypted_content"],
-    },
-  })
-  expect(models.empty.variants).toEqual({})
-  expect(Object.keys(models.fallback.variants ?? {})).toEqual(["none", "low", "medium", "high", "xhigh"])
-  expect(models.override.variants).toEqual({ high: { reasoningEffort: "high" } })
-  expect(models.anthropicCompatible.variants).toEqual({ max: { effort: "max" } })
-  expect(models["gemini-3-pro-fast"].variants).toEqual(models.override.variants)
-})
-
 test("public provider info omits invalid models", () => {
   const provider = Provider.fromModelsDevProvider({
     id: "test",
@@ -1539,38 +1425,14 @@ test("what a client of the server is told about a provider never carries its key
   expect(provider.options.apiKey).toBe("secret-key-of-the-provider")
 })
 
-it.instance("model variants are generated for reasoning models", () =>
+it.instance("no variants are generated for reasoning models", () =>
   Effect.gen(function* () {
     yield* set("ANTHROPIC_API_KEY", "test-api-key")
     const providers = yield* list
-    // Claude sonnet 4 has reasoning capability
     const model = providers[ProviderV2.ID.anthropic].models["claude-sonnet-4-6"]
     expect(model.capabilities.reasoning).toBe(true)
-    expect(model.variants).toBeDefined()
-    expect(Object.keys(model.variants!).length).toBeGreaterThan(0)
+    expect(model.variants).toEqual({})
   }),
-)
-
-it.instance(
-  "model variants can be disabled via config",
-  Effect.gen(function* () {
-    yield* set("ANTHROPIC_API_KEY", "test-api-key")
-    const providers = yield* list
-    const model = providers[ProviderV2.ID.anthropic].models["claude-sonnet-4-6"]
-    expect(model.variants).toBeDefined()
-    expect(model.variants!["high"]).toBeUndefined()
-    // max variant should still exist
-    expect(model.variants!["max"]).toBeDefined()
-  }),
-  {
-    config: {
-      provider: {
-        anthropic: {
-          models: { "claude-sonnet-4-6": { variants: { high: { disabled: true } } } },
-        },
-      },
-    },
-  },
 )
 
 it.instance(
@@ -1647,48 +1509,6 @@ it.instance(
           },
         },
       },
-    },
-  },
-)
-
-it.instance(
-  "variant config merges with generated variants",
-  Effect.gen(function* () {
-    yield* set("ANTHROPIC_API_KEY", "test-api-key")
-    const providers = yield* list
-    const model = providers[ProviderV2.ID.anthropic].models["claude-sonnet-4-6"]
-    expect(model.variants!["high"]).toBeDefined()
-    // Should have both the generated thinking config and the custom option
-    expect(model.variants!["high"].thinking).toBeDefined()
-    expect(model.variants!["high"].extraOption).toBe("custom-value")
-  }),
-  {
-    config: {
-      provider: {
-        anthropic: {
-          models: {
-            "claude-sonnet-4-6": { variants: { high: { extraOption: "custom-value" } } },
-          },
-        },
-      },
-    },
-  },
-)
-
-it.instance(
-  "variants filtered in second pass for database models",
-  Effect.gen(function* () {
-    yield* set("OPENAI_API_KEY", "test-api-key")
-    const providers = yield* list
-    const model = providers[ProviderV2.ID.openai].models["gpt-5"]
-    expect(model.variants).toBeDefined()
-    expect(model.variants!["high"]).toBeUndefined()
-    // Other variants should still exist
-    expect(model.variants!["medium"]).toBeDefined()
-  }),
-  {
-    config: {
-      provider: { openai: { models: { "gpt-5": { variants: { high: { disabled: true } } } } } },
     },
   },
 )

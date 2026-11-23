@@ -1,7 +1,6 @@
 import { Agent } from "@/agent/agent"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
 import { Provider } from "@/provider/provider"
-import { ProviderTransform } from "@/provider/transform"
 import { MCP } from "@/mcp"
 import { McpCatalog } from "@/mcp/catalog"
 import { Permission } from "@/permission"
@@ -19,8 +18,6 @@ import { Session } from "./session"
 import { SessionProcessor } from "./processor"
 import { PartID } from "./schema"
 import { EffectBridge } from "@/effect/bridge"
-import { ProviderV2 } from "@opencode-ai/core/provider"
-import { ModelV2 } from "@opencode-ai/core/model"
 import { isRecord } from "@/util/record"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { guardExecute } from "./repeat-guard"
@@ -91,15 +88,12 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
   })
 
   for (const item of yield* registry.tools({
-    modelID: ModelV2.ID.make(input.model.api.id),
-    providerID: input.model.providerID,
     agent: input.agent,
     permission: input.session.permission,
   })) {
-    const schema = ProviderTransform.schema(input.model, ToolJsonSchema.fromTool(item))
     tools[item.id] = tool({
       description: item.description,
-      inputSchema: jsonSchema(schema),
+      inputSchema: jsonSchema(ToolJsonSchema.fromTool(item)),
       execute(args, options) {
         return run.promise(
           Effect.gen(function* () {
@@ -150,18 +144,16 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
     tools[MCP_RESOURCE_TOOLS.list] = tool({
       description:
         "Lists resources provided by connected MCP servers. Resources provide context such as files, database schemas, or application-specific information.",
-      inputSchema: jsonSchema(
-        ProviderTransform.schema(input.model, {
-          type: "object",
-          properties: {
-            server: {
-              type: "string",
-              description: "Optional MCP server name. When omitted, lists resources from every connected server.",
-            },
+      inputSchema: jsonSchema({
+        type: "object",
+        properties: {
+          server: {
+            type: "string",
+            description: "Optional MCP server name. When omitted, lists resources from every connected server.",
           },
-          additionalProperties: false,
-        }),
-      ),
+        },
+        additionalProperties: false,
+      }),
       execute(args, opts) {
         return run.promise(
           Effect.gen(function* () {
@@ -232,19 +224,17 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
     tools[MCP_RESOURCE_TOOLS.listTemplates] = tool({
       description:
         "Lists resource templates provided by connected MCP servers. Resource templates are parameterized resources that can be read after filling in their URI template.",
-      inputSchema: jsonSchema(
-        ProviderTransform.schema(input.model, {
-          type: "object",
-          properties: {
-            server: {
-              type: "string",
-              description:
-                "Optional MCP server name. When omitted, lists resource templates from every connected server.",
-            },
+      inputSchema: jsonSchema({
+        type: "object",
+        properties: {
+          server: {
+            type: "string",
+            description:
+              "Optional MCP server name. When omitted, lists resource templates from every connected server.",
           },
-          additionalProperties: false,
-        }),
-      ),
+        },
+        additionalProperties: false,
+      }),
       execute(args, opts) {
         return run.promise(
           Effect.gen(function* () {
@@ -315,23 +305,21 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
     tools[MCP_RESOURCE_TOOLS.read] = tool({
       description:
         "Read a specific resource from an MCP server using the server name and resource URI. The URI is an MCP identifier and does not need to be a file URL.",
-      inputSchema: jsonSchema(
-        ProviderTransform.schema(input.model, {
-          type: "object",
-          properties: {
-            server: {
-              type: "string",
-              description: "MCP server name exactly as returned by list_mcp_resources.",
-            },
-            uri: {
-              type: "string",
-              description: "Resource URI to read. Use the exact URI string returned by list_mcp_resources.",
-            },
+      inputSchema: jsonSchema({
+        type: "object",
+        properties: {
+          server: {
+            type: "string",
+            description: "MCP server name exactly as returned by list_mcp_resources.",
           },
-          required: ["server", "uri"],
-          additionalProperties: false,
-        }),
-      ),
+          uri: {
+            type: "string",
+            description: "Resource URI to read. Use the exact URI string returned by list_mcp_resources.",
+          },
+        },
+        required: ["server", "uri"],
+        additionalProperties: false,
+      }),
       execute(args, opts) {
         return run.promise(
           Effect.gen(function* () {
@@ -411,8 +399,7 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
     if (!execute) continue
 
     const schema = yield* Effect.promise(() => Promise.resolve(asSchema(item.inputSchema).jsonSchema))
-    const transformed = ProviderTransform.schema(input.model, { ...schema, properties: schema.properties ?? {} })
-    item.inputSchema = jsonSchema(transformed)
+    item.inputSchema = jsonSchema({ ...schema, properties: schema.properties ?? {} })
     item.execute = (args, opts) =>
       run.promise(
         Effect.gen(function* () {

@@ -5,15 +5,18 @@ import { createMutation } from "@tanstack/solid-query"
 import { IconButtonV2 } from "@opencode-ai/ui/v2/icon-button-v2"
 import { Icon as IconV2 } from "@opencode-ai/ui/v2/icon"
 import { MenuV2 } from "@opencode-ai/ui/v2/menu-v2"
+import { TooltipV2 } from "@opencode-ai/ui/v2/tooltip-v2"
 import { useGlobal } from "@/context/global"
 import { useLanguage } from "@/context/language"
-import { ServerConnection, serverName } from "@/context/server"
-import { displayName, projectForSession } from "@/pages/layout/helpers"
+import { ServerConnection } from "@/context/server"
+import { useDefaultProjectFolders } from "@/hooks/use-default-project"
+import { projectForSession } from "@/pages/layout/helpers"
 import { SessionTabAvatar } from "@/pages/layout/session-tab-avatar"
 import type { Session } from "@opencode-ai/sdk/v2"
 import { sessionTitle } from "@/utils/session-title"
+import { projectLabel } from "@/utils/default-project"
 import { canOpenTabRename, forwardTabRef } from "./titlebar-tab-gesture"
-import { TabPreviewPopover } from "./titlebar-tab-popover"
+import { TabHint } from "./titlebar-tab-hint"
 import "./titlebar-tab-nav.css"
 
 // MouseEvent.button uses 1 for the middle/wheel button.
@@ -35,6 +38,7 @@ export function TabNavItem(props: {
   hidden?: boolean
 }) {
   const language = useLanguage()
+  const defaultFolders = useDefaultProjectFolders()
   const [menu, setMenu] = createStore({ open: false, rename: false })
   const [editing, setEditing] = createSignal(false)
   let tabRoot!: HTMLDivElement
@@ -63,23 +67,8 @@ export function TabNavItem(props: {
   const projectName = createMemo(() => {
     const session = props.session()
     if (!session) return
-    return displayName(project() ?? { worktree: session.directory })
+    return projectLabel({ directory: session.directory, project: project(), folders: defaultFolders() })
   })
-  const previewPath = createMemo(() => {
-    const session = props.session()
-    if (!session) return
-    const home = serverCtx()?.sync.data.path.home
-    return home ? session.directory.replace(home, "~") : session.directory
-  })
-  // Only label the server when multiple servers are connected.
-  const serverLabel = createMemo(() => {
-    if (global.servers.list().length <= 1) return
-    const conn = global.servers.list().find((item) => ServerConnection.key(item) === props.server)
-    return conn ? serverName(conn) : undefined
-  })
-
-  const [popoverOpen, setPopoverOpen] = createSignal(false)
-  const previewBlocked = () => !!props.dragging || editing() || menu.open || !!props.pressed || !props.session()
 
   const selectTitle = () => {
     const range = document.createRange()
@@ -274,26 +263,15 @@ export function TabNavItem(props: {
   )
 
   return (
-    <MenuV2.Context
-      onOpenChange={(open) => {
-        setMenu("open", open)
-        if (open) setPopoverOpen(false)
-      }}
-    >
-      <TabPreviewPopover
-        trigger={tab()}
-        open={popoverOpen() && !previewBlocked()}
-        onOpenChange={(value) => {
-          if (value && previewBlocked()) return
-          setPopoverOpen(value)
-        }}
-        data={{
-          projectName: projectName(),
-          title: title(),
-          path: previewPath(),
-          serverName: serverLabel(),
-        }}
-      />
+    <MenuV2.Context onOpenChange={(open) => setMenu("open", open)}>
+      <TooltipV2
+        class="w-full min-w-0"
+        placement="bottom"
+        contentStyle={{ "max-width": "360px" }}
+        value={<TabHint project={projectName()} title={title()} />}
+      >
+        {tab()}
+      </TooltipV2>
       <MenuV2.Context.Portal>
         <MenuV2.Context.Content
           onCloseAutoFocus={(event) => {

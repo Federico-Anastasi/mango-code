@@ -7,5 +7,5 @@ export async function expectAppVisible(locator: Locator) {
 }
 
 export async function expectSessionTitle(page: Page, title: string) {
-  await expectAppVisible(page.getByRole("heading", { name: title }))
+  await expectAppVisible(page.locator('[data-slot="titlebar-tabs"] a').filter({ hasText: title }))
 }

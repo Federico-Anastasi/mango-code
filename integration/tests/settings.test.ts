@@ -10,12 +10,13 @@ import fs from "node:fs";
 import path from "node:path";
 import { MangoCode, find } from "../client/mango-code";
 import { start, REPO, type Environment } from "./environment";
+import { systemMessages } from "./requests";
 
 let env: Environment;
 let mc: MangoCode;
 
 beforeAll(async () => {
-  env = await start([{ text: "Done." }]);
+  env = await start([{ text: "Done." }], { strict: true });
   mc = new MangoCode((await find(env.data))!);
   await mc.addMcp(env.project, "animation", {
     type: "local",
@@ -88,7 +89,7 @@ async function fresh(): Promise<{ tools: string[]; system: string; user: string 
   const text = (m: any) => (typeof m.content === "string" ? m.content : JSON.stringify(m.content));
   return {
     tools: (body.tools ?? []).map((t: any) => t.function.name).sort(),
-    system: body.messages.filter((m: any) => m.role === "system").map(text).join("\n"),
+    system: systemMessages(body)[0],
     user: body.messages.filter((m: any) => m.role === "user").map(text).join("\n"),
   };
 }

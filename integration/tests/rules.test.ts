@@ -7,6 +7,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { MangoCode, find } from "../client/mango-code";
 import { start, type Environment } from "./environment";
+import { systemMessages } from "./requests";
 
 const RUST = "RUST-PURPLE"; // src/**/*.rs, working folder
 const DOC = "APRICOT-DOC"; // docs/*.md, working folder
@@ -33,7 +34,7 @@ beforeAll(async () => {
     { tool: "read", arguments: { filePath: path.join(method, "CLAUDE.md") } },
     { tool: "read", arguments: { filePath: path.join(method, "data", "a.csv") } },
     { text: "Done." },
-  ]);
+  ], { strict: true });
   project = env.project;
   // The files are prepared before the first request: the agent reads the rules when the folder's instance is born.
   write(path.join(project, ".claude", "rules", "rust.md"), `---\npaths:\n  - "src/**/*.rs"\n---\n${RUST}: Rust files end with an empty line.\n`);
@@ -63,7 +64,6 @@ const chatRequests = () =>
     .filter((r) => r.route.startsWith("/v1/chat/completions"));
 
 const textOf = (m: any): string => (typeof m.content === "string" ? m.content : JSON.stringify(m.content));
-const systemOf = (body: any) => body.messages.filter((m: any) => m.role === "system").map(textOf).join("\n");
 
 async function runTurn(id: string) {
   const tools: { name: string; input: any; output: string }[] = [];
@@ -80,7 +80,7 @@ test("a rule with paths is not in the prompt; one without paths is", async () =>
   await mc.setExtraFolders(project, [env.method]);
   await runTurn(await open());
   const first = chatRequests()[0].body;
-  const s = systemOf(first);
+  const s = systemMessages(first)[0];
   expect(s).toContain("TANGERINE"); // the project's CLAUDE.md
   expect(s).toContain(ALWAYS); // the method's rule without paths:
   for (const word of [RUST, DOC, CONF, DATA]) expect(JSON.stringify(first.messages)).not.toContain(word);

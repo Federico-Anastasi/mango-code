@@ -13,7 +13,7 @@ import fs from "node:fs";
 import http from "node:http";
 import net from "node:net";
 import path from "node:path";
-import { page, type Page } from "./cdp";
+import { page, windowPage, type Page } from "./cdp";
 import { answer } from "./dialog";
 import { start, type Environment } from "./environment";
 import { atSizes } from "./window";
@@ -108,7 +108,7 @@ beforeAll(async () => {
     files,
     env: { MANGO_HF_URL: base, MANGO_DICTATION_FAKE: "50" },
   });
-  p = await page(env.cdp!, () => true, 120_000);
+  p = await windowPage(env.cdp!, env.agent, 120_000);
   await waitUntil(() => p.evaluate(`location.href === ${JSON.stringify(env.agent + "/")}`), "the window on the Home");
 }, 240_000);
 
@@ -295,7 +295,7 @@ test("a message written while it downloads waits, then leaves by itself when the
   await p.send("Network.enable");
   await p.send("Fetch.enable", { patterns: [{ urlPattern: "*/session?directory=*", requestStage: "Request" }] });
   const creation = new Promise<string>((ok) =>
-    p.on("Fetch.requestPaused", (e) => (e.request.method === "POST" ? ok(e.requestId) : void p.send("Fetch.continueRequest", { requestId: e.requestId }))),
+    p.on("Fetch.requestPaused", (e) => (e.request.method === "POST" ? ok(e.requestId) : void p.send("Fetch.continueRequest", { requestId: e.requestId }).catch(() => {}))),
   );
   await mouseClick('[aria-label="Nuova conversazione"]');
   await waitUntil(async () => (await p.evaluate("location.pathname")).endsWith("/new-session") && (await exists('[contenteditable="true"]')), "the composer of a second conversation");

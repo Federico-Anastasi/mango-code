@@ -23,10 +23,8 @@ This package is an Effect Schema-first LLM core. The Schema classes in `src/sche
 
 Primary in-repo integration point:
 
-- `packages/opencode/src/session/llm.ts` is the session-owned orchestration layer that decides whether a request uses AI SDK or this package's native route runtime.
-- `packages/opencode/src/session/llm/native-request.ts` is the lowering adapter from opencode's session/AI SDK-shaped data into this package's `LLMRequest` model.
-- `packages/opencode/src/session/llm/native-runtime.ts` is the execution adapter that calls raw `LLMClient.stream(request)` and bridges one provider turn of opencode tool calls through this package's typed dispatcher.
-- `packages/opencode/src/session/llm/ai-sdk.ts` keeps the default AI SDK path compatible by converting AI SDK stream parts into this package's shared `LLMEvent`s.
+- `packages/opencode/src/session/llm.ts` is the session-owned orchestration layer; it runs the AI SDK.
+- `packages/opencode/src/session/llm/ai-sdk.ts` converts AI SDK stream parts into this package's shared `LLMEvent`s.
 
 Keep this package independent of session concerns. Session auth, permissions, plugins, telemetry headers, and runtime selection belong in `packages/opencode/src/session/llm.ts` and its local adapters.
 
@@ -54,10 +52,10 @@ Filter or narrow `LLMEvent` streams with `LLMEvent.is.*` (camelCase guards, e.g.
 
 A route is the registered, runnable composition of four orthogonal pieces:
 
-- **`Protocol`** (`src/route/protocol.ts`) — semantic API contract. Owns request body construction (`body.from`), the body schema (`body.schema`), the streaming-event schema (`stream.event`), and the event-to-`LLMEvent` state machine (`stream.step`). `Route.make(...)` validates and JSON-encodes the body from `body.schema` and decodes frames with `stream.event`. Examples: `OpenAIChat.protocol`, `OpenAIResponses.protocol`, `AnthropicMessages.protocol`, `Gemini.protocol`, `BedrockConverse.protocol`.
+- **`Protocol`** (`src/route/protocol.ts`) — semantic API contract. Owns request body construction (`body.from`), the body schema (`body.schema`), the streaming-event schema (`stream.event`), and the event-to-`LLMEvent` state machine (`stream.step`). `Route.make(...)` validates and JSON-encodes the body from `body.schema` and decodes frames with `stream.event`. Examples: `OpenAIChat.protocol`, `OpenAIResponses.protocol`, `AnthropicMessages.protocol`.
 - **`Endpoint`** (`src/route/endpoint.ts`) — URL construction. The host, path, and route query live on the endpoint. `Endpoint.path("/chat/completions", { baseURL })` is the common case; pass a function for paths that embed the model id or a body field (e.g. `Endpoint.path(({ body }) => `/model/${body.modelId}/converse-stream`)`).
-- **`Auth`** (`src/route/auth.ts`) — per-request transport authentication. Provider facades configure credentials onto the route before model selection, usually via `Auth.bearer(apiKey)` or `Auth.header(name, apiKey)`. Routes that need per-request signing (Bedrock SigV4, future Vertex IAM, Azure AAD) implement `Auth` as a function that signs the body and merges signed headers into the result.
-- **`Framing`** (`src/route/framing.ts`) — bytes → frames. SSE (`Framing.sse`) is shared; Bedrock keeps its AWS event-stream framing as a typed `Framing<object>` value alongside its protocol.
+- **`Auth`** (`src/route/auth.ts`) — per-request transport authentication. Provider facades configure credentials onto the route before model selection, usually via `Auth.bearer(apiKey)` or `Auth.header(name, apiKey)`. Routes that need per-request signing implement `Auth` as a function that signs the body and merges signed headers into the result.
+- **`Framing`** (`src/route/framing.ts`) — bytes → frames. SSE (`Framing.sse`) is shared.
 
 Compose them via `Route.make(...)`:
 
@@ -82,9 +80,9 @@ When a provider ships a non-HTTP transport (OpenAI's WebSocket Responses backend
 
 ### URL Construction
 
-`Endpoint` owns `{ baseURL, path, query }`. Each protocol route includes a canonical endpoint when the provider has one (e.g. `https://api.openai.com/v1`); provider helpers override endpoint fields by configuring the route before selecting a model. Routes that have no canonical URL (OpenAI-compatible Chat, GitHub Copilot) require configuration before execution.
+`Endpoint` owns `{ baseURL, path, query }`. Each protocol route includes a canonical endpoint when the provider has one (e.g. `https://api.openai.com/v1`); provider helpers override endpoint fields by configuring the route before selecting a model. Routes that have no canonical URL (OpenAI-compatible Chat) require configuration before execution.
 
-For providers where the URL is derived from typed inputs (Azure resource name, Bedrock region), the provider helper configures the route endpoint before calling `.model(...)`. Use `AtLeastOne<T>` from `route/auth-options.ts` for inputs that accept either of two derivation paths (Azure: `resourceName` or `baseURL`).
+For providers where the URL is derived from typed inputs, the provider helper configures the route endpoint before calling `.model(...)`. Use `AtLeastOne<T>` from `route/auth-options.ts` for inputs that accept either of two derivation paths.
 
 ### Provider Facades
 
@@ -94,11 +92,8 @@ Provider-facing APIs are configured facades over route values. Endpoint/auth/res
 const openai = OpenAI.configure({ apiKey, baseURL })
 const model = openai.responses("gpt-4o-mini")
 
-const azure = Azure.configure({ resourceName, apiKey, apiVersion: "v1" })
-const deployment = azure.responses("my-deployment")
-
-const gateway = CloudflareAIGateway.configure({ accountId, gatewayId, gatewayApiKey, apiKey })
-const proxied = gateway.model("openai/gpt-4o-mini")
+const router = OpenRouter.configure({ apiKey })
+const routed = router.model("openai/gpt-4o-mini")
 ```
 
 Keep provider facades small and explicit:
@@ -109,7 +104,7 @@ Keep provider facades small and explicit:
 - Export lower-level `routes` arrays separately only when advanced internal wiring needs them.
 - Prefer `apiKey` as provider-specific sugar and `auth` as the explicit override; keep them mutually exclusive in provider option types with `ProviderAuthOption`.
 - Resolve `apiKey` → `Auth` with `AuthOptions.bearer(options, "<PROVIDER>_API_KEY")` (it honors an explicit `auth` override and falls back to `Auth.config(envVar)` so missing keys surface a typed `Authentication` error rather than a runtime crash).
-- Use separate top-level facades for products with different required setup, such as `CloudflareAIGateway` and `CloudflareWorkersAI`.
+- Use separate top-level facades for products with different required setup.
 
 `Provider.make(...)` remains available for simple static provider definitions, but new built-in providers should prefer plain configured facades unless a helper removes real duplication without adding runtime behavior.
 
@@ -143,15 +138,12 @@ packages/llm/src/
     openai-chat.ts          protocol + route (compose OpenAIChat.protocol)
     openai-responses.ts
     anthropic-messages.ts
-    gemini.ts
-    bedrock-converse.ts
-    bedrock-event-stream.ts framing for AWS event-stream binary frames
     openai-compatible-chat.ts route that reuses OpenAIChat.protocol, no canonical URL
     utils/                  per-protocol helpers (auth, cache, media, tool-stream, ...)
   providers/
     openai-compatible.ts    generic compatible helper + family model helpers
     openai-compatible-profile.ts family defaults (deepseek, togetherai, ...)
-    azure.ts / amazon-bedrock.ts / cloudflare.ts / github-copilot.ts / google.ts / xai.ts / openai.ts / anthropic.ts / openrouter.ts
+    openai.ts / anthropic.ts / openrouter.ts
   tool.ts                   typed tool() helper
   tool-runtime.ts           narrow one-call typed tool dispatcher
 ```

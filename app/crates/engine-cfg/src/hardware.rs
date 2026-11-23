@@ -10,6 +10,12 @@
 //!   sees the NVIDIA cards too, but doesn't give the CUDA version and for NVIDIA ones NVML rules; DXGI's NVIDIA
 //!   cards are only used if NVML doesn't answer (broken driver): they stay in the list, without CUDA version, and
 //!   the build will be Vulkan.
+//! - **the memory in use** on each card (`gpu_memory`): NVML for the NVIDIA cards, which is what the reserve of the
+//!   plans was measured with; for every other card Windows' counters of the memory dedicated to each adapter
+//!   («GPU Adapter Memory», the ones Task Manager shows), matched to the DXGI adapter by its LUID. DXGI's own
+//!   `QueryVideoMemoryInfo` is not used: it counts only the calling process. The engine's `--list-devices`, which
+//!   gives the free memory of every brand, costs a process to start (and the card's driver loaded in it) at every
+//!   reading, and the reading is made whenever the state of the engine is asked.
 
 use crate::user;
 use anyhow::{Context, Result};
@@ -17,7 +23,13 @@ use mango_common::{tr, Build};
 use nvml_wrapper::error::NvmlError;
 use nvml_wrapper::Nvml;
 use serde::Serialize;
+use std::collections::HashMap;
+use windows::core::{w, PCWSTR};
 use windows::Win32::Graphics::Dxgi::{CreateDXGIFactory1, IDXGIFactory1, DXGI_ADAPTER_FLAG_SOFTWARE};
+use windows::Win32::System::Performance::{
+    PdhAddEnglishCounterW, PdhCloseQuery, PdhCollectQueryData, PdhGetFormattedCounterArrayW, PdhOpenQueryW, PDH_FMT_COUNTERVALUE_ITEM_W, PDH_FMT_LARGE,
+    PDH_MORE_DATA,
+};
 use windows::Win32::System::SystemInformation::{
     GetLogicalProcessorInformationEx, GlobalMemoryStatusEx, RelationProcessorCore, MEMORYSTATUSEX,
     SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX,
@@ -159,7 +171,7 @@ impl Hardware {
 /// Reads this PC's hardware.
 pub fn detect() -> Result<Hardware> {
     let (nvidia, nvml_error) = match nvidia_gpus() {
-        Ok(gpus) => (gpus, None),
+        Ok(gpus) => (gpus.into_iter().map(|(gpu, _)| gpu).collect(), None),
         // No NVIDIA driver on this PC: nothing to report.
         Err(NvmlError::DriverNotLoaded | NvmlError::LibraryNotFound | NvmlError::LibloadingError(_)) => (Vec::new(), None),
         // A driver that doesn't answer as asked (a GT 710's legacy driver lacks functions of today's NVML) must not
@@ -193,8 +205,9 @@ pub fn choose_build(hw: &Hardware) -> Build {
 
 // --- NVIDIA (NVML) ---------------------------------------------------------------------------
 
-/// The NVIDIA cards in PCI order, as NVML gives them. What an error means is decided by `detect`.
-fn nvidia_gpus() -> Result<Vec<Gpu>, NvmlError> {
+/// The NVIDIA cards in PCI order, as NVML gives them, each with the MiB in use on it. What an error means is decided by
+/// `detect`.
+fn nvidia_gpus() -> Result<Vec<(Gpu, u64)>, NvmlError> {
     let nvml = Nvml::init()?;
     let version = nvml.sys_cuda_driver_version()?;
     let cuda_driver = ((version / 1000) as u32, ((version % 1000) / 10) as u32);
@@ -203,7 +216,8 @@ fn nvidia_gpus() -> Result<Vec<Gpu>, NvmlError> {
         let d = nvml.device_by_index(i)?;
         let pci = d.pci_info()?;
         let cc = d.cuda_compute_capability()?;
-        found.push(((pci.domain, pci.bus, pci.device), d.name()?, d.memory_info()?.total / (1 << 20), (cc.major as u32, cc.minor as u32)));
+        let memory = d.memory_info()?;
+        found.push(((pci.domain, pci.bus, pci.device), d.name()?, memory.total >> 20, memory.used >> 20, (cc.major as u32, cc.minor as u32)));
     }
     // CUDA_DEVICE_ORDER=PCI_BUS_ID numbers the cards by PCI address: they are ordered explicitly, without trusting
     // NVML's order.
@@ -211,32 +225,72 @@ fn nvidia_gpus() -> Result<Vec<Gpu>, NvmlError> {
     Ok(found
         .into_iter()
         .enumerate()
-        .map(|(i, (_, name, memory_mib, cc))| Gpu {
-            index: i as u32,
-            name,
-            vendor: Vendor::Nvidia,
-            memory_mib,
-            cuda_driver: Some(cuda_driver),
-            cc: Some(cc),
+        .map(|(i, (_, name, memory_mib, used_mib, cc))| {
+            (Gpu { index: i as u32, name, vendor: Vendor::Nvidia, memory_mib, cuda_driver: Some(cuda_driver), cc: Some(cc) }, used_mib)
         })
         .collect())
 }
 
-/// Memory in use right now on each NVIDIA card, in PCI order: (index, MiB used, MiB total). Empty if the driver
-/// doesn't answer (it's information to show, not a check).
+/// Memory in use right now on each card, numbered as `detect` numbers them: (index, MiB used, MiB total). A card that cannot
+/// be read is not in the list: whoever needs it says so, it is not a card with nothing in use.
 pub fn gpu_memory() -> Vec<(u32, u64, u64)> {
-    let Ok(nvml) = Nvml::init() else { return Vec::new() };
-    let Ok(n) = nvml.device_count() else { return Vec::new() };
-    let mut v: Vec<((u32, u32, u32), u64, u64)> = (0..n)
-        .filter_map(|i| {
-            let d = nvml.device_by_index(i).ok()?;
-            let pci = d.pci_info().ok()?;
-            let m = d.memory_info().ok()?;
-            Some(((pci.domain, pci.bus, pci.device), m.used >> 20, m.total >> 20))
-        })
-        .collect();
-    v.sort_by_key(|x| x.0);
-    v.into_iter().enumerate().map(|(i, (_, u, t))| (i as u32, u, t)).collect()
+    let nvidia = nvidia_gpus().unwrap_or_default();
+    match dxgi_gpus() {
+        Ok(dxgi) => memory_of(&nvidia, &dxgi, &adapter_memory()),
+        Err(_) => memory_of(&nvidia, &[], &HashMap::new()),
+    }
+}
+
+/// `gpu_memory` from its three sources: the NVML cards with what is in use on them, the DXGI adapters, and the bytes of
+/// dedicated memory in use by LUID. The cards are numbered as `merge` numbers them.
+fn memory_of(nvidia: &[(Gpu, u64)], dxgi: &[DxgiGpu], in_use: &HashMap<u64, u64>) -> Vec<(u32, u64, u64)> {
+    let mut cards: Vec<(u32, u64, u64)> = nvidia.iter().map(|(gpu, used)| (gpu.index, *used, gpu.memory_mib)).collect();
+    for (i, (_, adapter)) in beside_nvml(nvidia.is_empty(), dxgi).enumerate() {
+        if let Some(bytes) = in_use.get(&adapter.luid) {
+            cards.push(((nvidia.len() + i) as u32, bytes >> 20, adapter.memory_mib));
+        }
+    }
+    cards
+}
+
+// --- memory in use of every card (Windows' counters) -----------------------------------------
+
+/// Bytes of dedicated memory in use on each graphics adapter by all the programs together, by the adapter's LUID. An adapter
+/// that does not answer is not in the map.
+fn adapter_memory() -> HashMap<u64, u64> {
+    let mut in_use = HashMap::new();
+    let (mut query, mut counter) = (0isize, 0isize);
+    // SAFETY: the query and the counter are handles of this function, closed before it returns. The buffer has the size the
+    // counters ask for, in u64 units for the alignment of the items, and is read only up to the count they give.
+    unsafe {
+        if PdhOpenQueryW(PCWSTR::null(), 0, &mut query) != 0 {
+            return in_use;
+        }
+        if PdhAddEnglishCounterW(query, w!(r"\GPU Adapter Memory(*)\Dedicated Usage"), 0, &mut counter) == 0 && PdhCollectQueryData(query) == 0 {
+            let (mut size, mut count) = (0u32, 0u32);
+            if PdhGetFormattedCounterArrayW(counter, PDH_FMT_LARGE, &mut size, &mut count, None) == PDH_MORE_DATA {
+                let mut buffer = vec![0u64; (size as usize).div_ceil(8)];
+                let items = buffer.as_mut_ptr().cast::<PDH_FMT_COUNTERVALUE_ITEM_W>();
+                if PdhGetFormattedCounterArrayW(counter, PDH_FMT_LARGE, &mut size, &mut count, Some(items)) == 0 {
+                    for item in std::slice::from_raw_parts(items, count as usize) {
+                        let luid = item.szName.to_string().ok().and_then(|name| luid_of(&name));
+                        if let (Some(luid), 0) = (luid, item.FmtValue.CStatus) {
+                            *in_use.entry(luid).or_insert(0) += item.FmtValue.Anonymous.largeValue.max(0) as u64;
+                        }
+                    }
+                }
+            }
+        }
+        PdhCloseQuery(query);
+    }
+    in_use
+}
+
+/// The LUID an instance of the adapter counters names: `luid_0x00000000_0x00011920_phys_0` is `0x11920`.
+fn luid_of(instance: &str) -> Option<u64> {
+    let mut parts = instance.strip_prefix("luid_")?.split('_').map(|p| u64::from_str_radix(p.strip_prefix("0x")?, 16).ok());
+    let (high, low) = (parts.next()??, parts.next()??);
+    Some(high << 32 | low)
 }
 
 // --- all the cards (DXGI) --------------------------------------------------------------------
@@ -246,6 +300,8 @@ struct DxgiGpu {
     name: String,
     vendor_id: u32,
     memory_mib: u64,
+    /// What Windows' counters name the adapter by.
+    luid: u64,
 }
 
 /// Windows' graphics adapters, without the software ones (Microsoft Basic Render Driver).
@@ -268,6 +324,7 @@ fn dxgi_gpus() -> Result<Vec<DxgiGpu>> {
                 name: String::from_utf16_lossy(&d.Description[..end]),
                 vendor_id: d.VendorId,
                 memory_mib: d.DedicatedVideoMemory as u64 / (1 << 20),
+                luid: u64::from(d.AdapterLuid.HighPart as u32) << 32 | u64::from(d.AdapterLuid.LowPart),
             });
         }
         Ok(v)
@@ -283,17 +340,19 @@ fn vendor_from_id(id: u32) -> Vendor {
     }
 }
 
+/// The DXGI adapters that are cards of the list after the NVML ones, with their brand: the NVIDIA ones only if NVML sees no
+/// NVIDIA card (`nvml_empty`).
+fn beside_nvml(nvml_empty: bool, dxgi: &[DxgiGpu]) -> impl Iterator<Item = (Vendor, &DxgiGpu)> {
+    dxgi.iter().map(|d| (vendor_from_id(d.vendor_id), d)).filter(move |(vendor, _)| *vendor != Vendor::Nvidia || nvml_empty)
+}
+
 /// The NVIDIA cards come from NVML; DXGI adds the others. If NVML sees no NVIDIA but DXGI does, it keeps them
 /// (without CUDA version).
 fn merge(nvidia: Vec<Gpu>, dxgi: Vec<DxgiGpu>) -> Vec<Gpu> {
     let mut gpus = nvidia;
-    let nvml_empty = gpus.is_empty();
-    for d in dxgi {
-        let vendor = vendor_from_id(d.vendor_id);
-        if vendor == Vendor::Nvidia && !nvml_empty {
-            continue;
-        }
-        gpus.push(Gpu { index: gpus.len() as u32, name: d.name, vendor, memory_mib: d.memory_mib, cuda_driver: None, cc: None });
+    for (vendor, d) in beside_nvml(gpus.is_empty(), &dxgi) {
+        let index = gpus.len() as u32;
+        gpus.push(Gpu { index, name: d.name.clone(), vendor, memory_mib: d.memory_mib, cuda_driver: None, cc: None });
     }
     gpus
 }
@@ -578,8 +637,8 @@ mod tests {
     fn merging_nvml_and_dxgi_does_not_duplicate_the_nvidia_cards() {
         let nvml = vec![nvidia(0, "NVIDIA GeForce RTX 3060", 12_288, (8, 6), (12, 6))];
         let dxgi = vec![
-            DxgiGpu { name: "NVIDIA GeForce RTX 3060".into(), vendor_id: 0x10DE, memory_mib: 12_090 },
-            DxgiGpu { name: "AMD Radeon(TM) Graphics".into(), vendor_id: 0x1002, memory_mib: 512 },
+            DxgiGpu { name: "NVIDIA GeForce RTX 3060".into(), vendor_id: 0x10DE, memory_mib: 12_090, luid: 0x100 },
+            DxgiGpu { name: "AMD Radeon(TM) Graphics".into(), vendor_id: 0x1002, memory_mib: 512, luid: 0x200 },
         ];
         let v = merge(nvml, dxgi);
         assert_eq!(v.len(), 2);
@@ -587,9 +646,36 @@ mod tests {
         assert_eq!((v[1].vendor, v[1].index, v[1].cuda_driver), (Vendor::Amd, 1, None));
     }
 
+    /// The memory in use of every brand: NVML's for the NVIDIA cards, Windows' counters by LUID for the others, numbered as the
+    /// list of `detect`. An adapter the counters do not give is not in the reading, and the cards after it keep their numbers.
+    #[test]
+    fn the_memory_in_use_is_read_for_every_brand_with_the_numbers_of_the_list() {
+        let dxgi = |luid: u64, vendor_id: u32, memory_mib: u64| DxgiGpu { name: String::new(), vendor_id, memory_mib, luid };
+        let adapters = [dxgi(0x100, 0x10DE, 12_090), dxgi(0x200, 0x1002, 16_368), dxgi(0x300, 0x8086, 128), dxgi(0x400, 0x1002, 8_176)];
+        let gib = |n: u64| n << 30;
+        let in_use = HashMap::from([(0x100, gib(1)), (0x200, gib(15)), (0x300, 5 << 20), (0x999, gib(3))]);
+
+        let nvml = vec![(nvidia(0, "NVIDIA GeForce RTX 3060", 12_288, (8, 6), (12, 6)), 700)];
+        assert_eq!(memory_of(&nvml, &adapters, &in_use), [(0, 700, 12_288), (1, 15_360, 16_368), (2, 5, 128)], "NVML rules for the NVIDIA card; the fourth adapter has no counter");
+
+        let radeon = [adapters[1].clone()];
+        assert_eq!(memory_of(&[], &radeon, &in_use), [(0, 15_360, 16_368)], "a PC without NVIDIA: the Radeon is card 0, as in `detect`");
+        assert_eq!(memory_of(&[], &adapters, &in_use), [(0, 1_024, 12_090), (1, 15_360, 16_368), (2, 5, 128)], "NVML silent: DXGI's NVIDIA card is read from the counters");
+        assert_eq!(memory_of(&[], &radeon, &HashMap::new()), [], "counters that do not answer: nothing is read");
+    }
+
+    /// The instances of «GPU Adapter Memory» as Windows names them (two of them as read on a PC of the tests).
+    #[test]
+    fn an_adapter_counter_is_named_by_its_luid() {
+        assert_eq!(luid_of("luid_0x00000000_0x00011920_phys_0"), Some(0x11920));
+        assert_eq!(luid_of("luid_0x00000001_0x000118f3_phys_1"), Some(0x1_000118f3));
+        assert_eq!(luid_of("_Total"), None);
+        assert_eq!(luid_of("luid_0x00000000_phys_0"), None);
+    }
+
     #[test]
     fn if_nvml_is_silent_dxgis_nvidia_cards_stay_without_cuda() {
-        let dxgi = vec![DxgiGpu { name: "NVIDIA GeForce GTX 1650".into(), vendor_id: 0x10DE, memory_mib: 4096 }];
+        let dxgi = vec![DxgiGpu { name: "NVIDIA GeForce GTX 1650".into(), vendor_id: 0x10DE, memory_mib: 4096, luid: 0x100 }];
         let v = merge(vec![], dxgi);
         assert_eq!(v.len(), 1);
         assert_eq!((v[0].vendor, v[0].cuda_driver, v[0].cc), (Vendor::Nvidia, None, None));
@@ -603,8 +689,8 @@ mod tests {
     fn an_old_small_nvidia_card_read_from_dxgi_leaves_the_processor() {
         for memory_mib in [1024, 2048] {
             let dxgi = vec![
-                DxgiGpu { name: "NVIDIA GeForce GT 710".into(), vendor_id: 0x10DE, memory_mib },
-                DxgiGpu { name: "Intel(R) Graphics".into(), vendor_id: 0x8086, memory_mib: 128 },
+                DxgiGpu { name: "NVIDIA GeForce GT 710".into(), vendor_id: 0x10DE, memory_mib, luid: 0x100 },
+                DxgiGpu { name: "Intel(R) Graphics".into(), vendor_id: 0x8086, memory_mib: 128, luid: 0x200 },
             ];
             let hw = pc(merge(vec![], dxgi), 16_384);
             assert_eq!(hw.usable().count(), 0, "{memory_mib} MiB");

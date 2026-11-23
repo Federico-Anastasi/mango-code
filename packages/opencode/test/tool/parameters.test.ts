@@ -9,7 +9,6 @@ import { ToolJsonSchema } from "../../src/tool/json-schema"
 // prompt.ts` uses to emit tool schemas to the LLM, so the snapshots stay
 // provider-compatible while tools use Effect Schema internally.
 
-import { Parameters as ApplyPatch } from "../../src/tool/apply_patch"
 import { Parameters as Edit } from "../../src/tool/edit"
 import { Parameters as Glob } from "../../src/tool/glob"
 import { Parameters as Grep } from "../../src/tool/grep"
@@ -37,7 +36,6 @@ const toJsonSchema = ToolJsonSchema.fromSchema
 
 describe("tool parameters", () => {
   describe("JSON Schema (wire shape)", () => {
-    test("apply_patch", () => expect(toJsonSchema(ApplyPatch)).toMatchSnapshot())
     test("bash", () => expect(toJsonSchema(Shell)).toMatchSnapshot())
     test("edit", () => expect(toJsonSchema(Edit)).toMatchSnapshot())
     test("glob", () => expect(toJsonSchema(Glob)).toMatchSnapshot())
@@ -90,20 +88,6 @@ describe("tool parameters", () => {
         properties: { format: { type: "string", enum: ["text", "markdown", "html"], default: "markdown" } },
       })
       expect(toJsonSchema(WebFetch).properties?.format).not.toHaveProperty("anyOf")
-    })
-  })
-
-  describe("apply_patch", () => {
-    test("accepts patchText", () => {
-      expect(parse(ApplyPatch, { patchText: "*** Begin Patch\n*** End Patch" })).toEqual({
-        patchText: "*** Begin Patch\n*** End Patch",
-      })
-    })
-    test("rejects missing patchText", () => {
-      expect(accepts(ApplyPatch, {})).toBe(false)
-    })
-    test("rejects non-string patchText", () => {
-      expect(accepts(ApplyPatch, { patchText: 123 })).toBe(false)
     })
   })
 

@@ -11,6 +11,7 @@ use crate::choices::{self, Choices, ChoicesFile, SmallModels, WhereChoice};
 use crate::general::{self, Fit, Located, Placement};
 use crate::hardware::{choose_build, Gpu, Hardware, Vendor};
 use crate::profiles::Profile;
+use crate::reasoning;
 use crate::speed::{cpu_speed, Speed};
 use crate::split::MIN_CTX;
 use anyhow::Result;
@@ -193,8 +194,9 @@ pub struct Limits {
     /// The contexts offered with the current choice of where: 32K, 64K, 128K... up to the largest that fits, which is
     /// the last one. Empty if the model doesn't fit.
     pub context: Vec<u32>,
-    /// The model can think before it answers: the switch makes sense.
-    pub reasoning: bool,
+    /// What the model's chat template lets the user choose about its reasoning: "off" and "on", or "low", "medium" and
+    /// "high"; empty when it offers nothing (also while the model is not on the computer: its template is in its file).
+    pub reasoning: Vec<String>,
 }
 
 /// A local model of the catalog for the app: what the plan says about it here, what can be chosen and what is chosen.
@@ -269,6 +271,7 @@ pub fn models_view(paths: &Paths, hw: &Hardware) -> Result<Vec<ModelView>> {
             Err(_) => (false, false, r.recommendation.bytes),
         };
         fallback.push(r.recommendation.fallback);
+        let reasoning = reasoning::of_model(paths, &r.cfg);
         views.push(ModelView {
             key: key.to_string(),
             label: r.cfg.label.clone(),
@@ -301,9 +304,9 @@ pub fn models_view(paths: &Paths, hw: &Hardware) -> Result<Vec<ModelView>> {
                 fastest: r.recommendation.fastest,
                 estimated: r.recommendation.estimated,
             },
-            limits: Limits { places, context: largest.map_or_else(Vec::new, offered_contexts), reasoning: r.cfg.reasoning },
+            limits: Limits { places, context: largest.map_or_else(Vec::new, offered_contexts), reasoning: reasoning.levels() },
             tailored: crate::profiles::lookup(paths, key, hw)?.is_some_and(|p| p.tailored()),
-            choices: scope.choices,
+            choices: Choices { reasoning: scope.choices.reasoning.as_deref().and_then(|c| reasoning.resolve(c)).map(String::from), ..scope.choices },
         });
     }
     mark_recommended(&mut views, &fallback);
@@ -325,7 +328,7 @@ pub struct AfterFailure {
 /// here: a large screen, or two, make the desktop take more than the reserve measured with one.
 const TAKEN_MIB: u64 = 1024;
 
-/// What to say after the start of `failed` did not work. `used` is `(card index, used MiB, total MiB)` of the NVIDIA cards
+/// What to say after the start of `failed` did not work. `used` is `(card index, used MiB, total MiB)` of the cards
 /// (`gpu_memory`), read while no model of Mango Code is on them (empty otherwise): `now` is this computer without what the
 /// other programs hold. `in_use`: the model of Mango Code that runs meanwhile, if any.
 pub fn after_failure(paths: &Paths, hw: &Hardware, used: &[(u32, u64, u64)], failed: &str, default: Option<&str>, in_use: Option<&str>) -> Result<AfterFailure> {
@@ -367,7 +370,7 @@ pub struct CardsTaken {
 /// Before `key` starts: whether it fits beside what the other programs hold on its cards now.
 /// `used` as `gpu_memory` gives it, read while no model of Mango Code is on the cards; the cards in `lent` are lent to
 /// another job, which holds them: the plan leaves them out, and what is used there is not looked at. `None` when it fits,
-/// and when nothing is known of the cards (an empty `used`, cards that are not NVIDIA, a model on the processor).
+/// and when nothing is known of the cards (an empty `used`, a model on the processor).
 pub fn taken_before_start(paths: &Paths, hw: &Hardware, used: &[(u32, u64, u64)], key: &str, lent: &[u32]) -> Result<Option<CardsTaken>> {
     let used: Vec<(u32, u64, u64)> = used.iter().filter(|u| !lent.contains(&u.0)).copied().collect();
     if hw.gpus.iter().all(|g| held_by_others(g, &used) == 0) {
@@ -397,7 +400,7 @@ fn in_use_sentence(cards: &[Gpu], used: &[(u32, u64, u64)]) -> String {
 /// What the other programs hold on `g`, in MiB, beyond what every plan leaves to Windows (`split::SYSTEM_RESERVE_MIB`):
 /// 0 under `TAKEN_MIB`, and for a card `used` does not tell.
 fn held_by_others(g: &Gpu, used: &[(u32, u64, u64)]) -> u64 {
-    let held = used.iter().find(|(i, _, _)| g.vendor == Vendor::Nvidia && *i == g.index).map_or(0, |(_, u, _)| u.saturating_sub(crate::split::SYSTEM_RESERVE_MIB));
+    let held = used.iter().find(|(i, _, _)| *i == g.index).map_or(0, |(_, u, _)| u.saturating_sub(crate::split::SYSTEM_RESERVE_MIB));
     if held >= TAKEN_MIB { held } else { 0 }
 }
 

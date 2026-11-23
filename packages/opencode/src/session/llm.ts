@@ -1,5 +1,4 @@
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
-import { llmClient } from "@opencode-ai/core/effect/app-node-platform"
 import { PermissionV1 } from "@opencode-ai/core/v1/permission"
 import { Provider } from "@/provider/provider"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
@@ -8,8 +7,6 @@ import { Context, Effect, Layer } from "effect"
 import * as Stream from "effect/Stream"
 import { streamText, wrapLanguageModel, type ModelMessage, type Tool } from "ai"
 import type { LLMEvent } from "@opencode-ai/llm"
-import { LLMClient } from "@opencode-ai/llm/route"
-import type { LLMClientService } from "@opencode-ai/llm/route"
 import { ProviderTransform } from "@/provider/transform"
 import { Config } from "@/config/config"
 import type { Agent } from "@/agent/agent"
@@ -25,7 +22,6 @@ import * as Option from "effect/Option"
 import * as OtelTracer from "@effect/opentelemetry/Tracer"
 import { reason } from "@/tool/invalid"
 import { LLMAISDK } from "./llm/ai-sdk"
-import { LLMNativeRuntime } from "./llm/native-runtime"
 import { LLMRequestPrep } from "./llm/request"
 import { enqueueEngineRequest } from "@/provider/engine-queue"
 
@@ -63,13 +59,7 @@ export const use = serviceUse(Service)
 const live: Layer.Layer<
   Service,
   never,
-  | Config.Service
-  | Provider.Service
-  | Plugin.Service
-  | Permission.Service
-  | EventV2Bridge.Service
-  | LLMClientService
-  | RuntimeFlags.Service
+  Config.Service | Provider.Service | Plugin.Service | Permission.Service | EventV2Bridge.Service | RuntimeFlags.Service
 > = Layer.effect(
   Service,
   Effect.gen(function* () {
@@ -78,7 +68,6 @@ const live: Layer.Layer<
     const plugin = yield* Plugin.Service
     const perm = yield* Permission.Service
     const events = yield* EventV2Bridge.Service
-    const llmClient = yield* LLMClient.Service
     const flags = yield* RuntimeFlags.Service
 
     const run = Effect.fn("LLM.run")(function* (input: StreamRequest) {
@@ -120,139 +109,81 @@ const live: Layer.Layer<
           })
         : undefined
 
-      // Runtime seam: native is an opt-in adapter over @opencode-ai/llm. It
-      // either returns a ready LLMEvent stream or a concrete fallback reason.
-      if (flags.experimentalNativeLlm) {
-        const native = LLMNativeRuntime.stream({
-          model: input.model,
-          provider: item,
-          llmClient,
-          messages: prepared.messages,
-          tools: prepared.tools,
-          toolChoice: input.toolChoice,
-          temperature: prepared.params.temperature,
-          topP: prepared.params.topP,
-          topK: prepared.params.topK,
-          maxOutputTokens: prepared.params.maxOutputTokens,
-          providerOptions: prepared.params.options,
-          headers: prepared.headers,
-          abort: input.abort,
-        })
-        if (native.type === "supported") {
-          yield* Effect.logInfo("llm runtime selected", {
-            "llm.runtime": "native",
-            "llm.provider": input.model.providerID,
-            "llm.model": input.model.id,
-          })
-          return {
-            type: "native" as const,
-            stream: native.stream,
-          }
-        }
-        yield* Effect.logInfo("llm runtime selected", {
-          "llm.runtime": "ai-sdk",
-          "llm.provider": input.model.providerID,
-          "llm.model": input.model.id,
-          "llm.native_unsupported_reason": native.reason,
-        })
-        yield* Effect.logInfo("native runtime unavailable; falling back to ai-sdk", {
-          providerID: input.model.providerID,
-          modelID: input.model.id,
-          "session.id": input.sessionID,
-          small: (input.small ?? false).toString(),
-          agent: input.agent.name,
-          mode: input.agent.mode,
-          reason: native.reason,
-        })
-      }
-
-      yield* Effect.logInfo("llm runtime selected", {
-        "llm.runtime": "ai-sdk",
-        "llm.provider": input.model.providerID,
-        "llm.model": input.model.id,
-      })
-      // Default runtime path: AI SDK owns provider execution and tool dispatch;
-      // LLMAISDK.toLLMEvents below normalizes fullStream parts for the processor.
-      return {
-        type: "ai-sdk" as const,
-        result: streamText({
-          onError(error) {
-            bridge.fork(
-              Effect.logError("stream error", {
-                providerID: input.model.providerID,
-                modelID: input.model.id,
-                "session.id": input.sessionID,
-                small: (input.small ?? false).toString(),
-                agent: input.agent.name,
-                mode: input.agent.mode,
-                error,
-              }),
-            )
-          },
-          async experimental_repairToolCall(failed) {
-            const lower = failed.toolCall.toolName.toLowerCase()
-            if (lower !== failed.toolCall.toolName && prepared.tools[lower]) {
-              return {
-                ...failed.toolCall,
-                toolName: lower,
-              }
-            }
+      // AI SDK owns provider execution and tool dispatch; LLMAISDK.toLLMEvents below normalizes
+      // fullStream parts for the processor.
+      return streamText({
+        onError(error) {
+          bridge.fork(
+            Effect.logError("stream error", {
+              providerID: input.model.providerID,
+              modelID: input.model.id,
+              "session.id": input.sessionID,
+              small: (input.small ?? false).toString(),
+              agent: input.agent.name,
+              mode: input.agent.mode,
+              error,
+            }),
+          )
+        },
+        async experimental_repairToolCall(failed) {
+          const lower = failed.toolCall.toolName.toLowerCase()
+          if (lower !== failed.toolCall.toolName && prepared.tools[lower]) {
             return {
               ...failed.toolCall,
-              input: JSON.stringify({
-                tool: failed.toolCall.toolName,
-                error: reason({
-                  tool: failed.toolCall.toolName,
-                  arguments: failed.toolCall.input,
-                  error: failed.error.message,
-                  limit: prepared.params.maxOutputTokens,
-                }),
-              }),
-              toolName: "invalid",
+              toolName: lower,
             }
-          },
-          temperature: prepared.params.temperature,
-          topP: prepared.params.topP,
-          topK: prepared.params.topK,
-          providerOptions: ProviderTransform.providerOptions(input.model, prepared.params.options),
-          activeTools: Object.keys(prepared.tools).filter((x) => x !== "invalid"),
-          tools: prepared.tools,
-          toolChoice: input.toolChoice,
-          maxOutputTokens: prepared.params.maxOutputTokens,
-          abortSignal: input.abort,
-          headers: prepared.headers,
-          maxRetries: input.retries ?? 0,
-          messages: prepared.messages,
-          model: wrapLanguageModel({
-            model: language,
-            middleware: [
-              {
-                specificationVersion: "v3" as const,
-                async transformParams(args) {
-                  if (args.type === "stream") {
-                    // @ts-expect-error
-                    args.params.prompt = ProviderTransform.message(
-                      args.params.prompt,
-                      input.model,
-                      prepared.messageTransformOptions,
-                    )
-                  }
-                  return args.params
-                },
+          }
+          return {
+            ...failed.toolCall,
+            input: JSON.stringify({
+              tool: failed.toolCall.toolName,
+              error: reason({
+                tool: failed.toolCall.toolName,
+                arguments: failed.toolCall.input,
+                error: failed.error.message,
+                limit: prepared.params.maxOutputTokens,
+              }),
+            }),
+            toolName: "invalid",
+          }
+        },
+        temperature: prepared.params.temperature,
+        topP: prepared.params.topP,
+        topK: prepared.params.topK,
+        providerOptions: ProviderTransform.providerOptions(input.model, prepared.params.options),
+        activeTools: Object.keys(prepared.tools).filter((x) => x !== "invalid"),
+        tools: prepared.tools,
+        toolChoice: input.toolChoice,
+        maxOutputTokens: prepared.params.maxOutputTokens,
+        abortSignal: input.abort,
+        headers: prepared.headers,
+        maxRetries: input.retries ?? 0,
+        messages: prepared.messages,
+        model: wrapLanguageModel({
+          model: language,
+          middleware: [
+            {
+              specificationVersion: "v3" as const,
+              async transformParams(args) {
+                if (args.type === "stream") {
+                  // @ts-expect-error
+                  args.params.prompt = ProviderTransform.message(args.params.prompt, input.model)
+                }
+                return args.params
               },
-            ],
-          }),
-          experimental_telemetry: {
-            isEnabled: cfg.experimental?.openTelemetry,
-            functionId: "session.llm",
-            tracer: telemetryTracer,
-            metadata: {
-              userId: cfg.username ?? "unknown",
-              sessionId: input.sessionID,
             },
-          },
+          ],
         }),
-      }
+        experimental_telemetry: {
+          isEnabled: cfg.experimental?.openTelemetry,
+          functionId: "session.llm",
+          tracer: telemetryTracer,
+          metadata: {
+            userId: cfg.username ?? "unknown",
+            sessionId: input.sessionID,
+          },
+        },
+      })
     })
 
     const stream: Interface["stream"] = (input) =>
@@ -275,12 +206,8 @@ const live: Layer.Layer<
 
             const result = yield* run({ ...input, abort: ctrl.signal })
 
-            if (result.type === "native") return result.stream
-
-            // Adapter seam: both runtimes expose the same LLMEvent stream. Native
-            // already returns one; AI SDK streams are converted here.
             const state = LLMAISDK.adapterState()
-            return Stream.fromAsyncIterable(result.result.fullStream, (e) =>
+            return Stream.fromAsyncIterable(result.fullStream, (e) =>
               e instanceof Error ? e : new Error(String(e)),
             ).pipe(
               Stream.mapEffect((event) => LLMAISDK.toLLMEvents(state, event)),
@@ -297,7 +224,7 @@ const live: Layer.Layer<
 export const node = LayerNode.make({
   service: Service,
   layer: live,
-  deps: [Config.node, Provider.node, Plugin.node, Permission.node, EventV2Bridge.node, llmClient, RuntimeFlags.node],
+  deps: [Config.node, Provider.node, Plugin.node, Permission.node, EventV2Bridge.node, RuntimeFlags.node],
 })
 
 export * as LLM from "./llm"

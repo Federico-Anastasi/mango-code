@@ -31,11 +31,13 @@ pub enum ModelState {
         #[serde(rename = "where")]
         place: Option<Where>,
     },
+    /// `notice`: one line about the running model (`engine::PublicState::notice`), `null` when there is none.
     Ready {
         model: String,
         label: String,
         #[serde(rename = "where")]
         place: Where,
+        notice: Option<String>,
     },
     /// `reason` is the manager's sentence. `taken`: the sentence that says another program holds the card, when it does:
     /// the manager's, when it did not start the model for that, otherwise the one seen after the failure. `proposal`: a model
@@ -211,7 +213,9 @@ pub fn model_state(engine: &PublicState, remote: Option<&engine_remote::Info>, l
     let Some((model, label)) = engine.model.as_ref().map(named) else { return ModelState::None };
     match engine.phase {
         Phase::Running => match (&engine.name, engine.context) {
-            (Some(name), Some(context)) => ModelState::Ready { model, label: name.clone(), place: placed(engine.gpus.iter().map(|g| g.name.clone()).collect(), context) },
+            (Some(name), Some(context)) => {
+                ModelState::Ready { model, label: name.clone(), place: placed(engine.gpus.iter().map(|g| g.name.clone()).collect(), context), notice: engine.notice.clone() }
+            }
             // The engine has just stopped under the read: nothing runs.
             _ => ModelState::None,
         },
@@ -397,6 +401,7 @@ mod tests {
             failed: None,
             chosen: None,
             conversation_model: None,
+            notice: None,
         }
     }
 
@@ -427,10 +432,16 @@ mod tests {
     fn a_running_model_is_ready_with_where_it_runs() {
         assert_eq!(
             shown(&running("3.6")),
-            json!({ "phase": "ready", "model": "3.6", "label": "Qwen", "where": { "placement": "gpu", "gpus": ["RTX 3060 Ti"], "context": 131_072 } })
+            json!({ "phase": "ready", "model": "3.6", "label": "Qwen", "where": { "placement": "gpu", "gpus": ["RTX 3060 Ti"], "context": 131_072 }, "notice": null })
         );
         let on_cpu = PublicState { gpus: vec![], ..running("ling") };
         assert_eq!(shown(&on_cpu)["where"], json!({ "placement": "cpu", "gpus": [], "context": 131_072 }));
+    }
+
+    #[test]
+    fn the_line_of_a_running_model_is_told_with_it() {
+        let unread = PublicState { notice: Some("The memory of the cards cannot be read.".into()), ..running("3.6") };
+        assert_eq!(shown(&unread)["notice"], json!("The memory of the cards cannot be read."));
     }
 
     #[test]

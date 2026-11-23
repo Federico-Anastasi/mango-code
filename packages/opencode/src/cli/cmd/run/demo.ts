@@ -10,7 +10,7 @@
 //   /permission [kind] → triggers a permission request variant
 //   /question [kind]   → triggers a question request variant
 //   /fmt <kind>   → emits a specific tool/text type (text, reasoning, bash,
-//                   write, edit, patch, task, todo, question, error, mix)
+//                   write, edit, task, todo, question, error, mix)
 //
 // Demo mode also handles permission and question replies locally, completing
 // or failing the synthetic tool parts as appropriate.
@@ -28,7 +28,6 @@ const KINDS = [
   "bash",
   "write",
   "edit",
-  "patch",
   "task",
   "todo",
   "question",
@@ -626,35 +625,6 @@ function emitEdit(state: State): void {
   })
 }
 
-function emitPatch(state: State): void {
-  const file = path.join(process.cwd(), "src", "demo-format.ts")
-  const ref = make(state, "apply_patch", {
-    patchText: "*** Begin Patch\n*** End Patch",
-  })
-  doneTool(state, ref, {
-    title: "apply_patch",
-    output: "",
-    metadata: {
-      files: [
-        {
-          type: "update",
-          filePath: file,
-          relativePath: "src/demo-format.ts",
-          diff: "@@ -1 +1 @@\n-export const demo = 1\n+export const demo = 42\n",
-          deletions: 1,
-        },
-        {
-          type: "add",
-          filePath: path.join(process.cwd(), "README-demo.md"),
-          relativePath: "README-demo.md",
-          diff: "@@ -0,0 +1,4 @@\n+# Demo\n+This is a generated preview file.\n",
-          deletions: 0,
-        },
-      ],
-    },
-  })
-}
-
 function emitTask(state: State): void {
   const ref = make(state, "task", {
     description: "Scan run/* for reducer touchpoints",
@@ -1056,11 +1026,6 @@ async function emitFmt(state: State, kind: string, body: string, signal?: AbortS
     return true
   }
 
-  if (kind === "patch") {
-    emitPatch(state)
-    return true
-  }
-
   if (kind === "task") {
     emitTask(state)
     return true
@@ -1089,7 +1054,6 @@ async function emitFmt(state: State, kind: string, body: string, signal?: AbortS
     await emitBash(state, signal)
     emitWrite(state)
     emitEdit(state)
-    emitPatch(state)
     emitTask(state)
     emitTodo(state)
     emitQuestionTool(state)

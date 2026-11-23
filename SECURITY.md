@@ -42,7 +42,7 @@ isolation, run it in a virtual machine.
 - The preview panel also shows a PDF, a picture or a web page of a project when you click its card: only a file inside a project (or
   in `Documents\Mango Code`), at most 50 MB. An SVG is drawn as a picture by a page that allows no script, never opened as a
   page; a web page runs in the panel like the ones the agent opens; the files the server hands out stay inert downloads. From the phone the same files are shown from memory by the web UI.
-- The agent's browser: it is the preview panel, with a profile of its own and none of your logins. "Use my Chrome" lets
+- The agent's browser: it is the preview panel, with a profile of its own and none of your logins. "Also in my Chrome" lets
   the agent open a page in a new tab of your own Chrome, logged in wherever you are, when it asks for it for a page that
   needs your sign-ins, and it does not take a tab of yours to another address with `navigate_page`. While it is
   connected it can still list and read your other tabs, as with any use of your Chrome. Nothing copies the cookies of your Chrome.

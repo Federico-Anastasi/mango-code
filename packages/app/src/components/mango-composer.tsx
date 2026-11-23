@@ -2,7 +2,7 @@
 // seconds, a start that failed, the cards lent, the other PC's engine that does not answer, no model on the computer
 // (with the way to Models), a model just ready. Only what the app's state says: never a promise.
 import { createMediaQuery } from "@solid-primitives/media"
-import { createMemo, createSignal, Show } from "solid-js"
+import { createEffect, createMemo, createSignal, Show } from "solid-js"
 import { ButtonV2 } from "@opencode-ai/ui/v2/button-v2"
 import { ProgressBarV2 } from "@opencode-ai/ui/v2/progress-bar-v2"
 import { useLanguage } from "@/context/language"
@@ -10,7 +10,8 @@ import { failureText, useMango } from "@/context/mango"
 import { noModel } from "@/utils/mango-state"
 import { uiStorage } from "@/utils/ui-storage"
 import { showToast } from "@/utils/toast"
-import { statusLine } from "./mango-text"
+import { MangoNotice } from "./mango-notice"
+import { stateNotice, statusLine } from "./mango-text"
 
 const SEEN_KEY = "mango.readyHint.seen"
 const storedSeen = () => {
@@ -127,6 +128,29 @@ export function MangoStatusLine() {
             </ButtonV2>
           </Show>
         </div>
+      )}
+    </Show>
+  )
+}
+
+/** The engine's notice, under the status line: a model that runs while something is not as it should be. */
+export function MangoNoticeLine() {
+  const mango = useMango()
+  const language = useLanguage()
+  // a notice the user closed stays closed until the engine stops saying it
+  const [closed, setClosed] = createSignal<string>()
+  const said = () => {
+    const state = mango.state()
+    return state && stateNotice(state)
+  }
+  createEffect(() => {
+    if (mango.state() && !said()) setClosed(undefined)
+  })
+
+  return (
+    <Show when={said() && said() !== closed() ? said() : undefined}>
+      {(text) => (
+        <MangoNotice text={text()} closeLabel={language.t("common.close")} onClose={() => setClosed(text())} />
       )}
     </Show>
   )

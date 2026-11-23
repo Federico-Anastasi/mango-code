@@ -2,27 +2,10 @@ import type { NamedError } from "@opencode-ai/core/util/error"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
 import { Cause, Clock, Duration, Effect, Schedule } from "effect"
 import { MessageV2 } from "./message-v2"
-import { iife } from "@/util/iife"
 import { isRecord } from "@/util/record"
 import { tr } from "@/util/mango-language"
 
 export type Err = ReturnType<NamedError["toObject"]>
-
-export const GO_UPSELL_MESSAGE = "Free usage exceeded, subscribe to Go"
-export const GO_UPSELL_URL = "https://opencode.ai/go"
-export type RetryReason = "free_tier_limit" | "account_rate_limit" | (string & {})
-
-export type Retryable = {
-  message: string
-  action?: {
-    reason: RetryReason
-    provider: string
-    title: string
-    message: string
-    label: string
-    link?: string
-  }
-}
 
 export const RETRY_INITIAL_DELAY = 2000
 export const RETRY_BACKOFF_FACTOR = 2
@@ -83,7 +66,7 @@ function exponential(attempt: number, random: number) {
   return Math.ceil(base + base * RETRY_JITTER_FACTOR * random)
 }
 
-export function retryable(error: Err, provider: string) {
+export function retryable(error: Err) {
   // context overflow errors should not be retried
   if (SessionV1.ContextOverflowError.isInstance(error)) return undefined
   if (SessionV1.APIError.isInstance(error)) {
@@ -97,52 +80,6 @@ export function retryable(error: Err, provider: string) {
       !matchesRetryableMessage(error.data.responseBody)
     )
       return undefined
-    if (error.data.responseBody?.includes("FreeUsageLimitError")) {
-      return {
-        message: GO_UPSELL_MESSAGE,
-        action: {
-          reason: "free_tier_limit",
-          provider,
-          title: "Free limit reached",
-          message: "Subscribe to OpenCode Go for reliable access to the best open-source models for $10/month.",
-          label: "subscribe",
-          link: GO_UPSELL_URL,
-        },
-      }
-    }
-    if (error.data.responseBody?.includes("GoUsageLimitError")) {
-      const body = parseJSON(error.data.responseBody)
-      const workspace = str(body?.metadata?.workspace)
-      const limitName = str(body?.metadata?.limitName)
-      const retryAfter = num(error.data.responseHeaders?.["retry-after"])
-      const resetIn = iife(() => {
-        if (retryAfter === undefined) return ""
-        const seconds = Math.max(0, Math.ceil(retryAfter))
-        const days = Math.floor(seconds / 86_400)
-        const hours = Math.floor((seconds % 86_400) / 3_600)
-        const minutes = Math.ceil((seconds % 3_600) / 60)
-        const unit = (value: number, name: string) => `${value} ${name}${value === 1 ? "" : "s"}`
-
-        if (days > 0) return hours > 0 ? `${unit(days, "day")} ${unit(hours, "hour")}` : unit(days, "day")
-        if (hours > 0) return minutes > 0 ? `${unit(hours, "hour")} ${unit(minutes, "minute")}` : unit(hours, "hour")
-        return minutes > 0 ? unit(minutes, "minute") : "less than a minute"
-      })
-
-      const message = `${limitName ? `${limitName} usage limit` : "Usage limit"} reached. It will reset in ${resetIn}. To continue using this model now, enable usage from your available balance`
-
-      const link = `https://opencode.ai/workspace/${workspace}/go`
-      return {
-        message: `${message} - ${link}`,
-        action: {
-          reason: "account_rate_limit",
-          provider,
-          title: "Go limit reached",
-          message,
-          label: "open settings",
-          link,
-        },
-      }
-    }
     // mango-code: this PC's model closed in the middle of the answer (`MessageV2.fromError`): while the agent tries again
     // the engine is being loaded
     if (error.data.metadata?.engine === "closed")
@@ -168,37 +105,14 @@ function matchesRetryableMessage(value: unknown) {
   return typeof value === "string" && RETRYABLE_MESSAGE_PATTERNS.some((pattern) => pattern.test(value))
 }
 
-function str(value: unknown) {
-  if (value === undefined || value === null) return ""
-  return String(value)
-}
-
-function num(value: unknown) {
-  const parsed = Number.parseFloat(str(value))
-  if (Number.isNaN(parsed)) return undefined
-  return parsed
-}
-
-function parseJSON(value: unknown) {
-  return iife(() => {
-    try {
-      if (typeof value !== "string") return undefined
-      return JSON.parse(value)
-    } catch {
-      return undefined
-    }
-  })
-}
-
 export function policy(opts: {
-  provider: string
   parse: (error: unknown) => Err
-  set: (input: { attempt: number; message: string; action?: Retryable["action"]; next: number }) => Effect.Effect<void>
+  set: (input: { attempt: number; message: string; next: number }) => Effect.Effect<void>
 }) {
   return Schedule.fromStepWithMetadata(
     Effect.succeed((meta: Schedule.InputMetadata<unknown>) => {
       const error = opts.parse(meta.input)
-      const retry = retryable(error, opts.provider)
+      const retry = retryable(error)
       if (!retry) return Cause.done(meta.attempt)
       if (meta.attempt > RETRY_MAX_RETRIES) return Cause.done(meta.attempt)
       return Effect.gen(function* () {
@@ -207,7 +121,6 @@ export function policy(opts: {
         yield* opts.set({
           attempt: meta.attempt,
           message: retry.message,
-          action: retry.action,
           next: now + wait,
         })
         return [meta.attempt, Duration.millis(wait)] as [number, Duration.Duration]

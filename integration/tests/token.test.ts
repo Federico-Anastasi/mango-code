@@ -1,7 +1,7 @@
 // The token contract (docs/INTEGRATION.md, "Context used"): when the tokens of an answer arrive, what the summary
 // message carries, which event says the conversation was summarized. The fake engine declares the tokens of every
 // step (`token` in the script, see fake-engine.rs) and the model's context is small, so the summary really
-// triggers. Run it with `bun test integration`, after `cargo build -p mango-code -p engine` in app/.
+// triggers. Run it with `bun test --cwd integration`, after `cargo build -p mango-code -p engine` in app/.
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import fs from "node:fs";
@@ -59,7 +59,7 @@ describe("the tokens of an answer", () => {
   let mc: MangoCode;
 
   beforeAll(async () => {
-    env = await start(SCRIPT, { context: CONTEXT });
+    env = await start(SCRIPT, { context: CONTEXT, strict: true });
     mc = new MangoCode((await find(env.data))!);
   }, 200_000);
 
@@ -157,7 +157,7 @@ describe("the conversation summary", () => {
   let mc: MangoCode;
 
   beforeAll(async () => {
-    env = await start(SCRIPT, { context: CONTEXT });
+    env = await start(SCRIPT, { context: CONTEXT, strict: true });
     mc = new MangoCode((await find(env.data))!);
   }, 200_000);
 

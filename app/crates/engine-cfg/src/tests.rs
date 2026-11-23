@@ -1694,7 +1694,7 @@ mod real {
     }
 
     /// A model of the real catalog started without a profile, with the plan the app would make on any PC:
-    /// starts the real engine and answers (with a system message in the middle, like the agent), and if there is an
+    /// starts the real engine and answers, and if there is an
     /// image it reads it.
     /// - `MANGO_TEST_ENGINES`: engines folder (`llamacpp/b12110-<build>/`, `toq/`...);
     /// - `MANGO_TEST_MODELS`: models folder;
@@ -1749,14 +1749,10 @@ mod real {
                 assert!(start.elapsed().as_secs() < 300, "the engine is not ready in 300 s");
                 std::thread::sleep(std::time::Duration::from_millis(500));
             }
-            let (status, body) = http(
-                port,
-                "POST",
-                "/v1/chat/completions",
-                // A system message in the middle, as the agent sends it: the catalog's template must hold it.
-                r#"{"messages":[{"role":"system","content":"Answer with a single word."},{"role":"user","content":"Say hello."},{"role":"assistant","content":"Hello"},{"role":"system","content":"Service block."},{"role":"user","content":"Say goodbye."}],"max_tokens":16,"temperature":0,"chat_template_kwargs":{"enable_thinking":false}}"#,
-            )
-            .unwrap();
+            // The request the agent sends after a tool's result, as captured from the integration test, asking for a short answer.
+            let fixture: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/requests/tool-result.json")).unwrap()).unwrap();
+            let request = serde_json::json!({ "messages": fixture["messages"], "tools": fixture["tools"], "max_tokens": 16, "temperature": 0, "chat_template_kwargs": { "enable_thinking": false } });
+            let (status, body) = http(port, "POST", "/v1/chat/completions", &request.to_string()).unwrap();
             assert_eq!(status, 200, "{body}");
             let v: serde_json::Value = serde_json::from_str(&body).unwrap_or_else(|e| panic!("{e}: {body}"));
             let text = v["choices"][0]["message"]["content"].as_str().unwrap_or_default().to_string();

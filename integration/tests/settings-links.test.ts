@@ -3,15 +3,14 @@
 // of the engine turned on from their cards, with the code to copy and never an address or a key in the page; a text that
 // is not a code refused by the card of the engine of another PC, with nothing saved. Fake engine. The ports of the phone
 // and of the sharing sit on 127.0.0.1 (`MANGO_PHONE_PC_ONLY`, `MANGO_SHARE_PC_ONLY`, development builds only). The
-// screenshots stay in %TEMP%\mango-settings-*.png. `bun test integration`, after `cargo build -p mango-code -p engine`
+// screenshots are kept in the environment's folder, or in the one `MANGO_TEST_SCREENSHOTS` names. `bun test --cwd integration`, after `cargo build -p mango-code -p engine`
 // in app/.
 
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import fs from "node:fs";
 import net from "node:net";
-import os from "node:os";
 import path from "node:path";
-import { start, type Environment } from "./environment";
+import { saveScreenshot, start, type Environment } from "./environment";
 import { page, type Page } from "./cdp";
 import { resizeWindow } from "./window";
 
@@ -58,7 +57,7 @@ afterAll(async () => {
 
 const shot = async (name: string) => {
   const r = await p.send("Page.captureScreenshot", { format: "png" });
-  fs.writeFileSync(path.join(os.tmpdir(), `mango-settings-${name}.png`), Buffer.from(r.result.data, "base64"));
+  saveScreenshot(env, `mango-settings-${name}`, r.result.data);
 };
 
 async function waitFor(condition: string, ms = 20_000) {

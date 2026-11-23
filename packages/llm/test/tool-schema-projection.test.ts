@@ -27,28 +27,6 @@ describe("tool schema projections", () => {
     })
   })
 
-  test("gemini handles numeric enums, dangling required fields, untyped arrays, and scalar object keys", () => {
-    expect(
-      ToolSchemaProjection.gemini({
-        type: "object",
-        required: ["status", "missing"],
-        properties: {
-          status: { type: "integer", enum: [1, 2] },
-          tags: { type: "array" },
-          name: { type: "string", properties: { ignored: { type: "string" } }, required: ["ignored"] },
-        },
-      }),
-    ).toEqual({
-      type: "object",
-      required: ["status"],
-      properties: {
-        status: { type: "string", enum: ["1", "2"] },
-        tags: { type: "array", items: { type: "string" } },
-        name: { type: "string" },
-      },
-    })
-  })
-
   test("openai keeps one flat object top-level schema", () => {
     expect(
       ToolSchemaProjection.openAI({

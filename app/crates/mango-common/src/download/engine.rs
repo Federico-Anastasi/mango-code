@@ -171,7 +171,7 @@ fn other_versions(paths: &Paths, engine: &str, version: &str) -> Vec<(PathBuf, B
 }
 
 /// Downloads the build from the catalog, extracts it into `<engines>/<engine>/<version>-<build>/` and checks that
-/// the engine's program starts with `--version` (and, for CUDA, that it sees a GPU); only then does the folder appear. For
+/// the engine's program starts with `--version` (and, for a build that uses a card, that it sees one); only then does the folder appear. For
 /// CUDA it adds the runtime libraries if the PC lacks them. Already installed = no download.
 /// `progress(downloaded, total)` counts the bytes of all files. When `stop` becomes true the download ends with
 /// `Stopped`, and what has arrived stays for the next call.
@@ -307,21 +307,28 @@ fn extract(zip: &Path, dest: &Path) -> Result<()> {
     Ok(())
 }
 
-/// The engine must start (`--version`); a CUDA build must also see a GPU (`--list-devices`): with a driver too old
-/// for that CUDA the engine starts anyway and then runs on the CPU, silently. `gpu_check` is the engine's in the
-/// catalog: ik_llama.cpp (`toq`) has no `--list-devices` and would exit with an error.
+/// The engine must start (`--version`); a build that uses a card (every one but the processor's) must also see one
+/// (`--list-devices`): with a driver too old for that CUDA, or with none that does Vulkan, the engine starts anyway and then
+/// runs on the CPU, silently. `gpu_check` is the engine's in the catalog: ik_llama.cpp (`toq`) has no `--list-devices` and
+/// would exit with an error.
 fn check_engine(dir: &Path, m: &Engine, build: Build) -> Result<()> {
     run(dir, &m.exe, "--version")?;
-    if m.gpu_check && build.cuda_major().is_some() {
+    if m.gpu_check && build != Build::Cpu {
         let (gpus, messages) = run(dir, &m.exe, "--list-devices")?;
         if !lists_gpus(&gpus) {
+            let messages = messages.trim();
             bail!(
                 "{}",
-                tr!(
-                    "il motore parte ma non vede nessuna scheda: il driver NVIDIA di questo PC è troppo vecchio per la build {build}? ({})",
-                    "the engine starts but sees no GPU: is this PC's NVIDIA driver too old for the {build} build? ({})",
-                    messages.trim()
-                )
+                match build.cuda_major() {
+                    Some(_) => tr!(
+                        "il motore parte ma non vede nessuna scheda: il driver NVIDIA di questo PC è troppo vecchio per la build {build}? ({messages})",
+                        "the engine starts but sees no GPU: is this PC's NVIDIA driver too old for the {build} build? ({messages})"
+                    ),
+                    None => tr!(
+                        "il motore parte ma non vede nessuna scheda: il driver video di questo PC supporta Vulkan? ({messages})",
+                        "the engine starts but sees no GPU: does this PC's graphics driver support Vulkan? ({messages})"
+                    ),
+                }
             );
         }
     }
@@ -638,6 +645,35 @@ mod tests {
         // stable-diffusion.cpp's output, with a card and with none
         assert!(lists_gpus("CUDA0\tNVIDIA GeForce GTX 1080\r\nCPU\tTest CPU\r\n"));
         assert!(!lists_gpus("CPU\tTest CPU\r\n"));
+    }
+
+    /// An engine of ours as a script that answers `--version` and prints `devices` for `--list-devices`.
+    fn engine_listing(devices: &str) -> (tempfile::TempDir, Engine) {
+        let dir = tempfile::tempdir().unwrap();
+        let script = format!("@echo off\r\nif \"%1\"==\"--version\" echo version 1& exit /b 0\r\nif \"%1\"==\"--list-devices\" echo Available devices:{devices}& exit /b 0\r\nexit /b 1\r\n");
+        fs::write(dir.path().join("server.cmd"), script).unwrap();
+        let engine = Engine { version: "v1".into(), exe: "server.cmd".into(), gpu_check: true, avx2: false, build: BTreeMap::new() };
+        (dir, engine)
+    }
+
+    /// Every build that uses a card must see one when it is installed: an engine that starts without a card runs on the
+    /// processor while the app says «on the cards». The processor build does not look, nor an engine that cannot list.
+    #[test]
+    fn every_build_that_uses_a_card_must_see_one_when_installed() {
+        let (none, engine) = engine_listing("");
+        let (radeon, _) = engine_listing("&echo   Vulkan0: AMD Radeon RX 7800 XT (16368 MiB, 15000 MiB free)");
+        for build in Build::ALL {
+            let seeing = check_engine(radeon.path(), &engine, build);
+            assert!(seeing.is_ok(), "{build}: {seeing:?}");
+            let blind = check_engine(none.path(), &engine, build).map_err(|e| e.to_string());
+            match build {
+                Build::Cpu => assert!(blind.is_ok(), "{blind:?}"),
+                _ => assert!(blind.as_ref().is_err_and(|e| e.contains(&tr!("non vede nessuna scheda", "sees no GPU"))), "{build}: {blind:?}"),
+            }
+        }
+        let (_, mut cannot_list) = engine_listing("");
+        cannot_list.gpu_check = false;
+        assert!(check_engine(none.path(), &cannot_list, Build::Vulkan).is_ok());
     }
 
     /// An engine whose program is not `llama-server.exe` (the catalog names it) is checked, found on the disk and

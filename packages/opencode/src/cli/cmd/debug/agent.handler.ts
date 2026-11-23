@@ -64,24 +64,8 @@ const run = Effect.fn("Cli.debug.agent.body")(function* (
 })
 
 const getAvailableTools = Effect.fn("Cli.debug.agent.getAvailableTools")(function* (agent: Agent.Info) {
-  const provider = yield* Provider.Service
   const registry = yield* ToolRegistry.Service
-  const model =
-    agent.model ??
-    (yield* provider.defaultModel().pipe(
-      Effect.matchCauseEffect({
-        onSuccess: Effect.succeed,
-        onFailure: (cause) => {
-          const error = Cause.squash(cause) as Provider.DefaultModelError
-          if (error instanceof Provider.ModelNotFoundError) {
-            return fail(`Model not found: ${error.providerID}/${error.modelID}`)
-          }
-          if (error instanceof Provider.NoModelsError) return fail(`No models found for provider ${error.providerID}`)
-          return fail("No providers found")
-        },
-      }),
-    ))
-  return yield* registry.tools({ ...model, agent })
+  return yield* registry.tools({ agent })
 })
 
 function resolveTools(agent: Agent.Info, availableTools: { id: string }[]) {

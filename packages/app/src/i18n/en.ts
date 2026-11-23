@@ -55,9 +55,6 @@ export const dict = {
   "dialog.provider.group.popular": "Popular",
   "dialog.provider.group.other": "Other",
   "dialog.provider.custom.label": "Custom OpenAI-compatible provider",
-  "dialog.provider.tag.recommended": "Recommended",
-  "dialog.provider.opencode.tagline": "Reliable optimized models",
-  "dialog.provider.opencodeGo.tagline": "Low cost subscription for everyone",
   "dialog.provider.anthropic.note": "Direct access to Claude models, including Pro and Max",
   "dialog.provider.openai.note": "GPT models for fast, capable general AI tasks",
 
@@ -68,11 +65,7 @@ export const dict = {
   "dialog.model.manage.description": "Customize which models appear in the model selector.",
   "dialog.model.manage.provider.toggle": "Toggle all {{provider}} models",
 
-  "dialog.model.unpaid.freeModels.title": "Free models provided by OpenCode",
-  "dialog.model.unpaid.addMore.title": "Add more models from popular providers",
-  "dialog.model.unpaid.viewMoreProviders": "See 70+ more providers",
 
-  "dialog.provider.viewAll": "Show more providers",
 
   "provider.connect.title": "Connect {{provider}}",
   "provider.connect.title.anthropicProMax": "Login with Claude Pro/Max",
@@ -88,13 +81,6 @@ export const dict = {
   "provider.connect.apiKey.label": "{{provider}} API key",
   "provider.connect.apiKey.placeholder": "API key",
   "provider.connect.apiKey.required": "API key is required",
-  "provider.connect.opencodeZen.line1":
-    "OpenCode Zen gives you access to a curated set of reliable optimized models for coding agents.",
-  "provider.connect.opencodeZen.line2":
-    "With a single API key you'll get access to models such as Claude, GPT, Gemini, GLM and more.",
-  "provider.connect.opencodeZen.visit.prefix": "Visit ",
-  "provider.connect.opencodeZen.visit.link": "opencode.ai/zen",
-  "provider.connect.opencodeZen.visit.suffix": " to collect your API key.",
   "provider.connect.oauth.code.visit.prefix": "Visit ",
   "provider.connect.oauth.code.visit.link": "this link",
   "provider.connect.oauth.code.visit.suffix":
@@ -150,13 +136,7 @@ export const dict = {
   "provider.custom.error.duplicate": "Duplicate",
 
 
-  "model.tag.free": "Free",
   "model.tag.latest": "Latest",
-  "model.provider.anthropic": "Anthropic",
-  "model.provider.openai": "OpenAI",
-  "model.provider.google": "Google",
-  "model.provider.xai": "xAI",
-  "model.provider.meta": "Meta",
   "model.input.text": "text",
   "model.input.image": "image",
   "model.input.audio": "audio",
@@ -286,6 +266,12 @@ export const dict = {
   "settings.team.error.save": "Could not save: {{message}}",
   "settings.team.error.load": "Could not read the Team settings: {{message}}",
   "prompt.team": "Team",
+  "prompt.reasoning.label": "Reasoning",
+  "prompt.reasoning.off": "Off",
+  "prompt.reasoning.on": "On",
+  "prompt.reasoning.low": "Low",
+  "prompt.reasoning.medium": "Medium",
+  "prompt.reasoning.high": "High",
   "settings.prompt.tokens": "{{count}} tokens",
   "settings.prompt.notMeasured": "not measured",
   "settings.prompt.kind.base": "Base prompt",
@@ -551,7 +537,6 @@ export const dict = {
   "dialog.releaseNotes.action.next": "Next",
   "dialog.releaseNotes.action.hideFuture": "Don't show these in the future",
   "dialog.releaseNotes.media.alt": "Release preview",
-  "dialog.usageExceeded.dontShowAgain": "Don't show again",
 
   "context.breakdown.title": "Context Breakdown",
   "context.breakdown.note": 'Approximate breakdown of input tokens. "Other" includes tool definitions and overhead.',
@@ -738,6 +723,7 @@ export const dict = {
   "home.sessions.group.yesterday": "Yesterday",
   "home.sessions.group.older": "Older",
   "session.untitled": "New conversation",
+  "session.project.none": "No project",
   "titlebar.history": "Home",
   "titlebar.history.tooltip": "Projects and conversations",
   "home.session.rename.title": "Rename conversation",
@@ -1337,6 +1323,11 @@ export const dict = {
   "settings.models.sampling.range.above0": "more than 0",
   "settings.models.reasoning.title": "Reasoning",
   "settings.models.reasoning.description": "Thinks before answering. Slower, fewer mistakes.",
+  "settings.models.reasoning.off": "Off",
+  "settings.models.reasoning.on": "On",
+  "settings.models.reasoning.low": "Low",
+  "settings.models.reasoning.medium": "Medium",
+  "settings.models.reasoning.high": "High",
   "settings.models.remove.action": "Remove from the computer · frees {{size}}",
   "settings.models.remove.title": "Remove «{{name}}» from the computer?",
   "settings.models.remove.body": "It frees up to {{size}} on the disk.",
@@ -1497,11 +1488,10 @@ export const dict = {
   "mango.mcp.browser": "Browser",
   "mango.mcp.documents": "Documents",
   "mango.mcp.search": "Search",
-  // mango-code: the interface merged with the settings (the time of the update check)
+  // mango-code: the time of the update check in Settings
   "settings.help.update.checkedToday": "Up to date. Last checked today at {{time}}.",
   "settings.help.update.checkedOn": "Up to date. Last checked on {{date}} at {{time}}.",
-  // mango-code: the corrections of the merged interface (the engine the app came with, models that cannot be read,
-  // a memory that is estimated)
+  // mango-code: the engine the app came with, models that cannot be read, a memory that is estimated
   "mango.engine.updating": "Updating the engine",
   "mango.engine.paused": "The engine update is paused",
   "mango.engine.failed": "The engine update did not succeed: {{error}}",
@@ -1552,7 +1542,7 @@ export const dict = {
   "settings.models.estimated": "estimated memory",
   // mango-code: a model on the computer that waits for the new engine (components/settings-page/models.tsx)
   "settings.models.waitsEngine": "Waiting for the new engine",
-  // mango-code: the bar, the composer and the Home after the first round in the real window
+  // mango-code: the bar, the composer and the Home
   "mango.bar.status.loading": "loading, {{seconds}} s",
   "mango.bar.status.downloading": "downloading {{percent}}%",
   "mango.bar.status.lent": "cards lent",

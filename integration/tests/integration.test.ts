@@ -1,6 +1,6 @@
 // The integration test (docs/INTEGRATION.md), without a window and without GPUs: Mango Code started with
 // --service on an example folder (CLAUDE.md, a rule, a skill, a stdio MCP server); the model is the fake engine
-// answering from a script. Run it with `bun test integration`, after
+// answering from a script. Run it with `bun test --cwd integration`, after
 // `cargo build -p mango-code -p engine` in app/.
 
 import { afterAll, beforeAll, expect, test } from "bun:test";
@@ -9,6 +9,7 @@ import os from "node:os";
 import path from "node:path";
 import { MangoCode, find, type Step } from "../client/mango-code";
 import { start, type Environment } from "./environment";
+import { systemMessages } from "./requests";
 
 const GREETING = "Hello from the example project";
 // Every conversation goes through the script from the start: the fake engine answers step N, where N is the
@@ -23,7 +24,7 @@ let env: Environment;
 let mc: MangoCode;
 
 beforeAll(async () => {
-  env = await start(SCRIPT);
+  env = await start(SCRIPT, { strict: true });
   const s = await find(env.data);
   if (!s) throw new Error("service.json is there but Mango Code does not answer");
   mc = new MangoCode(s);
@@ -72,7 +73,7 @@ test("a request that needs a skill and a tool: the skill is read, the tool is ca
   // What reached the model: the project context, the app instruction, the MCP tool.
   const first = chatRequests().at(-3)!.body;
   expect(first.model).toBe("fake");
-  const system = first.messages.filter((m: any) => m.role === "system").map((m: any) => (typeof m.content === "string" ? m.content : JSON.stringify(m.content))).join("\n");
+  const system = systemMessages(first)[0];
   expect(system).toContain("TANGERINE"); // CLAUDE.md
   expect(system).toContain("End every answer"); // .claude/rules/style.md
   expect(system).toContain("App instruction: answer briefly.");

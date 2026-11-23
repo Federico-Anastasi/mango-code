@@ -1,6 +1,7 @@
 # Tests, builds, signs and publishes the Windows installer when a tag v<version> is pushed (app/README.md, "Automatic
-# updates"). The signing key lives in the `release` environment, which waits for the maintainer's approval, and only
-# the step "Sign the installer" reads it: a failed test, the build and the packages' scripts all run before and without it.
+# updates"). The tests are prove.yml, which is also started by hand to see them pass before a tag exists. The signing
+# key lives in the `release` environment, which waits for the maintainer's approval only once the tests have passed, and
+# only the step "Sign the installer" reads it: the build and the packages' scripts run before and without it.
 # The release is created as a draft, checked, and published last: users never see a release with files missing.
 name: release
 
@@ -14,7 +15,11 @@ permissions:
 concurrency: release
 
 jobs:
+  prove:
+    uses: ./.github/workflows/prove.yml
+
   windows:
+    needs: prove
     runs-on: windows-latest
     environment: release
     timeout-minutes: 150
@@ -59,25 +64,6 @@ jobs:
             if ($LASTEXITCODE) { throw "npm ci failed in $dir" }
             Pop-Location
           }
-
-      # The tests that need neither a graphics card nor the network, before anything is built or signed. Left out: the
-      # end-to-end tests of integration/ and the web interface's (they install the whole monorepo and start the
-      # agent), and the engines' own, which need the models.
-      - name: Tests
-        run: |
-          # tauri-build wants the staging folder to exist; build.ps1 fills it later
-          New-Item -ItemType Directory -Force app/scripts/staging/resources | Out-Null
-          Push-Location app
-          cargo test --workspace --locked
-          if ($LASTEXITCODE) { throw "cargo test failed" }
-          Pop-Location
-          # the release scripts, and the list of Rust crates in LICENSES/ against Cargo.lock
-          node --test "app/scripts/*.test.mjs"
-          if ($LASTEXITCODE) { throw "the release scripts' tests failed" }
-          Push-Location launcher/mango-documents
-          bun test
-          if ($LASTEXITCODE) { throw "the document tools' tests failed" }
-          Pop-Location
 
       - name: The agent
         run: ./app/scripts/build-agent.ps1

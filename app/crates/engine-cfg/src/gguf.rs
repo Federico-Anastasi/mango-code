@@ -448,6 +448,15 @@ pub fn model_memory(h: &GgufHeader) -> GgufMemory {
     }
 }
 
+/// In a MoE, the thousandths of the weights read for each token: the rest of the model and the experts chosen
+/// (`expert_used_count` of `expert_count`). `None` in a dense model, and when the header or the tensors don't say.
+pub fn active_permille(h: &GgufHeader) -> Option<u64> {
+    let (count, used) = (h.int_opt("expert_count")?, h.int_opt("expert_used_count")?);
+    let total: u64 = h.tensors.iter().map(|t| t.1).sum();
+    let experts: u64 = h.tensors.iter().filter(|t| t.0.contains("_exps.")).map(|t| t.1).sum();
+    (used > 0 && used < count && experts > 0).then(|| (total - experts + experts.saturating_mul(used) / count) * 1000 / total)
+}
+
 /// The most the f16 K and V cache of attention layer `il` can ask per token when the header doesn't say it: the output
 /// widths of its K and V projections (or of the fused QKV one), from the tensors' shapes. Without those, K and V twice
 /// as wide as the model each: heads x head size reaches twice the width in some models (Qwen3-0.6B: 16 x 128 on 1024).
@@ -540,6 +549,23 @@ pub(crate) mod test_util {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The rest of the model and the experts it chooses: (2048 + 2048 x 2/8) / 4096 of the weights.
+    #[test]
+    fn a_moe_reads_the_rest_of_the_model_and_the_experts_it_chooses() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("moe.gguf");
+        let moe = |count: u32, used: u32| {
+            let ints = [("llama.expert_count", count), ("llama.expert_used_count", used)];
+            test_util::write_with(&p, "llama", &ints, &[], &[], &[("blk.0.attn_k.weight", 1024), ("blk.0.ffn_gate_exps.weight", 1024), ("blk.0.ffn_down_exps.weight", 1024), ("blk.0.ffn_gate_shexp.weight", 1024)]);
+            active_permille(&read_header(&p).unwrap())
+        };
+        assert_eq!(moe(8, 2), Some(625));
+        assert_eq!(moe(8, 8), None, "all the experts are read: it is dense");
+        assert_eq!(moe(0, 0), None);
+        test_util::write_with(&p, "llama", &[], &[], &[], &[("blk.0.attn_k.weight", 1024)]);
+        assert_eq!(active_permille(&read_header(&p).unwrap()), None, "no experts");
+    }
 
     #[test]
     fn reads_shape_and_sizes() {

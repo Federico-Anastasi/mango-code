@@ -93,7 +93,7 @@ describe("llm constructors", () => {
     const updated = Model.update(base, {
       route: responsesRoute,
       defaults: { generation: { maxTokens: 20 } },
-      compatibility: { toolSchema: "gemini" },
+      compatibility: { toolSchema: "moonshot" },
     })
     const updatedInput = Model.input(updated)
 
@@ -101,7 +101,7 @@ describe("llm constructors", () => {
     expect(String(updated.id)).toBe("fake-model")
     expect(updated.route).toBe(responsesRoute)
     expect(updated.defaults?.generation).toEqual({ maxTokens: 20 })
-    expect(updated.compatibility).toEqual({ toolSchema: "gemini" })
+    expect(updated.compatibility).toEqual({ toolSchema: "moonshot" })
     expect(updatedInput.defaults).toBe(updated.defaults)
     expect(updatedInput.compatibility).toBe(updated.compatibility)
     expect(String(updatedInput.provider)).toBe("fake")

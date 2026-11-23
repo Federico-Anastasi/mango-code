@@ -42,7 +42,7 @@ const entry = (key: string, present: boolean, fits: boolean, extra: Record<strin
   bytes: 100,
   verdict: { fits, where: fits ? where : null, reason: fits ? "" : "Non ci sta.", speed: null, fastest: false },
   choices: { where: "auto", gpus: [], context: null, style: "recommended", reasoning: null, sampling: {} },
-  limits: { where: ["auto", "one", "cpu"], context: [32768, 65536, 131072], reasoning: true },
+  limits: { where: ["auto", "one", "cpu"], context: [32768, 65536, 131072], reasoning: ["off", "on"] },
   ...extra,
 })
 
@@ -62,7 +62,7 @@ describe("the app's state, as the agent tells it", () => {
     expect(catalog[0].limits).toEqual({
       where: ["auto", "one", "cpu"],
       context: [32768, 65536, 131072],
-      reasoning: true,
+      reasoning: ["off", "on"],
     })
     expect(parseCatalog({ models: [entry("a", true, true)] })![0].sampling).toBeNull()
     expect(parseCatalog({ models: [] })).toEqual([])
@@ -190,6 +190,31 @@ describe("the app's state, as the agent tells it", () => {
     expect(parseImageModels({ models: [] })).toBeUndefined()
     expect(parseImageModels({ image_models: [] })).toEqual({ models: [], default: null })
     expect(parseImageModels(undefined)).toBeUndefined()
+  })
+
+  test("a ready model carries the line about it, or none", () => {
+    const line = "I can't read the memory of the cards (GPU 0): I can't tell whether another program is using it."
+    expect(state({ phase: "ready", model: "3.6", label: "Qwen", where, notice: line }).model).toMatchObject({ notice: line })
+    expect(state({ phase: "ready", model: "3.6", label: "Qwen", where, notice: null }).model).toMatchObject({ notice: null })
+    expect(state({ phase: "ready", model: "3.6", label: "Qwen", where }).model).toMatchObject({ notice: null })
+  })
+
+  test("the choices of reasoning are the names of a level, or none; the levels of a model leave out what is not one", () => {
+    const choices = { where: "auto", gpus: [], context: null, style: "recommended", sampling: {} }
+    const limits = { where: ["auto"], context: [32768] }
+    const read = (reasoning: unknown, offered: unknown) =>
+      parseCatalog({
+        models: [entry("a", true, true, { choices: { ...choices, reasoning }, limits: { ...limits, reasoning: offered } })],
+      })?.[0]
+    expect(read("medium", ["low", "medium", "high"])).toMatchObject({
+      choices: { reasoning: "medium" },
+      limits: { reasoning: ["low", "medium", "high"] },
+    })
+    expect(read(null, ["off", "on", "maximum", 3])?.limits.reasoning).toEqual(["off", "on"])
+    expect(read(null, [])?.limits.reasoning).toEqual([])
+    expect(read(null, undefined)?.limits.reasoning).toEqual([])
+    expect(read(true, ["off", "on"])).toBeUndefined()
+    expect(read("maximum", ["off", "on"])).toBeUndefined()
   })
 
   test("a failed start carries the model that fits now, or none", () => {

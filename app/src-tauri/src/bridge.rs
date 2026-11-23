@@ -136,7 +136,7 @@ pub const INIT_SCRIPT: &str = r#"
       // a PDF, a picture or a web page the agent wrote (absolute path); rejects with { code, message } (not_found, blocked_type, too_large, ...)
       openFile: (path) => call("preview_file", { path }),
     }),
-    // "Use my Chrome": { installed, debugging, enabled }; setEnabled rejects with chrome_missing / chrome_debug_off
+    // "Also in my Chrome": { installed, debugging, enabled }; setEnabled rejects with chrome_missing / chrome_debug_off
     chrome: Object.freeze({
       info: () => call("chrome_info"),
       setEnabled: (enabled) => call("chrome_set_enabled", { enabled }),

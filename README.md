@@ -67,7 +67,7 @@ and on two engines of our own derived from it; the pictures are drawn by
   turned on or off, for all folders or for one, and the settings page shows how many tokens each one costs.
 - **Settings in one page**: six sections (Models, Computer, Agent, Connections, General, Help) and a search that finds
   every setting. For each model you choose where it runs, how many tokens it remembers, the style of its answers (or
-  its six sampling values) and whether it reasons, and you can put its files in another folder; for the computer,
+  its six sampling values) and how it reasons, and you can put its files in another folder; for the computer,
   which graphics cards the models leave alone and the folder the models are kept in.
 - **Projects are git repositories**: a folder you open becomes one if it isn't (with an empty first commit), so every
   change the agent makes can be seen and undone. Never in a folder too broad to be a project (your user folder,

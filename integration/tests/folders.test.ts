@@ -6,6 +6,7 @@ import { afterAll, beforeAll, expect, test } from "bun:test";
 import fs from "node:fs";
 import { MangoCode, find } from "../client/mango-code";
 import { start, type Environment } from "./environment";
+import { systemMessages } from "./requests";
 
 const SCRIPT = [{ tool: "skill", arguments: { name: "whiteboard" } }, { text: "Done — end" }];
 
@@ -13,7 +14,7 @@ let env: Environment;
 let mc: MangoCode;
 
 beforeAll(async () => {
-  env = await start(SCRIPT);
+  env = await start(SCRIPT, { strict: true });
   mc = new MangoCode((await find(env.data))!);
 }, 200_000);
 
@@ -33,9 +34,6 @@ const chatRequests = () =>
     .map((l) => JSON.parse(l))
     .filter((r) => r.route.startsWith("/v1/chat/completions"));
 
-const systemText = (body: any): string =>
-  body.messages.filter((m: any) => m.role === "system").map((m: any) => (typeof m.content === "string" ? m.content : JSON.stringify(m.content))).join("\n");
-
 async function runTurn(id: string) {
   const steps = [];
   for await (const p of mc.turn(id, env.project, "How do you wipe the whiteboard?", { model: "fake" })) steps.push(p);
@@ -45,7 +43,7 @@ async function runTurn(id: string) {
 test("without extra folders the method is not there", async () => {
   const id = await mc.createSession(env.project);
   await runTurn(id);
-  const system = systemText(chatRequests().at(-2)!.body);
+  const system = systemMessages(chatRequests().at(-2)!.body)[0];
   expect(system).toContain("TANGERINE");
   expect(system).not.toContain("GINGER");
 }, 120_000);
@@ -59,7 +57,7 @@ test("extra folders give instructions, rules and skills, and declaring them agai
   const skill = steps.find((p) => p.type === "tool" && p.name === "skill" && p.status === "completed") as any;
   expect(skill.output).toContain("green rag");
 
-  const system = systemText(chatRequests().at(-2)!.body);
+  const system = systemMessages(chatRequests().at(-2)!.body)[0];
   expect(system).toContain("TANGERINE"); // the working folder stays
   expect(system).toContain("GINGER"); // the method's CLAUDE.md
   expect(system).toContain("always cite the method keyword"); // the method's .claude/rules/tone.md
@@ -73,5 +71,5 @@ test("an empty list removes the extra folders; a path that is not a folder is re
   await expect(mc.setExtraFolders(env.project, [env.method + "-that-does-not-exist"])).rejects.toThrow(/400/);
   expect((await mc.setExtraFolders(env.project, [])).changed).toBe(true);
   await runTurn(await mc.createSession(env.project));
-  expect(systemText(chatRequests().at(-2)!.body)).not.toContain("GINGER");
+  expect(systemMessages(chatRequests().at(-2)!.body)[0]).not.toContain("GINGER");
 }, 120_000);

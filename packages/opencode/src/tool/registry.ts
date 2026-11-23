@@ -29,7 +29,6 @@ import { WebSearchTool } from "./websearch"
 import { ImageTool } from "./image"
 import { LspTool } from "./lsp"
 import * as Truncate from "./truncate"
-import { ApplyPatchTool } from "./apply_patch"
 import { Glob } from "@opencode-ai/core/util/glob"
 import path from "path"
 import { pathToFileURL } from "url"
@@ -50,8 +49,6 @@ import { Skill } from "../skill"
 import { Permission } from "@/permission"
 import { BackgroundJob } from "@/background/job"
 import { RuntimeFlags } from "@/effect/runtime-flags"
-import { ProviderV2 } from "@opencode-ai/core/provider"
-import { ModelV2 } from "@opencode-ai/core/model"
 import { MCP } from "@/mcp"
 import { PermissionV1 } from "@opencode-ai/core/v1/permission"
 import { McpCatalog } from "@/mcp/catalog"
@@ -74,12 +71,7 @@ export interface Interface {
   readonly ids: () => Effect.Effect<string[]>
   readonly all: () => Effect.Effect<Tool.Def[]>
   readonly named: () => Effect.Effect<{ task: TaskDef; read: ReadDef }>
-  readonly tools: (model: {
-    providerID: ProviderV2.ID
-    modelID: ModelV2.ID
-    agent: Agent.Info
-    permission?: PermissionV1.Ruleset
-  }) => Effect.Effect<Tool.Def[]>
+  readonly tools: (input: { agent: Agent.Info; permission?: PermissionV1.Ruleset }) => Effect.Effect<Tool.Def[]>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/ToolRegistry") {}
@@ -109,7 +101,6 @@ const layer = Layer.effect(
     const writetool = yield* WriteTool
     const edit = yield* EditTool
     const greptool = yield* GrepTool
-    const patchtool = yield* ApplyPatchTool
     const skilltool = yield* SkillTool
     const agent = yield* Agent.Service
     const codeMode = flags.experimentalCodeMode ? yield* Effect.promise(() => import("./code-mode")) : undefined
@@ -217,7 +208,6 @@ const layer = Layer.effect(
           search: Tool.init(websearch),
           image: Tool.init(image),
           skill: Tool.init(skilltool),
-          patch: Tool.init(patchtool),
           question: Tool.init(question),
           lsp: Tool.init(lsptool),
           plan: Tool.init(plan),
@@ -241,7 +231,6 @@ const layer = Layer.effect(
             tool.search,
             tool.image,
             tool.skill,
-            tool.patch,
             ...(tool.execute ? [tool.execute] : []),
             ...(flags.experimentalLspTool ? [tool.lsp] : []),
             ...(flags.experimentalPlanMode && flags.client === "cli" ? [tool.plan] : []),
@@ -294,11 +283,6 @@ const layer = Layer.effect(
         }
         // mango-code: pictures are made by the app, which gives the agent it starts the address of its control server.
         if (tool.id === ImageTool.id) return Boolean(process.env.MANGO_CONTROL_URL)
-
-        const usePatch =
-          input.modelID.includes("gpt-") && !input.modelID.includes("oss") && !input.modelID.includes("gpt-4")
-        if (tool.id === ApplyPatchTool.id) return usePatch
-        if (tool.id === EditTool.id || tool.id === WriteTool.id) return !usePatch
 
         return true
       })

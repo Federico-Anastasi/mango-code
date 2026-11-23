@@ -7,6 +7,7 @@
 //! sentence for the user, never the standard values in its place; and it is not overwritten.
 
 use crate::catalog::{load_models, model_cfg};
+use crate::reasoning;
 use crate::split::{context_label, MIN_CTX};
 use anyhow::Result;
 use mango_common::catalog::Sampling;
@@ -69,9 +70,27 @@ pub struct Choices {
     pub style: Style,
     /// The values the user chose one by one, over the style's: a missing one is the style's.
     pub sampling: Sampling,
-    /// `None` = as the model wants.
-    pub reasoning: Option<bool>,
+    /// A level the model's chat template offers (`reasoning::Reasoning`): "off" or "on", or "low", "medium" or "high".
+    /// `None` = as the model wants. A file written before the levels has `true` or `false`: they are read as "on" and "off".
+    #[serde(deserialize_with = "saved_reasoning")]
+    pub reasoning: Option<String>,
 }
+
+fn saved_reasoning<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<String>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Saved {
+        Switch(bool),
+        Level(String),
+    }
+    Ok(Option::<Saved>::deserialize(d)?.map(|saved| match saved {
+        Saved::Switch(on) => if on { "on" } else { "off" }.to_string(),
+        Saved::Level(level) => level,
+    }))
+}
+
+/// The names a choice of reasoning can have; which of them a model has depends on its chat template.
+const REASONING: [&str; 5] = ["off", "on", "low", "medium", "high"];
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(default)]
@@ -255,18 +274,56 @@ pub(crate) fn effective_sampling(catalog: Option<Sampling>, choices: &Choices) -
 }
 
 /// What a chat request to `key` is given when it does not say it itself: the sampling values the user's style and
-/// choices make of the catalog's (`effective_sampling`) and, if the user chose it for a model that reasons, whether it
-/// reasons (`chat_template_kwargs.enable_thinking`). Empty when there is nothing to add: a model with no values in the
-/// catalog, the recommended style and the reasoning as the model wants.
-pub fn request_defaults(paths: &Paths, key: &str) -> Result<serde_json::Map<String, serde_json::Value>> {
+/// choices make of the catalog's (`effective_sampling`), the reasoning of the earlier turns kept in the history
+/// (`chat_template_kwargs.preserve_thinking`, which a template that does not read it ignores) and, if the user chose it
+/// for a model whose template offers it, the level (`reasoning_effort`) or the switch (`enable_thinking`).
+pub(crate) fn request_defaults(paths: &Paths, key: &str) -> Result<serde_json::Map<String, serde_json::Value>> {
     let cfg = model_cfg(&load_models(paths)?, key)?;
     let choices = read(paths)?.models.remove(key).unwrap_or_default();
     let sampling = effective_sampling(cfg.sampling, &choices);
     let serde_json::Value::Object(mut fields) = serde_json::to_value(sampling)? else { unreachable!("a struct is written as an object") };
-    if let (true, Some(reason)) = (cfg.reasoning, choices.reasoning) {
-        fields.insert("chat_template_kwargs".into(), serde_json::json!({ "enable_thinking": reason }));
+    let mut kwargs = serde_json::Map::from_iter([("preserve_thinking".to_string(), true.into())]);
+    if let Some((name, value)) = choices.reasoning.as_deref().and_then(|chosen| reasoning::of_model(paths, &cfg).kwarg(chosen)) {
+        kwargs.insert(name.into(), value);
     }
+    fields.insert("chat_template_kwargs".into(), kwargs.into());
     Ok(fields)
+}
+
+/// What a chat request to each model is given (`request_defaults`), kept in memory until one of the files it comes from is
+/// written: the choices, the user's models, where the model files are. Whoever writes them says so
+/// (`mango_common::catalog::changed`); a request does not read the disk. A model whose defaults cannot be read is read again at
+/// the next request.
+pub struct ModelDefaults {
+    paths: Paths,
+    kept: Mutex<Kept>,
+}
+
+struct Kept {
+    revision: u64,
+    models: std::collections::HashMap<String, serde_json::Map<String, serde_json::Value>>,
+}
+
+impl ModelDefaults {
+    pub fn new(paths: Paths) -> ModelDefaults {
+        let revision = mango_common::catalog::revision(&paths.data);
+        ModelDefaults { paths, kept: Mutex::new(Kept { revision, models: Default::default() }) }
+    }
+
+    pub fn get(&self, key: &str) -> Result<serde_json::Map<String, serde_json::Value>> {
+        let revision = mango_common::catalog::revision(&self.paths.data);
+        let mut kept = self.kept.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if kept.revision != revision {
+            kept.revision = revision;
+            kept.models.clear();
+        }
+        if let Some(fields) = kept.models.get(key) {
+            return Ok(fields.clone());
+        }
+        let fields = request_defaults(&self.paths, key)?;
+        kept.models.insert(key.to_string(), fields.clone());
+        Ok(fields)
+    }
 }
 
 /// Two commands that change the file at the same time must not read the same old content: one of the changes would be
@@ -284,7 +341,9 @@ fn change(paths: &Paths, apply: impl FnOnce(&mut ChoicesFile)) -> Result<()> {
     let f = paths.data.join(FILE);
     let error = |e: &dyn std::fmt::Display| user_error(&tr!("Non riesco a salvare le tue scelte.", "I can't save your choices."), format!("{}: {e}", f.display()));
     std::fs::create_dir_all(&paths.data).map_err(|e| error(&e))?;
-    mango_common::write_atomic(&f, serde_json::to_string_pretty(&file)?).map_err(|e| error(&e))
+    mango_common::write_atomic(&f, serde_json::to_string_pretty(&file)?).map_err(|e| error(&e))?;
+    mango_common::catalog::changed(&paths.data);
+    Ok(())
 }
 
 impl Choices {
@@ -296,6 +355,9 @@ impl Choices {
         }
         if self.place == WhereChoice::Pick && self.gpus.is_empty() {
             anyhow::bail!("{}", tr!("Per «{name}» hai scelto le schede, ma non ne hai indicata nessuna.", "For «{name}» you chose the cards, but named none."));
+        }
+        if let Some(level) = self.reasoning.as_deref().filter(|l| !REASONING.contains(l)) {
+            anyhow::bail!("{}", tr!("Per «{name}» il ragionamento «{level}» non esiste.", "For «{name}» the reasoning «{level}» does not exist."));
         }
         let s = &self.sampling;
         let in_interval = |field: &str, value: Option<f64>, low: f64, high: f64, range: String| match value {

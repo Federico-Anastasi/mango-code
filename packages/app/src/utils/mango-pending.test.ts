@@ -6,7 +6,7 @@ import { batches, combine, joinPrompts, pendingText, split, withTimeout, type Pe
 const text = (content: string, start = 0) => ({ type: "text" as const, content, start, end: start + content.length })
 const draft = (prompt: Prompt, extra: Partial<FollowupDraft> = {}): FollowupDraft => ({
   sessionID: "ses_1",
-  sessionDirectory: "C:\\progetto",
+  sessionDirectory: "C:\\project",
   prompt,
   context: [],
   agent: "build",
@@ -17,29 +17,29 @@ const item = (id: string, run: string, value: FollowupDraft): PendingItem => ({ 
 
 describe("the waiting messages of a conversation", () => {
   test("leave together, in order, a blank line between them, with the mentions moved along", () => {
-    const first = [text("Riordina "), { type: "file" as const, path: "a.txt", content: "@a.txt", start: 9, end: 15 }]
-    const joined = joinPrompts([first, [text("poi novembre")]])
+    const first = [text("Sort out "), { type: "file" as const, path: "a.txt", content: "@a.txt", start: 9, end: 15 }]
+    const joined = joinPrompts([first, [text("then October")]])
     expect(joined.map((part) => ("content" in part ? part.content : "")).join("")).toBe(
-      "Riordina @a.txt\n\npoi novembre",
+      "Sort out @a.txt\n\nthen October",
     )
     expect(joined[1]).toMatchObject({ start: 9, end: 15 })
-    expect(joined[3]).toMatchObject({ content: "poi novembre", start: 17, end: 29 })
+    expect(joined[3]).toMatchObject({ content: "then October", start: 17, end: 29 })
   })
 
   test("as one message to the model now ready, with their context together and once", () => {
     const shared = { key: "f:a", type: "file" as const, path: "a.txt" }
     const combined = combine(
       [
-        item("1", "run", draft([text("uno")], { context: [shared] })),
+        item("1", "run", draft([text("one")], { context: [shared] })),
         item(
           "2",
           "run",
-          draft([text("due")], { context: [shared, { key: "f:b", type: "file", path: "b.txt" }], agent: "team" }),
+          draft([text("two")], { context: [shared, { key: "f:b", type: "file", path: "b.txt" }], agent: "team" }),
         ),
       ],
       { providerID: "mango", modelID: "ling" },
     )!
-    expect(pendingText(combined)).toBe("uno\n\ndue")
+    expect(pendingText(combined)).toBe("one\n\ntwo")
     expect(combined.context.map((c) => c.key)).toEqual(["f:a", "f:b"])
     expect(combined.model).toEqual({ providerID: "mango", modelID: "ling" })
     expect(combined.agent).toBe("team")
@@ -64,7 +64,7 @@ describe("the waiting messages of a conversation", () => {
 
 describe("the order they leave in", () => {
   test("messages written one after the other go as one; a «/» command goes by itself, in its place", () => {
-    const list = ["uno", "due", "/review", "tre", "/compact", "/review"].map((content, index) =>
+    const list = ["one", "two", "/review", "six", "/compact", "/review"].map((content, index) =>
       item(String(index), "run", draft([text(content)])),
     )
     expect(batches(list).map((group) => group.map((one) => one.id))).toEqual([["0", "1"], ["2"], ["3"], ["4"], ["5"]])

@@ -86,7 +86,7 @@ enum Role {
 pub struct BrowserInputs {
     /// Remote debugging port of the Preview panel (127.0.0.1 only, chosen at random at every start).
     pub preview_port: u16,
-    /// File with the «Use my Chrome» choice (`{"myChrome":true}`): the server rereads it at every tool call, so the
+    /// File with the «Also in my Chrome» choice (`{"myChrome":true}`): the server rereads it at every tool call, so the
     /// choice applies without restarting the agent.
     pub choice: PathBuf,
 }

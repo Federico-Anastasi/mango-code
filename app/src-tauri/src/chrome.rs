@@ -1,4 +1,4 @@
-//! "Use my Chrome": the agent may open a page that needs the user's sign-ins as a new tab of their own Chrome; every
+//! "Also in my Chrome": the agent may open a page that needs the user's sign-ins as a new tab of their own Chrome; every
 //! other page stays in the Preview panel. It is an explicit choice, off by default, and shown only if Chrome is installed.
 //!
 //! The link is the remote debugging that Chrome offers from `chrome://inspect/#remote-debugging`: at every
@@ -78,7 +78,7 @@ pub struct ChromeInfo {
     installed: bool,
     /// Chrome's remote debugging is on now.
     debugging: bool,
-    /// The user chose "Use my Chrome".
+    /// The user chose "Also in my Chrome".
     enabled: bool,
 }
 
@@ -87,7 +87,7 @@ pub fn chrome_info() -> ChromeInfo {
     ChromeInfo { installed: installed(), debugging: debug_active(), enabled: read_choice().my_chrome }
 }
 
-/// Turns "Use my Chrome" on or off. Turning on is refused if Chrome is missing (`chrome_missing`) or has
+/// Turns "Also in my Chrome" on or off. Turning on is refused if Chrome is missing (`chrome_missing`) or has
 /// remote debugging off (`chrome_debug_off`): the browser server would have nothing to connect to and the
 /// agent would be left without a browser. Turning off goes back to the panel.
 #[tauri::command]

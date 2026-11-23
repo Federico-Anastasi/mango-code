@@ -17,6 +17,19 @@ use std::path::Path;
 /// The user's models file, in the app's data dir.
 pub const USER_FILE: &str = "user-models.json";
 
+/// How many times the files the catalog and the user's choices come from have been written, by data folder. Whoever keeps
+/// something derived from them has it out of date when the number changes: the writer says so after writing.
+static REVISIONS: std::sync::Mutex<BTreeMap<std::path::PathBuf, u64>> = std::sync::Mutex::new(BTreeMap::new());
+
+pub fn revision(data: &Path) -> u64 {
+    REVISIONS.lock().unwrap_or_else(|e| e.into_inner()).get(data).copied().unwrap_or(0)
+}
+
+/// A file of `data` the catalog or the choices come from has just been written.
+pub fn changed(data: &Path) {
+    *REVISIONS.lock().unwrap_or_else(|e| e.into_inner()).entry(data.to_path_buf()).or_default() += 1;
+}
+
 /// A line for the user about a catalog model (`about` in `mango-models.json`), in both languages.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -329,7 +342,9 @@ fn write_user_list(data: &Path, models: BTreeMap<String, Value>) -> Result<()> {
         )
     };
     std::fs::create_dir_all(data).map_err(|e| error(&e))?;
-    crate::write_durable(&f, serde_json::to_string_pretty(&serde_json::json!({ "models": models }))?).map_err(|e| error(&e))
+    crate::write_durable(&f, serde_json::to_string_pretty(&serde_json::json!({ "models": models }))?).map_err(|e| error(&e))?;
+    changed(data);
+    Ok(())
 }
 
 fn cannot_read_user_list() -> String {
