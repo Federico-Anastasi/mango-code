@@ -130,7 +130,7 @@ export function PictureModelControl(props: { picture: PromptPicture; onClose: ()
             as={ButtonV2}
             variant="ghost-muted"
             size="normal"
-            class="min-w-0 max-w-[220px] justify-start ![font-weight: 400]"
+            class="min-w-0 max-w-[220px] justify-start ![font-weight:400]"
             style={{ height: "28px" }}
             data-action="prompt-picture-model"
             aria-label={language.t("picture.model.label")}

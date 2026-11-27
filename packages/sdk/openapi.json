@@ -17156,10 +17156,11 @@
           "auto": {
             "type": "boolean"
           },
-          "overflow": {
-            "type": "boolean"
-          },
           "tail_start_id": {
+            "type": "string",
+            "pattern": "^msg"
+          },
+          "users_from_id": {
             "type": "string",
             "pattern": "^msg"
           }

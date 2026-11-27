@@ -11,8 +11,18 @@ export const configHandlers = HttpApiBuilder.group(InstanceHttpApi, "config", (h
     const providerSvc = yield* Provider.Service
     const configSvc = yield* Config.Service
 
+    // mango-code: the keys `{env:…}` put in the providers stay in the agent; whoever reads the config gets it without them.
     const get = Effect.fn("ConfigHttpApi.get")(function* () {
-      return yield* configSvc.get()
+      const config = yield* configSvc.get()
+      if (!config.provider) return config
+      const provider = Object.fromEntries(
+        Object.entries(config.provider).map(([id, item]) => {
+          if (!item.options) return [id, item]
+          const { apiKey: _, ...options } = item.options
+          return [id, { ...item, options }]
+        }),
+      )
+      return { ...config, provider }
     })
 
     const update = Effect.fn("ConfigHttpApi.update")(function* (ctx) {

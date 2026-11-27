@@ -22,6 +22,7 @@ import type { WorkspaceAdapter } from "@/control-plane/types"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { PromptSettings } from "@/session/settings"
+import { Harness } from "@/session/harness"
 import { PromptMeasurement } from "@/session/prompt-measurement"
 
 type State = {
@@ -252,24 +253,34 @@ const layer = Layer.effect(
     >(name: Name, input: Input, output: Output) {
       if (!name) return output
       const s = yield* InstanceState.get(state)
-      let valid: { directory: string; imp: PromptSettings.Valid } | undefined
-      for (const hook of s.hooks) {
+      const listening = s.hooks.filter((hook) => hook[name])
+      if (!listening.length) return output
+      const sessionID = (input as { sessionID?: unknown }).sessionID
+      const defined = typeof sessionID === "string" ? Harness.ofSession(sessionID) : Harness.definition(Harness.DEFAULT)
+      // mango-code: the conversation of a `commands` harness sends its own prompt, tools and messages: no plugin adds to them
+      if (typeof sessionID === "string" && defined.kind === "commands" && ADDING_HOOKS.has(name)) return output
+      // mango-code: a plugin with a name reads the harness of the conversation: which hooks are on (its own and the
+      // switches of the settings page), their numbers and texts. The settings are re-read at every round, only when such
+      // a plugin listens: a change applies at once.
+      let imp: PromptSettings.Valid | undefined
+      for (const hook of listening) {
         const fn = hook[name] as any
-        if (!fn) continue
         const pluginName = names.get(hook)
         if (!pluginName) {
           yield* Effect.promise(async () => fn(input, output))
           continue
         }
-        // mango-code: a plugin that is switched off does not run. The settings are re-read at every round: a change applies at once.
-        if (!valid) {
-          const directory = (yield* InstanceState.context).directory
-          valid = { directory, imp: PromptSettings.load(directory) }
+        if (!imp) {
+          const loaded = PromptSettings.load((yield* InstanceState.context).directory, defined.id)
+          imp = loaded
+          if (typeof sessionID === "string")
+            Object.assign(input as object, { harness: Harness.withSwitches(defined, (hook) => PromptSettings.chosen(loaded, "hooks", hook)) })
         }
-        if (!PromptSettings.enabled(valid.imp, "plugins", pluginName)) continue
+        // mango-code: a plugin that is switched off does not run
+        if (!PromptSettings.enabled(imp, "plugins", pluginName)) continue
         const lengthBefore = addedLength(name, output)
         yield* Effect.promise(async () => fn(input, output))
-        collectAdditions(name, pluginName, input, output, lengthBefore, valid)
+        collectAdditions(name, pluginName, input, output, lengthBefore, imp)
       }
       return output
     })
@@ -293,6 +304,14 @@ const layer = Layer.effect(
 // remembered, because it is part of the plugin's weight that the first request measures.
 const SYSTEM_HOOK = "experimental.chat.system.transform"
 const MESSAGE_HOOK = "chat.message"
+// mango-code: the hooks through which a plugin puts text into what the model reads
+const ADDING_HOOKS = new Set<string>([
+  SYSTEM_HOOK,
+  MESSAGE_HOOK,
+  "experimental.chat.messages.transform",
+  "tool.execute.before",
+  "tool.execute.after",
+])
 
 /** How many system texts / message parts there are before the plugin runs; -1 for hooks that add nothing. */
 function addedLength(name: string, output: any): number {
@@ -307,7 +326,7 @@ function collectAdditions(
   input: any,
   output: any,
   lengthBefore: number,
-  valid: { directory: string; imp: PromptSettings.Valid },
+  imp: PromptSettings.Valid,
 ) {
   if (lengthBefore < 0) return
   if (name === MESSAGE_HOOK) {
@@ -321,8 +340,7 @@ function collectAdditions(
   }
   for (const text of (output.system as string[]).splice(lengthBefore)) {
     const file = PromptSettings.instructionsFile(text)
-    const instruction = file && PromptSettings.instructionName(file, valid.directory)
-    if (instruction && !PromptSettings.enabled(valid.imp, "instructions", instruction)) continue
+    if (file && !PromptSettings.enabled(imp, "instructions", file)) continue
     output.system.push(text)
   }
 }

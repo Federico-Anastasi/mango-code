@@ -16,6 +16,8 @@ export type MangoModelChoices = {
   reasoning: string | null
   /** The values the user chose one by one, over the style's; a missing one is the style's. */
   sampling: Sampling
+  /** The harness the agent uses with the model (`/mango/harness`); `null`: the default one. */
+  harness: string | null
 }
 
 /** Bridge to the Mango Code desktop app: the app (Tauri) defines it in every page, a normal browser does not. */
@@ -159,6 +161,8 @@ export type MangoDesktop = {
   engineShare?: MangoEngineShare
   /** «Use the engine of another PC»: connect checks the code with that PC and the app starts again on its engine. */
   engineRemote?: MangoEngineRemote
+  /** «Use a server»: OpenAI-compatible servers whose models the agent uses beside the local ones. */
+  servers?: MangoServers
   /** The "Preview" panel (native browser inside the window). Only in the desktop app. */
   preview?: MangoPreview
   /** "Also in my Chrome" in the settings: the choice applies to the next browser request. */
@@ -283,6 +287,27 @@ export type MangoEngineShare = {
   newKey(): Promise<MangoEngineShareState>
 }
 
+/** `price`: US dollars per million tokens, when the service says it. */
+export type MangoServerModel = { id: string; label: string; ctx: number; images: boolean; price?: { input: number; output: number } }
+
+export type MangoServersState = {
+  list: { id: string; label: string; url: string; key: boolean; models: MangoServerModel[] }[]
+  /** The model of new conversations, when it is a server's. */
+  default: { server: string; model: string } | null
+}
+
+export type MangoServers = {
+  state(): Promise<MangoServersState>
+  /** Checks the server and saves it, then the app starts again; `context` when the server does not say it (nothing saved). */
+  add(address: string, key?: string, context?: number, asDefault?: boolean): Promise<{ context: number | null }>
+  /** Reads the models again: `gone` is the name of the default model of new conversations if it is no longer there, `context` the smallest context of the models before and after, if it changed. */
+  refresh(id: string): Promise<{ gone: string | null; context: { from: number; to: number } | null }>
+  /** The app starts again without it. */
+  remove(id: string): Promise<void>
+  /** `null`: back to the local default. */
+  setDefault(server: string | null, model: string | null): Promise<void>
+}
+
 /** They reject with { code, message } (bad_code, rejected, unreachable, no_models, not_mango): `message` is the sentence to show. */
 export type MangoEngineRemote = {
   connect(code: string): Promise<void>
@@ -388,6 +413,9 @@ export type MangoDesktopError = { code: string; message: string }
 
 export function mangoDesktopError(cause: unknown): MangoDesktopError {
   if (cause && typeof cause === "object" && "code" in cause && "message" in cause) return cause as MangoDesktopError
+  // a resource's error: Solid wraps a refusal of the bridge, which is not an Error, in one that keeps it as its cause
+  if (cause instanceof Error && cause.cause && typeof cause.cause === "object" && !(cause.cause instanceof Error))
+    return mangoDesktopError(cause.cause)
   return { code: "io", message: cause instanceof Error ? cause.message : String(cause) }
 }
 

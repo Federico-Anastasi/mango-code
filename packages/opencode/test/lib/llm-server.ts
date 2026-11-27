@@ -97,12 +97,12 @@ function finishLine(reason: string, usage?: Usage) {
   return chunk({ finish: reason, usage })
 }
 
-function toolStartLine(id: string, name: string) {
+function toolStartLine(id: string, name: string, index = 0) {
   return chunk({
     delta: {
       tool_calls: [
         {
-          index: 0,
+          index,
           id,
           type: "function",
           function: {
@@ -115,12 +115,12 @@ function toolStartLine(id: string, name: string) {
   })
 }
 
-function toolArgsLine(value: string) {
+function toolArgsLine(value: string, index = 0) {
   return chunk({
     delta: {
       tool_calls: [
         {
-          index: 0,
+          index,
           function: {
             arguments: value,
           },
@@ -524,6 +524,15 @@ export class Reply {
     const id = this.#id()
     const args = JSON.stringify(input)
     this.#tail = [...this.#tail, toolStartLine(id, name), toolArgsLine(args)]
+    return this.toolCalls()
+  }
+
+  /** Several calls in the same answer, each at its own index. */
+  tools(calls: { name: string; input: unknown }[]) {
+    this.#tail = [
+      ...this.#tail,
+      ...calls.flatMap((call, index) => [toolStartLine(this.#id(), call.name, index), toolArgsLine(JSON.stringify(call.input), index)]),
+    ]
     return this.toolCalls()
   }
 

@@ -65,6 +65,12 @@ test("uses the current server default model", () => {
   })
 })
 
+test("a model id with slashes (a cloud service's «vendor/model») stays whole: only the first one ends the provider", () => {
+  expect(resolveDefaultModel(undefined, "server-1/qwen/qwen3-8b")).toEqual({ providerID: "server-1", modelID: "qwen/qwen3-8b" })
+  expect(resolveDefaultModel(undefined, "mango/ling")).toEqual({ providerID: "mango", modelID: "ling" })
+  expect(resolveDefaultModel(undefined, "no-provider")).toBeUndefined()
+})
+
 test("does not use legacy config when the current server has no default", () => {
   expect(resolveDefaultModel(null, "anthropic/claude")).toBeUndefined()
 })

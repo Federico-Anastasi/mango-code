@@ -371,6 +371,26 @@ fn the_plan_of_a_model_that_makes_images() {
     let e = image::image_plan_for(&t.paths, "a", 8090, &three_gpus()).unwrap_err().to_string();
     assert!(e.contains(&tr!("non fa immagini", "does not make images")), "{e}");
 
+    // The integrated graphics turned on asks for the engine's Vulkan build: it is fetched as the models' engine is.
+    let mut igpu = pc(vec![integrated(0, "AMD Radeon(TM) Graphics", 512, 7_700)], 15_700);
+    assert!(!engine_updates(&t.paths, &igpu).unwrap().iter().any(|u| u.model == "img"), "off, the processor's build is there");
+    igpu.integrated = true;
+    let updates = engine_updates(&t.paths, &igpu).unwrap();
+    assert!(updates.iter().any(|u| u.model == "img" && !u.version), "{:?}", updates.iter().map(|u| &u.model).collect::<Vec<_>>());
+
+    // A card the user left out does not draw: the next one does, and with every card left out the processor does.
+    choices::set_gpu_used(&t.paths, &three_gpus(), "NVIDIA GeForce RTX 3060 Ti", false).unwrap();
+    let p = plan(&three_gpus()).unwrap();
+    assert_eq!((p.gpus.iter().map(|g| g.index).collect::<Vec<_>>(), visible(&p).as_deref()), (vec![1], Some("1")));
+    assert_eq!(image::image_views(&t.paths, &three_gpus()).unwrap().models[0].place.gpus, ["NVIDIA GeForce GTX 1080"]);
+    for name in ["NVIDIA GeForce GTX 1080", "NVIDIA GeForce GTX 1660 SUPER"] {
+        choices::set_gpu_used(&t.paths, &three_gpus(), name, false).unwrap();
+    }
+    let p = plan(&three_gpus()).unwrap();
+    assert!(p.gpus.is_empty() && p.spec.env.is_empty(), "{:?}", p.spec.env);
+    assert_eq!(p.spec.exe, t.paths.engines.join("sd").join("v1-cpu").join("sd-server.exe"));
+    assert_eq!(image::image_views(&t.paths, &three_gpus()).unwrap().models[0].place.placement, Placement::Cpu);
+
     // the default is a model that makes images, or the list is damaged
     t.catalog["image_default"] = "a".into();
     std::fs::write(t.paths.dist.join("mango-models.json"), t.catalog.to_string()).unwrap();
@@ -921,6 +941,58 @@ fn all_on_cpu(p: &EnginePlan) {
     let a = &p.spec.args;
     assert!(has(a, ["-fit", "off"]) && has(a, ["-dev", "none"]) && has(a, ["-t", "8"]), "{a:?}");
     assert!(!a.iter().any(|x| x == "-ngl") && p.gpus_used.is_empty() && !env_of(p).contains_key("CUDA_VISIBLE_DEVICES"), "{a:?} {:?}", p.spec.env);
+}
+
+/// On the integrated graphics that borrows the PC's memory the model sits whole on it, with the Vulkan build, and the plan
+/// carries the same model on the processor with the same program: the processor's own build may not be on the disk. No
+/// other plan carries one.
+#[test]
+fn a_plan_on_the_integrated_graphics_carries_the_plan_on_the_processor() {
+    let t = Fake::small();
+    std::fs::remove_dir_all(t.paths.engines.join("llamacpp").join("b12110-cpu")).unwrap();
+    let f = t.save();
+    let mut hw = pc(vec![integrated(0, "AMD Radeon(TM) Graphics", 512, 7_700)], 15_700);
+    hw.integrated = true;
+    let p = build_plan(&t.paths, &f, None, 8080, &hw, &[], |_, _, _| panic!("GGUF read")).unwrap();
+    all_on_gpus(&p.spec.args);
+    assert!(p.spec.exe.ends_with(std::path::Path::new("b12110-vulkan").join("llama-server.exe")), "{:?}", p.spec.exe);
+    assert_eq!(p.gpus_used.iter().map(|g| g.name.as_str()).collect::<Vec<_>>(), ["AMD Radeon(TM) Graphics"]);
+    let processor = p.fallback.as_deref().expect("the plan on the processor");
+    all_on_cpu(processor);
+    assert_eq!((&processor.spec.exe, processor.fallback.is_none()), (&p.spec.exe, true));
+    assert!(general_plan(&three_gpus(), &[]).unwrap().fallback.is_none());
+    assert!(general_plan(&pc(vec![], 16_384), &[]).unwrap().fallback.is_none());
+}
+
+/// A PC that has only the processor's engine when the user turns the integrated graphics on: the model stays on the
+/// processor until the engine for the graphics arrives, it stays among the models on the disk, waiting for that engine,
+/// and the download of a model on the disk brings it; the computer does not call it a new version of the engine.
+#[test]
+fn until_the_engine_for_the_integrated_graphics_arrives_the_model_runs_on_the_processor() {
+    let t = Fake::small();
+    std::fs::remove_dir_all(t.paths.engines.join("llamacpp").join("b12110-vulkan")).unwrap();
+    let f = t.save();
+    let mut hw = pc(vec![integrated(0, "AMD Radeon(TM) Graphics", 512, 7_700)], 15_700);
+    hw.integrated = true;
+    let p = build_plan(&t.paths, &f, None, 8080, &hw, &[], |_, _, _| panic!("GGUF read")).unwrap();
+    all_on_cpu(&p);
+    assert!(p.spec.exe.ends_with(std::path::Path::new("b12110-cpu").join("llama-server.exe")), "{:?}", p.spec.exe);
+    assert!(p.fallback.is_none());
+
+    let view = models_view(&t.paths, &hw).unwrap().into_iter().find(|v| v.key == f.default).unwrap();
+    assert!(view.waits_engine && !view.present, "{view:?}");
+    let updates = engine_updates(&t.paths, &hw).unwrap();
+    assert_eq!(updates.iter().map(|u| (u.model.as_str(), u.version)).collect::<Vec<_>>(), [(f.default.as_str(), false)]);
+    assert!(!computer_view(&t.paths, &hw).unwrap().engine.update);
+
+    // At the start of the app it is a model ready on the processor, not one missing its engine.
+    let (entries, _) = catalog_for(&t.paths, &hw).unwrap();
+    let entry = entries.iter().find(|e| e.key == f.default).unwrap();
+    assert_eq!((entry.missing.as_deref(), entry.waits_engine), (None, false), "{entry:?}");
+    assert_eq!(startup_model(&t.paths, &entries).unwrap().as_deref(), Some(f.default.as_str()));
+
+    hw.integrated = false;
+    assert!(engine_updates(&t.paths, &hw).unwrap().is_empty(), "off, nothing waits");
 }
 
 #[test]
@@ -1716,7 +1788,7 @@ mod real {
             data: data.path().to_path_buf(),
         };
         let key = std::env::var("MANGO_TEST_MODEL").unwrap_or_else(|_| "3.5-4b".into());
-        let mut hw = detect().unwrap();
+        let mut hw = detect_bare().unwrap();
         match std::env::var("MANGO_TEST_GPUS").as_deref() {
             Ok("no") => hw.gpus.clear(),
             _ => hw.gpus.iter_mut().for_each(|g| g.name.push_str(" (test)")),
@@ -1782,7 +1854,7 @@ mod real {
     #[test]
     #[ignore = "requires three NVIDIA cards (RTX 3060 Ti, GTX 1080, GTX 1660 SUPER) and a built distribution"]
     fn real_cards_and_plan() {
-        let hw = detect().unwrap();
+        let hw = detect_bare().unwrap();
         for g in &hw.gpus {
             println!("card {}: {} {} MiB {:?} cuda {:?}", g.index, g.name, g.memory_mib, g.cc, g.cuda_driver);
         }
@@ -1856,6 +1928,26 @@ fn integrated_graphics_with_much_memory_is_the_card_of_the_plan() {
         let place = views.iter().find(|v| v.key == key).unwrap().verdict.place.clone();
         assert_eq!(place.map(|p| (p.placement, p.gpus)), Some((Placement::Gpu, vec![RADEON_8060S.to_string()])), "{key}");
     }
+}
+
+/// A laptop with only the processor's graphics (values as Windows gives them for a Ryzen 7 5825U with 16 GB): with the
+/// user's switch on, a model that fits the memory the graphics may borrow runs there, whole; one that does not runs on the
+/// processor. Pictures go where the models go: on the processor at first, on the graphics once it is on.
+#[test]
+fn integrated_graphics_that_borrows_the_ram_is_the_card_of_the_plan() {
+    const RADEON: &str = "AMD Radeon(TM) Graphics";
+    let mut hw = pc(vec![integrated(0, RADEON, 512, 7_700)], 15_700);
+    let place = |hw: &Hardware, key: &str| models_view(&real_paths(), hw).unwrap().into_iter().find(|v| v.key == key).unwrap().verdict;
+    let pictures = |hw: &Hardware| crate::image::image_views(&real_paths(), hw).unwrap().models[0].place.clone();
+    assert_eq!(place(&hw, "ling").place.map(|p| (p.placement, p.gpus)), Some((Placement::Cpu, vec![])), "off at first");
+    assert_eq!(pictures(&hw).placement, Placement::Cpu);
+
+    hw.integrated = true;
+    let ling = place(&hw, "ling");
+    assert_eq!(ling.place.map(|p| (p.placement, p.gpus)), Some((Placement::Gpu, vec![RADEON.to_string()])));
+    assert!(ling.reason.contains(&tr!("grafica integrata", "integrated graphics")), "{}", ling.reason);
+    assert_eq!(place(&hw, "bonsai2").place.map(|p| p.placement), Some(Placement::Cpu), "27B does not fit the memory it may borrow");
+    assert_eq!((pictures(&hw).placement, pictures(&hw).gpus), (Placement::Gpu, vec![RADEON.to_string()]));
 }
 
 // --- a model whose file the user moved ----------------------------------------------------------------

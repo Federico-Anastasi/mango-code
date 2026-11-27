@@ -89,14 +89,14 @@ async function photo(name: string) {
   if (!process.env.MC_PHOTOS) return;
   fs.mkdirSync(process.env.MC_PHOTOS, { recursive: true });
   const shot = await p.send("Page.captureScreenshot", { format: "png" });
-  fs.writeFileSync(path.join(process.env.MC_PHOTOS, `ogni-avvio-${name}.png`), Buffer.from(shot.result.data, "base64"));
+  fs.writeFileSync(path.join(process.env.MC_PHOTOS, `every-start-${name}.png`), Buffer.from(shot.result.data, "base64"));
 }
 
 beforeAll(async () => {
-  env = await start([{ text: "Eccomi." }, { text: "Fatto." }], { window: true, otherModels: ["second", "huge"], bytes: { huge: 10 * 2 ** 40 } });
+  env = await start([{ text: "Here I am." }, { text: "Done." }], { window: true, otherModels: ["second", "huge"], bytes: { huge: 10 * 2 ** 40 } });
   mc = new MangoCode((await find(env.data))!);
   // a conversation of an earlier day: the app does not open it
-  await mc.createSession(env.project, { title: "Fatture di ottobre" });
+  await mc.createSession(env.project, { title: "October invoices" });
   p = await windowPage(env.cdp!, env.agent, 120_000);
 }, 240_000);
 
@@ -118,7 +118,7 @@ test("the model changes from the bar without waiting, and the bar says what it i
   await mouseClick('[role="menu"] [data-option-key="second"]');
   await waitUntil(async () => (await control()).model.model === "second", "the second model chosen");
   await waitUntil(async () => (await barText()) === "Model second", "the second model in the bar", 120_000);
-  await photo("3-cambiato");
+  await photo("3-changed");
 }, 180_000);
 
 test("a message written while the cards are lent waits; the X puts one back; when the model is ready they leave together", async () => {
@@ -131,29 +131,29 @@ test("a message written while the cards are lent waits; the X puts one back; whe
   await waitUntil(async () => (await barText()).includes("schede prestate"), "the bar says the cards are lent");
 
   const before = chats().length;
-  await write("Riordina le fatture di ottobre");
+  await write("Sort the October invoices");
   await waitUntil(async () => (await count('[data-slot="mango-pending-item"]')) === 1, "the first waiting message");
-  await write("Poi quelle di novembre");
+  await write("Then the November ones");
   await waitUntil(async () => (await count('[data-slot="mango-pending-item"]')) === 2, "the second waiting message");
-  await write("Questo lo rimetto nella casella");
+  await write("I put this back in the box");
   await waitUntil(async () => (await count('[data-slot="mango-pending-item"]')) === 3, "the third waiting message");
   expect(await text()).toContain("In attesa: parte da sola appena il modello è pronto");
-  expect(await text()).toContain("Le schede video sono prestate a un altro programma");
-  await photo("4-in-attesa");
+  expect(await text()).toContain("Le schede video sono in prestito");
+  await photo("4-waiting");
   // the X of the last one: back in the box, out of the waiting list
   await p.evaluate(`[...document.querySelectorAll('[data-action="mango-pending-restore"]')].at(-1).click()`);
   await waitUntil(async () => (await count('[data-slot="mango-pending-item"]')) === 2, "two waiting");
-  expect(await p.evaluate(`document.querySelector('[contenteditable="true"]').innerText`)).toContain("Questo lo rimetto nella casella");
+  expect(await p.evaluate(`document.querySelector('[contenteditable="true"]').innerText`)).toContain("I put this back in the box");
   expect(chats().length).toBe(before);
 
   holder.kill();
-  await waitUntil(() => chats().some((r: { body: unknown }) => JSON.stringify(r.body).includes("Poi quelle di novembre")), "the messages at the engine", 120_000);
-  const sent = chats().filter((r: { body: unknown }) => JSON.stringify(r.body).includes("Riordina le fatture di ottobre"));
+  await waitUntil(() => chats().some((r: { body: unknown }) => JSON.stringify(r.body).includes("Then the November ones")), "the messages at the engine", 120_000);
+  const sent = chats().filter((r: { body: unknown }) => JSON.stringify(r.body).includes("Sort the October invoices"));
   // one message with both, in order
-  expect(JSON.stringify(sent.at(-1).body)).toMatch(/Riordina le fatture di ottobre\\n\\nPoi quelle di novembre/);
-  expect(JSON.stringify(sent.at(-1).body)).not.toContain("Questo lo rimetto nella casella");
+  expect(JSON.stringify(sent.at(-1).body)).toMatch(/Sort the October invoices\\n\\nThen the November ones/);
+  expect(JSON.stringify(sent.at(-1).body)).not.toContain("I put this back in the box");
   await waitUntil(async () => (await count('[data-slot="mango-pending-item"]')) === 0, "nothing waiting");
-  await photo("5-partiti");
+  await photo("5-sent");
 }, 240_000);
 
 test("in a long conversation the waiting message comes into view, with the line under it", async () => {
@@ -164,7 +164,7 @@ test("in a long conversation the waiting message comes into view, with the line 
     const asked = messages.filter((m) => m.info.role === "user").length;
     return { asked, answered: messages.filter((m) => m.info.role === "assistant" && m.info.time?.completed).length };
   };
-  const long = "Una riga lunga per riempire la conversazione, con abbastanza parole da andare a capo più volte. ".repeat(8);
+  const long = "A long line to fill the conversation, with enough words to wrap several times. ".repeat(8);
   for (let i = 0; i < 6; i++) {
     const before = (await turns()).asked;
     await write(`${i + 1}. ${long}`);
@@ -190,7 +190,7 @@ test("in a long conversation the waiting message comes into view, with the line 
     })()`;
     await waitUntil(() => p.evaluate(seen('[data-slot="mango-pending-item"]')), "the waiting message in view", 10_000);
     expect(await p.evaluate(seen('[data-slot="mango-pending-note"]'))).toBe(true);
-    await photo("5b-in-attesa-lunga");
+    await photo("5b-long-wait");
 
     // who scrolled up to read stays where they are when another message comes to wait
     const scroller = `(() => {
@@ -206,7 +206,7 @@ test("in a long conversation the waiting message comes into view, with the line 
     await waitUntil(async () => !(await p.evaluate(seen('[data-slot="mango-pending-item"]'))), "the conversation scrolled up", 10_000);
     await Bun.sleep(500);
     const top = (await p.evaluate(`${scroller}.scrollTop`)) as number;
-    await write("Questo arriva mentre leggo più su");
+    await write("This arrives while I read further up");
     await waitUntil(async () => (await count('[data-slot="mango-pending-item"]')) === 2, "the second waiting message");
     await Bun.sleep(1500);
     expect(Math.abs(((await p.evaluate(`${scroller}.scrollTop`)) as number) - top)).toBeLessThan(4);
@@ -229,7 +229,7 @@ test("a start that fails says why on the Home, with Retry and the settings", asy
   expect(await exists('[data-action="mango-failed-settings"]')).toBe(true);
   // nothing is in use; the Home and the line above the box say why
   expect(await barText()).toBe("Nessun modello in uso");
-  await photo("6-non-parte");
+  await photo("6-does-not-start");
 }, 180_000);
 
 test("«Parti con …» starts the model that fits for this time only, and «Riprova» tries the one that did not start again", async () => {
@@ -263,7 +263,7 @@ test("«Parti con …» starts the model that fits for this time only, and «Rip
   await waitUntil(async () => (await control()).model.phase === "ready" && (await control()).model.model === "second", "the model loaded at the second try", 120_000);
   await waitUntil(async () => (await barText()) === "Model second", "the model in the bar");
   await waitUntil(async () => !(await exists('[data-component="mango-failed"]')), "the box gone");
-  await photo("6b-riprova");
+  await photo("6b-retry");
 }, 300_000);
 
 test("after an update of the app that brings a new engine, it arrives by itself: the bar, the Home and the line say so, never the welcome", async () => {
@@ -294,7 +294,7 @@ test("after an update of the app that brings a new engine, it arrives by itself:
     // the bar's name and its state are two pieces (the name gives way in a narrow window): read as the bar is read aloud
     expect(await barText()).toMatch(/^Aggiorno il motore · \d+%$/);
     expect((await (await fetch(`${env.engine}/control/computer`)).json()).engine.update).toBe(true);
-    await photo("7-aggiorno-il-motore");
+    await photo("7-updating-the-engine");
 
     // Models: one row brings the engine, named after it; the models that wait for it stay in their rows, with
     // «Aspetta il motore nuovo», none among those to download
@@ -310,7 +310,7 @@ test("after an update of the app that brings a new engine, it arrives by itself:
     // a model on the computer that does not fit says so with its row closed, once the hardware is read
     await waitUntil(async () => (await count('[data-model-row="huge"] [data-slot="settings-model-no-fit"]')) === 1, "«huge» does not fit");
     expect(await count('[data-model-row="fake"] [data-slot="settings-model-no-fit"]')).toBe(0);
-    await photo("7b-modelli-aspettano");
+    await photo("7b-models-wait");
 
     // Computer: «Aggiorna il motore», and its answer under the engine's line
     await openComputer();
@@ -340,7 +340,7 @@ test("an update of the engine that failed says why in Computer, with «Riprova»
   const zip = engineZip("newer-engine");
   let open = false;
   const server = http.createServer((req, res) => {
-    if (req.url !== "/engine.zip" || !open) return void res.writeHead(503).end();
+    if (req.url !== "/engine.zip" || !open) return void res.writeHead(404).end();
     res.writeHead(200, { "Content-Length": zip.length }).end(zip);
   });
   await new Promise<void>((ok) => server.listen(0, "127.0.0.1", ok));
@@ -361,7 +361,7 @@ test("an update of the engine that failed says why in Computer, with «Riprova»
     expect(await computerText()).toContain("Il server non dà i file di «llama.cpp");
     expect(await computerText()).not.toContain("Fake model");
     expect(await p.evaluate(`document.querySelector('[data-action="settings-computer-update-engine"]').innerText`)).toBe("Riprova");
-    await photo("8-motore-non-riuscito");
+    await photo("8-engine-failed");
 
     open = true;
     await mouseClick('[data-action="settings-computer-update-engine"]');

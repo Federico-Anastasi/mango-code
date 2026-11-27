@@ -66,7 +66,7 @@ export const SettingsTeamV2: Component<{ onChange?: () => void }> = (props) => {
             {language.t("settings.team.error.load", { message: mangoDesktopError(info.error).message })}
           </p>
         </Show>
-        <Show when={info()}>
+        <Show when={!info.error && info()}>
           {(current) => (
             <div class="settings-v2-section">
               <SettingsListV2>

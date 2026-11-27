@@ -20,6 +20,9 @@ pub const CREDENTIAL: &str = "OPENROUTER_API_KEY";
 pub const PROVIDER_CLOUD: &str = "openrouter";
 /// The variable through which the key reaches the agent's processes.
 pub const KEY_VAR: &str = "MANGO_OPENROUTER_KEY";
+/// What the plugin gives the hidden dev and agents (the name of the app's run) and they pass on to what they start: the app
+/// stops them by it when it restarts the agent.
+pub const HIDDEN_VAR: &str = "MANGO_TEAM_HIDDEN";
 /// The name of the opencode agent that holds the conversation with the Team on.
 pub const AGENT: &str = "team";
 /// The dev on 4090, the agents from 4092.
@@ -29,7 +32,31 @@ pub const AGENT_PORTS: [u16; AGENTS_MAX as usize] = [4092, 4093, 4094, 4095];
 pub const MANAGER_TOOLS: &[&str] = &["ask_dev", "launch_agent", "ask_agent", "list_agents", "read_todos", "close_agent"];
 
 const CHOICES_FILE: &str = "team.json";
+/// How long the check of a key waits for OpenRouter.
+const KEY_CHECK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+
+/// The catalog key of the Team's models until the user chooses others.
 const DEFAULT_MODEL: &str = "deepseek";
+
+/// Whether OpenRouter takes the key, asked at `<base_url>/key` (the page of the key itself): a key it refuses is not
+/// saved, so that the Team does not start with it and answer an error the user cannot place. Without an answer that
+/// refuses it (no network, another address) the key is saved.
+pub fn check_key(base_url: &str, key: &str) -> Result<()> {
+    let agent = mango_common::internet::agent_with_replies(base_url, KEY_CHECK_TIMEOUT);
+    let Ok(answer) = agent.get(format!("{}/key", base_url.trim_end_matches('/'))).header("Authorization", format!("Bearer {key}")).call() else {
+        return Ok(());
+    };
+    if matches!(answer.status().as_u16(), 401 | 403) {
+        bail!(
+            "{}",
+            tr!(
+                "OpenRouter non riconosce questa chiave: controlla di averla copiata intera, dalla pagina delle chiavi del tuo account.",
+                "OpenRouter does not recognise this key: check that you copied all of it, from the keys page of your account."
+            )
+        );
+    }
+    Ok(())
+}
 
 /// What the user chooses in the Team page.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -187,9 +214,28 @@ pub fn openrouter_models(team: &TeamInputs, base: &Value) -> Value {
         v["name"] = json!(m.label);
         v["attachment"] = json!(m.images);
         v["modalities"]["input"] = if m.images { json!(["text", "image"]) } else { json!(["text"]) };
-        v["limit"] = json!({ "context": m.ctx, "output": (m.ctx / 8).clamp(4096, 16384) });
+        v["limit"] = json!({ "context": m.ctx, "output": m.ctx });
         v["cost"] = json!({ "input": m.input_cost, "output": m.output_cost, "cache_read": m.cache_cost });
         out.insert(m.id.clone(), v);
     }
     Value::Object(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::servers::tests::fake;
+
+    #[test]
+    fn a_key_openrouter_refuses_is_not_saved_and_one_it_takes_or_cannot_judge_is() {
+        let refused = fake(&[("/api/v1/key", 401, r#"{"error":{"message":"User not found.","code":401}}"#)]);
+        let e = check_key(&format!("{}/api/v1", refused.url), "sk-or-v1-wrong").unwrap_err().to_string();
+        assert!(e.contains("OpenRouter"), "{e}");
+        assert!(refused.requests.lock().unwrap()[0].contains("Bearer sk-or-v1-wrong"));
+        let taken = fake(&[("/api/v1/key", 200, r#"{"data":{"label":"sk-or-v1-abc...xyz"}}"#)]);
+        check_key(&format!("{}/api/v1/", taken.url), "sk-or-v1-right").unwrap();
+        let other = fake(&[]);
+        check_key(&format!("{}/api/v1", other.url), "sk-or-v1-any").unwrap();
+        check_key("http://127.0.0.1:9", "sk-or-v1-any").unwrap();
+    }
 }

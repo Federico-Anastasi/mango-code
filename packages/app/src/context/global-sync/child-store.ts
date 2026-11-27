@@ -221,6 +221,7 @@ export function createChildStoreManager(input: {
               return pathQuery.data ?? EMPTY
             },
             status: "loading" as const,
+            model_ready: false,
             agent: [],
             command: [],
             get reference() {

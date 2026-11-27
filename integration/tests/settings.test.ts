@@ -115,8 +115,8 @@ async function measured(entries = ON) {
   throw new Error("the entries were not measured");
 }
 
-const MANGO_MD = fs.readFileSync(path.join(REPO, "launcher", "opencode-home", "MANGO.md"), "utf8").split("\n").find((r) => r.trim().length > 30)!.trim();
-const DISCIPLINE = "DISCIPLINE (local model)";
+const BASE_LINE = fs.readFileSync(path.join(REPO, "launcher", "harness", "mango-harness-1", "prompt.md"), "utf8").split("\n").find((r) => r.trim().length > 30)!.trim();
+const DISCIPLINE = "DISCIPLINE - keep these rules active";
 
 let all: Awaited<ReturnType<typeof fresh>>;
 let allWeight: number;
@@ -130,21 +130,21 @@ test("with everything on, by default, every entry is on and says its weight in t
   expect(all.tools).toContain("echo_repeat"); // the project's (.mcp.json)
   expect(all.tools).toContain("animation_repeat"); // added by an app
   expect(all.system).toContain("TANGERINE");
-  expect(all.system).toContain(MANGO_MD);
+  expect(all.system).toContain(BASE_LINE);
   expect(all.system).toContain("<name>greeting</name>");
   expect(all.user).toContain(DISCIPLINE);
 
   const s = await measured();
   expect(s.model).toBe("fake");
   expect(s.items.filter((v: any) => v.type !== "base").every((v: any) => v.enabled && v.source === "default")).toBe(true);
-  for (const [type, name] of [["tools", "webfetch"], ["mcp", "echo"], ["mcp", "animation"], ["skills", "greeting"], ["instructions", "CLAUDE.md"], ["instructions", "MANGO.md"], ["plugins", "mango-discipline"]]) {
+  for (const [type, name] of [["tools", "webfetch"], ["mcp", "echo"], ["mcp", "animation"], ["skills", "greeting"], ["instructions", "CLAUDE.md"],["plugins", "mango-discipline"]]) {
     const v = entry(s, type, name);
     expect(v, `${type} ${name}`).toBeDefined();
     expect(v.tokens, `${type} ${name}`).toBeGreaterThan(0);
   }
   expect(entry(s, "base", "base").tokens).toBeGreaterThan(0);
-  // with a new conversation every entry has its weight: none "not measured"
-  expect(s.items.filter((v: any) => v.tokens === null).map((v: any) => `${v.type}:${v.name}`)).toEqual([]);
+  // with a new conversation every entry has its weight: none "not measured" (a hook has none: it adds its text only when it comes)
+  expect(s.items.filter((v: any) => v.tokens === null && v.type !== "hooks").map((v: any) => `${v.type}:${v.name}`)).toEqual([]);
   // an MCP server weighs its definitions: echo has one, the plugin's reminder is its text
   expect(entry(s, "plugins", "mango-documents").tokens).toBe(0);
   allWeight = await requestTokens(all);
@@ -192,7 +192,7 @@ test("an entry switched off for all folders does not reach the request, and neit
   expect(r.tools).toContain("bash");
   expect(r.system).not.toContain("TANGERINE");
   expect(r.system).not.toContain("<name>greeting</name>");
-  expect(r.system).toContain(MANGO_MD); // the other instructions stay
+  expect(r.system).toContain(BASE_LINE); // the base prompt stays
   expect(r.user).not.toContain(DISCIPLINE);
 
   const s = await measured();
@@ -274,7 +274,7 @@ test("the weights outlive the app; without them, a conversation taken up again m
   await restart();
   const after = await read();
   expect(after.model).toBe("fake");
-  expect(after.items.filter((v: any) => v.tokens === null).map((v: any) => `${v.type}:${v.name}`)).toEqual([]);
+  expect(after.items.filter((v: any) => v.tokens === null && v.type !== "hooks").map((v: any) => `${v.type}:${v.name}`)).toEqual([]);
   for (const v of after.items) expect(v.tokens, `${v.type} ${v.name}`).toBe(entry(before, v.type, v.name)?.tokens);
   // nothing is read or counted again to show them
   const tokenized = counted();
@@ -303,7 +303,7 @@ test("wrong requests or files that cannot be read say what is wrong", async () =
   const r = await fetch(url());
   expect(r.status).toBe(500);
   // the error is shown to the user: it follows the language (Italian here)
-  expect((await r.json()).error).toContain("settings.json non e' JSON valido");
+  expect((await r.json()).error).toContain("settings.json non è JSON valido");
   // a conversation in that folder does not start, and the error names the file: switched-off entries do not silently come back on
   const id = await mc.createSession(env.project);
   const events: any[] = [];

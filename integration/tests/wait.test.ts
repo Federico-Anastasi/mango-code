@@ -59,7 +59,7 @@ test("while the GPUs are lent the page says so, and when the holder exits the an
     await Bun.sleep(500);
     notice = await p.evaluate(`document.querySelector('[data-component="engine-speed"]')?.innerText ?? ''`);
   }
-  expect(notice).toContain("Il modello aspetta le schede video, prestate a Wait test dalle");
+  expect(notice).toMatch(/Il modello aspetta le schede video, in prestito dalle \d\d:\d\d \(Wait test\)/);
   // also the turn's line in the conversation, in place of "Sto leggendo la richiesta"
   const row = await p.evaluate(`document.body.innerText`);
   expect(row.split("Il modello aspetta le schede video").length - 1).toBeGreaterThanOrEqual(2);

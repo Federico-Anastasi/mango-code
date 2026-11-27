@@ -44,6 +44,9 @@ and on two engines of our own derived from it; the pictures are drawn by
   many tokens of conversation it remembers. It downloads the right engine (CUDA for NVIDIA, Vulkan for AMD and Intel, or the processor alone) and the
   models you choose, with resume and checksum, and the app can be used meanwhile. A model runs entirely on the
   graphics cards, with the largest context that fits, or entirely on the processor.
+- **Integrated graphics.** "Use for the models" in Settings › Computer lets the processor's integrated graphics run the
+  models on the PC's memory. When a model does not fit there, or the start does not hold, it starts once on the
+  processor and a line says so.
 - **No waiting at start.** The app opens on the Home at once and loads the default model in the background; its name
   and what it is doing are in the top bar, where you can change it without waiting. A message sent before the model is
   ready waits and leaves by itself. If the model does not start, the app says why (also when another program is using
@@ -63,6 +66,9 @@ and on two engines of our own derived from it; the pictures are drawn by
   a second instead of reading it again.
 
 **An agent you can see into**
+- **Harnesses.** What a model reads and what it can do (prompt, tools, hooks) is its harness, chosen for each model
+  under "Harness" in Settings › Models and shown in Settings › Agent: Mango Harness 1 (the agent's own tools with
+  discipline reminders) and Mango Harness 2 (a terminal and a few commands of its own). Duplicate one to change it.
 - **You decide what goes in the prompt.** Every built-in tool, MCP server, skill, instruction file and plugin can be
   turned on or off, for all folders or for one, and the settings page shows how many tokens each one costs.
 - **Settings in one page**: six sections (Models, Computer, Agent, Connections, General, Help) and a search that finds
@@ -92,6 +98,9 @@ and on two engines of our own derived from it; the pictures are drawn by
   another PC" (under Connections; on the Home of the first start the button is "Use the engine of another PC of
   mine"): no model and no engine to download, and
   the way back to the engine of that PC is one button.
+- **A server instead of a local model.** "Use a server" in Settings › Connections adds the models of an
+  OpenAI-compatible server (llama-server, LM Studio, a cloud service with your key) beside those of this PC; the app
+  checks it with a real request before saving it.
 - **For other apps.** A documented HTTP contract and a TypeScript client let another app start conversations, follow
   their events, answer permissions and borrow the graphics cards from the model when they need them:
   [`docs/INTEGRATION.md`](docs/INTEGRATION.md).
@@ -143,7 +152,7 @@ the settings that paid off, the ones that did not and why. The installed app inc
    [latest release](https://github.com/Federico-Anastasi/mango-code/releases) (Windows 10 or 11, 64-bit).
 2. Windows may show "Windows protected your PC": the installer has no paid code-signing certificate. Click "More info",
    then "Run anyway".
-3. Open Mango Code. The installer is small: the engine and the models are downloaded at first run, only the ones that
+3. Open Mango Code. The engine and the models are downloaded at first run, only the ones that
    suit your PC.
 
 Closing the window with X keeps the app in the tray (it says so the first time); "Quit" in the tray icon's menu closes
@@ -160,6 +169,7 @@ The models run on your computer: your files, your prompts and the model's answer
 - **Updates**: once per start, the app reads the latest release's `latest.json` from this repository.
 - **Web search**, when the agent uses it: the query goes to DuckDuckGo, Bing and Startpage.
 - **Team mode**, only when you turn it on: the conversation goes to OpenRouter, with your key.
+- **A server you add** in Settings › Connections › "Use a server": the conversation goes to that server, with its key if you gave one.
 - **"Report a problem"**, only when you click Send: the logs, the PC details and, if you leave the switch on, a
   screenshot of the window. Your user name, PC name, emails, network addresses and keys are removed before sending.
 
@@ -187,8 +197,8 @@ How to contribute and run the tests: [CONTRIBUTING.md](CONTRIBUTING.md).
 ```
 mango-code/
 ├── app/          the desktop app (Rust, Tauri): engine manager, models and downloads, settings, voice, phone access
-├── launcher/     what the app installs as resources: model catalog, profiles, agent plugins
-│                 and instructions, MCP servers, skills
+├── launcher/     what the app installs as resources: model catalog, profiles, agent plugins, the harnesses
+│                 (`harness/`: what each model reads and what it can do), MCP servers, skills
 ├── packages/     the agent: opencode with Mango Code's changes
 ├── integration/  the client for other apps (TypeScript), examples and end-to-end tests
 ├── optimize/     the tuning skill and its knowledge base

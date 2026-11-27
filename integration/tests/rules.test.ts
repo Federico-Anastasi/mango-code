@@ -90,7 +90,8 @@ test("the rule enters with the matching file, at the end of the result, once; ot
   const [note, lib, main, created, conf, claude, csv] = await runTurn(await open());
   expect(note.output).not.toContain(RUST);
   expect(lib.output).toContain(RUST);
-  expect(lib.output).toContain(path.join(project, ".claude", "rules", "rust.md"));
+  expect(lib.output).toContain("Instructions from: .claude/rules/rust.md\n");
+  expect(lib.output).not.toContain(path.join(project, ".claude", "rules", "rust.md"));
   expect(lib.output.indexOf("</content>")).toBeLessThan(lib.output.indexOf(RUST)); // after the file's content
   expect(main.output).not.toContain(RUST); // already entered in this conversation
   expect(created.name).toBe("write");

@@ -5,7 +5,7 @@ import { Permission } from "@/permission"
 import type { Agent } from "@/agent/agent"
 import type { Provider } from "@/provider/provider"
 import { ProviderTransform } from "@/provider/transform"
-import { SystemPrompt } from "../system"
+import { Harness } from "../harness"
 import { InstallationVersion } from "@opencode-ai/core/installation/version"
 import { Effect, Record } from "effect"
 import type { ModelMessage, Tool } from "ai"
@@ -30,6 +30,8 @@ type PrepareInput = {
   readonly provider: Provider.Info
   readonly plugin: Plugin.Interface
   readonly flags: RuntimeFlags.Info
+  /** mango-code: the system prompt and the tools are the harness's own (`StreamInput.commands`). */
+  readonly commands?: { system: string; stable: number }
 }
 
 export type Prepared = {
@@ -49,19 +51,27 @@ const mergeOptions = (target: Record<string, any>, source: Record<string, any> |
   mergeDeep(target, source ?? {}) as Record<string, any>
 
 export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: PrepareInput) {
-  const system = [
-    ...(input.agent.prompt ? [input.agent.prompt] : [SystemPrompt.base]),
-    ...input.system,
-    ...(input.user.system ? [input.user.system] : []),
-  ].filter((x) => x)
-  yield* input.plugin.trigger(
-    "experimental.chat.system.transform",
-    { sessionID: input.sessionID, model: input.model },
-    { system },
-  )
+  // mango-code: a harness of the user's can bring its own base prompt and its own words for the agent's tools. A request
+  // of a `commands` harness's model outside its turn (a summary, a title) is made as the default harness makes it.
+  const chosen = Harness.forModel(input.model.id, input.model.providerID)
+  const harness = input.commands ? undefined : chosen.kind === "commands" ? Harness.definition(Harness.DEFAULT) : chosen
+  // mango-code: a `commands` harness brings its own prompt: no base prompt, no agent text, no plugin
+  const system = input.commands
+    ? [input.commands.system]
+    : [
+        ...(input.agent.prompt ? [input.agent.prompt] : [Harness.basePrompt(harness!)]),
+        ...input.system,
+        ...(input.user.system ? [input.user.system] : []),
+      ].filter((x) => x)
+  if (!input.commands)
+    yield* input.plugin.trigger(
+      "experimental.chat.system.transform",
+      { sessionID: input.sessionID, model: input.model },
+      { system },
+    )
   // after what the plugins add, so that the engine reuses the prompt it has already read up to these lines
   const stable = system.join("\n")
-  const prompt = input.env?.length ? [stable, ...input.env].join("\n") : stable
+  const prompt = input.env?.length && !input.commands ? [stable, ...input.env].join("\n") : stable
 
   const variant =
     !input.small && input.model.variants && input.user.model.variant
@@ -84,7 +94,8 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
       temperature: input.model.capabilities.temperature ? input.agent.temperature : undefined,
       topP: input.agent.topP,
       topK: undefined,
-      maxOutputTokens: ProviderTransform.maxOutputTokens(input.model, input.flags.outputTokenMax),
+      // the answer has no limit of its own: it may take what is left of the context (a plugin may still set one)
+      maxOutputTokens: undefined,
       options,
     },
   )
@@ -103,12 +114,12 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
     },
   )
 
-  const tools = resolveTools(input)
+  const tools = input.commands ? input.tools : Harness.describe(harness!, resolveTools(input))
 
   const requestHeaders: Prepared["headers"] = {
     ...(input.model.providerID === "mango"
       ? // the engine keeps the system prompt read up to here for the new conversations of every folder and day
-        { "X-Mango-Stable-Prompt": String(Buffer.byteLength(stable)) }
+        { "X-Mango-Stable-Prompt": String(input.commands?.stable ?? Buffer.byteLength(stable)) }
       : {
           "x-opencode-session-id": input.sessionID,
           ...(input.parentSessionID ? { "x-opencode-parent-session-id": input.parentSessionID } : {}),
@@ -123,7 +134,8 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
 
   return {
     messages,
-    tools: Object.fromEntries(Object.entries(tools).toSorted(([a], [b]) => a.localeCompare(b))),
+    // mango-code: the harness's tools keep its order
+    tools: input.commands ? tools : Object.fromEntries(Object.entries(tools).toSorted(([a], [b]) => a.localeCompare(b))),
     params,
     headers: requestHeaders,
   }

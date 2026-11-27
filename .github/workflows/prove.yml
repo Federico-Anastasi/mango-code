@@ -63,6 +63,11 @@ jobs:
           node --test "app/scripts/*.test.mjs"
           if ($LASTEXITCODE) { throw "the release scripts' tests failed" }
 
+      - name: Web search server
+        run: |
+          node --test launcher/mango-websearch-mcp.test.mjs launcher/mango-linux-path.test.mjs
+          if ($LASTEXITCODE) { throw "the web search server's tests failed" }
+
       - name: Document tools
         working-directory: launcher/mango-documents
         run: |

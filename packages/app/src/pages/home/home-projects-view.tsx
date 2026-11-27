@@ -86,7 +86,7 @@ export function HomeProjectsView(props: HomeProjectsViewProps) {
     >
       <Logo class="shrink-0 pl-1 text-[34px]" />
       <div class="flex h-7 min-w-0 shrink-0 items-center justify-between pl-1.5 pr-3">
-        <div class="text-[11px] uppercase tracking-[0.08em] text-v2-text-text-muted [font-weight: 600]">{props.language.t("home.projects")}</div>
+        <div class="text-[11px] uppercase tracking-[0.08em] text-v2-text-text-muted [font-weight:600]">{props.language.t("home.projects")}</div>
         <Show
           when={
             props.servers().length === 1 &&
@@ -436,7 +436,7 @@ function HomeProjectEmpty(
       </HomeProjectNavButton>
       <Show when={props.items.length > 0}>
         <div class="mt-3 flex h-7 min-w-0 shrink-0 items-center pl-1.5 pr-3">
-          <div class="text-v2-text-text-faint [font-weight: 500]">{props.language.t("home.recentlyClosed")}</div>
+          <div class="text-v2-text-text-faint [font-weight:500]">{props.language.t("home.recentlyClosed")}</div>
         </div>
         <For each={props.items}>
           {(project) => <HomeRecentlyClosedRow {...props} project={project} server={props.server} />}
@@ -624,7 +624,7 @@ function HomeProjectNavButton(props: JSX.ButtonHTMLAttributes<HTMLButtonElement>
       {...rest}
       class={`
         flex h-7 min-w-0 w-full shrink-0 cursor-default items-center gap-2 rounded-[6px] bg-transparent px-1.5 text-left
-        text-v2-text-text-muted [font-weight: 400] transition-[background-color,color,box-shadow] duration-[120ms] ease-in-out
+        text-v2-text-text-muted [font-weight:400] transition-[background-color,color,box-shadow] duration-[120ms] ease-in-out
         hover:bg-v2-overlay-simple-overlay-hover hover:text-v2-text-text-base
         data-[selected]:bg-v2-background-bg-layer-01 data-[selected]:text-v2-text-text-base
         data-[selected]:hover:bg-v2-background-bg-layer-01

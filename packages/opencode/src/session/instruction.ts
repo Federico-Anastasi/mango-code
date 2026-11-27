@@ -12,6 +12,7 @@ import { FSUtil } from "@opencode-ai/core/fs-util"
 import { withTransientReadRetry } from "@/util/effect-http-client"
 import { Global } from "@opencode-ai/core/global"
 import type { MessageID } from "./schema"
+import { instructionName } from "./settings"
 
 function extract(messages: SessionV1.WithParts[]) {
   const paths = new Set<string>()
@@ -158,11 +159,14 @@ const layer: Layer.Layer<
         (item) => item.startsWith("https://") || item.startsWith("http://"),
       )
 
+      const directory = yield* InstanceState.directory
       const files = yield* Effect.forEach(Array.from(paths), read, { concurrency: 8 })
       const remote = yield* Effect.forEach(urls, fetch, { concurrency: 4 })
 
       return [
-        ...Array.from(paths).flatMap((item, i) => (files[i] ? [`Instructions from: ${item}\n${files[i]}`] : [])),
+        ...Array.from(paths).flatMap((item, i) =>
+          files[i] ? [`Instructions from: ${instructionName(item, directory)}\n${files[i]}`] : [],
+        ),
         ...urls.flatMap((item, i) => (remote[i] ? [`Instructions from: ${item}\n${remote[i]}`] : [])),
       ]
     })
@@ -210,7 +214,7 @@ const layer: Layer.Layer<
         set.add(found)
         const content = yield* read(found)
         if (content) {
-          results.push({ filepath: found, content: `Instructions from: ${found}\n${content}` })
+          results.push({ filepath: found, content: `Instructions from: ${instructionName(found, root)}\n${content}` })
         }
 
         current = path.dirname(current)

@@ -15,8 +15,8 @@ import { start, type Environment } from "./environment";
 import { page, type Page } from "./cdp";
 
 const [AGENT, ENGINE, DEBUG] = [47710, 47711, 47712];
-const FOLDER = "Contabilità prova B";
-const TEXT = "| Fattura | Totale |\n| 1 | €1.464,00 |\n| 2 | €4.270,00 àè |\n";
+const FOLDER = "Café accounts B";
+const TEXT = "| Invoice | Total |\n| 1 | €1,464.00 |\n| 2 | €4,270.00 àè |\n";
 
 let env: Environment;
 let mc: MangoCode;
@@ -33,8 +33,8 @@ const git = (...args: string[]) => {
 beforeAll(async () => {
   env = await start(
     ({ project }) => [
-      { tool: "write", arguments: { filePath: path.join(project, FOLDER, "fatture.md"), content: TEXT } },
-      { text: "Fatto." },
+      { tool: "write", arguments: { filePath: path.join(project, FOLDER, "invoices.md"), content: TEXT } },
+      { text: "Done." },
     ],
     { window: true, env: { MANGO_AGENT_PORT: String(AGENT), MANGO_ENGINE_PORT: String(ENGINE), WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${DEBUG}` } },
   );
@@ -68,7 +68,7 @@ async function waitFor(condition: string, ms = 20_000) {
 
 test("the turn's changes name the file from the project", async () => {
   const user = (await mc.messages(id, project)).find((m) => m.info.role === "user");
-  expect(user.info.summary.diffs.map((d: { file: string }) => d.file)).toEqual(["fatture.md"]);
+  expect(user.info.summary.diffs.map((d: { file: string }) => d.file)).toEqual(["invoices.md"]);
 }, 30_000);
 
 test("the file shows once under the answer, from the project, with Open and not as gone", async () => {
@@ -78,7 +78,7 @@ test("the file shows once under the answer, from the project, with Open and not 
     `[...${diffs}.querySelectorAll('[data-slot="session-turn-diff-trigger"], [data-slot="session-turn-file-card"]')].map((row) => row.innerText)`,
   );
   expect(rows).toHaveLength(1);
-  expect(rows[0]).toContain("fatture.md");
+  expect(rows[0]).toContain("invoices.md");
   expect(rows[0]).not.toContain(FOLDER);
   expect(rows[0]).toContain("Apri");
   expect(rows[0]).not.toContain("non c'è più");
@@ -87,7 +87,7 @@ test("the file shows once under the answer, from the project, with Open and not 
 test("the Git changes name the file from the project, with its lines of text", async () => {
   const r = await fetch(`${env.agent}/vcs/diff?directory=${encodeURIComponent(project)}&mode=git`);
   const changes = (await r.json()) as { file: string; additions: number; patch: string }[];
-  expect(changes.map((c) => c.file)).toEqual(["fatture.md"]);
+  expect(changes.map((c) => c.file)).toEqual(["invoices.md"]);
   expect(changes[0].additions).toBe(3);
-  expect(changes[0].patch).toContain("+| 2 | €4.270,00 àè |");
+  expect(changes[0].patch).toContain("+| 2 | €4,270.00 àè |");
 }, 30_000);

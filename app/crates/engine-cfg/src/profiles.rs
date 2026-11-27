@@ -7,7 +7,7 @@
 
 use crate::choices::WhereChoice;
 use crate::general::Placement;
-use crate::hardware::{choose_build, Hardware};
+use crate::hardware::{choose_build, Gpu, Hardware};
 use crate::user;
 use anyhow::Result;
 use mango_common::download::{has_build, needs_avx2};
@@ -95,9 +95,34 @@ pub fn profile_for(paths: &Paths, model: &str, hw: &Hardware) -> Result<Option<P
 /// A profile on an engine built for AVX2 (our forks) does not apply to a processor without it. An unreadable profile is
 /// an error (the distribution is damaged), not a reason to silently fall back on the general one. A CUDA 12 profile runs
 /// on its engine's build for the GTX 16 family where the PC's cards ask for it (`Hardware::turing_without_tensor_cores`)
-/// and the engine has one.
+/// and the engine has one. A profile tailored to the PC that needs a card the user left out gives way to the next one, or
+/// to the general plan (`tailored_left_out` says which card).
 pub(crate) fn lookup(paths: &Paths, model: &str, hw: &Hardware) -> Result<Option<Profile>> {
-    let profiles: Vec<Profile> = for_model(paths, model)?.into_iter().filter(|p| hw.cpu.avx2 || !needs_avx2(paths, &p.engine)).collect();
+    let unused = left_out(paths, hw)?;
+    first(paths, model, hw, |p| needed_left_out(p, hw, &unused).is_none())
+}
+
+/// The card left out by the user that keeps the setup tailored to this PC from applying to `model`.
+pub(crate) fn tailored_left_out(paths: &Paths, model: &str, hw: &Hardware) -> Result<Option<Gpu>> {
+    let unused = left_out(paths, hw)?;
+    Ok(first(paths, model, hw, Profile::tailored)?.and_then(|p| needed_left_out(&p, hw, &unused)))
+}
+
+fn left_out(paths: &Paths, hw: &Hardware) -> Result<Vec<u32>> {
+    Ok(crate::general::unused_indexes(hw, &crate::choices::read(paths)?.computer_scope()))
+}
+
+/// A tailored profile that names its cards (all of them, or those of its `CUDA_VISIBLE_DEVICES`) needs each one; one that
+/// splits by itself does without the cards left out.
+fn needed_left_out(p: &Profile, hw: &Hardware, unused: &[u32]) -> Option<Gpu> {
+    if !p.tailored() || crate::auto_split(p) {
+        return None;
+    }
+    crate::manual_gpus(p, hw.usable().cloned().collect()).ok()?.into_iter().find(|g| unused.contains(&g.index))
+}
+
+fn first(paths: &Paths, model: &str, hw: &Hardware, keep: impl Fn(&Profile) -> bool) -> Result<Option<Profile>> {
+    let profiles: Vec<Profile> = for_model(paths, model)?.into_iter().filter(|p| keep(p) && (hw.cpu.avx2 || !needs_avx2(paths, &p.engine))).collect();
     let build = choose_build(hw);
     Ok(profiles
         .iter()

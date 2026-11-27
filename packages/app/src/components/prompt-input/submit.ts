@@ -3,7 +3,7 @@ import { showToast } from "@/utils/toast"
 import { base64Encode } from "@opencode-ai/core/util/encode"
 import { Binary } from "@opencode-ai/core/util/binary"
 import { useNavigate, useParams, useSearchParams } from "@solidjs/router"
-import { batch, startTransition, type Accessor } from "solid-js"
+import { batch, createEffect, createRoot, startTransition, type Accessor } from "solid-js"
 import { useTabs } from "@/context/tabs"
 import { useServerSync, type ServerSync } from "@/context/server-sync"
 import { useLanguage } from "@/context/language"
@@ -358,6 +358,17 @@ export function createPromptSubmit(input: PromptSubmitInput) {
       return
     }
 
+    // the project's agents and settings can arrive after the box shows: a message sent before them waits for them (or for their failure)
+    if (!sync().data.model_ready)
+      await new Promise<void>((done) =>
+        createRoot((dispose) =>
+          createEffect(() => {
+            if (!sync().data.model_ready) return
+            dispose()
+            done()
+          }),
+        ),
+      )
     const modelSelection = input.model ?? local.model
     const currentModel = modelSelection.current()
     const currentAgent = local.agent.current()

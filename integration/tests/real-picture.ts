@@ -16,7 +16,7 @@ import path from "node:path";
 import { page, type Page } from "./cdp";
 import { APP_EXE, REPO, writeLanguage } from "./environment";
 
-const [data, out, request = "Una pizza margherita su un tavolo di legno, vista dall'alto"] = process.argv.slice(2);
+const [data, out, request = "A margherita pizza on a wooden table, seen from above"] = process.argv.slice(2);
 if (!data || !out) throw new Error('usage: bun integration/tests/real-picture.ts <data folder> <folder for the photo and the picture> ["request"]');
 for (const folder of ["models", "engine"]) {
   if (!fs.existsSync(path.join(data, folder))) throw new Error(`${path.join(data, folder)} is missing`);

@@ -27,7 +27,7 @@ const model = async (key: string) => ((await get("models")).models as any[]).fin
 /** A command of the bridge, from the window: "ok", or what it was rejected with. */
 const ask = (call: string) => p.evaluate(`window.__MANGO_DESKTOP__.${call}.then(() => "ok", (e) => JSON.stringify(e))`) as Promise<string>;
 const saved = () => JSON.parse(fs.readFileSync(path.join(env.data, "choices.json"), "utf8"));
-/** How many times the engine loaded a model: a line of the manager's log each. */
+/** How many times the engine loaded a model: a line of the manager's log each, written a moment after the state says ready. */
 const loads = () => fs.readFileSync(path.join(env.data, "logs", "manager.log"), "utf8").split("\n").filter((l) => l.includes('"event":"restore"')).length;
 
 /** The model in use again after a choice that may have changed its plan: a reload begins a moment after the command answers. */
@@ -73,7 +73,7 @@ test("a context chosen for the model in use loads it again with that context; th
   expect(running).toBe(65536);
   expect(await ask(`models.setChoices("fake", { where: "auto", gpus: [], context: 32768, style: "creative", reasoning: null })`)).toBe("ok");
   await waitUntil(async () => (await state()).model.phase === "ready" && (await state()).model.where.context === 32768, "the model loaded again with the chosen context");
-  expect(loads()).toBe(2);
+  await waitUntil(() => loads() === 2, "the load in the manager's log");
   const listed = await model("fake");
   expect(listed.choices).toMatchObject({ where: "auto", context: 32768, style: "creative" });
   expect(listed.verdict.where.context).toBe(32768);
@@ -98,7 +98,7 @@ test("a personal context is any number of tokens from the minimum to the model's
   const choices = (patch: string) => `models.setChoices("fake", { where: "auto", gpus: [], context: 40000, style: "recommended", reasoning: null, sampling: {}, ${patch} })`;
   expect(await ask(choices(""))).toBe("ok");
   await waitUntil(async () => (await state()).model.phase === "ready" && (await state()).model.where.context === 40000, "the model loaded again with the number chosen");
-  expect(loads()).toBe(loadsBefore + 1);
+  await waitUntil(() => loads() === loadsBefore + 1, "the load in the manager's log");
   expect((await model("fake")).verdict.where.context).toBe(40000);
 
   // Under the minimum, or over what the model holds: refused with the sentence, nothing saved.

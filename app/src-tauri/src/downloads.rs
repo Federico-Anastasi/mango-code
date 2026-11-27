@@ -23,6 +23,8 @@ const SPEED_WINDOW: Duration = Duration::from_secs(5);
 /// How long taking a model off the computer waits for its download to stop: a read from the network can hold the
 /// download for up to a minute before it sees the stop.
 const STOP_WAIT: Duration = Duration::from_secs(90);
+/// A download that failed for the network starts again by itself after each of these waits, from where it stopped.
+const RETRY_WAITS: [Duration; 3] = [Duration::from_secs(5), Duration::from_secs(20), Duration::from_secs(60)];
 
 /// What downloading a model takes on this computer.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -250,12 +252,15 @@ struct Inner {
     restored: AtomicBool,
     /// How long taking a model off waits for its download to stop.
     stop_wait: Duration,
+    /// The waits before a download that failed for the network starts again (`RETRY_WAITS`).
+    retry_waits: Vec<Duration>,
 }
 
 /// Callbacks of the queue: `arrived(model)` when a model is whole on the disk, `stopped(model)` when its download ended
-/// without it (failed, paused, cancelled), `engine(model)` when the engine it brings is on the disk and its files still
-/// come (another model that waited for that engine can load), `changed(model)` when its files changed without anything
-/// to load, `log(line)` for what went wrong in the background.
+/// without it (failed, paused, cancelled), `engine(model)` when the engine it brings is on the disk, before its files if
+/// any still come (a model that waited for that engine can load, the model in use moves to the graphics the engine is
+/// for), `changed(model)` when its files changed without anything to load, `log(line)` for what went wrong in the
+/// background.
 pub struct Tell {
     pub arrived: Box<dyn Fn(&str) + Send + Sync>,
     pub stopped: Box<dyn Fn(&str) + Send + Sync>,
@@ -295,10 +300,10 @@ pub struct Downloads(Arc<Inner>);
 impl Downloads {
     /// `file`: where the queue is kept between one start and the next.
     pub fn new(source: Box<dyn Source>, file: PathBuf, tell: Tell) -> Downloads {
-        Downloads::waiting(source, file, tell, STOP_WAIT)
+        Downloads::waiting(source, file, tell, STOP_WAIT, RETRY_WAITS.to_vec())
     }
 
-    fn waiting(source: Box<dyn Source>, file: PathBuf, tell: Tell, stop_wait: Duration) -> Downloads {
+    fn waiting(source: Box<dyn Source>, file: PathBuf, tell: Tell, stop_wait: Duration, retry_waits: Vec<Duration>) -> Downloads {
         Downloads(Arc::new(Inner {
             source,
             file,
@@ -311,6 +316,7 @@ impl Downloads {
             log: tell.log,
             restored: AtomicBool::new(false),
             stop_wait,
+            retry_waits,
         }))
     }
 
@@ -565,9 +571,31 @@ impl Downloads {
                 e.samples.clear();
                 (e.model.clone(), e.stop.clone())
             };
-            let outcome = this.run(&model, &stop);
+            let outcome = this.run_again(&model, &stop);
             this.finish(&model, outcome);
         });
+    }
+
+    /// A download that fails for the network, or on a server busy for a moment, starts again by itself, from where it stopped, a few times with a longer
+    /// wait each time; a pause or a cancel during a wait ends it at once.
+    fn run_again(&self, model: &str, stop: &AtomicBool) -> Result<(), Ended> {
+        let mut waits = self.0.retry_waits.iter();
+        loop {
+            match self.run(model, stop) {
+                Err(Ended::Failed(sentence, e)) if e.chain().any(|c| matches!(c.downcast_ref::<Trouble>(), Some(Trouble::Network(_) | Trouble::Busy(_)))) => {
+                    let Some(wait) = waits.next() else { return Err(Ended::Failed(sentence, e)) };
+                    (self.0.log)(&format!("download of {model}: {e:#}; trying again in {} s", wait.as_secs()));
+                    let until = Instant::now() + *wait;
+                    while Instant::now() < until {
+                        if stop.load(Ordering::SeqCst) {
+                            return Err(Ended::Stopped);
+                        }
+                        std::thread::sleep((until - Instant::now()).min(Duration::from_millis(200)));
+                    }
+                }
+                other => return other,
+            }
+        }
     }
 
     /// One download: the engine if it is missing, then the files if they are missing.
@@ -581,9 +609,7 @@ impl Downloads {
         let failed = |e: anyhow::Error| if e.is::<Stopped>() { Ended::Stopped } else { Ended::Failed(failure(&need.label, engine_only, &e), e) };
         if need.engine_bytes > 0 {
             self.0.source.engine(model, stop, &mut |done, total| self.update(model, |e| e.engine = (done, total))).map_err(failed)?;
-            if !engine_only {
-                (self.0.engine)(model);
-            }
+            (self.0.engine)(model);
         }
         if need.weights_bytes > 0 {
             self.0.source.weights(model, stop, &mut |done, total| self.update(model, |e| e.weights = (done, total))).map_err(failed)?;
@@ -682,7 +708,7 @@ fn failure(label: &str, engine_only: bool, e: &anyhow::Error) -> String {
                 "Lo scaricamento di «{label}» si è interrotto. Controlla la connessione e riprova: riparte da dove era arrivato.",
                 "The download of «{label}» stopped. Check the connection and try again: it goes on from where it got to."
             ),
-            Trouble::Server(_) => tr!(
+            Trouble::Server(_) | Trouble::Busy(_) => tr!(
                 "Il server non dà i file di «{label}». Riprova più tardi.",
                 "The server does not give the files of «{label}». Try again later."
             ),
@@ -762,13 +788,13 @@ fn entry<'a>(q: &'a mut Queue, model: &str) -> Result<&'a mut Entry> {
 pub struct Real {
     pub paths: Paths,
     /// How the computer is read: `engine_cfg::detect`, or a fixed computer in the tests.
-    pub hardware: fn() -> Result<Hardware>,
+    pub hardware: fn(&Paths) -> Result<Hardware>,
 }
 
 impl Real {
     /// The hardware, read: 60 ms on the PC measured (`detect`), so a command reads it once.
     fn read_hardware(&self) -> Result<Hardware> {
-        (self.hardware)().with_context(|| tr!("Non riesco a guardare l'hardware di questo computer.", "Cannot look at the hardware of this computer."))
+        (self.hardware)(&self.paths).with_context(|| tr!("Non riesco a guardare l'hardware di questo computer.", "Cannot look at the hardware of this computer."))
     }
 
     /// What downloading `model` means here, with the user's choices.
@@ -901,6 +927,8 @@ mod tests {
         stubborn: AtomicBool,
         /// Deleting the partial files waits while this is true.
         hold_discard: AtomicBool,
+        /// How many more times the download of a model fails for the network before it works.
+        flaky: Mutex<HashMap<String, u32>>,
         /// Models being discarded right now, and those that downloaded meanwhile.
         discarding: Mutex<Vec<String>>,
         overlaps: Mutex<Vec<String>>,
@@ -963,6 +991,10 @@ mod tests {
                 if self.broken.lock().unwrap().iter().any(|m| m == model) {
                     return Err(Trouble::Network("the network is gone from https://huggingface.co/x".into()).into());
                 }
+                if let Some(left) = self.flaky.lock().unwrap().get_mut(model).filter(|left| **left > 0) {
+                    *left -= 1;
+                    return Err(Trouble::Network("the connection dropped".into()).into());
+                }
                 let mut arrived = self.arrived.lock().unwrap();
                 let done = arrived.entry(model.to_string()).or_default();
                 if *done >= SIZE {
@@ -1005,6 +1037,10 @@ mod tests {
     }
 
     fn fixture_waiting(fake: Fake, dir: tempfile::TempDir, stop_wait: Duration) -> Fixture {
+        fixture_retrying(fake, dir, stop_wait, Vec::new())
+    }
+
+    fn fixture_retrying(fake: Fake, dir: tempfile::TempDir, stop_wait: Duration, retry_waits: Vec<Duration>) -> Fixture {
         let fake = Arc::new(fake);
         let (arrived, stopped, changed, log) = (Arc::new(Mutex::new(Vec::new())), Arc::new(Mutex::new(Vec::new())), Arc::new(Mutex::new(Vec::new())), Arc::new(Mutex::new(Vec::new())));
         let engines = Arc::new(Mutex::new(Vec::new()));
@@ -1016,7 +1052,7 @@ mod tests {
             changed: Box::new(move |m| touched.lock().unwrap().push(m.to_string())),
             log: Box::new(move |l| lines.lock().unwrap().push(l.to_string())),
         };
-        let downloads = Downloads::waiting(Box::new(fake.clone()), dir.path().join("downloads.json"), tell, stop_wait);
+        let downloads = Downloads::waiting(Box::new(fake.clone()), dir.path().join("downloads.json"), tell, stop_wait, retry_waits);
         Fixture { fake, downloads, arrived, stopped, engines, changed, log, _dir: dir }
     }
 
@@ -1099,7 +1135,8 @@ mod tests {
     }
 
     /// The files are on the disk and only the engine is missing: the download brings the engine, does not
-    /// touch the files, and the model is told whole.
+    /// touch the files, tells the engine (the model in use may move to the graphics that engine is for) and the model
+    /// whole.
     #[test]
     fn a_model_whose_files_are_there_downloads_only_its_engine_and_arrives() {
         let f = fixture();
@@ -1112,7 +1149,7 @@ mod tests {
         f.fake.hold_engine.store(false, Ordering::SeqCst);
         until("«a» arrived", || f.states().is_empty());
         f.arrives(&["a"]);
-        assert!(f.engines.lock().unwrap().is_empty(), "the engine alone: the arrival of the model says it all");
+        assert_eq!(*f.engines.lock().unwrap(), ["a"]);
     }
 
     /// A download that brings an engine and files tells the engine as soon as it is on the disk, while the files still
@@ -1261,6 +1298,20 @@ mod tests {
         assert_eq!(f.saved(), r#"[{"model":"a","paused":true}]"#);
     }
 
+    /// A download that fails for the network starts again by itself, a few times; after the last one it is failed.
+    #[test]
+    fn a_download_that_fails_for_the_network_starts_again_by_itself() {
+        let waits = vec![Duration::from_millis(1); 2];
+        let f = fixture_retrying(Fake::default(), tempfile::tempdir().unwrap(), STOP_WAIT, waits);
+        f.downloads.restore().unwrap();
+        f.fake.flaky.lock().unwrap().extend([("a".to_string(), 2), ("b".to_string(), 3)]);
+        f.ask(&["a", "b"]).unwrap();
+        f.go();
+        until("«b» failed", || f.states() == states(&[("b", Status::Failed)]));
+        f.arrives(&["a"]);
+        assert_eq!(f.log.lock().unwrap().iter().filter(|l| l.contains("trying again")).count(), 4, "{:?}", f.log.lock().unwrap());
+    }
+
     #[test]
     fn a_cancelled_download_leaves_the_queue_and_its_partial_files_go() {
         let f = fixture();
@@ -1379,7 +1430,7 @@ mod tests {
         f.fake.stubborn.store(true, Ordering::SeqCst);
         f.ask(&["3.5-4b"]).unwrap();
         until("the download active", || f.states() == states(&[("3.5-4b", Status::Active)]));
-        let hw = (w.real.hardware)().unwrap();
+        let hw = (w.real.hardware)(&w.real.paths).unwrap();
         std::thread::scope(|s| {
             let removal = s.spawn(|| crate::model_choices::take_off(&w.real.paths, &hw, Some(&f.downloads), Some(&engine), None, "3.5-4b"));
             until("the removal waiting for the download", || f.downloads.removing("3.5-4b"));
@@ -1400,7 +1451,7 @@ mod tests {
     fn a_model_of_the_user_taken_off_leaves_the_list_and_only_the_users_file_stays() {
         use engine_cfg::choices::{self, Choices, WhereChoice};
         let w = real_world();
-        let hw = (w.real.hardware)().unwrap();
+        let hw = (w.real.hardware)(&w.real.paths).unwrap();
         let paths = &w.real.paths;
         let mine = w._dir.path().join("elsewhere").join("mine.gguf");
         std::fs::create_dir_all(mine.parent().unwrap()).unwrap();
@@ -1434,7 +1485,7 @@ mod tests {
     #[test]
     fn a_model_taken_off_takes_its_slot_files_with_it() {
         let w = real_world();
-        let hw = (w.real.hardware)().unwrap();
+        let hw = (w.real.hardware)(&w.real.paths).unwrap();
         let paths = &w.real.paths;
         let (slots, memory) = (paths.data.join("slots"), paths.data.join("memory"));
         std::fs::create_dir_all(&slots).unwrap();
@@ -1456,7 +1507,7 @@ mod tests {
     fn a_model_of_the_catalog_run_from_the_users_own_file() {
         use engine_cfg::choices;
         let w = real_world();
-        let hw = (w.real.hardware)().unwrap();
+        let hw = (w.real.hardware)(&w.real.paths).unwrap();
         let paths = &w.real.paths;
         let mine = w._dir.path().join("elsewhere").join("Ling-3.0-tiny-Q4_K_M.gguf");
         std::fs::create_dir_all(mine.parent().unwrap()).unwrap();
@@ -1491,7 +1542,7 @@ mod tests {
     fn a_model_that_makes_pictures_taken_off_is_no_longer_the_users_default() {
         use engine_cfg::choices;
         let w = real_world();
-        let hw = (w.real.hardware)().unwrap();
+        let hw = (w.real.hardware)(&w.real.paths).unwrap();
         let paths = &w.real.paths;
         let need = w.real.need("flux2-klein-4b").unwrap();
         assert!(need.weights_bytes > 2_000_000_000 && need.engine_bytes > 0, "its files and the image engine: {need:?}");
@@ -1514,7 +1565,7 @@ mod tests {
         use engine_cfg::choices;
         use std::os::windows::fs::OpenOptionsExt;
         let w = real_world();
-        let hw = (w.real.hardware)().unwrap();
+        let hw = (w.real.hardware)(&w.real.paths).unwrap();
         let paths = &w.real.paths;
         let files = ["FLUX.2-klein-4B-GGUF/flux-2-klein-4b-Q4_0.gguf", "Qwen3-4B-GGUF/Qwen3-4B-Q4_K_M.gguf", "FLUX.2-klein-4B-GGUF/flux2-vae.safetensors"];
         files.into_iter().for_each(|f| w.put(f));
@@ -1609,6 +1660,7 @@ mod tests {
         assert!(says(Trouble::Network("x".into()).into()).contains(&connection));
         for e in [
             anyhow::Error::new(Trouble::Server("404".into())),
+            anyhow::Error::new(Trouble::Busy("503".into())),
             anyhow::Error::new(Trouble::WrongFile("sha256".into())),
             anyhow::anyhow!("--version").context(EngineUnusable { engine: "llamacpp".into(), build: mango_common::Build::Cpu }),
             anyhow::Error::new(std::io::Error::from(std::io::ErrorKind::PermissionDenied)),
@@ -1755,7 +1807,7 @@ mod tests {
         let exe = paths.engines.join("llamacpp").join(format!("{}-{}", engines["llamacpp"]["version"].as_str().unwrap(), mango_common::Build::Cpu)).join("llama-server.exe");
         std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
         std::fs::write(&exe, b"").unwrap();
-        let hardware = || Ok(Hardware { gpus: vec![], cpu: engine_cfg::Cpu { name: "Test CPU".into(), cores: 8, avx2: true, avx512: false }, ram_mib: 65_536, nvml_error: None });
+        let hardware = |_: &Paths| Ok(Hardware { gpus: vec![], cpu: engine_cfg::Cpu { name: "Test CPU".into(), cores: 8, avx2: true, avx512: false }, ram_mib: 65_536, integrated: false, nvml_error: None });
         RealWorld { real: Real { paths, hardware }, _dir: dir }
     }
 
@@ -1797,14 +1849,14 @@ mod tests {
         assert_eq!(w.real.label("3.5-4b"), "Qwen3.5-4B");
     }
 
-    /// «Aggiorna il motore»: an engine is to update when the catalog's version of it is missing (the app came with a new
+    /// «Update the engine»: an engine is to update when the catalog's version of it is missing (the app came with a new
     /// one), its old version is on the disk and a model on the disk waits for it. One model brings it, with only the
     /// engine in its download, however many wait; Computer names that engine. An engine never installed, or the engine
     /// of another PC in use, updates nothing.
     #[test]
     fn an_engine_to_update_comes_with_one_model_on_the_disk_and_brings_only_the_engine() {
         let w = real_world();
-        let hw = (w.real.hardware)().unwrap();
+        let hw = (w.real.hardware)(&w.real.paths).unwrap();
         assert!(engine_cfg::engine_updates(&w.real.paths, &hw).unwrap().is_empty(), "nothing on the disk");
         w.put(GGUF);
         w.put(MMPROJ);
@@ -1830,7 +1882,7 @@ mod tests {
             let sentence = failure(&label, true, &e);
             assert!(sentence.contains(&format!("«{label}»")) && !sentence.contains(&tr!("Il motore di", "The engine of")) && !sentence.contains(&tr!("cartella dei modelli", "models folder")), "{sentence}");
         }
-        assert_eq!(updates, [engine_cfg::EngineUpdate { model: updates[0].model.clone(), label: label.clone() }], "one for the engine, not one a model");
+        assert_eq!(updates, [engine_cfg::EngineUpdate { model: updates[0].model.clone(), label: label.clone(), version: true }], "one for the engine, not one a model");
         assert!(["3.5-4b", "3.5-2b"].contains(&updates[0].model.as_str()), "{updates:?}");
         let engine = engine_cfg::computer_view(&w.real.paths, &hw).unwrap().engine;
         assert!(engine.update && engine.label == label, "{engine:?}");
@@ -1859,7 +1911,7 @@ mod tests {
     #[test]
     fn at_the_start_the_new_engine_is_queued_with_one_model_and_brings_only_it() {
         let w = real_world();
-        let hw = (w.real.hardware)().unwrap();
+        let hw = (w.real.hardware)(&w.real.paths).unwrap();
         w.put(GGUF);
         w.put(MMPROJ);
         w.put("Qwen3.5-2B-GGUF/Qwen3.5-2B-Q4_K_M.gguf");
@@ -1886,9 +1938,9 @@ mod tests {
         let w = real_world();
         let counted = Real {
             paths: w.real.paths.clone(),
-            hardware: || {
+            hardware: |_| {
                 READS.fetch_add(1, Ordering::SeqCst);
-                Ok(Hardware { gpus: vec![], cpu: engine_cfg::Cpu { name: "Test CPU".into(), cores: 8, avx2: true, avx512: false }, ram_mib: 65_536, nvml_error: None })
+                Ok(Hardware { gpus: vec![], cpu: engine_cfg::Cpu { name: "Test CPU".into(), cores: 8, avx2: true, avx512: false }, ram_mib: 65_536, integrated: false, nvml_error: None })
             },
         };
         let needs = counted.needs(&["3.5-4b".to_string(), "3.5-2b".to_string()]).unwrap();

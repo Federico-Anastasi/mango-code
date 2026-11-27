@@ -346,7 +346,7 @@ fn every_template_is_the_text_its_manifest_names() {
 #[test]
 fn the_agents_requests_render_with_the_original_templates_of_real_models() {
     let scenarios = scenarios();
-    for name in ["first-turn", "tool-result", "long-with-reminders", "after-summary", "images", "reasoning"] {
+    for name in ["first-turn", "tool-result", "long-with-reminders", "after-summary", "summary-request", "images", "reasoning"] {
         assert!(scenarios.contains_key(name), "the request fixture {name} is missing");
     }
     // (template, kind of problem) -> the pieces it is about and the scenarios it happens in, each with the thinking settings
@@ -462,4 +462,30 @@ fn the_engine_accepts_what_minijinja_accepts() {
         }
     }
     assert!(disagreements.is_empty(), "{} disagreements:\n{}", disagreements.len(), disagreements.join("\n"));
+}
+
+/// Ling's own template takes the first request of Mango Harness 2 as the agent sends it, with thinking on: the system
+/// message, the user's text and every tool reach the prompt.
+#[test]
+fn ling_takes_mango_harness_2s_first_request() {
+    let ling = templates().into_iter().find(|t| t.id == "ling").expect("the manifest has Ling's template");
+    let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../packages/opencode/test/mango-harness/examples");
+    let mut seen = 0;
+    for entry in std::fs::read_dir(&examples).unwrap() {
+        let path = entry.unwrap().path();
+        let example = json_of(&path);
+        let messages = example["messages"].as_array().unwrap();
+        let request = serde_json::json!({ "messages": messages[..2], "tools": example["tools"] });
+        let Probe::Text(rendered) = render(&request, &ling, Some(true)) else { panic!("{}: Ling's template does not render it", path.display()) };
+        for message in &messages[..2] {
+            let text = message["content"].as_str().unwrap();
+            assert!(rendered.contains(text), "{}: the {} message is not in the prompt", path.display(), message["role"]);
+        }
+        for tool in example["tools"].as_array().unwrap() {
+            let name = tool["function"]["name"].as_str().unwrap();
+            assert!(rendered.contains(name), "{}: the tool {name} is not in the prompt", path.display());
+        }
+        seen += 1;
+    }
+    assert_eq!(seen, 2, "the two requests");
 }

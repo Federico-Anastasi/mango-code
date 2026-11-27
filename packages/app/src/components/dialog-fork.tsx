@@ -18,10 +18,6 @@ interface ForkableMessage {
   time: string
 }
 
-function formatTime(date: Date): string {
-  return date.toLocaleTimeString(undefined, { timeStyle: "short" })
-}
-
 export const DialogFork: Component = () => {
   const params = useParams()
   const navigate = useNavigate()
@@ -48,7 +44,7 @@ export const DialogFork: Component = () => {
       result.push({
         id: message.id,
         text: textPart.text.replace(/\n/g, " ").slice(0, 200),
-        time: formatTime(new Date(message.time.created)),
+        time: new Date(message.time.created).toLocaleTimeString(language.intl(), { timeStyle: "short" }),
       })
     }
 

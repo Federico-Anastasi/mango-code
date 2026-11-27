@@ -15,10 +15,10 @@ import { page, type Page } from "./cdp";
 import { start, type Environment } from "./environment";
 import { atSizes } from "./window";
 
-// The fake model that writes answers what rewrites a request: a description, or (for a «stemma») a question first.
+// The fake model that writes answers what rewrites a request: a description, or (for a «crest») a question first.
 const SCRIPT = [
-  { if: "OPTIONS: Rosso", text: "PROMPT: a red logo for a pizzeria, flat vector" },
-  { if: "stemma", text: "QUESTION: Di che colore?\nOPTIONS: Rosso | Blu" },
+  { if: "OPTIONS: Red", text: "PROMPT: a red logo for a pizzeria, flat vector" },
+  { if: "crest", text: "QUESTION: What colour?\nOPTIONS: Red | Blue" },
   { summary: "PROMPT: an old neon pizzeria sign at night, seen from the street, photograph" },
 ];
 const DESCRIPTION = "an old neon pizzeria sign at night, seen from the street, photograph";
@@ -205,13 +205,13 @@ test("a request in the box makes a picture: the words are rewritten, the steps a
   await click('[data-picture-format="portrait"]');
   await click('[data-picture-size="large"]');
   await waitUntil(async () => (await pressed('[data-picture-format="portrait"]')) && (await pressed('[data-picture-size="large"]')), "the choices made");
-  await write("Un'insegna al neon per una pizzeria, di sera, vista dalla strada");
+  await write("A neon sign for a pizzeria, at night, seen from the street");
   await shoot("writing");
   await send();
 
   // the request is the user's bubble, the turn is one row of the conversation
   await waitUntil(async () => (await rows()) === 1, "the row of the picture");
-  expect(await body()).toContain("Un'insegna al neon per una pizzeria, di sera, vista dalla strada");
+  expect(await body()).toContain("A neon sign for a pizzeria, at night, seen from the street");
   await waitUntil(async () => /Passo \d di 4/.test(await text(ROW)), "the steps");
   expect(await text(ROW)).toContain("Immagine");
   // the frame has the proportions of the picture from the start (720 x 1280)
@@ -294,21 +294,21 @@ test("a corrected description is what the image engine receives, nothing rewrite
 
 test("a question of the model that rewrites is shown by the dock of the conversation; an option answers it and the picture is made", async () => {
   await click('[data-mode="picture"]');
-  await write("Uno stemma per la pizzeria");
+  await write("A crest for the pizzeria");
   await send();
-  await waitUntil(async () => (await body()).includes("Di che colore?"), "the question", 60_000);
-  expect(await body()).toContain("Rosso");
-  expect(await body()).toContain("Blu");
+  await waitUntil(async () => (await body()).includes("What colour?"), "the question", 60_000);
+  expect(await body()).toContain("Red");
+  expect(await body()).toContain("Blue");
   await shoot("question");
-  await click('[data-slot="question-option"]', "Rosso");
+  await click('[data-slot="question-option"]', "Red");
   await click('[data-slot="question-footer-actions"] button', "Invia");
   await waitUntil(async () => files().length === 4, "the picture after the answer", 90_000);
   expect(received(files()[3]!).prompt).toBe("a red logo for a pizzeria, flat vector");
-  await waitUntil(async () => !(await body()).includes("Di che colore?") && (await made()) === 4, "the dock closed and the row done");
+  await waitUntil(async () => !(await body()).includes("What colour?") && (await made()) === 4, "the dock closed and the row done");
 }, 180_000);
 
 test("a stop while the picture is drawn cancels the job, the row says it was stopped and the box works again", async () => {
-  await write("Un'insegna blu");
+  await write("A blue sign");
   await sendOn();
   await send();
   await waitUntil(async () => /Passo \d di 4/.test(await lastRowText()), "the steps", 60_000);
@@ -319,20 +319,20 @@ test("a stop while the picture is drawn cancels the job, the row says it was sto
   expect(files()).toHaveLength(4);
   await shoot("stopped", ROW);
   // the box is the user's again
-  await write("Un'insegna rossa");
+  await write("A red sign");
   await waitUntil(() => p.evaluate(`document.querySelector('[data-action="prompt-submit"]').disabled === false`) as Promise<boolean>, "the send button on");
 }, 120_000);
 
 test("a question left open when the turn is stopped does not stay on the screen", async () => {
-  await write("Uno stemma grande");
+  await write("A big crest");
   await sendOn();
   await send();
-  await waitUntil(async () => (await body()).includes("Di che colore?"), "the question", 60_000);
+  await waitUntil(async () => (await body()).includes("What colour?"), "the question", 60_000);
   // the dock takes the place of the box: the turn is stopped from outside, as another client would, and no
   // «question rejected» arrives: the session going idle is what closes the dock
   const session = (await (await fetch(`${env.agent}/session?directory=${encodeURIComponent(site)}`)).json())[0].id as string;
   expect((await fetch(`${env.agent}/session/${session}/abort?directory=${encodeURIComponent(site)}`, { method: "POST" })).ok).toBe(true);
-  await waitUntil(async () => !(await body()).includes("Di che colore?"), "the dock closed with the stop", 30_000);
+  await waitUntil(async () => !(await body()).includes("What colour?"), "the dock closed with the stop", 30_000);
   await waitUntil(() => exists(FIELD), "the box back");
   expect(await lastRowText()).toContain("Fermata");
   await shoot("question-stopped", ROW);
@@ -340,7 +340,7 @@ test("a question left open when the turn is stopped does not stay on the screen"
 
 test("when the user leaves pictures the engine that draws is put away: «Testo», then the Home", async () => {
   // a picture stays on the engine for the next one
-  await write("Un'insegna gialla");
+  await write("A yellow sign");
   await sendOn();
   await send();
   await waitUntil(async () => files().length === 5, "the picture", 90_000);
@@ -351,7 +351,7 @@ test("when the user leaves pictures the engine that draws is put away: «Testo»
 
   // another picture, then the Home: the same
   await click('[data-mode="picture"]');
-  await write("Un'insegna verde");
+  await write("A green sign");
   await sendOn();
   await send();
   await waitUntil(async () => files().length === 6, "the picture", 90_000);
@@ -385,7 +385,7 @@ test("a conversation opened again shows its pictures and opens on «Immagine»",
 }, 120_000);
 
 test("leaving a conversation of pictures for a new one puts the engine away", async () => {
-  await write("Un'insegna viola");
+  await write("A purple sign");
   await sendOn();
   await send();
   await waitUntil(async () => files().length === 7, "the picture", 90_000);
@@ -398,19 +398,19 @@ test("leaving a conversation of pictures for a new one puts the engine away", as
 
 test("«Ignora» on the question leaves the choice to the model, and the picture is made", async () => {
   await click('[data-mode="picture"]');
-  await write("Uno stemma tondo");
+  await write("A round crest");
   await sendOn();
   await send();
-  await waitUntil(async () => (await body()).includes("Di che colore?"), "the question", 60_000);
+  await waitUntil(async () => (await body()).includes("What colour?"), "the question", 60_000);
   await click('[data-component="dock-prompt"] button', "Ignora");
   await waitUntil(async () => files().length === 8, "the picture after the question was dismissed", 90_000);
   expect(received(files()[7]!).prompt).toBe("a red logo for a pizzeria, flat vector");
-  await waitUntil(async () => !(await body()).includes("Di che colore?") && (await exists(`${ROW} [data-slot="picture-image"]`)), "the dock closed and the picture shown");
+  await waitUntil(async () => !(await body()).includes("What colour?") && (await exists(`${ROW} [data-slot="picture-image"]`)), "the dock closed and the picture shown");
 }, 180_000);
 
 test("a page reloaded just after the user left pictures still puts the engine away", async () => {
   await click('[data-mode="picture"]');
-  await write("Un'insegna arancione");
+  await write("An orange sign");
   await sendOn();
   await send();
   await waitUntil(async () => (await control("state")).image_loaded === "pic1", "the engine on", 90_000);
@@ -430,7 +430,7 @@ test("a page reloaded just after the user left pictures still puts the engine aw
 test("a page reloaded with pictures on view keeps the engine however long the app takes to answer", async () => {
   await newConversation();
   await click('[data-mode="picture"]');
-  await write("Un'insegna blu");
+  await write("A blue sign");
   await sendOn();
   await send();
   await waitUntil(async () => (await control("state")).image_loaded === "pic1", "the engine on", 90_000);
@@ -461,9 +461,9 @@ test("the first picture the model makes by itself asks first, in plain words wit
     "face in focus and the room behind it blurred: a bookshelf, a floor lamp, a plant. Warm, quiet, photograph, 50 mm.";
   const own = await start(
     [
-      { tool: "image_generate", arguments: { prompt: drawn, name: "gatto-sul-divano" } },
-      { text: "Ecco il gatto." },
-      { summary: "Un gatto" },
+      { tool: "image_generate", arguments: { prompt: drawn, name: "cat-on-the-sofa" } },
+      { text: "Here is the cat." },
+      { summary: "A cat" },
     ],
     { window: true, context: 65536, imageModels: ["pic1"], imagePresent: ["pic1"], args: [`${site}\\.`], env: { FAKE_SD_PNG: "1" } },
   );
@@ -474,18 +474,18 @@ test("the first picture the model makes by itself asks first, in plain words wit
   try {
     await waitUntil(async () => (await control("state")).model.phase === "ready", "the model ready");
     await newConversation();
-    await write("Disegna un gatto");
+    await write("Draw a cat");
     await sendOn();
     await send();
     await waitUntil(() => exists("[data-picture-prompt]"), "the question of the permission", 60_000);
     expect(await body()).toMatch(/Il modello vuole creare un'immagine di \d+ × \d+ pixel\. Disegnerà:/);
     expect(await text("[data-picture-prompt]")).toBe(drawn);
-    expect(fs.existsSync(path.join(pictures, "gatto-sul-divano.png"))).toBe(false);
+    expect(fs.existsSync(path.join(pictures, "cat-on-the-sofa.png"))).toBe(false);
     await shoot("permission");
     await click('[data-slot="permission-footer-actions"] button', "Consenti una volta");
-    await waitUntil(() => fs.existsSync(path.join(pictures, "gatto-sul-divano.png")), "the picture", 90_000);
+    await waitUntil(() => fs.existsSync(path.join(pictures, "cat-on-the-sofa.png")), "the picture", 90_000);
     await waitUntil(() => exists(`${ROW} [data-slot="picture-image"]`), "the picture in the conversation");
-    await waitUntil(async () => (await body()).includes("Ecco il gatto."), "the model's answer after the picture");
+    await waitUntil(async () => (await body()).includes("Here is the cat."), "the model's answer after the picture");
     // a picture the model made by itself is not made again from the row: the words were not the user's
     expect(await exists(`${ROW} [data-action="picture-again"]`)).toBe(false);
     await shoot("own-picture", ROW);
@@ -518,7 +518,7 @@ test("a picture rewritten by another model leaves the conversations that write w
     await waitUntil(async () => (await writer()).includes("Fake model"), "the model that writes");
     const before = files().length;
     await click('[data-mode="picture"]');
-    await write("Un'insegna al neon per una pizzeria");
+    await write("A neon sign for a pizzeria");
     await sendOn();
     await send();
     await waitUntil(async () => files().length === before + 1, "the picture", 90_000);
@@ -540,7 +540,7 @@ test("a picture rewritten by another model leaves the conversations that write w
     await Bun.sleep(3000);
     expect(await writer()).toContain("Fake model");
     // a message there is answered by that model: the engine goes back to it
-    await write("Ciao");
+    await write("Hello");
     await sendOn();
     await send();
     await waitUntil(async () => (await control("state")).model.model === "fake", "the engine back on the model of the conversation", 60_000);
@@ -575,8 +575,8 @@ test("with no model that draws on the computer the «Immagine» side says so, le
     await waitUntil(() => exists('[data-component="picture-notice"]'), "the line");
     expect(await text('[data-component="picture-notice"]')).toContain("Sul computer non c'è un modello che disegna.");
     expect(await exists('[data-action="prompt-picture-model"]')).toBe(false);
-    await write("Una pizza");
-    await waitUntil(async () => (await text(FIELD)).includes("Una pizza"), "the words in the box");
+    await write("A pizza");
+    await waitUntil(async () => (await text(FIELD)).includes("A pizza"), "the words in the box");
     expect(await p.evaluate(`document.querySelector('[data-action="prompt-submit"]').disabled`)).toBe(true);
     expect((await control("image")).jobs).toEqual([]);
     await shoot("no-model");
@@ -590,3 +590,53 @@ test("with no model that draws on the computer the «Immagine» side says so, le
     env = main;
   }
 }, 240_000);
+
+test("several pictures asked at once: the ones waiting for the engine say «In coda», and each counts its own seconds", async () => {
+  const call = (name: string) => ({ tool: "image_generate", arguments: { prompt: `a ${name} on a worn green velvet sofa, soft light, photograph`, name } });
+  const own = await start(
+    [{ ...call("cat-one"), also: [call("cat-two"), call("cat-three")] }, { text: "Here are the cats." }, { summary: "Cats" }],
+    { window: true, context: 65536, imageModels: ["pic1"], imagePresent: ["pic1"], args: [`${site}\.`], env: { FAKE_SD_PNG: "1", FAKE_SD_STEP_MS: "700" } },
+  );
+  const q = await page(own.cdp!, (t) => t.url.startsWith(own.agent), 120_000);
+  const [previous, main] = [p, env];
+  p = q;
+  env = own;
+  try {
+    await waitUntil(async () => (await control("state")).model.phase === "ready", "the model ready");
+    await newConversation();
+    await write("Draw three cats");
+    await sendOn();
+    await send();
+    // what each row says of itself, every 250 ms, while the three are made; the permission asked is given when it is there
+    const started = Date.now();
+    const seen: string[][] = [];
+    let shotQueued = false;
+    while (!(await body()).includes("Here are the cats.")) {
+      if (Date.now() - started > 180_000) throw new Error("the three pictures were not made in time\n" + JSON.stringify(seen.slice(-3)));
+      if (await exists('[data-slot="permission-footer-actions"] button')) await click('[data-slot="permission-footer-actions"] button', "Consenti una volta");
+      seen.push((await p.evaluate(`[...document.querySelectorAll('${ROW}')].map((row) => row.querySelector('[data-slot="basic-tool-tool-time"]')?.textContent ?? "")`)) as string[]);
+      if (!shotQueued && seen.at(-1)!.filter((label) => label === "In coda").length === 2) {
+        shotQueued = true;
+        await shoot("queued", ROW);
+      }
+      await Bun.sleep(250);
+    }
+    const total = (Date.now() - started) / 1000;
+    const labels = seen.flat();
+    // a picture waiting says only that; it never shows seconds
+    expect(labels).toContain("In coda");
+    expect(labels.filter((label) => label.startsWith("In coda") && label !== "In coda")).toEqual([]);
+    expect(Math.max(...seen.map((row) => row.filter((label) => label === "In coda").length))).toBe(2);
+    // each picture took about as long as the one before it: none counts the time spent waiting for the others
+    const took = (await p.evaluate(`[...document.querySelectorAll('${ROW} [data-slot="picture-facts"]')].map((e) => e.textContent)`)) as string[];
+    expect(took).toHaveLength(3);
+    const seconds = took.map((facts) => Number(/^(\d+) s/.exec(facts)?.[1]));
+    expect(Math.max(...seconds)).toBeLessThan(total * 0.6);
+    await shoot("queue", ROW);
+  } finally {
+    q.close();
+    own.close();
+    p = previous;
+    env = main;
+  }
+}, 300_000);

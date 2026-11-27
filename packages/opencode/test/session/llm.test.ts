@@ -8,7 +8,6 @@ import { Cause, Effect, Exit, Fiber, Stream } from "effect"
 import z from "zod"
 import { LLM } from "../../src/session/llm"
 import { Provider } from "@/provider/provider"
-import { ProviderTransform } from "@/provider/transform"
 import { ModelsDev } from "@opencode-ai/core/models-dev"
 
 import { testEffect } from "../lib/effect"
@@ -240,6 +239,33 @@ describe("session.llm.ai-sdk adapter", () => {
     const stepFinish = events[0]
     if (stepFinish.type !== "step-finish") throw new Error("expected step-finish")
     expect(stepFinish.usage).toBeUndefined()
+  })
+
+  test("adds the system prompt the app's engine read before the request to the step's reading", async () => {
+    const step = (headers?: Record<string, string>) =>
+      adapt([
+        {
+          type: "finish-step",
+          response: { id: "response-1", timestamp: new Date(0), modelId: "local", headers },
+          finishReason: "stop",
+          rawFinishReason: "stop",
+          usage: {
+            inputTokens: 345,
+            outputTokens: 107,
+            totalTokens: 452,
+            inputTokenDetails: { noCacheTokens: 345, cacheReadTokens: 0, cacheWriteTokens: 0 },
+            outputTokenDetails: { textTokens: 107, reasoningTokens: 0 },
+          },
+          providerMetadata: { mango: { timings: { promptTokens: 345, promptMs: 16_000, predictedTokens: 107, predictedMs: 7_400 } } },
+        },
+      ]).then(([event]) => (event.type === "step-finish" ? event.providerMetadata : undefined))
+    const read = { "x-mango-prefix-read": JSON.stringify({ prompt_n: 14_325, prompt_ms: 330_000 }) }
+    expect(await step(read)).toEqual({
+      mango: { timings: { promptTokens: 14_670, promptMs: 346_000, predictedTokens: 107, predictedMs: 7_400 } },
+    })
+    expect(await step()).toEqual({
+      mango: { timings: { promptTokens: 345, promptMs: 16_000, predictedTokens: 107, predictedMs: 7_400 } },
+    })
   })
 
   test("reuses adapter state cleanly across streams once finish has fired", async () => {
@@ -699,9 +725,8 @@ describe("session.llm.stream", () => {
         expect(body.top_p).toBe(0.8)
         expect(body.stream).toBe(true)
 
-        const maxTokens = (body.max_tokens as number | undefined) ?? (body.max_output_tokens as number | undefined)
-        const expectedMaxTokens = ProviderTransform.maxOutputTokens(resolved)
-        expect(maxTokens).toBe(expectedMaxTokens)
+        // the answer may take all that is left of the context: no limit is sent
+        expect(Object.keys(body).filter((key) => /max_?(completion_|output_)?tokens|n_predict/i.test(key))).toEqual([])
 
         const reasoning = (body.reasoningEffort as string | undefined) ?? (body.reasoning_effort as string | undefined)
         expect(reasoning).toBe("high")

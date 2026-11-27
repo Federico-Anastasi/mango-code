@@ -116,7 +116,7 @@ test("the app's own page, the Home and a conversation fill the window, also afte
   const { MangoCode, find } = await import("../client/mango-code");
   const mc = new MangoCode((await find(env.data))!);
   const id = await mc.createSession(env.project, { title: "misura" });
-  for await (const _ of mc.turn(id, env.project, "Ciao", { model: "fake" }));
+  for await (const _ of mc.turn(id, env.project, "Hello", { model: "fake" }));
   const b64 = btoa(String.fromCharCode(...new TextEncoder().encode(env.project))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, "");
   await p.send("Page.navigate", { url: `${env.agent}/${b64}/session/${id}` });
   await Bun.sleep(4000);
@@ -141,7 +141,7 @@ for (const level of [1.25, 1.5, 1.75]) {
     const { MangoCode, find } = await import("../client/mango-code");
     const mc = new MangoCode((await find(env.data))!);
     const id = await mc.createSession(env.project, { title: "zoom" });
-    for await (const _ of mc.turn(id, env.project, "Ciao", { model: "fake" }));
+    for await (const _ of mc.turn(id, env.project, "Hello", { model: "fake" }));
     fs.writeFileSync(path.join(env.data, "zoom.txt"), String(level));
     await env.restart();
     const p = await page(DEBUG, (t) => t.url.startsWith(env.agent), 90_000);

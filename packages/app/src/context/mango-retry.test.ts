@@ -26,7 +26,7 @@ const server = http.createServer((request, response) => {
     catalog_revision: 0,
     model: retried
       ? { phase: "loading", model: "a", label: "A", seconds: 0, where: null }
-      : { phase: "failed", model: "a", label: "A", reason: "it does not start", taken: null, proposal: null },
+      : { phase: "failed", model: "a", label: "A", reason: "it does not start", detail: null, taken: null, proposal: null },
     default_model: "a",
     downloads: [],
   })

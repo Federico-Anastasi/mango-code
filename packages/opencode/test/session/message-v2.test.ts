@@ -254,7 +254,7 @@ describe("session.message-v2.toModelMessage", () => {
     ])
   })
 
-  test("converts user text/file parts and injects compaction/subtask prompts", async () => {
+  test("converts user text/file parts and injects the subtask prompt", async () => {
     const messageID = "m-user"
 
     const input: SessionV1.WithParts[] = [
@@ -294,11 +294,6 @@ describe("session.message-v2.toModelMessage", () => {
             url: "https://example.com/dir",
           },
           {
-            ...basePart(messageID, "p6"),
-            type: "compaction",
-            auto: true,
-          },
-          {
             ...basePart(messageID, "p7"),
             type: "subtask",
             prompt: "prompt",
@@ -320,7 +315,6 @@ describe("session.message-v2.toModelMessage", () => {
             filename: "img.png",
             data: "https://example.com/img.png",
           },
-          { type: "text", text: "What did we do so far?" },
           { type: "text", text: "The following tool was executed by the user" },
         ],
       },
@@ -1674,7 +1668,7 @@ describe("session.message-v2.latest", () => {
   const OVERFLOW_ASSISTANT = MessageID.make("msg_002")
   const COMPACTION_USER = MessageID.make("msg_003")
   const SUMMARY_ASSISTANT = MessageID.make("msg_004")
-  const CONTINUE_USER = MessageID.make("msg_005")
+  const TOLD_USER = MessageID.make("msg_005")
   const NEW_COMPACTION_USER = MessageID.make("msg_006")
 
   const tailUser: SessionV1.WithParts = {
@@ -1713,15 +1707,16 @@ describe("session.message-v2.latest", () => {
     parts: [],
   }
 
-  const continueUser: SessionV1.WithParts = {
-    info: userInfo(CONTINUE_USER),
+  // what the agent writes after the summary: the model reads it where the summary is
+  const toldUser: SessionV1.WithParts = {
+    info: userInfo(TOLD_USER),
     parts: [
       {
-        ...basePart(CONTINUE_USER, "p1"),
+        ...basePart(TOLD_USER, "p1"),
         type: "text",
-        text: "Continue if you have next steps...",
+        text: "This conversation continues from a summary...",
         synthetic: true,
-        metadata: { compaction_continue: true },
+        metadata: { resume: "compaction", compaction: "summary" },
       },
     ] as SessionV1.Part[],
   }
@@ -1764,14 +1759,13 @@ describe("session.message-v2.latest", () => {
     expect(state.user?.id).toBe(higher.id)
   })
 
-  // Regression for double auto-compaction. The reorder in filterCompacted
-  // (#27145) returns [compaction-user, summary, ...tail..., continue-user],
-  // so picking lastFinished by array position landed on the pre-compaction
-  // overflow assistant and bypassed the `summary !== true` overflow guard
-  // in SessionPrompt.runLoop, firing a second compaction.create immediately.
+  // Regression for double auto-compaction. filterCompacted puts the messages in the order the model reads them
+  // (the user's, the message the agent wrote, the tail, the summary), so picking lastFinished by array position
+  // landed on the pre-compaction overflow assistant and bypassed the `summary !== true` overflow guard in
+  // SessionPrompt.runLoop, firing a second compaction.create immediately.
   test("finished is the chronologically-latest finished assistant, not the array-latest", () => {
     const filtered = MessageV2.filterCompacted([
-      continueUser,
+      toldUser,
       summaryAssistant,
       compactionUser,
       overflowAssistant,
@@ -1782,7 +1776,7 @@ describe("session.message-v2.latest", () => {
 
     expect(state.finished?.id).toBe(SUMMARY_ASSISTANT)
     expect(state.finished?.summary).toBe(true)
-    expect(state.user?.id).toBe(CONTINUE_USER)
+    expect(state.user?.id).toBe(TOLD_USER)
     expect(state.tasks).toEqual([])
   })
 
@@ -1803,7 +1797,7 @@ describe("session.message-v2.latest", () => {
       overflowAssistant,
       compactionUser,
       summaryAssistant,
-      continueUser,
+      toldUser,
       newCompactionUser,
     ])
 
@@ -1843,6 +1837,49 @@ describe("session.message-v2.latest", () => {
   })
 })
 
+describe("session.message-v2.fromError: an external server or the Team's cloud that refuses or does not answer", () => {
+  const server = ProviderV2.ID.make("server-1")
+  const call = (statusCode: number | undefined, responseBody: string, message = "Bad") =>
+    new APICallError({
+      message,
+      url: "https://openrouter.ai/api/v1/chat/completions",
+      requestBodyValues: {},
+      statusCode,
+      responseBody,
+      isRetryable: statusCode === undefined || statusCode === 429 || statusCode >= 500,
+    })
+  const said = (e: unknown, providerID = server) => (MessageV2.fromError(e, { providerID }) as { data: { message: string } }).data.message
+
+  test("a refusal says what it is in the app's words, with the server's own reason after them", () => {
+    const credit = said(call(402, JSON.stringify({ error: { message: "Insufficient credits", code: 402 } })))
+    expect(credit).toMatch(/credito \(402\)|credit \(402\)/)
+    expect(credit).toContain("Insufficient credits")
+    // OpenRouter puts the real reason of a 429 in `metadata.raw`
+    const limited = said(call(429, JSON.stringify({ error: { message: "Provider returned error", code: 429, metadata: { raw: "temporarily rate-limited upstream" } } })))
+    expect(limited).toMatch(/troppe richieste|too many requests/)
+    expect(limited).toContain("temporarily rate-limited upstream")
+    expect(said(call(500, "oops"))).toMatch(/errore \(500\)|error \(500\)/)
+    expect(said(call(401, JSON.stringify({ error: { message: "User not found." } })))).toMatch(/chiave|key/)
+    expect(said(call(429, "{}"), ProviderV2.ID.make("openrouter"))).toMatch(/troppe richieste|too many requests/)
+  })
+
+  test("while the agent tries again, the retry line says what the server did and gives no advice to try again", () => {
+    const retrying = (e: unknown) => SessionRetry.retryable(MessageV2.fromError(e, { providerID: server }))?.message
+    const crashed = retrying(call(500, JSON.stringify({ error: { message: "The upstream provider crashed" } })))
+    expect(crashed).toMatch(/^(Il server risponde con un errore \(500\)|The server answers with an error \(500\))$/)
+    expect(retrying(call(429, "{}"))).toMatch(/\(429\)$/)
+    expect(retrying(call(undefined, "", "Cannot connect to API: ECONNREFUSED"))).toMatch(/^(Il server non risponde|The server does not answer)$/)
+    // the turn's error, once the tries are over, keeps the advice and the server's reason
+    expect(said(call(500, JSON.stringify({ error: { message: "The upstream provider crashed" } })))).toMatch(/(riprova quando funziona|try again when it works)\. \(The upstream provider crashed\)$/)
+  })
+
+  test("a server that does not answer says so, not the HTTP client's words", () => {
+    const down = said(call(undefined, "", "Cannot connect to API: ECONNREFUSED: Unable to connect."))
+    expect(down).toMatch(/non risponde|does not answer/)
+    expect(down).not.toContain("Cannot connect to API")
+  })
+})
+
 describe("session.message-v2.fromError: this PC's engine that closes in the middle of an answer", () => {
   const mango = ProviderV2.ID.make("mango")
   const reset = () => Object.assign(new Error("read ECONNRESET"), { code: "ECONNRESET", syscall: "read" })
@@ -1863,12 +1900,12 @@ describe("session.message-v2.fromError: this PC's engine that closes in the midd
     const loading = /ricaricando|loading it again/
     expect((result as { data: { message: string } }).data.message).not.toMatch(loading)
     expect(SessionRetry.retryable(result)?.message).toMatch(loading)
-    const other = MessageV2.fromError(reset(), { providerID: ProviderV2.ID.make("openrouter") })
+    const other = MessageV2.fromError(reset(), { providerID: ProviderV2.ID.make("anthropic") })
     expect(SessionRetry.retryable(other)?.message).toBe("Connection reset by server")
   })
 
   test("another provider, or a connection that was never made, keeps its own message", () => {
-    const other = MessageV2.fromError(reset(), { providerID: ProviderV2.ID.make("openrouter") }) as {
+    const other = MessageV2.fromError(reset(), { providerID: ProviderV2.ID.make("anthropic") }) as {
       data: { message: string; metadata?: Record<string, string> }
     }
     expect(other.data.message).toBe("Connection reset by server")
@@ -1938,7 +1975,7 @@ describe("session.message-v2.fromError: the engine of another PC", () => {
     ) as { data: { message: string } }
     expect(says(slow.data.message)).toBe(false)
     const other = withRemoteEngine(() =>
-      MessageV2.fromError(refused(), { providerID: ProviderV2.ID.make("openrouter") }),
+      MessageV2.fromError(refused(), { providerID: ProviderV2.ID.make("anthropic") }),
     ) as { data: { message: string } }
     expect(other.data.message).toContain("Cannot connect")
     const local = MessageV2.fromError(refused(), { providerID: mango }) as { data: { message: string } }

@@ -4,7 +4,8 @@
 //!
 //! A model runs **entirely on the graphics cards or entirely on the processor**, never split: on the cards if
 //! weights and cache (at least `MIN_CTX` tokens) fit, otherwise on the processor if they fit in RAM, otherwise it
-//! doesn't fit.
+//! doesn't fit. The integrated graphics that borrows the PC's memory (`Hardware::borrows_ram`) does not break the rule:
+//! that memory is RAM, but the whole model sits on one device, and the graphics is never added to a dedicated card.
 //!
 //! `llama-server` options used, checked with `--help` and in the sources of build b12110 (`common/arg.cpp`,
 //! `common/fit.cpp`): `-fit off` (by default `-fit` is on and, if the cards' memory isn't enough, moves layers or
@@ -26,7 +27,7 @@
 
 use crate::catalog::{ModelCfg, ModelsFile, GENERAL_ENGINE};
 use crate::choices::{Scope, WhereChoice};
-use crate::hardware::{choose_build, Gpu, Hardware, Vendor, GPU_RESERVE_MIB};
+use crate::hardware::{choose_build, Gpu, Hardware, Vendor, RAM_RESERVE_MIB};
 use crate::split::{context_label, MIN_CTX};
 use anyhow::{bail, Result};
 use mango_common::i18n::{lang, Lang};
@@ -40,8 +41,6 @@ const CTX_STEP: u32 = 4096;
 /// plan really gets, which goes down in multiples of `CTX_STEP` (4096): 61,440 is under it, so "at least 64,000" means
 /// 65,536 tokens in practice. A model whose target is lower wants its target.
 pub(crate) const AUTO_CTX: u32 = 64_000;
-/// RAM left to Windows and the other programs when the model runs on the processor.
-const RAM_RESERVE_MIB: u64 = 4096;
 const MIB: u64 = 1 << 20;
 
 /// Where a model runs: entirely on the graphics cards or entirely on the processor.
@@ -163,8 +162,8 @@ fn first_set<T: Copy>(items: &[T], k: usize, accept: impl Fn(&[T]) -> bool) -> O
 }
 
 /// Memory of the cards to count on for weights and cache.
-fn gpus_memory_mib(gpus: &[&Gpu]) -> u64 {
-    gpus.iter().map(|s| s.memory_mib.saturating_sub(GPU_RESERVE_MIB)).sum()
+fn gpus_memory_mib(hw: &Hardware, gpus: &[&Gpu]) -> u64 {
+    gpus.iter().map(|g| hw.model_memory_mib(g)).sum()
 }
 
 fn ram_memory_mib(hw: &Hardware) -> u64 {
@@ -188,9 +187,9 @@ fn context(f: &Needs, available_mib: u64, placement: Placement) -> Option<Contex
     }
 }
 
-/// The indexes of the cards of the PC that count and that the user left out, by name.
+/// The indexes of the cards of the PC that count and that the user left out (`Hardware::names`).
 pub(crate) fn unused_indexes(hw: &Hardware, scope: &Scope) -> Vec<u32> {
-    hw.usable().filter(|g| scope.unused.contains(&g.name)).map(|g| g.index).collect()
+    hw.usable().filter(|g| scope.unused.iter().any(|n| hw.names(n, g))).map(|g| g.index).collect()
 }
 
 /// Whether the plan can leave out the `unused` cards. With Vulkan only all of them together: the engine numbers its
@@ -292,7 +291,7 @@ impl<'a> Situation<'a> {
             WhereChoice::Cpu => unreachable!("the processor is not a try on the cards"),
         };
         set.sort_by_key(|g| g.index);
-        Ok(match context(&self.need, gpus_memory_mib(&set), Placement::Gpu) {
+        Ok(match context(&self.need, gpus_memory_mib(self.hw, &set), Placement::Gpu) {
             Some(fit) => Tried::Fits(Placed { fit, gpus: set }),
             None => Tried::Short(set),
         })
@@ -301,13 +300,13 @@ impl<'a> Situation<'a> {
     /// `auto`: the fewest cards that give `AUTO_CTX` tokens (the target, if lower), the fastest first. If not even all
     /// of them do, the fewest that give the context all of them give.
     fn auto(&self, mut cards: Vec<&'a Gpu>) -> Tried<'a> {
-        let Some(all) = context(&self.need, gpus_memory_mib(&cards), Placement::Gpu) else { return Tried::Short(cards) };
+        let Some(all) = context(&self.need, gpus_memory_mib(self.hw, &cards), Placement::Gpu) else { return Tried::Short(cards) };
         cards.sort_by_key(|g| by_speed(g));
         // Vulkan: the cards can't be told apart from here, so it takes them all.
         if self.build != Build::Vulkan {
             // The goal is compared with the rounded context `c.ctx` (see `AUTO_CTX`), not with the memory in tokens.
             let want = AUTO_CTX.min(self.need.target);
-            let fit_of = |set: &[&Gpu]| context(&self.need, gpus_memory_mib(set), Placement::Gpu).filter(|c| c.ctx >= want || *c == all);
+            let fit_of = |set: &[&Gpu]| context(&self.need, gpus_memory_mib(self.hw, set), Placement::Gpu).filter(|c| c.ctx >= want || *c == all);
             for k in 1..cards.len() {
                 let Some(mut set) = first_set(&cards, k, |s| fit_of(s).is_some()) else { continue };
                 // A model that fits one card, on a computer that wants small models on all of them.
@@ -327,7 +326,7 @@ impl<'a> Situation<'a> {
     fn picked(&self, cards: &[&'a Gpu]) -> Result<Vec<&'a Gpu>> {
         let mut set: Vec<&Gpu> = Vec::new();
         for name in &self.scope.choices.gpus {
-            let mut found = cards.iter().copied().filter(|g| &g.name == name).peekable();
+            let mut found = cards.iter().copied().filter(|g| self.hw.names(name, g)).peekable();
             if found.peek().is_none() {
                 bail!("{}", self.missing_card(name));
             }
@@ -343,7 +342,7 @@ impl<'a> Situation<'a> {
     /// Why a card named in the choice isn't among the cards.
     fn missing_card(&self, name: &str) -> String {
         let label = &self.cfg.label;
-        let in_pc: Vec<&Gpu> = self.hw.gpus.iter().filter(|g| g.name == name).collect();
+        let in_pc: Vec<&Gpu> = self.hw.gpus.iter().filter(|g| self.hw.names(name, g)).collect();
         if in_pc.is_empty() {
             return tr!("La scheda «{name}» scelta per il modello «{label}» non c'è più in questo computer.", "The card «{name}» chosen for the model «{label}» is no longer in this computer.");
         }
@@ -354,7 +353,7 @@ impl<'a> Situation<'a> {
                 "The card «{name}» chosen for the model «{label}» can't be used by this computer's engine."
             );
         }
-        if self.scope.unused.iter().any(|n| n == name) {
+        if self.scope.unused.iter().any(|n| in_pc.iter().any(|g| self.hw.names(n, g))) {
             return tr!("La scheda «{name}» scelta per il modello «{label}» è segnata come non usata.", "The card «{name}» chosen for the model «{label}» is marked as not used.");
         }
         tr!("La scheda «{name}» scelta per il modello «{label}» è prestata a un altro lavoro.", "The card «{name}» chosen for the model «{label}» is lent to another job.")
@@ -423,7 +422,7 @@ impl<'a> Situation<'a> {
             cards.iter().map(|g| g.name.as_str()).collect::<Vec<_>>().join(", "),
             gb(self.need.minimum_mib()),
             context_label(MIN_CTX.min(self.need.target)),
-            gb(gpus_memory_mib(cards))
+            gb(gpus_memory_mib(self.hw, cards))
         )
     }
 
@@ -433,7 +432,7 @@ impl<'a> Situation<'a> {
         let placement = if cards.is_empty() {
             tr!(" e la RAM ne ha {}", " and the RAM has {}", gb(ram_memory_mib(self.hw)))
         } else {
-            tr!(", le schede video ne hanno {} e la RAM {}", ", the graphics cards have {} and the RAM {}", gb(gpus_memory_mib(&cards)), gb(ram_memory_mib(self.hw)))
+            tr!(", le schede video ne hanno {} e la RAM {}", ", the graphics cards have {} and the RAM {}", gb(gpus_memory_mib(self.hw, &cards)), gb(ram_memory_mib(self.hw)))
         };
         tr!(
             "Il modello «{}» non ci sta in questo computer: servono almeno {} GB (pesi e cache per {} token){placement}. Scegli un modello più piccolo.",
@@ -445,17 +444,17 @@ impl<'a> Situation<'a> {
     }
 }
 
-/// The choices of «where it runs» that work on this PC for a model the general engine runs: «one» and «pick» need
-/// two cards to mean something and a build that can tell them apart; with Vulkan and a card that can't be left out
-/// only the processor is left.
+/// The choices of «where it runs» that work on this PC for a model the general engine runs: «all» needs two cards to
+/// mean something, «one» and «pick» also a build that can tell them apart; with Vulkan and a card that can't be left
+/// out only the processor is left.
 pub(crate) fn places(hw: &Hardware, build: Build, scope: &Scope) -> Vec<WhereChoice> {
     let unused = unused_indexes(hw, scope);
     if !unused.is_empty() && !removable(hw, build, &unused) {
         return vec![WhereChoice::Cpu];
     }
-    let several = build != Build::Vulkan && engine_gpus(hw, build, &unused).len() >= 2;
-    let any = !engine_gpus(hw, build, &unused).is_empty();
-    let all = [(WhereChoice::Auto, true), (WhereChoice::One, several), (WhereChoice::All, any), (WhereChoice::Cpu, true), (WhereChoice::Pick, several)];
+    let two = engine_gpus(hw, build, &unused).len() >= 2;
+    let several = build != Build::Vulkan && two;
+    let all = [(WhereChoice::Auto, true), (WhereChoice::One, several), (WhereChoice::All, two), (WhereChoice::Cpu, true), (WhereChoice::Pick, several)];
     all.into_iter().filter_map(|(choice, works)| works.then_some(choice)).collect()
 }
 
@@ -548,10 +547,15 @@ pub(crate) fn evaluate(file: &ModelsFile, cfg: &ModelCfg, hw: &Hardware, build: 
     );
     let cards = s.cards(false);
     let reason = match c.placement {
+        Placement::Gpu if used.iter().any(|g| hw.borrows_ram(g)) => tr!(
+            "Ci sta nella grafica integrata, che usa la RAM: {how_much}, su {} GB disponibili.",
+            "It fits in the integrated graphics, which uses the RAM: {how_much}, out of {} GB available.",
+            gb(gpus_memory_mib(hw, &used))
+        ),
         Placement::Gpu => tr!(
             "Ci sta nella memoria delle schede video: {how_much}, su {} GB disponibili.",
             "It fits in the graphics cards' memory: {how_much}, out of {} GB available.",
-            gb(gpus_memory_mib(&used))
+            gb(gpus_memory_mib(hw, &used))
         ),
         Placement::Cpu if scope.choices.place == WhereChoice::Cpu => {
             tr!("Gira sul processore, come hai scelto: {how_much}, su {} GB di RAM disponibili.", "It runs on the processor, as you chose: {how_much}, out of {} GB of RAM available.", gb(ram_memory_mib(hw)))
@@ -563,7 +567,7 @@ pub(crate) fn evaluate(file: &ModelsFile, cfg: &ModelCfg, hw: &Hardware, build: 
             "Nelle schede video non ci sta (servono almeno {} GB, ne hanno {}): gira sul processore, più lento. Nella RAM: {how_much}, su {} GB disponibili.",
             "It doesn't fit in the graphics cards (at least {} GB are needed, they have {}): it runs on the processor, slower. In RAM: {how_much}, out of {} GB available.",
             gb(f.minimum_mib()),
-            gb(gpus_memory_mib(&cards)),
+            gb(gpus_memory_mib(hw, &cards)),
             gb(ram_memory_mib(hw))
         ),
     };

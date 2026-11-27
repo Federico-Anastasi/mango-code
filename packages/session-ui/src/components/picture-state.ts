@@ -6,9 +6,9 @@ import type { UiI18nKey, UiI18nParams } from "@opencode-ai/ui/context/i18n"
 /** The longest side of the picture in the conversation, in pixels. */
 export const PICTURE_LONG_SIDE = 320
 
-export type PictureStage = "rewriting" | "waiting" | "preparing" | "drawing" | "finishing"
+export type PictureStage = "asking" | "rewriting" | "waiting" | "preparing" | "drawing" | "finishing"
 
-const STAGES: ReadonlySet<string> = new Set<PictureStage>(["rewriting", "waiting", "preparing", "drawing", "finishing"])
+const STAGES: ReadonlySet<string> = new Set<PictureStage>(["asking", "rewriting", "waiting", "preparing", "drawing", "finishing"])
 
 function count(value: unknown) {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined
@@ -49,6 +49,17 @@ export function pictureSides(metadata: Record<string, unknown>) {
 /** The width of the frame in the conversation: the picture's long side is `PICTURE_LONG_SIDE`, its proportions the real ones. */
 export function pictureFrameWidth(sides: { width: number; height: number }) {
   return Math.round(PICTURE_LONG_SIDE * Math.min(1, sides.width / sides.height))
+}
+
+/**
+ * The times the row counts for the picture: from `began`, when its own turn came, to the end of the part. None while it
+ * waits for the user's permission or in the line, where there is nothing yet to count; a part that does not say when its
+ * turn came counts from its start.
+ */
+export function pictureTime(metadata: Record<string, unknown>, time: { start?: number; end?: number } | undefined) {
+  const stage = pictureStage(metadata)
+  if (!time || stage === "asking" || stage === "waiting") return undefined
+  return { start: count(metadata.began) ?? time.start, end: time.end }
 }
 
 /** The seconds the picture took, from the part's own times; none while it goes on or when they are not there. */

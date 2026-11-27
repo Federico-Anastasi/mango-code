@@ -15,6 +15,7 @@ import { Global } from "@opencode-ai/core/global"
 import { Hash } from "@opencode-ai/core/util/hash"
 import { engineIsRemote, engineOriginUrl } from "@/provider/engine-timings"
 import { tr } from "@/util/mango-language"
+import { DEFAULT } from "./harness"
 
 /** An item with the text it adds to the prompt; without text (a server that is not connected) it cannot be measured. */
 export type Item = { kind: string; name: string; text?: string }
@@ -37,9 +38,13 @@ const FOLDERS = 50
 
 const file = () => path.join(Global.Path.state, "prompt-weights.json")
 const decode = Schema.decodeUnknownOption(Schema.fromJsonString(Saved))
-const folderKey = (directory: string) => path.resolve(directory).toLowerCase()
-// The base prompt carries today's date (session/system.ts): a new day does not make its weight an old one.
-const print = (text: string) => Hash.fast(text.replace(/Today's date: .*/, ""))
+// Each harness has the weights of its own items: the default one under the folder, the others under the folder and
+// their name.
+const folderKey = (directory: string, harness = DEFAULT) =>
+  path.resolve(directory).toLowerCase() + (harness === DEFAULT ? "" : `#${harness}`)
+// The base prompt carries today's date (session/system.ts, and the harness's own prompt): a new day does not make its
+// weight an old one.
+const print = (text: string) => Hash.fast(text.replace(/Today's date: .*/, "").replace(/^- Date: .*$/m, ""))
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e))
 
 let loaded: Saved | undefined
@@ -93,8 +98,8 @@ function save(next: Saved): string | undefined {
 }
 
 /** The model of the last measurement in this folder: the one that ran its latest conversation. */
-export function measuredModel(directory: string): string | undefined {
-  return weights()?.[folderKey(directory)]?.model
+export function measuredModel(directory: string, harness?: string): string | undefined {
+  return weights()?.[folderKey(directory, harness)]?.model
 }
 
 /**
@@ -102,8 +107,8 @@ export function measuredModel(directory: string): string | undefined {
  * since. An item whose text is not known right now (a server not connected, a plugin's reminder, seen only during a
  * conversation) keeps its weight: nothing says it is old.
  */
-export function tokens(directory: string, model: string, item: Item): number | undefined {
-  const known = weights()?.[folderKey(directory)]
+export function tokens(directory: string, model: string, item: Item, harness?: string): number | undefined {
+  const known = weights()?.[folderKey(directory, harness)]
   const ofKind = known?.model === model ? known.items[item.kind] : undefined
   // an item's name is free text (a server called "constructor"): only the file's own keys count
   const weight = ofKind && Object.hasOwn(ofKind, item.name) ? ofKind[item.name] : undefined
@@ -111,7 +116,8 @@ export function tokens(directory: string, model: string, item: Item): number | u
   return weight.tokens
 }
 
-async function count(text: string): Promise<number> {
+/** The tokens of a text, counted by the running model's own tokenizer. */
+export async function count(text: string): Promise<number> {
   // The network door of another PC's engine does not count tokens: the item stays "not measured", without a refused request each.
   if (engineIsRemote()) throw new Error(tr("il motore di un altro PC non conta i token", "the engine of another PC does not count tokens"))
   const origin = engineOriginUrl()
@@ -137,7 +143,7 @@ const PARALLEL = 8
  * An item that cannot be measured stays unmeasured and the reason goes in `errors`; `unsaved` says why the weights
  * could not be kept.
  */
-export async function measure(directory: string, model: string, items: Item[]) {
+export async function measure(directory: string, model: string, items: Item[], harness?: string) {
   const results: { kind: string; name: string; tokens: number; print: string }[] = []
   const errors: string[] = []
   const queue = items.filter((item): item is Item & { text: string } => item.text !== undefined)
@@ -155,7 +161,7 @@ export async function measure(directory: string, model: string, items: Item[]) {
   if (results.length === 0) return { errors }
   const all = weights()
   if (!all) return { errors, unsaved: takeProblem() }
-  const key = folderKey(directory)
+  const key = folderKey(directory, harness)
   const existing = all[key]
   const known: Record<string, Record<string, { tokens: number; print: string }>> = existing?.model === model
     ? { ...existing.items }

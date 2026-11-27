@@ -1,0 +1,299 @@
+{
+ "skill": {
+  "description": "Gives the method for one kind of job. `name` is what follows `skill` in the list of the skills.",
+  "parameters": {
+   "type": "object",
+   "properties": {
+    "name": {
+     "type": "string",
+     "description": "The name in the list, like `web-research`"
+    }
+   },
+   "required": [
+    "name"
+   ]
+  },
+  "answers": "The text of the skill. An unknown name: `No skill named X. The skills are: …`, with the list."
+ },
+ "terminal": {
+  "description": "Runs one command and returns what it prints. The shell is bash (Git Bash on Windows) and starts in the project folder. For programs: python, git, bun, npm, tests. Files have their own commands: `search`, `read`, `write`, `edit`. Whatever the command started is stopped when it ends: a server or a watcher does not stay on.",
+  "parameters": {
+   "type": "object",
+   "properties": {
+    "command": {
+     "type": "string",
+     "description": "The command, as you would type it in bash"
+    },
+    "folder": {
+     "type": "string",
+     "description": "A folder of the project to run it in, like `src`. Without it: the project folder"
+    },
+    "timeout": {
+     "type": "integer",
+     "description": "Seconds to wait before the command is stopped. Without it: 120. At most 600"
+    }
+   },
+   "required": [
+    "command"
+   ]
+  },
+  "answers": "What the program printed, the last 200 lines and 20,000 characters (a first line says how much was cut), and `exit N` when N is not 0. Errors arrive in English, in one or two lines, without colour codes. After `timeout` seconds (120 without it, 600 at most) it stops the program and says how long it waited. A `folder` outside the project, or a command that names a place outside it: refused, with what the project folder holds. A `cd` alone changes nothing: it says to give the folder as `folder`."
+ },
+ "powershell": {
+  "description": "Runs a Windows PowerShell 5.1 script on Windows, in the project folder. Only for what Windows alone has: services, the registry, Word or Excel automation. Anything else goes through `terminal`. Whatever the script started is stopped when it ends.",
+  "parameters": {
+   "type": "object",
+   "properties": {
+    "script": {
+     "type": "string",
+     "description": "The PowerShell script"
+    },
+    "timeout": {
+     "type": "integer",
+     "description": "Seconds to wait before the command is stopped. Without it: 120. At most 600"
+    }
+   },
+   "required": [
+    "script"
+   ]
+  },
+  "answers": "What the script printed, the last 200 lines and 20,000 characters (a first line says how much was cut), and `exit N` when N is not 0. Errors arrive in English, one line each, without colour codes. After `timeout` seconds (120 without it, 600 at most) it stops the script and says how long it waited. A script that names a place outside the project: refused, with what the project folder holds."
+ },
+ "read": {
+  "description": "Returns the text of a file, under a first line with its name and the lines shown, or the list of what a folder holds. At most 200 lines and 20,000 characters come in one answer: a last line says where to read on from. A PDF is returned as its text, page by page. A picture file (PNG, JPEG, GIF, WebP) is shown to you as a picture, and so is a PDF page that has no text. A file that is not text is not read.",
+  "parameters": {
+   "type": "object",
+   "properties": {
+    "path": {
+     "type": "string",
+     "description": "The file or the folder, from the project folder: `notes.txt`, `src/app.js`, `.`"
+    },
+    "from": {
+     "type": "integer",
+     "description": "The first line to return. Without it: the first. In a PDF the lines are those of its text, each page starting with `--- page N ---`"
+    },
+    "lines": {
+     "type": "integer",
+     "description": "How many lines to return. Without it: 200"
+    }
+   },
+   "required": [
+    "path"
+   ]
+  },
+  "answers": "A file: `X, lines A-B of N`, then its lines without numbers, 200 and 20,000 characters at most; when the characters end the answer sooner, a last line says how many lines were left out and which line to read on from. A PDF: `X, PDF of P pages, lines A-B of N`, then its text in reading order, each page under `--- page N ---`; a page with no text (a scan, a drawing) says so, and with sight its picture follows the words, four at most in one answer, the others left out with the line to read on from. A picture file: `The picture of X follows.` and the picture, a PNG of at most 768 pixels on the longer side; without sight, one line that says pictures cannot be seen; a PDF that is damaged or locked by a password: one line that says so. Word, Excel and PowerPoint files: one line that says `read` does not read them. A binary file: one line that says it is not text. A folder: its files and folders, one per line. Not found: `No file X. The folder holds: …`. Outside the project: refused, with what the project folder holds."
+ },
+ "write": {
+  "description": "Creates a file, or replaces a whole file, with the text you give. Makes the folders in its path if they are not there.",
+  "parameters": {
+   "type": "object",
+   "properties": {
+    "path": {
+     "type": "string",
+     "description": "The file, from the project folder: `src/app.js`, `data/orders.csv`"
+    },
+    "content": {
+     "type": "string",
+     "description": "The whole text of the file"
+    }
+   },
+   "required": [
+    "path",
+    "content"
+   ]
+  },
+  "answers": "`Written X (N lines)`. Outside the project: refused, with what the project folder holds. A path ending in .docx, .xlsx, .pptx or .pdf: refused."
+ },
+ "edit": {
+  "description": "Replaces a piece of a file with another. Give enough of the old text to find one place only; spaces at the ends of the lines don't matter.",
+  "parameters": {
+   "type": "object",
+   "properties": {
+    "path": {
+     "type": "string",
+     "description": "The file, from the project folder"
+    },
+    "old": {
+     "type": "string",
+     "description": "The text that is in the file now"
+    },
+    "new": {
+     "type": "string",
+     "description": "The text to put in its place"
+    },
+    "all": {
+     "type": "boolean",
+     "description": "true to replace every place where the old text is. Without it: one place only"
+    }
+   },
+   "required": [
+    "path",
+    "old",
+    "new"
+   ]
+  },
+  "answers": "`Changed X`, with the lines around the change. Old text not found: the lines of the file closest to it, to copy from. Found in more than one place: how many and at which lines, asking for more text or `all`."
+ },
+ "search": {
+  "description": "Finds files by their name, or the lines that hold a text, in the project. Give `name`, `text`, or both.",
+  "parameters": {
+   "type": "object",
+   "properties": {
+    "name": {
+     "type": "string",
+     "description": "A pattern for the file name: `*.csv`, `report*`, `**/*.test.ts`"
+    },
+    "text": {
+     "type": "string",
+     "description": "A text to find inside the files, matched as it is written and without regard to upper or lower case: not a regular expression. It returns file, line number and line"
+    },
+    "folder": {
+     "type": "string",
+     "description": "A folder of the project to search in. Without it: the whole project"
+    }
+   },
+   "required": []
+  },
+  "answers": "By name: the paths, 100 at most. By text: `path:line: the line`, 100 at most. Nothing found: `Nothing found`, and the folders of the project. Neither `name` nor `text`: refused, saying to give one."
+ },
+ "web_search": {
+  "description": "Searches the web and returns the results: title, address, date, and a few lines of each. Open the best ones with `web_open` before you answer.",
+  "parameters": {
+   "type": "object",
+   "properties": {
+    "query": {
+     "type": "string",
+     "description": "What to search, in a few words"
+    },
+    "days": {
+     "type": "integer",
+     "description": "Only results of the last days: 7 for a week. Without it: any date"
+    }
+   },
+   "required": [
+    "query"
+   ]
+  },
+  "answers": "Ten results at most: title, address, date when known, two lines of text. No network: `The web cannot be reached`, in one line."
+ },
+ "web_open": {
+  "description": "Returns the text of a web page. The address comes from a result of `web_search` or from the user: never make one up.",
+  "parameters": {
+   "type": "object",
+   "properties": {
+    "url": {
+     "type": "string",
+     "description": "The address, starting with http:// or https://"
+    }
+   },
+   "required": [
+    "url"
+   ]
+  },
+  "answers": "The title, the date when known, and the text of the page, 300 lines at most. An address that no search result and no message of the user contains: refused, saying to search first. Not http: refused in one line."
+ },
+ "page_view": {
+  "description": "Opens a page in the app's browser and returns what is on it: the text in order, the links, buttons and fields with a number each, and the errors of the console.",
+  "parameters": {
+   "type": "object",
+   "properties": {
+    "page": {
+     "type": "string",
+     "description": "A file of the project, like `site/home.html`, or an address starting with http"
+    }
+   },
+   "required": [
+    "page"
+   ]
+  },
+  "answers": "The title; the text in order; links, buttons and fields with a number each; the errors of the console, or `No errors in the console`. A file that is not there: as `read`. At most 400 items: a page that has more ends with a line that says so."
+ },
+ "page_look": {
+  "description": "Takes a picture of a web page as a person sees it and shows it to you: a chart, a drawing, a picture, a colour, how things are laid out. What `page_view` gives as text it does not give again. The picture files and the PDFs of the project are seen with `read`, not here.",
+  "parameters": {
+   "type": "object",
+   "properties": {
+    "page": {
+     "type": "string",
+     "description": "A file of the project, like `site/home.html`, or an address starting with http. Without it: the page that is open"
+    }
+   },
+   "required": []
+  },
+  "answers": "`The picture of the page follows.` and the picture, in the same answer. No page open and none given: `No page is open: give `page`, or `page_view` one first.`"
+ },
+ "page_act": {
+  "description": "Clicks, types or presses a key in the page that `page_view` opened, and returns the page as it is afterwards.",
+  "parameters": {
+   "type": "object",
+   "properties": {
+    "action": {
+     "type": "string",
+     "enum": [
+      "click",
+      "type",
+      "press"
+     ],
+     "description": "What to do"
+    },
+    "on": {
+     "type": "integer",
+     "description": "The number `page_view` gave to the link, button or field. Not needed for `press`"
+    },
+    "text": {
+     "type": "string",
+     "description": "For `type`: the text to write. For `press`: the key, like `Enter`"
+    }
+   },
+   "required": [
+    "action"
+   ]
+  },
+  "answers": "The page after the action, as `page_view` gives it. A number that is not on the page: refused, with the numbers that are. No page open: refused, naming `page_view`. At most 400 items: a page that has more ends with a line that says so."
+ },
+ "ask": {
+  "description": "Asks the user one question and returns the answer. For a choice only the user can make, or a request that can mean two different things.",
+  "parameters": {
+   "type": "object",
+   "properties": {
+    "question": {
+     "type": "string",
+     "description": "The question, in the user's language"
+    },
+    "options": {
+     "type": "array",
+     "items": {
+      "type": "string"
+     },
+     "description": "Two to four answers to choose from. Without it: the user writes freely"
+    }
+   },
+   "required": [
+    "question"
+   ]
+  },
+  "answers": "What the user answered, as text."
+ },
+ "plan": {
+  "description": "Keeps the plan of a long job, for this conversation. `text` writes the whole plan: a document, not a list. `step` with `text` rewrites one step, or adds one, when the work shows that the plan was wrong. `done` says a step is finished and checked, and answers with the whole text of the next step.",
+  "parameters": {
+   "type": "object",
+   "properties": {
+    "done": {
+     "type": "integer",
+     "description": "The number of the step you have just finished and checked"
+    },
+    "text": {
+     "type": "string",
+     "description": "The plan as a document, in this form:\n# Goal\nwhat the user will have at the end\n# What is there\nthe files you read and what each holds, what must not change\n## Step 1: a title\neverything needed to do this step later without looking again: which files, what to change in each, how to check it\n## Step 2: a title\n...\n# Not doing\nwhat the request does not ask for"
+    },
+    "step": {
+     "type": "integer",
+     "description": "With `text`: the number of the one step to rewrite, or of a new step to add after the last. The rest of the plan and the marks stay as they are"
+    }
+   },
+   "required": []
+  },
+  "answers": "After `text`: the titles of the steps as a list, then the whole text of step 1. A text without `## Step` headings: refused, showing the form. After `step` with `text`: the titles with their marks, and the step as it is now; a step rewritten loses its mark; a number beyond the next free one: refused, with the titles. After `done`: the goal; the titles of the steps, with a mark on those done; then the whole text of the next step, exactly as it was written in the plan. After the last one: `All steps done. Read the goal and Not doing once more, then answer the user`. A `done` for a step that is not there: refused, with the titles. No parameter: the whole plan, or `No plan yet`. The plan belongs to the conversation: a new conversation starts without one, and the app shows it to the user."
+ }
+}

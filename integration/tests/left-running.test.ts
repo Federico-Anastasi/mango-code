@@ -8,6 +8,7 @@
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { MangoCode, find } from "../client/mango-code";
@@ -80,6 +81,13 @@ describe("PowerShell", () => {
 
 const GIT_BASH = "C:\\Program Files\\Git\\bin\\bash.exe";
 
+/** A config file of the agent's that chooses Git Bash, in a temporary folder of this test. */
+function shellConfig() {
+  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "left-running-")), "opencode.json");
+  fs.writeFileSync(file, JSON.stringify({ shell: GIT_BASH }));
+  return file;
+}
+
 describe.skipIf(!fs.existsSync(GIT_BASH))("Git Bash", () => {
   // `&`: bash ends at once and ping keeps its output open. The second command times out: its subshell has already
   // ended, so stopping the command does not reach ping.
@@ -91,7 +99,9 @@ describe.skipIf(!fs.existsSync(GIT_BASH))("Git Bash", () => {
       { tool: "bash", arguments: { command: TIMED_OUT, timeout: 3000 } },
       { text: "Started." },
     ],
-    (project) => fs.writeFileSync(path.join(project, "opencode.json"), JSON.stringify({ shell: GIT_BASH })),
+    undefined,
+    // The shell is chosen in a config file of the agent's (`OPENCODE_CONFIG`): a project's own opencode.json is not read.
+    { env: { OPENCODE_CONFIG: shellConfig() } },
   );
 
   test("what a command left running with & or after its time ran out is listed, and Stop ends it", async () => {

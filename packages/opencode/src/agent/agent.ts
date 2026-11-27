@@ -8,7 +8,6 @@ import { generateObject } from "ai"
 import { Truncate } from "@/tool/truncate"
 
 import PROMPT_GENERATE from "./generate.txt"
-import PROMPT_COMPACTION from "./prompt/compaction.txt"
 import PROMPT_EXPLORE from "./prompt/explore.txt"
 import PROMPT_SUMMARY from "./prompt/summary.txt"
 import { Permission } from "@/permission"
@@ -210,21 +209,6 @@ const layer = Layer.effect(
             options: {},
             mode: "subagent",
             native: true,
-          },
-          compaction: {
-            name: "compaction",
-            mode: "primary",
-            native: true,
-            hidden: true,
-            prompt: PROMPT_COMPACTION,
-            permission: Permission.merge(
-              defaults,
-              Permission.fromConfig({
-                "*": "deny",
-              }),
-              user,
-            ),
-            options: {},
           },
           summary: {
             name: "summary",

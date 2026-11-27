@@ -31,6 +31,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { fromLinux } from "./mango-linux-path.mjs";
 
 const SELF = path.dirname(fileURLToPath(import.meta.url));
 const MAIN = path.join(SELF, "node_modules", "chrome-devtools-mcp", "build", "src", "bin", "chrome-devtools-mcp-main.js");
@@ -404,26 +405,12 @@ trace("browser: " + mode);
 // the app serves the folder of that file on a port of its own for as long as it runs (`POST /control/site`), so the
 // page works as on the web and there is no server to start. Without the app the file opens by its own address.
 
-// The folders a Unix path starts with that are not part of what the model is naming, and the ones at the root of a
-// Windows drive that a path without a drive may really mean.
-const UNIX_ROOTS = new Set(["home", "root", "tmp", "workspace", "workspaces", "app", "mnt", "var", "usr", "opt", "srv", "etc"]);
-const WINDOWS_ROOTS = new Set(["users", "windows", "program files", "program files (x86)", "programdata"]);
-
 // Where a path the model wrote is on this computer. A relative one is in the project; so is a Unix one on Windows
-// (`/home/user/site/index.html`), which names nothing here: the agent's file tools follow the same rule, so a file
-// written there is found here.
+// (`/home/user/site/index.html`), which names nothing here: the agent's file tools follow the same rule
+// (`mango-linux-path.mjs`), so a file written there is found here.
 function inProject(written, project) {
-  if (process.platform !== "win32" || !/^[\\/](?![\\/])/.test(written)) return path.resolve(project, written);
-  const parts = written.split(/[\\/]+/).filter(Boolean);
-  if (/^[A-Za-z]$/.test(parts[0] ?? "") && parts.length > 1) return path.join(parts[0].toUpperCase() + ":\\", ...parts.slice(1));
-  const plain = path.resolve(project, written);
-  const relative = path.relative(project, plain);
-  const inside = relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
-  const root = (parts[0] ?? "").toLowerCase();
-  if (inside || WINDOWS_ROOTS.has(root)) return plain;
-  const named = parts.map((part) => part.toLowerCase()).lastIndexOf(path.basename(project).toLowerCase());
-  const skipped = named >= 0 ? named + 1 : root === "home" ? 2 : UNIX_ROOTS.has(root) ? 1 : 0;
-  return path.join(project, ...parts.slice(skipped));
+  if (process.platform !== "win32") return path.resolve(project, written);
+  return fromLinux(project, written, (name) => fs.existsSync(path.join(project, name)))?.path ?? path.resolve(project, written);
 }
 
 // The project folder: the first of the folders the agent declares (the last is always the temp folder, alone when the

@@ -17,7 +17,7 @@ export function isSection(value: unknown): value is SettingsSection {
 
 /**
  * A setting the search finds: its section, the keys of its title and of the line under it, and of the other words a
- * user writes for it, which the page does not show («zoom» for «Grandezza»).
+ * user writes for it, which the page does not show («zoom» for «Size»).
  */
 export type IndexEntry = { section: SettingsSection; title: TextKey; description?: TextKey; words?: TextKey }
 
@@ -88,13 +88,14 @@ export const SETTINGS_INDEX: IndexEntry[] = [
   { section: "computer", title: "settings.computer.tailored", description: "settings.computer.optimize" },
   {
     section: "agent",
-    title: "settings.prompt.title",
+    title: "settings.harness.title",
     description: "settings.agent.prompt.search",
     words: "settings.words.prompt",
   },
   { section: "agent", title: "settings.agent.tools.title", description: "settings.agent.tools.description" },
   { section: "agent", title: "settings.agent.mcp.title", description: "settings.agent.mcp.description" },
   { section: "agent", title: "settings.agent.skills.title", description: "settings.agent.skills.description" },
+  { section: "agent", title: "settings.agent.hooks.title", description: "settings.agent.hooks.description" },
   {
     section: "agent",
     title: "settings.agent.instructions.title",
@@ -123,6 +124,12 @@ export const SETTINGS_INDEX: IndexEntry[] = [
     section: "links",
     title: "settings.links.remote.title",
     description: "settings.links.remote.line",
+    words: "settings.words.network",
+  },
+  {
+    section: "links",
+    title: "settings.links.servers.title",
+    description: "settings.links.servers.line",
     words: "settings.words.network",
   },
   { section: "links", title: "settings.links.cloud.title", description: "settings.links.cloud.line" },

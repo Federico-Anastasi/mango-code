@@ -16,7 +16,7 @@ import {
 type Language = Pick<ReturnType<typeof useLanguage>, "t" | "intl">
 
 /**
- * A download in a line: «8,3 di 13,6 GB · circa 4 minuti. Intanto si continua a lavorare.», or what keeps it still;
+ * A download in a line: «8.3 of 13.6 GB · about 4 minutes. You can keep working meanwhile.», or what keeps it still;
  * one that brings only the engine the app came with says so first.
  */
 export function downloadLine(download: Download, language: Language) {
@@ -31,13 +31,13 @@ export function downloadLine(download: Download, language: Language) {
 }
 
 /**
- * The downloads as «In arrivo» lists them: one row «Aggiorno il motore», the first download that brings only an engine,
+ * The downloads as «Arriving» lists them: one row «Updating the engine», the first download that brings only an engine,
  * however many engines the app came with.
  */
 export const arrivingRows = (downloads: Download[]) =>
   downloads.filter((download) => !download.engine_only || download === downloads.find((d) => d.engine_only))
 
-/** «Spazio usato dai modelli: 41 GB su C:»: the drive of the models' folder, or the folder where it has none. */
+/** «Space used by the models: 41 GB on C:»: the drive of the models' folder, or the folder where it has none. */
 export function diskLabel(disk: Computer["disk"], t: Language["t"], locale?: string) {
   return t("settings.models.disk", {
     used: formatFileSize(disk.used_bytes, locale),
@@ -46,7 +46,7 @@ export function diskLabel(disk: Computer["disk"], t: Language["t"], locale?: str
 }
 
 /**
- * What «Togli» says of a model, on its button and in the window that asks: the space it frees, or, for a model from files
+ * What «Remove» says of a model, on its button and in the window that asks: the space it frees, or, for a model from files
  * the user chose (which stay), that it leaves the list and which files stay where they are, by name: one or two by
  * name, a model in many pieces by its first and how many others.
  */
@@ -147,13 +147,13 @@ const SPEED_LABELS = {
   quick: "settings.models.other.speed.quick",
 } as const
 
-/** A quantization of «Un altro modello» as chosen: with the image encoder, if asked and the repo has one. */
+/** A quantization of «Another model» as chosen: with the image encoder, if asked and the repo has one. */
 export const variantFit = (variant: MangoVariant, images: boolean): MangoFit =>
   images && variant.with_images ? variant.with_images : variant
 
 /**
  * A quantization in a line, with or without images as chosen: its name (when the sizes have the title), weight, where it
- * runs and the context it would run with, as the catalog's rows say it: «Q4_K_M · 2,5 GB · 2 schede · 32k».
+ * runs and the context it would run with, as the catalog's rows say it: «Q4_K_M · 2.5 GB · 2 cards · 32k».
  */
 export function variantLine(
   variant: MangoVariant,
@@ -173,7 +173,7 @@ export function variantLine(
     .join(" · ")
 }
 
-/** Where a quantization would run: «1 scheda», «2 schede», «Sul processore · lento», «Non ci sta». */
+/** Where a quantization would run: «1 card», «2 cards», «On the processor · slow», «Does not fit». */
 function fitWhere(fit: MangoFit, language: Language) {
   const t = language.t
   if (!fit.placement) return t("settings.models.other.noFit")

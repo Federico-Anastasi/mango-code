@@ -89,6 +89,9 @@ export function retryable(error: Err) {
           "The model closed in the middle of the answer: Mango Code is loading it again.",
         ),
       }
+    // mango-code: an external server's refusal (`MessageV2.fromError`): what it did, without the advice meant for the end
+    const retrying = error.data.metadata?.retrying
+    if (retrying) return { message: retrying }
     return { message: error.data.message.includes("Overloaded") ? "Provider is overloaded" : error.data.message }
   }
 

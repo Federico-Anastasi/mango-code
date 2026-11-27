@@ -1,7 +1,8 @@
 // A fake `opencode serve` for the Team tests: it answers the health check, opens sessions and receives messages as
 // the real one would, and writes to MANGO_TEAM_DIR/fake-<name>.jsonl what reached it (arguments, folder, environment,
 // messages). At the end of a session's first message it writes the link of its role, like the `chat.message` hook of
-// the real plugin. It is built with `bun build --compile` into an executable, because the plugin starts it with
+// the real plugin. After a message that is not the one it starts with it says on `/session/status` that the session is
+// working. It is built with `bun build --compile` into an executable, because the plugin starts it with
 // `serve --hostname … --port …` like the real agent.
 
 import fs from "node:fs";
@@ -16,13 +17,14 @@ const name = role === "agent" ? `agent-${id}` : role;
 const logFile = path.join(dir, `fake-${name}.jsonl`);
 const link = path.join(dir, role === "agent" ? `team-link-agent-${id}.json` : "team-link.json");
 const write = (entry: object) => fs.appendFileSync(logFile, JSON.stringify(entry) + "\n");
+const working = new Set<string>();
 
 write({
   type: "start",
   argv,
   cwd: process.cwd(),
   env: Object.fromEntries(
-    ["OPENCODE_CONFIG_DIR", "MANGO_TEAM_ROLE", "MANGO_TEAM_AGENT", "MANGO_TEAM_LAUNCH", "MANGO_AGENT_ID", "XDG_DATA_HOME", "MANGO_OPENROUTER_KEY"].map((k) => [k, process.env[k] ?? null]),
+    ["OPENCODE_CONFIG_DIR", "MANGO_TEAM_ROLE", "MANGO_TEAM_AGENT", "MANGO_TEAM_LAUNCH", "MANGO_AGENT_ID", "XDG_DATA_HOME", "MANGO_OPENROUTER_KEY", "MANGO_TEAM_HIDDEN"].map((k) => [k, process.env[k] ?? null]),
   ),
 });
 
@@ -33,12 +35,15 @@ Bun.serve({
     const url = new URL(req.url);
     if (url.pathname === "/global/health") return Response.json({ healthy: true });
     if (req.method === "POST" && url.pathname === "/session") return Response.json({ id: `ses_${name}`, title: "x" });
+    if (req.method === "GET" && url.pathname === "/session/status") return Response.json(Object.fromEntries([...working].map((id) => [id, { type: "busy" }])));
     const m = url.pathname.match(/^\/session\/([^/]+)\/prompt_async$/);
     if (req.method === "POST" && m) {
       const body = (await req.json()) as { parts: { text: string }[] };
       const raw = req.headers.get("x-opencode-directory") ?? url.searchParams.get("directory");
       const folder = raw && decodeURIComponent(raw); // the SDK encodes it in the header
-      write({ type: "message", session: m[1], folder, text: body.parts.map((p) => p.text).join("\n") });
+      const text = body.parts.map((p) => p.text).join("\n");
+      write({ type: "message", session: m[1], folder, text });
+      if (!/^(\[START\]|You are AGENT )/.test(text)) working.add(m[1]);
       fs.writeFileSync(link, JSON.stringify({ serverUrl: `http://127.0.0.1:${port}`, sessionID: m[1], directory: folder }));
       return new Response(null, { status: 204 });
     }

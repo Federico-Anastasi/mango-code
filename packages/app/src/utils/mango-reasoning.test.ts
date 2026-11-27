@@ -10,10 +10,11 @@ const base: MangoModelChoices = {
   style: "recommended",
   sampling: {},
   reasoning: null,
+  harness: null,
 }
-const entry = (levels: unknown, chosen?: unknown) => ({
+const entry = (levels: unknown, chosen?: unknown, reasoningDefault?: string) => ({
   key: "qwen",
-  limits: { reasoning: levels },
+  limits: { reasoning: levels, reasoningDefault },
   choices: { ...base, reasoning: chosen } as MangoModelChoices,
 })
 
@@ -25,8 +26,9 @@ describe("what a catalog entry says about reasoning", () => {
     expect(reasoningOf(entry(["low", "medium", "high"], "high"))).toEqual({
       levels: ["low", "medium", "high"],
       chosen: "high",
+      shown: "high",
     })
-    expect(reasoningOf(entry(["off", "on"]))).toEqual({ levels: ["off", "on"], chosen: undefined })
+    expect(reasoningOf(entry(["off", "on"]))).toEqual({ levels: ["off", "on"], chosen: undefined, shown: "on" })
   })
 
   test("an empty array, a boolean or anything else is a model with no levels", () => {
@@ -39,7 +41,15 @@ describe("what a catalog entry says about reasoning", () => {
     expect(reasoningOf(entry(["low", "extreme", "high"], "extreme"))).toEqual({
       levels: ["low", "high"],
       chosen: undefined,
+      shown: "high",
     })
+  })
+
+  test("with no choice the level shown is the one the model's template takes by itself", () => {
+    expect(reasoningOf(entry(["low", "medium", "high"], undefined, "medium")).shown).toBe("medium")
+    expect(reasoningOf(entry(["low", "medium", "high"], "low", "medium")).shown).toBe("low")
+    const catalog = [entry(["low", "medium", "high"], undefined, "medium")]
+    expect(reasoningControl({ model: mango, catalog, variants: none })?.value).toBe("medium")
   })
 })
 

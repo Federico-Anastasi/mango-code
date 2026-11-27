@@ -88,12 +88,14 @@ fn proxy_for_with(url: &str, sources: &Sources) -> Option<String> {
 /// What the program the app starts needs to leave through the same proxy as the app: the agent (Bun) and the servers it starts read only
 /// `HTTP_PROXY`, `HTTPS_PROXY` and `NO_PROXY`, never Windows' settings. Nothing is added if the user's environment already names a proxy (the
 /// program inherits it) or Windows has none. Without `NO_PROXY` Bun sends even `127.0.0.1` to the proxy, and the agent could not reach the
-/// engine: it covers this computer, the local network (Bun reads address ranges) and the engine's own address, which can be another PC's.
-pub fn child_proxy_env(engine_url: &str) -> Vec<(String, String)> {
-    with_real_sources(|sources| child_proxy_env_with(engine_url, sources))
+/// engine: it covers this computer, the local network (Bun reads address ranges), the engine's own address, which can be another PC's, and
+/// the `servers` (the external ones the agent talks to) that Windows' proxy itself lets through: a server on the local network named by its
+/// name, not a cloud service a company's network reaches only through the proxy.
+pub fn child_proxy_env(engine_url: &str, servers: &[String]) -> Vec<(String, String)> {
+    with_real_sources(|sources| child_proxy_env_with(engine_url, servers, sources))
 }
 
-fn child_proxy_env_with(engine_url: &str, sources: &Sources) -> Vec<(String, String)> {
+fn child_proxy_env_with(engine_url: &str, servers: &[String], sources: &Sources) -> Vec<(String, String)> {
     const NAMES: [&str; 6] = ["HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy"];
     if NAMES.iter().any(|n| (sources.var)(n).is_some()) {
         return Vec::new();
@@ -105,6 +107,9 @@ fn child_proxy_env_with(engine_url: &str, sources: &Sources) -> Vec<(String, Str
     }
     let mut local = ["localhost", "127.0.0.0/8", "[::1]", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16", "100.64.0.0/10"].join(",");
     if let Some((_, host)) = split_url(engine_url) {
+        local = format!("{local},{host}");
+    }
+    for (_, host) in servers.iter().filter(|s| proxy_for_with(s, sources).is_none()).filter_map(|s| split_url(s)) {
         local = format!("{local},{host}");
     }
     let no_proxy = match (sources.var)("NO_PROXY").or_else(|| (sources.var)("no_proxy")) {
@@ -130,7 +135,7 @@ fn split_url(url: &str) -> Option<(bool, String)> {
 }
 
 /// This computer or its local network: never through the proxy (a company proxy can't reach a home network, and the app's own servers are here).
-fn is_local(host: &str) -> bool {
+pub fn is_local(host: &str) -> bool {
     if host == "localhost" || host.ends_with(".localhost") {
         return true;
     }
@@ -354,7 +359,7 @@ mod tests {
         let map: HashMap<_, _> = variables.iter().copied().collect();
         let var = vars(&map);
         let sys = |_: &str| system.map(str::to_owned);
-        child_proxy_env_with(engine, &Sources { var: &var, system: &sys }).into_iter().collect()
+        child_proxy_env_with(engine, &[], &Sources { var: &var, system: &sys }).into_iter().collect()
     }
 
     #[test]
@@ -367,7 +372,21 @@ mod tests {
             assert!(covered.contains(&must), "{must} in {covered:?}");
         }
         // the engine can be reached by a name too (Tailscale)
-        assert!(child_env("http://pc-fisso.tailnet.ts.net:47431", &[], Some("http://p:1"))["NO_PROXY"].ends_with(",pc-fisso.tailnet.ts.net"));
+        assert!(child_env("http://pc.tailnet.ts.net:47431", &[], Some("http://p:1"))["NO_PROXY"].ends_with(",pc.tailnet.ts.net"));
+    }
+
+    /// An external server Windows' proxy lets through (by name on the local network, listed in its exclusions) skips it for the
+    /// agent too; a cloud service the proxy reaches stays behind it.
+    #[test]
+    fn the_servers_the_proxy_lets_through_skip_it_for_the_agent() {
+        let map: HashMap<&str, &str> = HashMap::from([("NO_PROXY", "llm-box")]);
+        let var = vars(&map);
+        let sys = |_: &str| Some("http://proxy.company:8080".to_owned());
+        let servers = ["http://llm-box:8080/v1".to_string(), "https://api.example.com/v1".to_string(), "http://192.168.1.30:8080/v1".to_string()];
+        let env: HashMap<String, String> = child_proxy_env_with("http://127.0.0.1:1", &servers, &Sources { var: &var, system: &sys }).into_iter().collect();
+        let covered: Vec<&str> = env["NO_PROXY"].split(',').collect();
+        assert!(covered.contains(&"llm-box") && covered.contains(&"192.168.1.30"), "{covered:?}");
+        assert!(!covered.contains(&"api.example.com"), "{covered:?}");
     }
 
     #[test]

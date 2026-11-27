@@ -107,13 +107,53 @@ describe("prompt settings", () => {
     expect(() => PromptSettings.write(folder, "all", "skills", "pdf", false)).toThrow("MANGO_SETTINGS")
   })
 
-  test("the name of an instructions file: relative to the folder, or the bare name if it is Mango Code's, or the path", () => {
+  test("each harness has its own items: the default one's are at the top of the file, the others' under their name", () => {
+    writeDefaults({ tools: { bash: false } })
+    PromptSettings.write(folder, "all", "tools", "terminal", false, "mango-harness-2")
+    PromptSettings.write(folder, "folder", "hooks", "would-lose", false, "mango-harness-2")
+    expect(JSON.parse(fs.readFileSync(defaults, "utf8"))).toEqual({
+      prompt: { tools: { bash: false } },
+      harnesses: { "mango-harness-2": { prompt: { tools: { terminal: false } } } },
+    })
+    const second = PromptSettings.load(folder, "mango-harness-2")
+    expect(PromptSettings.enabled(second, "tools", "terminal")).toBe(false)
+    expect(PromptSettings.enabled(second, "tools", "bash")).toBe(true)
+    expect(PromptSettings.chosen(second, "hooks", "would-lose")).toBe(false)
+    expect(PromptSettings.chosen(second, "hooks", "every-calls")).toBeUndefined()
+    const first = PromptSettings.load(folder)
+    expect(PromptSettings.enabled(first, "tools", "bash")).toBe(false)
+    expect(PromptSettings.enabled(first, "tools", "terminal")).toBe(true)
+  })
+
+  test("a harness removed leaves the file for all folders: a new one with its name starts with every item as it comes", () => {
+    writeDefaults({ tools: { bash: false } })
+    PromptSettings.write(folder, "all", "tools", "read", false, "mine")
+    PromptSettings.write(folder, "all", "tools", "read", false, "other")
+    PromptSettings.forget("mine")
+    expect(JSON.parse(fs.readFileSync(defaults, "utf8"))).toEqual({
+      prompt: { tools: { bash: false } },
+      harnesses: { other: { prompt: { tools: { read: false } } } },
+    })
+    expect(PromptSettings.enabled(PromptSettings.load(folder, "mine"), "tools", "read")).toBe(true)
+    PromptSettings.forget("never-there")
+    fs.rmSync(defaults)
+    PromptSettings.forget("mine")
+    expect(fs.existsSync(defaults)).toBe(false)
+  })
+
+  test("a harness's items that are not an object stop with the file name", () => {
+    fs.writeFileSync(defaults, JSON.stringify({ harnesses: { mine: { prompt: { tools: { x: "off" } } } } }))
+    expect(() => PromptSettings.load(folder, "mine")).toThrow("tools.x")
+    fs.writeFileSync(defaults, JSON.stringify({ harnesses: [] }))
+    expect(() => PromptSettings.load(folder, "mine")).toThrow(defaults)
+  })
+
+  test("the name of an instructions file: its place from the folder when it is the folder's or above it, otherwise the bare name", () => {
     const inside = path.join(folder, ".claude", "rules", "style.md")
     expect(PromptSettings.instructionName(inside, folder)).toBe(".claude/rules/style.md")
     expect(PromptSettings.instructionName(path.join(folder, "CLAUDE.md"), folder)).toBe("CLAUDE.md")
-    expect(PromptSettings.instructionName(path.join(root, "dist", "opencode-home", "MANGO.md"), folder)).toBe("MANGO.md")
-    const outside = path.join(root, "method", "CLAUDE.md")
-    expect(PromptSettings.instructionName(outside, folder)).toBe(outside.replaceAll("\\", "/"))
+    expect(PromptSettings.instructionName(path.join(path.dirname(folder), "CLAUDE.md"), folder)).toBe("../CLAUDE.md")
+    expect(PromptSettings.instructionName(path.join(root, "method", "CLAUDE.md"), folder)).toBe("CLAUDE.md")
     expect(PromptSettings.instructionName("https://example.com/rules.md", folder)).toBe("https://example.com/rules.md")
   })
 
@@ -124,7 +164,7 @@ describe("prompt settings", () => {
   })
 
   test("the instructions file of a system text is recognized from the first line", () => {
-    expect(PromptSettings.instructionsFile("Instructions from: C:\\x\\MANGO.md\nBody")).toBe("C:\\x\\MANGO.md")
+    expect(PromptSettings.instructionsFile("Instructions from: .claude/rules/style.md\nBody")).toBe(".claude/rules/style.md")
     expect(PromptSettings.instructionsFile("Another text")).toBeUndefined()
   })
 })

@@ -41,6 +41,7 @@ const api = {
 function directoryState() {
   return createStore<State>({
     status: "loading",
+    model_ready: false,
     agent: [],
     command: [],
     reference: [],
@@ -137,11 +138,13 @@ describe("bootstrapDirectory", () => {
     })
 
     expect(store.status).toBe("partial")
+    expect(store.model_ready).toBe(false)
 
     await new Promise((resolve) => setTimeout(resolve, 80))
 
     expect(store.status).toBe("complete")
     expect(legacyConfigReads).toEqual(["directory"])
+    expect(store.model_ready).toBe(true)
     expect(mcpReads.sort()).toEqual(["command", "resource", "status"])
   })
 
@@ -180,6 +183,49 @@ describe("bootstrapDirectory", () => {
     await new Promise((resolve) => setTimeout(resolve, 80))
 
     expect(store.status).toBe("complete")
+  })
+
+  test("the model of a new conversation is known when the settings fail to load", async () => {
+    const [store, setStore] = directoryState()
+
+    await bootstrapDirectory({
+      directory: "/project",
+      scope: ServerScope.local,
+      mcp: false,
+      global: {
+        config: {} satisfies Config,
+        path: { state: "", config: "", worktree: "/project", directory: "/project", home: "/home" },
+        project: [{ id: "project", worktree: "/project" } as Project],
+        provider,
+      },
+      sdk: {
+        app: { agents: async () => ({ data: [{ name: "build", mode: "primary" }] }) },
+        config: {
+          get: async () => {
+            throw new Error("settings unavailable")
+          },
+        },
+        session: { status: async () => ({ data: {} }) },
+        vcs: { get: async () => ({ data: undefined }) },
+        permission: { list: async () => ({ data: [] }) },
+        question: { list: async () => ({ data: [] }) },
+        v2: { reference: { list: async () => ({ data: { data: [] } }) } },
+        provider: { list: async () => ({ data: { all: [], connected: [], default: {} } }) },
+      } as unknown as OpencodeClient,
+      api,
+      store,
+      setStore,
+      vcsCache: { setStore() {} } as unknown as VcsCache,
+      loadSessions() {},
+      translate: (key) => key,
+      queryClient: new QueryClient(),
+      protocol: Promise.resolve("v1"),
+    })
+
+    await new Promise((resolve) => setTimeout(resolve, 80))
+
+    expect(store.status).toBe("partial")
+    expect(store.model_ready).toBe(true)
   })
 })
 

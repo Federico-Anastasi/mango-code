@@ -102,25 +102,29 @@ export const ImageTool = Tool.define(
               (part) => part.type === "tool" && part.tool === ImageTool.id && part.state.status === "completed",
             ),
           )
-          if (!already)
+          if (!already) {
+            yield* ctx.metadata({ title: params.name, metadata: { stage: "asking" } })
             yield* ctx.ask({
               permission: "image",
               patterns: [params.name],
               always: ["*"],
               metadata: { prompt: params.prompt, width, height },
             })
+          }
 
           const guess = yield* pictureFile(fs, instance.directory, params.name)
           const guessed = path.relative(instance.directory, guess)
-          yield* ctx.metadata({ title: guessed, metadata: { file: guess, width, height } })
+          // the seconds of the picture count from here, not from the wait for the permission
+          yield* ctx.metadata({ title: guessed, metadata: { file: guess, width, height, began: Date.now() } })
 
           const drawn = yield* draw(
             { prompt: params.prompt, width, height, file: guess },
             {
-              report: (job) =>
-                job.status === "drawing"
-                  ? ctx.metadata({ title: `${guessed} (${job.step}/${job.steps})` })
-                  : Effect.void,
+              report: (job, began) =>
+                ctx.metadata({
+                  title: job.status === "drawing" ? `${guessed} (${job.step}/${job.steps})` : guessed,
+                  metadata: pictureState(job, began, { file: guess, width, height }),
+                }),
               aborted: () => ctx.abort.aborted,
             },
           )
@@ -134,7 +138,7 @@ export const ImageTool = Tool.define(
           return {
             title: shown,
             output: pictureOutput(shown, width, height, model?.capabilities.input.image === true),
-            metadata: { file, width, height, seed: drawn.job.seed, model: drawn.job.model },
+            metadata: { file, width, height, seed: drawn.job.seed, model: drawn.job.model, began: drawn.began },
             attachments: [pictureFilePart(file, drawn.png)],
           }
         }).pipe(Effect.orDie),
@@ -169,16 +173,36 @@ export type Drawing = {
 }
 
 /**
- * Asks the app for the picture and waits for it. `report` is told the state of the job each time it is asked while it
- * has not ended; `aborted` is asked then too, and a picture whose turn was stopped is cancelled. The job is cancelled
+ * What the row of the picture in the conversation is told while the job goes on: the stage it is at, and `began`, the
+ * moment its own turn came (none while it waits in the line), from which the row counts its seconds.
+ */
+export function pictureState(
+  job: Pick<Job, "status" | "step" | "steps"> & { preview?: string | null },
+  began: number | undefined,
+  shown: { file: string; width: number; height: number },
+) {
+  return {
+    stage: job.status,
+    step: job.step,
+    steps: job.steps,
+    preview: job.preview ?? null,
+    began,
+    ...shown,
+  }
+}
+
+/**
+ * Asks the app for the picture and waits for it. `report` is told the state of the job, and when its turn came, each
+ * time it changes while it has not ended; `aborted` is asked at every look, and a picture whose turn was stopped is
+ * cancelled. The job is cancelled
  * on every way out except its own ending (done, failed or cancelled by someone else): an interruption, or a failure
  * to follow it, would otherwise leave the app drawing a picture nobody waits for, with the next one in line behind it.
  * `file` of the result is where the app really wrote the picture. Fails with the sentence for the user.
  */
 export function draw(
   drawing: Drawing,
-  options: { report: (job: Job) => Effect.Effect<void>; aborted?: () => boolean },
-): Effect.Effect<{ job: Job; png: string; file: string }, Error> {
+  options: { report: (job: Job, began: number | undefined) => Effect.Effect<void>; aborted?: () => boolean },
+): Effect.Effect<{ job: Job; png: string; file: string; began: number | undefined }, Error> {
   return Effect.gen(function* () {
     yield* requireApp()
     const asked = yield* control("POST", "/control/image/generate", Job, {
@@ -193,9 +217,10 @@ export function draw(
     const cancel = control("POST", `/control/image/jobs/${asked.id}/cancel`, Job, undefined, LIMIT.cancel).pipe(
       Effect.ignore,
     )
-    const job = yield* follow(asked.id, options).pipe(
+    const followed = yield* follow(asked.id, options).pipe(
       Effect.onExit((exit) => (Exit.isSuccess(exit) ? Effect.void : cancel)),
     )
+    const job = followed.job
 
     if (job.status === "cancelled") return yield* Effect.fail(new Error("The picture was stopped."))
     if (job.status === "failed")
@@ -208,7 +233,7 @@ export function draw(
         ),
       )
     const picture = yield* control("GET", `/control/image/jobs/${job.id}/picture`, Picture, undefined, LIMIT.picture)
-    return { job, png: picture.png, file: job.file ?? drawing.file }
+    return { job, png: picture.png, file: job.file ?? drawing.file, began: followed.began }
   })
 }
 
@@ -233,18 +258,26 @@ export function pictureOutput(shown: string, width: number, height: number, look
     : `Picture saved as ${shown} (${width}x${height}).`
 }
 
-/** The job when it has ended: asked again and again. */
+/**
+ * The job when it has ended, asked again and again, and the moment it was first seen out of the line (`began`). The
+ * app makes one picture at a time: a job that is still `waiting` has not started, and its seconds are not yet counted.
+ * `told` is what the last report said: the report is made when the job is not what it was.
+ */
 function follow(
   id: string,
-  options: { report: (job: Job) => Effect.Effect<void>; aborted?: () => boolean },
-): Effect.Effect<Job, Error> {
+  options: { report: (job: Job, began: number | undefined) => Effect.Effect<void>; aborted?: () => boolean },
+  since?: number,
+  told?: string,
+): Effect.Effect<{ job: Job; began: number | undefined }, Error> {
   return Effect.gen(function* () {
     if (options.aborted?.()) return yield* Effect.fail(new Error("The picture was stopped."))
     const job = yield* control("GET", `/control/image/jobs/${id}`, Job)
-    if (job.status === "done" || job.status === "failed" || job.status === "cancelled") return job
-    yield* options.report(job)
+    const began = since ?? (job.status === "waiting" ? undefined : Date.now())
+    if (job.status === "done" || job.status === "failed" || job.status === "cancelled") return { job, began }
+    const now = `${job.status}/${job.step}/${job.steps}/${job.preview ?? ""}`
+    if (now !== told) yield* options.report(job, began)
     yield* Effect.sleep(EVERY)
-    return yield* follow(id, options)
+    return yield* follow(id, options, began, now)
   })
 }
 

@@ -15,8 +15,8 @@
 //!   the models, beyond the engine, and the pictures (`/control/image`, the `images` crate). Without an app behind (the
 //!   tools, the tests) they are not there (404).
 //!
-//! Forwarding is byte for byte; only a chat request that lacks the defaults of its model (above) gets those fields
-//! written in. The request goes to the engine with `Connection: close` and the reply returns to
+//! Forwarding is byte for byte, except the head of the reply (`Connection: close`, and the line a route adds) and a chat
+//! request that lacks the defaults of its model (above), which gets those fields written in. The request goes to the engine with `Connection: close` and the reply returns to
 //! the client as it arrives (the engine's headers and chunks), piece by piece. A thread watches the client's
 //! socket: if the client closes (the «Stop» button), the connection to the engine is closed at once too, and the
 //! engine cancels the task even while it is reading the prompt, when it has nothing to write yet.
@@ -297,23 +297,27 @@ fn handle(c: TcpStream, m: &EngineManager, net: Option<&Share>, app: Option<&dyn
     };
     let permit = match permit {
         Ok(u) => u,
-        // A model that doesn't start as it is must not be retried, and the agent retries 5xx: 422, with the sentence that explains it.
-        Err(e) => return respond(&c, if crate::not_to_retry(&e) { 422 } else { 503 }, error(&format!("{e:#}"))),
+        // A model that doesn't start as it is must not be retried, and the agent retries 5xx: 422, with the sentence that explains it
+        // (the conversation shows it: the technical detail stays in the state, behind «Technical details»).
+        Err(e) => return respond(&c, if crate::not_to_retry(&e) { 422 } else { 503 }, error(&mango_common::without_detail(&format!("{e:#}")))),
     };
     // The engine has one slot: a conversation takes its turn here, and the system prompt of a new one is put in it first.
     let slot = permit.slot.clone();
     let mut turn = None;
+    let mut read = None;
     if path == "/v1/chat/completions" && req.method == "POST" {
         req.body = m.with_request_defaults(&permit.key, std::mem::take(&mut req.body));
         turn = slot.as_deref().map(crate::prefix::Slot::turn);
         if let Some(turn) = turn.as_mut() {
             // The client that closes while its prompt is being read does not get the engine's time for the rest.
-            if !crate::prefix::prepare(turn, m, &permit.url, req.header(crate::prefix::STABLE_PROMPT), &req.body, &c) {
-                return;
+            match crate::prefix::prepare(turn, m, &permit.url, req.header(crate::prefix::STABLE_PROMPT), &req.body, &c) {
+                crate::prefix::Prepared::Gone => return,
+                crate::prefix::Prepared::Go { read: r } => read = r,
             }
         }
     }
-    if let Err(e) = forward(&c, &permit.url, &req) {
+    let extra = read.map(|r| format!("{}: {r}", crate::prefix::PREFIX_READ));
+    if let Err(e) = forward(&c, &permit.url, &req, extra.as_deref()) {
         // Before anything has been written to the client the error can still be told; after that, the connection drops.
         respond(&c, 502, error(&tr!("il motore non risponde: {e:#}", "the engine does not answer: {e:#}")));
     }
@@ -391,9 +395,10 @@ fn gpus_must_be_a_list() -> String {
     tr!("«gpus» deve essere un elenco di indici", "«gpus» must be a list of indexes")
 }
 
-/// Forwards the request to the engine and copies the reply, byte for byte, until the engine closes.
+/// Forwards the request to the engine and copies the reply until the engine closes: the body byte for byte, the head with
+/// `Connection: close` and `extra`, a header line the route adds (`reply_head`).
 /// `Err` only if nothing could be written to the client (the caller can still answer 502).
-fn forward(client: &TcpStream, base: &str, req: &Request) -> Result<()> {
+fn forward(client: &TcpStream, base: &str, req: &Request, extra: Option<&str>) -> Result<()> {
     let host = base.trim_start_matches("http://");
     let mut engine = TcpStream::connect(host).with_context(|| tr!("connessione a {host}", "connection to {host}"))?;
     engine.set_nodelay(true).ok();
@@ -433,7 +438,7 @@ fn forward(client: &TcpStream, base: &str, req: &Request) -> Result<()> {
         let chunk = match head.as_mut() {
             Some(t) => {
                 t.extend_from_slice(&buf[..n]);
-                match with_connection_close(t) {
+                match reply_head(t, extra) {
                     Some(whole) => {
                         head = None;
                         whole
@@ -461,18 +466,21 @@ fn forward(client: &TcpStream, base: &str, req: &Request) -> Result<()> {
     Ok(())
 }
 
-/// The head of an HTTP reply with `Connection: close`, added if missing. `None` until the head is whole (beyond
-/// 64 KiB it isn't a head: it's left as it is).
-fn with_connection_close(t: &[u8]) -> Option<Vec<u8>> {
+/// The head of an HTTP reply with `Connection: close` added if missing, and the `extra` header line. `None` until the
+/// head is whole (beyond 64 KiB it isn't a head: it's left as it is).
+fn reply_head(t: &[u8], extra: Option<&str>) -> Option<Vec<u8>> {
     let Some(end) = t.windows(4).position(|w| w == b"\r\n\r\n") else {
         return (t.len() > 64 * 1024).then(|| t.to_vec());
     };
     let lines = String::from_utf8_lossy(&t[..end]).to_ascii_lowercase();
-    if lines.split("\r\n").skip(1).any(|r| r.starts_with("connection:")) {
-        return Some(t.to_vec());
-    }
     let mut v = t[..end].to_vec();
-    v.extend_from_slice(b"\r\nConnection: close");
+    if !lines.split("\r\n").skip(1).any(|r| r.starts_with("connection:")) {
+        v.extend_from_slice(b"\r\nConnection: close");
+    }
+    if let Some(line) = extra {
+        v.extend_from_slice(b"\r\n");
+        v.extend_from_slice(line.as_bytes());
+    }
     v.extend_from_slice(&t[end..]);
     Some(v)
 }

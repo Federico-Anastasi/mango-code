@@ -281,9 +281,18 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
 
     const recent = createMemo(() => models.recent.list().map(models.find).filter(Boolean))
 
+    // The model the conversation names when it no longer exists (a server taken off the app): `current` has already gone to
+    // the model that takes its place.
+    const missing = () => {
+      const model = scope()?.model
+      if (!model || providers.all().size === 0 || validModel(model)) return
+      return model
+    }
+
     const model = {
       ready: models.ready,
       current,
+      missing,
       recent,
       list: models.list,
       cycle(direction: 1 | -1) {

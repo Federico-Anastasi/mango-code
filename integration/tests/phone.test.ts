@@ -146,7 +146,7 @@ test("every section of the settings opens from the phone and says what is done f
   for (const section of SECTIONS) {
     await ui.goto(`${base}/settings?section=${section}`);
     await ui.waitForFunction((name: string) => document.querySelector(`[data-pane="${name}"]`) !== null && document.body.innerText.includes("Si fa dal computer"), section, { timeout: 30_000 });
-    if (process.env.MC_PHOTOS) await ui.screenshot({ path: path.join(process.env.MC_PHOTOS, `telefono-impostazioni-${section}-390.png`) });
+    if (process.env.MC_PHOTOS) await ui.screenshot({ path: path.join(process.env.MC_PHOTOS, `phone-settings-${section}-390.png`) });
   }
   // the models are read through the port: the list is there, what changes the computer is off
   await ui.goto(`${base}/settings?section=models`);

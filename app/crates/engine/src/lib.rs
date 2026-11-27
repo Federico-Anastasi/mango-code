@@ -23,7 +23,6 @@ use anyhow::{bail, Context, Result};
 use engine_cfg::{EnginePlan, Gpu};
 use mango_common::{tail, tr, user_error};
 use serde::Serialize;
-use std::fs::File;
 use std::io::Write;
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
@@ -284,6 +283,9 @@ struct Running {
     slot: Option<Arc<prefix::Slot>>,
     /// See `PublicState::notice`.
     notice: Option<String>,
+    /// It runs the fallback of the plan it was started for (`EnginePlan::fallback`): the processor in place of the
+    /// integrated graphics.
+    fell_back: bool,
 }
 
 #[derive(Default)]
@@ -535,7 +537,7 @@ impl EngineManager {
         self.pick(key, true);
     }
 
-    /// «Riprova» after a start that failed: like `choose`, and the model starts also when other programs hold memory it counts
+    /// «Retry» after a start that failed: like `choose`, and the model starts also when other programs hold memory it counts
     /// on (`TakenByOthers`). The user was told; if the cards are free meanwhile it starts as usual, otherwise slower.
     pub fn retry(&self, key: &str) {
         self.pick(key, false);
@@ -810,10 +812,15 @@ impl EngineManager {
                 }
                 let room = if check { self.room_for(&plan, excluded.as_deref().unwrap_or_default()) } else { Ok(()) };
                 let notice = self.unread_cards(&plan);
-                room.and_then(|()| self.start_process(plan, tick)).map(|mut a| {
+                let processor = plan.fallback.clone();
+                let started = room.and_then(|()| self.start_process(plan, tick)).map(|mut a| {
                     a.notice = notice;
                     a
-                })
+                });
+                match (started, processor) {
+                    (Err(e), Some(processor)) if !e.is::<LoadStopped>() => self.on_the_processor(*processor, e, tick),
+                    (started, _) => started,
+                }
             }
         };
         let mut s = self.lock();
@@ -917,6 +924,22 @@ impl EngineManager {
         }
     }
 
+    /// The model of a plan on the integrated graphics did not start there (`failed`): it starts once on the processor, with
+    /// the plan that came with it (`EnginePlan::fallback`), and the state says so in one line: the reason when the RAM the
+    /// other programs leave was too little (`TakenByOthers`), that the graphics could not hold it when the start failed.
+    fn on_the_processor(&self, processor: EnginePlan, failed: anyhow::Error, tick: &mut dyn FnMut(u64)) -> Result<Running> {
+        self.log(serde_json::json!({ "event": "fallback", "model": processor.key, "error": format!("{failed:#}") }));
+        self.lock().loading = Some((processor.clone(), Instant::now()));
+        self.0.cv.notify_all();
+        let mut a = self.start_process(processor, tick)?;
+        a.fell_back = true;
+        a.notice = Some(match failed.downcast_ref::<TakenByOthers>() {
+            Some(refused) => format!("{} {}", refused.sentence, tr!("Gira sul processore.", "It runs on the processor.")),
+            None => tr!("La grafica integrata non ha retto il modello: gira sul processore.", "The integrated graphics could not hold the model: it runs on the processor."),
+        });
+        Ok(a)
+    }
+
     /// The line for the user when the memory of a card `plan` counts on cannot be read: the model starts anyway, since nothing
     /// says that another program holds it, and the user is told that nobody looked. Nothing without the room check, which is
     /// what reads the cards.
@@ -937,7 +960,7 @@ impl EngineManager {
 
     fn start_process(&self, plan: EnginePlan, tick: &mut dyn FnMut(u64)) -> Result<Running> {
         let log = self.0.logs.join(format!("{}.log", plan.spec.name));
-        let out = File::create(&log).with_context(|| format!("log {}", log.display()))?;
+        let out = mango_common::fresh_log(&log).with_context(|| format!("log {}", log.display()))?;
         let mut cmd = Command::new(&plan.spec.exe);
         cmd.args(&plan.spec.args)
             .stdin(Stdio::null())
@@ -961,7 +984,7 @@ impl EngineManager {
             self.log(serde_json::json!({ "event": "slot files", "model": plan.key, "note": note }));
         }
         let slot = plan.slots.clone().map(|c| Arc::new(prefix::Slot::new(c)));
-        let mut a = Running { plan, child, slot, notice: None };
+        let mut a = Running { plan, child, slot, notice: None, fell_back: false };
         match wait_healthy(&mut a, &log, tick, &|| self.lock().stop_load) {
             Ok(()) => {
                 let loaded = t0.elapsed();
@@ -1265,18 +1288,19 @@ impl EngineManager {
     /// with the new choices stays as it is, and the state says why (`failed`). A model that is loading is compared when
     /// its load ends.
     pub fn reload_if_changed(&self) {
-        let (now, excluded) = {
+        let (now, fell_back, excluded) = {
             let mut s = self.lock();
             if s.phase == Phase::Starting {
                 s.recheck = true;
                 return;
             }
             match (&s.running, s.all) {
-                (Some(a), false) if s.phase == Phase::Running => (a.plan.clone(), s.excluded.clone()),
+                (Some(a), false) if s.phase == Phase::Running => (a.plan.clone(), a.fell_back, s.excluded.clone()),
                 _ => return,
             }
         };
         let cards = |p: &EnginePlan| p.gpus_used.iter().map(|g| g.index).collect::<Vec<_>>();
+        let same = |p: &EnginePlan| p.ctx == now.ctx && cards(p) == cards(&now);
         let plan = self.plan(&now.key, &excluded);
         {
             let mut s = self.lock();
@@ -1285,8 +1309,15 @@ impl EngineManager {
                 return;
             }
             match plan {
-                Ok(new) if new.ctx == now.ctx && cards(&new) == cards(&now) => {
+                // A model that went to the processor stays there while its plan's fallback is what runs.
+                Ok(new) if same(&new) || (fell_back && new.fallback.as_deref().is_some_and(same)) => {
                     s.stale = false;
+                    // The integrated graphics turned off: the processor is the plan now, not a fallback, and the next
+                    // time it is turned on it is tried again.
+                    if let Some(a) = s.running.as_mut().filter(|_| fell_back && new.fallback.is_none()) {
+                        a.fell_back = false;
+                        a.notice = None;
+                    }
                     if s.failed.as_ref().is_some_and(|f| f.model == now.key) {
                         s.failed = None;
                     }

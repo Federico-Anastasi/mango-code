@@ -2,6 +2,7 @@
 //! the graphics card it draws on.
 
 use crate::catalog::{image_build, load_models, model_cfg, ModelCfg, IMAGE_ENGINE};
+use crate::general;
 use crate::choices;
 use crate::general::Placement;
 use crate::hardware::{Gpu, Hardware, Vendor};
@@ -57,7 +58,7 @@ pub struct ImageCatalog {
 pub fn image_models(paths: &Paths, hw: &Hardware) -> Result<ImageCatalog> {
     let file = load_models(paths)?;
     let default = default_of(paths, &file);
-    let engine = installed_program(paths, IMAGE_ENGINE, image_build(hw)).is_some();
+    let engine = installed_program(paths, IMAGE_ENGINE, engine_on(paths, hw).0).is_some();
     let mut models = Vec::new();
     for key in file.models.keys().filter(|k| file.is_image(k)) {
         let cfg = model_cfg(&file, key)?;
@@ -150,9 +151,9 @@ pub struct ImageViews {
 pub fn image_views(paths: &Paths, hw: &Hardware) -> Result<ImageViews> {
     let file = load_models(paths)?;
     let default = default_of(paths, &file);
-    let build = image_build(hw);
+    let (build, cards) = engine_on(paths, hw);
     let installed = installed_program(paths, IMAGE_ENGINE, build).is_some();
-    let gpus: Vec<String> = cards(hw, build).into_iter().map(|g| g.name).collect();
+    let gpus: Vec<String> = cards.into_iter().map(|g| g.name).collect();
     let place = Draws { placement: if gpus.is_empty() { Placement::Cpu } else { Placement::Gpu }, gpus };
     let mut models = Vec::new();
     for key in file.models.keys().filter(|k| file.is_image(k)) {
@@ -183,7 +184,7 @@ pub fn image_views(paths: &Paths, hw: &Hardware) -> Result<ImageViews> {
 
 /// The plan for `key` on this computer, with the engine's server on `port`.
 pub fn image_plan(paths: &Paths, key: &str, port: u16) -> Result<ImagePlan> {
-    image_plan_for(paths, key, port, &crate::hardware::detect()?)
+    image_plan_for(paths, key, port, &crate::hardware::detect(paths)?)
 }
 
 pub fn image_plan_for(paths: &Paths, key: &str, port: u16, hw: &Hardware) -> Result<ImagePlan> {
@@ -192,7 +193,7 @@ pub fn image_plan_for(paths: &Paths, key: &str, port: u16, hw: &Hardware) -> Res
     let Some(image) = cfg.image else {
         return Err(user(&tr!("Il modello «{}» non fa immagini.", "The model «{}» does not make images.", cfg.label), format!("«{key}» has no «image»")));
     };
-    let build = image_build(hw);
+    let (build, gpus) = engine_on(paths, hw);
     let exe = installed_program(paths, IMAGE_ENGINE, build).ok_or_else(|| {
         user(
             &tr!("Il motore delle immagini non è ancora su questo computer.", "The image engine is not on this computer yet."),
@@ -208,7 +209,6 @@ pub fn image_plan_for(paths: &Paths, key: &str, port: u16, hw: &Hardware) -> Res
     }
     let [diffusion, encoder, vae] = files.map(|f| f.display().to_string());
 
-    let gpus = cards(hw, build);
     let env = match build.cuda_major() {
         Some(_) => vec![
             ("CUDA_DEVICE_ORDER".to_string(), "PCI_BUS_ID".to_string()),
@@ -243,18 +243,25 @@ pub fn image_plan_for(paths: &Paths, key: &str, port: u16, hw: &Hardware) -> Res
     })
 }
 
-/// The cards for a picture. With CUDA one NVIDIA card: one with tensor cores before one without (the engine's fast
-/// paths count on them), then the one with more memory. With Vulkan all the usable ones: the engine picks.
-fn cards(hw: &Hardware, build: Build) -> Vec<Gpu> {
-    match build {
+/// The build of the image engine and the cards a picture draws on, without the cards the user left out. With CUDA one
+/// NVIDIA card: one with tensor cores before one without (the engine's fast paths count on them), then the one with more
+/// memory. With Vulkan all the usable ones, the integrated graphics when it counts: the engine picks, so a card left out
+/// leaves the picture to the processor, as it does a model that writes. No card left: the processor's build.
+pub(crate) fn engine_on(paths: &Paths, hw: &Hardware) -> (Build, Vec<Gpu>) {
+    // a choices file that cannot be read does not take the pictures down (`default_of`): no card is left out then
+    let unused = choices::read(paths).map(|c| general::unused_indexes(hw, &c.computer_scope())).unwrap_or_default();
+    let build = image_build(hw);
+    let cards: Vec<Gpu> = match build {
         Build::Cpu => Vec::new(),
+        Build::Vulkan if !unused.is_empty() => Vec::new(),
         Build::Vulkan => hw.usable().cloned().collect(),
         Build::Cuda12 | Build::Cuda12Gtx16 | Build::Cuda13 => hw
             .usable()
-            .filter(|g| g.vendor == Vendor::Nvidia)
+            .filter(|g| g.vendor == Vendor::Nvidia && !unused.contains(&g.index))
             .max_by_key(|g| (g.has_tensor_cores(), g.memory_mib, std::cmp::Reverse(g.index)))
             .cloned()
             .into_iter()
             .collect(),
-    }
+    };
+    (if cards.is_empty() { Build::Cpu } else { build }, cards)
 }

@@ -42,7 +42,7 @@ const METHODS: &[&str] = &["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"];
 /// `/mango/computer`, `/mango/model/*`) pass: from the phone too the model is chosen. So do the pictures
 /// (`/mango/image/*`). The programs the agent left running
 /// (`processes`, with their "Stop") are shown and stopped on the PC only.
-const PC_ONLY: &[&str] = &["/mango/reload", "/mango/extra-folders", "/mango/processes"];
+const PC_ONLY: &[&str] = &["/mango/reload", "/mango/quiet", "/mango/extra-folders", "/mango/processes"];
 /// Static files of the web UI that need no session: the app's manifest and icons are read by the system (the home screen, the
 /// browser's tab), which does not send the cookie, and the page that asks for the key shows the icon. The agent serves them without
 /// a password too, and they carry no data.
@@ -838,7 +838,7 @@ mod tests {
 
     #[test]
     fn the_pc_only_routes_cannot_be_got_around() {
-        for p in ["/mango/reload", "/mango/extra-folders", "/mango//reload", "/MANGO/Extra-Folders", "/mango/%72eload", "/mango/extra-folders/", "//mango/reload", "/mango/processes", "/mango/processes/stop"] {
+        for p in ["/mango/reload", "/mango/quiet", "/mango/extra-folders", "/mango//reload", "/MANGO/Extra-Folders", "/mango/%72eload", "/mango/extra-folders/", "//mango/reload", "/mango/processes", "/mango/processes/stop"] {
             assert!(pc_only(p), "{p}");
         }
         for p in [

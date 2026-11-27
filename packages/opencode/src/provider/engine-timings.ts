@@ -58,6 +58,26 @@ export function savedTimings(value: unknown): EngineTimings | undefined {
   return { promptTokens, promptMs, predictedTokens, predictedMs }
 }
 
+/**
+ * The step's timings with the system prompt the app's engine read for the request before it (the reply's
+ * `X-Mango-Prefix-Read` header, in the engine's names): the engine's own timings count only what the request read after.
+ */
+export function withPrefixRead(timings: EngineTimings | undefined, headers: Record<string, string> | undefined) {
+  const header = headers?.["x-mango-prefix-read"]
+  if (!timings || !header) return timings
+  const read = (() => {
+    try {
+      return JSON.parse(header) as Record<string, unknown>
+    } catch {
+      return undefined
+    }
+  })()
+  const tokens = num(read?.prompt_n)
+  const ms = num(read?.prompt_ms)
+  if (tokens === undefined || ms === undefined) return timings
+  return { ...timings, promptTokens: timings.promptTokens + tokens, promptMs: timings.promptMs + ms }
+}
+
 /** Live speed of the stream in progress, or undefined if the engine is not writing. */
 export function liveTimings(now = Date.now()): EngineLive | undefined {
   if (!live) return

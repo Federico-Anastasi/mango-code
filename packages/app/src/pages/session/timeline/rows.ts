@@ -8,6 +8,8 @@ import { uniqueSummaryDiffs } from "./summary-diffs"
 import { producedFiles } from "./produced-files"
 import { compareMessages } from "@/utils/session-message"
 import { waitingState } from "./waiting"
+import { repeatedPart } from "./resumes"
+import { teamNotice } from "./team-notice"
 
 export { TimelineRow, type SummaryDiff } from "./timeline-row"
 
@@ -120,18 +122,27 @@ export namespace Timeline {
     const latestError = assistantMessages.at(-1)?.error
     const error = latestError?.name === "MessageAbortedError" ? undefined : latestError
 
+    // the text of a summary is for the model: the turn shows where it happened (`summarized`), not what it says
     const assistantPartRefs = assistantMessages.flatMap((message, messageIndex) =>
-      getMessageParts(message.id)
+      (message.summary ? [] : getMessageParts(message.id))
         .filter((part) => renderable(part))
         .map((part) => ({ messageID: message.id, messageIndex, part })),
     )
     // where the turn has a line between two answers: it was interrupted there, or the answer was cut for its length and
-    // the turn took it up again
+    // the turn took it up again; and after an answer cut because it kept writing the same text, where the turn ends or goes on
     const cuts = [
       ...(interrupted && !compaction ? [{ index: interruptedMessageIndex, item: { type: "interrupted" as const } }] : []),
       ...assistantMessages.flatMap((message, index) =>
         index < assistantMessages.length - 1 && message.finish === "length" && !message.error
           ? [{ index, item: { type: "resumed" as const, messageID: message.id } }]
+          : [],
+      ),
+      ...assistantMessages.flatMap((message, index) =>
+        message.summary ? [{ index, item: { type: "summarized" as const, messageID: message.id } }] : [],
+      ),
+      ...assistantMessages.flatMap((message, index) =>
+        !message.error && getMessageParts(message.id).some(repeatedPart)
+          ? [{ index, item: { type: "repeated" as const, messageID: message.id } }]
           : [],
       ),
     ].toSorted((a, b) => a.index - b.index)
@@ -149,11 +160,14 @@ export namespace Timeline {
         }),
       )
 
+    const notice = teamNotice(userParts)
     rows.push(
-      new TimelineRow.UserMessage({
-        userMessageID: userMessage.id,
-        anchor: inlineComments || comments.length === 0,
-      }),
+      notice
+        ? new TimelineRow.TeamNotice({ userMessageID: userMessage.id, kind: notice.kind, agent: notice.agent, text: notice.text, excerpt: notice.excerpt })
+        : new TimelineRow.UserMessage({
+            userMessageID: userMessage.id,
+            anchor: inlineComments || comments.length === 0,
+          }),
     )
 
     if (compaction && !error) {
@@ -178,6 +192,14 @@ export namespace Timeline {
       }
       if (item.type === "resumed") {
         rows.push(new TimelineRow.Resumed({ userMessageID: userMessage.id, messageID: item.messageID }))
+        return
+      }
+      if (item.type === "repeated") {
+        rows.push(new TimelineRow.Repeated({ userMessageID: userMessage.id, messageID: item.messageID }))
+        return
+      }
+      if (item.type === "summarized") {
+        rows.push(new TimelineRow.Summarized({ userMessageID: userMessage.id, messageID: item.messageID }))
         return
       }
 
@@ -240,7 +262,7 @@ export namespace Timeline {
         new TimelineRow.Error({
           userMessageID: userMessage.id,
           overflow: error.name === "ContextOverflowError",
-          // mango-code: this PC's model closed in the middle of the answer (the agent marks it): «Riprova» sends it again
+          // mango-code: this PC's model closed in the middle of the answer (the agent marks it): «Retry» sends it again
           retry: error.name === "APIError" && error.data?.metadata?.engine === "closed",
           text: unwrapErrorMessage(
             typeof data === "string" ? data : data === undefined || data === null ? "" : String(data),
@@ -262,7 +284,9 @@ export namespace Timeline {
       .flatMap((message) => getMessageParts(message.id))
       .some(
         (part) =>
-          (part.type === "tool" && !HIDDEN_TOOLS.has(part.tool)) || (part.type === "text" && hasContent(part.text)),
+          (part.type === "tool" && !HIDDEN_TOOLS.has(part.tool)) ||
+          (part.type === "text" && hasContent(part.text)) ||
+          repeatedPart(part),
       )
   }
 

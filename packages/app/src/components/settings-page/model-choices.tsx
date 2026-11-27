@@ -1,6 +1,7 @@
 // mango-code: Settings › Models, the two choices of a model that are numbers: the context (the steps offered, and
-// «Personale» for any number of tokens) and the style of the answers (three shortcuts and the six values they fill).
+// «Custom» for any number of tokens) and the style of the answers (three shortcuts and the six values they fill).
 import { ButtonV2 } from "@opencode-ai/ui/v2/button-v2"
+import { SelectV2 } from "@opencode-ai/ui/v2/select-v2"
 import { SegmentedControlItemV2, SegmentedControlV2 } from "@opencode-ai/ui/v2/segmented-control-v2"
 import { TextInputV2 } from "@opencode-ai/ui/v2/text-input-v2"
 import { type Component, createEffect, createMemo, createSignal, For, on, Show } from "solid-js"
@@ -8,7 +9,17 @@ import { createStore } from "solid-js/store"
 import { useLanguage } from "@/context/language"
 import { contextLabel, SAMPLING_KEYS, type CatalogEntry, type Sampling } from "@/utils/mango-state"
 import type { MangoModelChoices } from "@/utils/mango-desktop"
-import { contextIssue, parseContext, parseSamplingValue, SAMPLING_RANGES, samplingIssue, samplingText, stepContext } from "./lines"
+import {
+  contextIssue,
+  parseContext,
+  parseSamplingValue,
+  SAMPLING_RANGES,
+  samplingIssue,
+  samplingText,
+  stepContext,
+} from "./lines"
+import { createHarnessList } from "./harnesses"
+import { useOpenSettings } from "./open"
 
 const STYLES = {
   recommended: { label: "settings.models.style.recommended", line: "settings.models.style.recommended.description" },
@@ -31,11 +42,18 @@ type FieldProps = {
 }
 
 /**
- * The steps the computer offers up to the largest that fits, and «Personale»: the plus and the minus in steps of 4096
+ * The steps the computer offers up to the largest that fits, and «Custom»: the plus and the minus in steps of 4096
  * tokens, or the number typed, from the smallest step to the largest. A choice the computer cannot carry (a larger
  * computer's, kept) is shown as it was chosen, with what the model starts with.
  */
-export const ContextField: Component<FieldProps> = (props) => {
+export const ContextField: Component<FieldProps> = (props) => (
+  // A model that fits nowhere with the cards in use offers no context: nothing to show, and no number to start from.
+  <Show when={props.model.limits.context.length}>
+    <ContextSteps {...props} />
+  </Show>
+)
+
+const ContextSteps: Component<FieldProps> = (props) => {
   const language = useLanguage()
   const steps = () => props.model.limits.context
   const min = () => steps()[0]
@@ -63,91 +81,153 @@ export const ContextField: Component<FieldProps> = (props) => {
   }
 
   return (
-    <Show when={steps().length}>
-      <div class="settings-page-field">
-        <b data-slot="settings-field-title">{language.t("settings.models.context.title")}</b>
-        <SegmentedControlV2
-          value={custom() ? "custom" : String(current())}
-          disabled={props.disabled}
-          onChange={(value) => {
-            if (!value) return
-            if (value === "custom") return setOpen(true)
-            setOpen(false)
-            setIssue(undefined)
-            // the largest offered is «as much as fits»: it follows the choices that change it
-            const tokens = Number(value)
-            void props.choose({ context: tokens === max() ? null : tokens })
-          }}
-          data-action="settings-model-context"
-          aria-label={language.t("settings.models.context.title")}
-        >
-          <For each={steps()}>
-            {(tokens) => <SegmentedControlItemV2 value={String(tokens)}>{contextLabel(tokens)}</SegmentedControlItemV2>}
-          </For>
-          <Show when={max() > min() || custom()}>
-            <SegmentedControlItemV2 value="custom">{language.t("settings.models.context.custom")}</SegmentedControlItemV2>
-          </Show>
-        </SegmentedControlV2>
-        <Show when={custom()}>
-          <div class="settings-page-context-custom" data-slot="settings-model-context-custom">
-            <ButtonV2
-              variant="neutral"
-              disabled={props.disabled || current() <= min()}
-              onClick={() => set(stepContext(current(), -1, min(), max()))}
-              aria-label={language.t("settings.models.context.less")}
-              data-action="settings-model-context-less"
-            >
-              −
-            </ButtonV2>
-            <TextInputV2
-              numeric
-              appearance="base"
-              value={text()}
-              invalid={!!issue()}
-              disabled={props.disabled}
-              onInput={(event) => setText(event.currentTarget.value)}
-              onBlur={commit}
-              onKeyDown={(event) => event.key === "Enter" && commit()}
-              inputmode="numeric"
-              spellcheck={false}
-              autocomplete="off"
-              aria-label={language.t("settings.models.context.value")}
-              data-action="settings-model-context-value"
-            />
-            <ButtonV2
-              variant="neutral"
-              disabled={props.disabled || current() >= max()}
-              onClick={() => set(stepContext(current(), 1, min(), max()))}
-              aria-label={language.t("settings.models.context.more")}
-              data-action="settings-model-context-more"
-            >
-              +
-            </ButtonV2>
-            <span>
-              {language.t("settings.models.context.range", { min: contextLabel(min()), max: contextLabel(max()) })}
-            </span>
-          </div>
+    <div class="settings-page-field">
+      <b data-slot="settings-field-title">{language.t("settings.models.context.title")}</b>
+      <SegmentedControlV2
+        value={custom() ? "custom" : String(current())}
+        disabled={props.disabled}
+        onChange={(value) => {
+          if (!value) return
+          if (value === "custom") return setOpen(true)
+          setOpen(false)
+          setIssue(undefined)
+          // the largest offered is «as much as fits»: it follows the choices that change it
+          const tokens = Number(value)
+          void props.choose({ context: tokens === max() ? null : tokens })
+        }}
+        data-action="settings-model-context"
+        aria-label={language.t("settings.models.context.title")}
+      >
+        <For each={steps()}>
+          {(tokens) => <SegmentedControlItemV2 value={String(tokens)}>{contextLabel(tokens)}</SegmentedControlItemV2>}
+        </For>
+        <Show when={max() > min() || custom()}>
+          <SegmentedControlItemV2 value="custom">{language.t("settings.models.context.custom")}</SegmentedControlItemV2>
         </Show>
-        <small data-tone={issue() ? "danger" : undefined} data-slot="settings-model-context-note">
-          {issue() === "min"
-            ? language.t("settings.models.context.min", { min: contextLabel(min()) })
-            : issue() === "max"
-              ? language.t("settings.models.context.max", { max: contextLabel(max()) })
-              : language.t("settings.models.context.description")}
+      </SegmentedControlV2>
+      <Show when={custom()}>
+        <div class="settings-page-context-custom" data-slot="settings-model-context-custom">
+          <ButtonV2
+            variant="neutral"
+            disabled={props.disabled || current() <= min()}
+            onClick={() => set(stepContext(current(), -1, min(), max()))}
+            aria-label={language.t("settings.models.context.less")}
+            data-action="settings-model-context-less"
+          >
+            −
+          </ButtonV2>
+          <TextInputV2
+            numeric
+            appearance="base"
+            value={text()}
+            invalid={!!issue()}
+            disabled={props.disabled}
+            onInput={(event) => setText(event.currentTarget.value)}
+            onBlur={commit}
+            onKeyDown={(event) => event.key === "Enter" && commit()}
+            inputmode="numeric"
+            spellcheck={false}
+            autocomplete="off"
+            aria-label={language.t("settings.models.context.value")}
+            data-action="settings-model-context-value"
+          />
+          <ButtonV2
+            variant="neutral"
+            disabled={props.disabled || current() >= max()}
+            onClick={() => set(stepContext(current(), 1, min(), max()))}
+            aria-label={language.t("settings.models.context.more")}
+            data-action="settings-model-context-more"
+          >
+            +
+          </ButtonV2>
+          <span>
+            {language.t("settings.models.context.range", { min: contextLabel(min()), max: contextLabel(max()) })}
+          </span>
+        </div>
+      </Show>
+      <small data-tone={issue() ? "danger" : undefined} data-slot="settings-model-context-note">
+        {issue() === "min"
+          ? language.t("settings.models.context.min", { min: contextLabel(min()) })
+          : issue() === "max"
+            ? language.t("settings.models.context.max", { max: contextLabel(max()) })
+            : language.t("settings.models.context.description")}
+      </small>
+      <Show when={chosen() !== null && started() !== undefined && started() !== chosen()}>
+        <small data-slot="settings-model-context-effective">
+          {language.t("settings.models.context.effective", { tokens: format(started()!) })}
         </small>
-        <Show when={chosen() !== null && started() !== undefined && started() !== chosen()}>
-          <small data-slot="settings-model-context-effective">
-            {language.t("settings.models.context.effective", { tokens: format(started()!) })}
-          </small>
+      </Show>
+    </div>
+  )
+}
+
+/** The harness of the model: how the agent works with it. «Open in Agent» shows what it reads and does. */
+export const HarnessField: Component<FieldProps> = (props) => {
+  const language = useLanguage()
+  const open = useOpenSettings()
+  const [list, { failed }] = createHarnessList()
+  const chosen = () => props.model.choices.harness ?? list()?.default
+  return (
+    <Show
+      when={list()}
+      keyed
+      fallback={
+        <Show when={failed()}>
+          {(message) => (
+            <div class="settings-page-field">
+              <b data-slot="settings-field-title">{language.t("settings.models.harness.title")}</b>
+              <small>{language.t("settings.harness.listFailed", { message: message() })}</small>
+            </div>
+          )}
         </Show>
-      </div>
+      }
+    >
+      {(current) => (
+        <div class="settings-page-field">
+          <b data-slot="settings-field-title">{language.t("settings.models.harness.title")}</b>
+          <SelectV2
+            appearance="inline"
+            data-action="settings-model-harness"
+            options={current.harnesses.filter((harness) => !harness.error)}
+            current={current.harnesses.find((harness) => harness.id === chosen())}
+            placement="bottom-end"
+            gutter={6}
+            disabled={props.disabled}
+            value={(harness) => harness.id}
+            label={(harness) => harness.name}
+            onSelect={(harness) => {
+              if (!harness || harness.id === chosen()) return
+              void props.choose({ harness: harness.id === current.default ? null : harness.id })
+            }}
+          />
+          {/* the harness chosen, its folder deleted or its harness.json broken: the agent stops with its name */}
+          <Show when={!current.harnesses.some((harness) => harness.id === chosen() && !harness.error) && chosen()}>
+            {(id) => (
+              <small class="settings-page-error" role="alert" data-slot="settings-model-harness-missing">
+                {language.t("settings.models.harness.missing", { id: id() })}
+              </small>
+            )}
+          </Show>
+          <small>
+            {language.t("settings.models.harness.description")}{" "}
+            <button
+              type="button"
+              class="settings-page-link"
+              data-action="settings-model-harness-open"
+              onClick={() => chosen() && open("agent", chosen())}
+            >
+              {language.t("settings.models.harness.open")}
+            </button>
+          </small>
+        </div>
+      )}
     </Show>
   )
 }
 
 /**
- * The three styles are shortcuts: each fills the six values. «Mostra i valori» opens them to be written one by one; a
- * value changed makes a fourth segment, «Personale», and «Ripristina» goes back to the style that was chosen.
+ * The three styles are shortcuts: each fills the six values. «Show the values» opens them to be written one by one; a
+ * value changed makes a fourth segment, «Custom», and «Reset» goes back to the style that was chosen.
  */
 export const StyleField: Component<FieldProps & { showValues: boolean; onShowValues: (shown: boolean) => void }> = (
   props,

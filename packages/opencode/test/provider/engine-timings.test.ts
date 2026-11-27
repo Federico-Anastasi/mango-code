@@ -10,6 +10,7 @@ import {
   readingProgress,
   savedTimings,
   setEngineOrigin,
+  withPrefixRead,
 } from "@/provider/engine-timings"
 
 // Final chunk as llama-server sends it (same numbers as its `eval time` log).
@@ -61,6 +62,16 @@ describe("engine timings", () => {
     expect(savedTimings(metadata?.mango?.timings)).toEqual(parseTimings(final.timings))
     expect(savedTimings({ promptTokens: 1 })).toBeUndefined()
     expect(savedTimings(undefined)).toBeUndefined()
+  })
+
+  test("the system prompt the engine read before the request counts in the step's reading", () => {
+    const step = savedTimings({ promptTokens: 345, promptMs: 16_000, predictedTokens: 107, predictedMs: 7_400 })
+    const header = { "x-mango-prefix-read": JSON.stringify({ prompt_n: 14_325, prompt_ms: 330_000 }) }
+    expect(withPrefixRead(step, header)).toEqual({ promptTokens: 14_670, promptMs: 346_000, predictedTokens: 107, predictedMs: 7_400 })
+    expect(withPrefixRead(step, {})).toEqual(step)
+    expect(withPrefixRead(step, undefined)).toEqual(step)
+    expect(withPrefixRead(step, { "x-mango-prefix-read": "not json" })).toEqual(step)
+    expect(withPrefixRead(undefined, header)).toBeUndefined()
   })
 
   test("a stream without timings leaves no metadata", () => {

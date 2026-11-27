@@ -191,9 +191,9 @@ describe("the line above the composer", () => {
     expect(barParts(state({ phase: "none" }, [engine]), t)).toEqual({ name: "Updating the engine", status: "25%" })
   })
 
-  test("the cards lent to another program", () => {
+  test("the cards on loan, to another program or to Mango Code's pictures", () => {
     expect(line(state({ phase: "lent", model: "3.6", label: "Qwen" }))?.text).toBe(
-      "The graphics cards are lent to another program: Qwen starts again when they come back.",
+      "The graphics cards are on loan: Qwen starts again when they come back.",
     )
   })
 })
@@ -254,6 +254,28 @@ describe("the model in the top bar", () => {
       ),
     ).toEqual({ name: "No model in use" })
     expect(barParts(state({ phase: "none" }), t)).toEqual({ name: "No model in use" })
+  })
+
+  test("a server's model of new conversations is what the bar and the button under the chat say, never «No model in use»", () => {
+    const server = (model: unknown, downloads: unknown[] = []) => ({
+      ...state(model, downloads),
+      server_model: "server-1/D:\\models\\Qwen3.5-4B-Q4_K_M.gguf",
+      server_label: "Qwen3.5-4B-Q4_K_M",
+    })
+    expect(barParts(server({ phase: "none" }), t)).toEqual({ name: "Qwen3.5-4B-Q4_K_M" })
+    expect(composerParts(server({ phase: "none" }), t)).toEqual({ name: "Qwen3.5-4B-Q4_K_M" })
+    expect(barTone(server({ phase: "none" }))).toBe("ready")
+    const download = { model: "ling", label: "Ling", state: "active", done: 7, total: 100, bytes_per_second: 1 }
+    expect(barParts(server({ phase: "none" }, [download]), t)).toEqual({ name: "Qwen3.5-4B-Q4_K_M" })
+    expect(barDownload(server({ phase: "none" }, [download]))).toBeUndefined()
+    expect(modelTag("3.6", { ...server({ phase: "none" }), default_model: "3.6" }, t)).toBeUndefined()
+    // a local model still loaded: the bar says the server's, which new conversations use; the button of a conversation
+    // on the local model says the local one
+    expect(barParts(server({ phase: "ready", model: "3.6", label: "Qwen", where }), t)).toEqual({ name: "Qwen3.5-4B-Q4_K_M" })
+    expect(barTone(server({ phase: "loading", model: "3.6", label: "Qwen", seconds: 3 }))).toBe("ready")
+    expect(composerParts(server({ phase: "ready", model: "3.6", label: "Qwen", where }), t)).toEqual({ name: "Qwen" })
+    // before the app says the name the model's own is better than nothing
+    expect(barParts({ ...server({ phase: "none" }), server_label: null }, t).name).toBe("server-1/D:\\models\\Qwen3.5-4B-Q4_K_M.gguf")
   })
 
   test("under the composer the same words as the bar, the load without its seconds", () => {

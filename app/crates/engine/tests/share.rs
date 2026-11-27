@@ -43,9 +43,10 @@ fn planner(log: PathBuf) -> Box<engine::Planner> {
             label: "Model A".into(),
             ctx: 4096,
             images: false,
-            gpus_used: vec![Gpu { index: 0, name: "GPU 0".into(), vendor: Vendor::Nvidia, memory_mib: 8192, cuda_driver: Some((12, 6)), cc: Some((8, 6)) }],
+            gpus_used: vec![Gpu { index: 0, name: "GPU 0".into(), vendor: Vendor::Nvidia, memory_mib: 8192, shared_mib: 0, cuda_driver: Some((12, 6)), cc: Some((8, 6)) }],
             gguf: r"C:\fake\a.gguf".into(),
             slots: None,
+            fallback: None,
         })
     })
 }

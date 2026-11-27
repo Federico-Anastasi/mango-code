@@ -18,6 +18,7 @@ import { Discovery } from "./discovery"
 import { isRecord } from "@/util/record"
 import { escapeHtml } from "@/util/html"
 import { foldersOf } from "@/server/shared/mango-folders"
+import { Harness } from "@/session/harness"
 
 const CLAUDE_EXTERNAL_DIR = ".claude"
 const AGENTS_EXTERNAL_DIR = ".agents"
@@ -34,6 +35,15 @@ const CUSTOMIZE_OPENCODE_SKILL_NAME = "customize-opencode"
 const CUSTOMIZE_OPENCODE_SKILL_DESCRIPTION =
   "Use ONLY when the user is editing or creating opencode's own configuration: opencode.json, opencode.jsonc, files under .opencode/, or files under ~/.config/opencode/. Also use when creating or fixing opencode agents, subagents, skills, plugins, MCP servers, or permission rules. Do not use for the user's own application code, or for any project that is not configuring opencode itself."
 const CUSTOMIZE_OPENCODE_SKILL_BODY = SkillPlugin.CustomizeOpencodeContent
+
+// mango-code: the skills of the default harness are built into the agent (`launcher/harness/mango-harness-1/skills/`):
+// a `desc:` line, an empty line, the body. They have no file, so the model is shown no place for them.
+export const BUILT_IN = "<built-in>"
+const harnessSkills = () =>
+  Object.entries(Harness.definition(Harness.DEFAULT).skills ?? {}).map(([name, text]): Info => {
+    const [first, ...rest] = text.replace(/\r\n/g, "\n").split("\n\n")
+    return { name, description: first.replace(/^desc:\s*/, ""), location: BUILT_IN, content: rest.join("\n\n").trim() }
+  })
 
 export const Info = Schema.Struct({
   name: Schema.String,
@@ -293,6 +303,7 @@ const layer = Layer.effect(
     const state = yield* InstanceState.make(
       Effect.fn("Skill.state")(function* () {
         const s: State = { skills: {}, dirs: new Set() }
+        for (const item of harnessSkills()) s.skills[item.name] = item
         // Register the built-in skill BEFORE disk discovery so a user-disk
         // skill with the same name can override it.
         if (!flags.disableBuiltinCommands) {
@@ -420,7 +431,7 @@ export function fmt(list: Listed[], opts: { verbose: boolean }) {
           "  <skill>",
           `    <name>${skill.name}</name>`,
           `    <description>${skill.description}</description>`,
-          `    <location>${escapeHtml(skill.location)}</location>`,
+          ...(skill.location === BUILT_IN ? [] : [`    <location>${escapeHtml(skill.location)}</location>`]),
           "  </skill>",
         ]),
       "</available_skills>",

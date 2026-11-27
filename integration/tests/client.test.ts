@@ -199,7 +199,7 @@ test("a picture as a turn of the session is asked on the session's route, with t
   servers.push(server);
   const agent = `http://127.0.0.1:${server.port}`;
   const mc = new MangoCode({ version: 1, pid: process.pid, agent, engine: null, control: agent, window: false });
-  const message = await mc.pictureTurn("ses_1", "C:\\Projects\\film", { request: "una vespa rossa", format: "landscape", rewrite: false, seed: 3 });
+  const message = await mc.pictureTurn("ses_1", "C:\\Projects\\film", { request: "a red scooter", format: "landscape", rewrite: false, seed: 3 });
   expect(message.parts[0].state.status).toBe("completed");
-  expect(seen).toEqual([{ path: "/session/ses_1/image", directory: "C:\\Projects\\film", body: { request: "una vespa rossa", format: "landscape", rewrite: false, seed: 3 } }]);
+  expect(seen).toEqual([{ path: "/session/ses_1/image", directory: "C:\\Projects\\film", body: { request: "a red scooter", format: "landscape", rewrite: false, seed: 3 } }]);
 });

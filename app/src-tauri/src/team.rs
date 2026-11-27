@@ -65,16 +65,47 @@ pub fn team_info(app: AppHandle) -> Result<TeamInfo, BridgeError> {
 #[tauri::command]
 pub async fn team_set_key(app: AppHandle, key: String) -> Result<(), BridgeError> {
     let key = clean_key(&key)
-        .ok_or_else(|| err("invalid_key", tr!("la chiave è vuota o contiene spazi", "the key is empty or contains spaces")))?;
-    credentials::save(team::CREDENTIAL, key).map_err(|e| io(&app, e))?;
-    crate::restart(&app);
+        .ok_or_else(|| err("invalid_key", tr!("la chiave è vuota o contiene spazi", "the key is empty or contains spaces")))?
+        .to_string();
+    let paths = paths(&app)?;
+    let checked = key.clone();
+    tauri::async_runtime::spawn_blocking(move || -> anyhow::Result<()> {
+        let catalog = mango_common::catalog::read(&paths)?.root;
+        let manager = team::read_choices(&paths)?.manager;
+        let base_url = team::cloud_models(&catalog).into_iter().find(|m| m.key == manager).map(|m| m.base_url);
+        base_url.map_or(Ok(()), |url| team::check_key(&url, &checked))
+    })
+    .await
+    .map_err(|e| err("io", e.to_string()))?
+    .map_err(|e| err("invalid_key", format!("{e:#}")))?;
+    credentials::save(team::CREDENTIAL, &key).map_err(|e| io(&app, e))?;
+    crate::engine_remote::restart_after_the_answer(app.clone());
     Ok(())
 }
 
+/// Stops what the Team started, through the agent (`POST /mango/team/stop`): the manager's answers in progress, the dev and the
+/// agents, with a line in the conversation if something was working. A Team that cannot be stopped goes to the startup log:
+/// the restart that follows ends the hidden processes anyway.
+pub(crate) fn stop_in_agent(app: &AppHandle) {
+    let state = app.state::<AppState>();
+    let Some(agent) = state.agent.lock().unwrap().clone() else { return };
+    let url = format!("{agent}/mango/team/stop");
+    let stopped = mango_common::internet::agent(&url, STOP_MAX).post(&url).header("Content-Type", "application/json").send("{}");
+    if let (Err(e), Some(paths)) = (stopped, state.paths.get()) {
+        crate::startup_log(paths, &format!("the Team did not stop through the agent: {e:#}"));
+    }
+}
+
+/// How long the agent has to stop the Team.
+const STOP_MAX: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Removes the key. Whatever the Team was doing stops first: it would keep working, and being billed, until the restart.
 #[tauri::command]
 pub async fn team_remove_key(app: AppHandle) -> Result<(), BridgeError> {
+    let stopping = app.clone();
+    tauri::async_runtime::spawn_blocking(move || stop_in_agent(&stopping)).await.map_err(|e| err("io", e.to_string()))?;
     credentials::remove(team::CREDENTIAL).map_err(|e| io(&app, e))?;
-    crate::restart(&app);
+    crate::engine_remote::restart_after_the_answer(app.clone());
     Ok(())
 }
 
@@ -83,7 +114,7 @@ pub async fn team_remove_key(app: AppHandle) -> Result<(), BridgeError> {
 pub async fn team_save(app: AppHandle, agents: u8, manager: String, agent: String) -> Result<(), BridgeError> {
     team::write_choices(&paths(&app)?, &Choices { agents, manager, agent }).map_err(|e| shown(&app, "invalid_choices", "team: choices not saved", e))?;
     if credentials::read(team::CREDENTIAL).map_err(|e| io(&app, e))?.is_some() {
-        crate::restart(&app);
+        crate::engine_remote::restart_after_the_answer(app.clone());
     }
     Ok(())
 }

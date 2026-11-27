@@ -2,6 +2,7 @@
 // closed and also when the start fails. Run in a temporary folder of its own, so that it sees only its own leftovers.
 
 import { afterAll, beforeAll, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -39,6 +40,16 @@ test("closing the environment removes its folder", async () => {
   env.close();
   expect(fs.existsSync(env.root)).toBe(false);
   expect(leftovers()).toEqual([]);
+}, 240_000);
+
+test("closing the environment removes the keys the app saved for it in the Credential Manager", async () => {
+  const env = await start([{ text: "Done." }]);
+  const target = `MANGO_SERVER_KEY_SERVER_1.MangoCode-test-${createHash("sha256").update(env.data).digest("hex").slice(0, 12)}`;
+  const listed = () => (spawnSync("cmdkey", ["/list"], { encoding: "utf8" }).stdout ?? "").includes(`target=${target}`);
+  spawnSync("cmdkey", [`/generic:${target}`, "/user:MANGO_SERVER_KEY_SERVER_1", "/pass:invented-key"], { windowsHide: true });
+  expect(listed()).toBe(true);
+  env.close();
+  expect(listed()).toBe(false);
 }, 240_000);
 
 test("a folder that a process holds open fails the removal with what it could not remove, and goes once the process lets go", async () => {

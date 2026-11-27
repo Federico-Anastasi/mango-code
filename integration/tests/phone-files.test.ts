@@ -66,14 +66,14 @@ beforeAll(async () => {
       { tool: "write", arguments: { filePath: path.join(project, "doc.pdf"), content: PDF } },
       { tool: "write", arguments: { filePath: path.join(project, "picture.png"), content: "x" } },
       { tool: "write", arguments: { filePath: path.join(project, "vector.svg"), content: SVG } },
-      { tool: "write", arguments: { filePath: path.join(project, "site.html"), content: "<!doctype html><title>Sito</title><h1>Pagina del sito</h1>" } },
-      { text: "Fatto." },
+      { tool: "write", arguments: { filePath: path.join(project, "site.html"), content: "<!doctype html><title>Site</title><h1>The site's page</h1>" } },
+      { text: "Done." },
     ],
     { window: true, env: { MANGO_AGENT_PORT: String(AGENT), MANGO_ENGINE_PORT: String(ENGINE), MANGO_PHONE_PC_ONLY: "1", MANGO_PHONE_PORT: String(PHONE) } },
   );
   mc = new MangoCode((await find(env.data))!);
   id = await mc.createSession(env.project, { title: "telefono" });
-  for await (const _ of mc.turn(id, env.project, "Fammi un PDF, un'immagine e un disegno", { model: "fake" }));
+  for await (const _ of mc.turn(id, env.project, "Make me a PDF, a picture and a drawing", { model: "fake" }));
   fs.writeFileSync(path.join(env.project, "picture.png"), png());
 
   // the phone port on, from the window's bridge (the page of the app is the agent's)
@@ -116,7 +116,7 @@ test("a picture opens full screen, from memory, drawn as a picture", async () =>
   await ui.waitForFunction(() => (document.querySelector('[data-component="phone-preview-image"]') as HTMLImageElement)?.naturalWidth === 240);
   if (process.env.MC_PHOTOS) {
     fs.mkdirSync(process.env.MC_PHOTOS, { recursive: true });
-    await ui.screenshot({ path: path.join(process.env.MC_PHOTOS, "immagine-telefono-390.png") });
+    await ui.screenshot({ path: path.join(process.env.MC_PHOTOS, "picture-phone-390.png") });
   }
   await close();
   await img.waitFor({ state: "detached" });
@@ -156,7 +156,7 @@ test("the globe opens the last page the conversation wrote when the computer's p
   await ui.locator('[data-action="titlebar-preview"]').click();
   const frame = ui.frameLocator('[data-component="phone-preview"] iframe');
   await frame.locator("h1").waitFor({ timeout: 30_000 });
-  expect(await frame.locator("h1").textContent()).toBe("Pagina del sito");
+  expect(await frame.locator("h1").textContent()).toBe("The site's page");
   if (process.env.MC_PHOTOS) await ui.screenshot({ path: path.join(process.env.MC_PHOTOS, "globo-telefono-390.png") });
   await close();
 }, 60_000);

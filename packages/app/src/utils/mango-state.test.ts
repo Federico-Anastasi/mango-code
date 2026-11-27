@@ -20,6 +20,7 @@ import {
   parseState,
   pollDelay,
   recommended,
+  replacementModel,
   type MangoState,
 } from "./mango-state"
 
@@ -63,6 +64,7 @@ describe("the app's state, as the agent tells it", () => {
       where: ["auto", "one", "cpu"],
       context: [32768, 65536, 131072],
       reasoning: ["off", "on"],
+      reasoningDefault: null,
     })
     expect(parseCatalog({ models: [entry("a", true, true)] })![0].sampling).toBeNull()
     expect(parseCatalog({ models: [] })).toEqual([])
@@ -71,7 +73,7 @@ describe("the app's state, as the agent tells it", () => {
       models: [entry("w", false, true, { waits_engine: true }), entry("a", false, true)],
     })!
     expect(waiting.map((model) => model.waitsEngine)).toEqual([true, false])
-    // the files the user chose, which «Togli» leaves; none for a model whose files Mango Code downloads
+    // the files the user chose, which «Remove» leaves; none for a model whose files Mango Code downloads
     const own = parseCatalog({
       models: [entry("mine", true, true, { user: true, own_files: ["D:\\m.gguf"] }), entry("a", true, true)],
     })!
@@ -88,9 +90,20 @@ describe("the app's state, as the agent tells it", () => {
     const [model] = parseCatalog({
       models: [entry("a", true, true, { choices: { ...choices, sampling: { temperature: 0.4, top_k: 10, junk: 1, top_p: "x" } } })],
     })!
-    expect(model.choices).toEqual({ ...choices, sampling: { temperature: 0.4, top_k: 10 } })
+    expect(model.choices).toEqual({ ...choices, sampling: { temperature: 0.4, top_k: 10 }, harness: null })
     expect(parseCatalog({ models: [entry("a", true, true, { choices })] })).toBeUndefined()
     expect(parseCatalog({ models: [entry("a", true, true, { choices: { ...choices, sampling: 3 } })] })).toBeUndefined()
+  })
+
+  test("the harness chosen for a model is read, so that a change of another choice sends it back; none is the default", () => {
+    const base = { where: "auto", gpus: [], context: null, style: "recommended", reasoning: null, sampling: {} }
+    const [mine, plain] = parseCatalog({
+      models: [entry("a", true, true, { choices: { ...base, harness: "mio" } }), entry("b", true, true)],
+    })!
+    expect(mine.choices.harness).toBe("mio")
+    expect({ ...mine.choices, context: 65536 }.harness).toBe("mio")
+    expect(plain.choices.harness).toBeNull()
+    expect(parseCatalog({ models: [entry("a", true, true, { choices: { ...base, harness: 3 } })] })).toBeUndefined()
   })
 
   test("a catalog whose models are all left out, or no list at all, does not read: it is not a computer without models", () => {
@@ -101,7 +114,11 @@ describe("the app's state, as the agent tells it", () => {
 
   test("a computer reads with its cards; a card without a name is left out", () => {
     const pc = parseComputer({
-      gpus: [{ name: "RTX 3060 Ti", memory_mib: 8192, used: true, note: "La più potente." }, { name: 3 }],
+      gpus: [
+        { name: "RTX 3060 Ti", memory_mib: 8192, used: true, note: "La più potente." },
+        { name: "AMD Radeon(TM) Graphics", memory_mib: 6676, shared: true, used: false, note: "" },
+        { name: 3 },
+      ],
       small_models: "all",
       cpu: "Intel Core i7",
       cores: 8,
@@ -109,12 +126,17 @@ describe("the app's state, as the agent tells it", () => {
       disk: { path: "C:\\Mango\\models", used_bytes: 41e9, free_bytes: 200e9 },
       engine: { label: "llama.cpp", installed: true },
       tailored: { models: 5 },
+      gone: ["RTX 3060 #2", 4],
     })
-    expect(pc?.gpus).toEqual([{ name: "RTX 3060 Ti", memory_mib: 8192, used: true, note: "La più potente." }])
+    expect(pc?.gpus).toEqual([
+      { name: "RTX 3060 Ti", memory_mib: 8192, shared: false, used: true, note: "La più potente." },
+      { name: "AMD Radeon(TM) Graphics", memory_mib: 6676, shared: true, used: false, note: "" },
+    ])
     expect(pc?.small_models).toBe("all")
     expect(pc?.disk.used_bytes).toBe(41e9)
     expect(pc?.engine).toEqual({ label: "llama.cpp", installed: true, update: false })
     expect(pc?.tailored).toEqual({ models: 5 })
+    expect(pc?.gone).toEqual(["RTX 3060 #2"])
     expect(parseComputer(null)).toBeUndefined()
   })
 
@@ -228,6 +250,7 @@ describe("the app's state, as the agent tells it", () => {
       model: "3.6",
       label: "Qwen",
       reason: "No.",
+      detail: null,
       taken: null,
       proposal: { model: "ling", label: "Ling", where: { placement: "gpu", gpus: ["RTX 3060 Ti"], context: 65536 } },
     })
@@ -238,10 +261,12 @@ describe("the app's state, as the agent tells it", () => {
         model: "3.6",
         label: "Qwen",
         reason: "CUDA error",
+        detail: "CUDA error (technical detail: out of memory)",
         taken: "Another program takes 5 GB.",
       }).model,
     ).toMatchObject({
       reason: "CUDA error",
+      detail: "CUDA error (technical detail: out of memory)",
       taken: "Another program takes 5 GB.",
     })
     // no proposal yet: it is null, not an error
@@ -392,6 +417,26 @@ describe("a message sent before the model is ready", () => {
     expect(noModel(state({ phase: "remote", address: "a", models: [] }), nothingHere)).toBe(false)
     expect(noModel(state({ phase: "none" }), undefined)).toBe(false)
     expect(noModel(undefined, nothingHere)).toBe(false)
+    // the conversations go to a server's model: nothing on the computer is needed
+    expect(noModel({ ...state({ phase: "none" }), server_model: "server-1/m" }, nothingHere)).toBe(false)
+  })
+
+  test("a model that is no longer on the computer is replaced by the one of new conversations, or the first that is there", () => {
+    const catalog = parseCatalog({ models: [entry("3.6", true, true), entry("ling", true, true), entry("gone", false, true)] })
+    expect(replacementModel(state({ phase: "none" }), catalog, "gone")).toBe("3.6")
+    expect(replacementModel({ ...state({ phase: "none" }), default_model: "ling" }, catalog, "gone")).toBe("ling")
+    expect(replacementModel({ ...state({ phase: "none" }), default_model: null }, catalog, "gone")).toBe("3.6")
+    // an entry that left the catalog (a model of the user's taken off the list) is gone too
+    expect(replacementModel(state({ phase: "none" }), catalog, "mine")).toBe("3.6")
+    // it is there, or the engine runs it, or a download brings it: it stays
+    expect(replacementModel(state({ phase: "none" }), catalog, "ling")).toBeUndefined()
+    expect(replacementModel(state({ phase: "ready", model: "gone", label: "Gone", where }), catalog, "gone")).toBeUndefined()
+    expect(replacementModel(state({ phase: "none" }, [{ ...download("active"), model: "gone" }]), catalog, "gone")).toBeUndefined()
+    // none left, the catalog not read yet, the other PC's engine
+    expect(replacementModel(state({ phase: "none" }), parseCatalog({ models: [entry("gone", false, true)] }), "gone")).toBeUndefined()
+    expect(replacementModel(state({ phase: "none" }), undefined, "gone")).toBeUndefined()
+    expect(replacementModel(state({ phase: "remote", address: "a", models: [] }), catalog, "gone")).toBeUndefined()
+    expect(replacementModel(undefined, catalog, "gone")).toBeUndefined()
   })
 
   test("waits while the other PC's engine does not answer, and leaves when it answers or a model is ready", () => {
@@ -431,6 +476,8 @@ describe("the Home", () => {
     expect(homeView(state({ phase: "remote", address: "a", models: [], reachable: false }), nothingHere)).toBe("remote")
     expect(homeView(state({ phase: "remote", address: "a", models: [] }), nothingHere)).toBe("usual")
     expect(homeView(undefined, undefined)).toBe("usual")
+    // the conversations go to a server: no model to download first
+    expect(homeView({ ...state({ phase: "none" }), server_model: "server-1/m" }, nothingHere)).toBe("usual")
   })
 
   test("models on the disk that wait for the engine the app came with are not a first start: the Home says it arrives", () => {

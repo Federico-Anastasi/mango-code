@@ -98,6 +98,8 @@
             "scenarios": [
               "tool-result",
               "long-with-reminders",
+              "after-summary",
+              "summary-request",
               "reasoning"
             ],
             "message": "Conversation roles must alternate"
@@ -126,6 +128,8 @@
             "scenarios": [
               "tool-result",
               "long-with-reminders",
+              "after-summary",
+              "summary-request",
               "reasoning"
             ],
             "message": "Conversation roles must alternate"
@@ -367,13 +371,20 @@
       "eos_token": "</s>",
       "expect": {
         "opening": "[/INST]",
-        "note": "Writes the system message inside the last user message, so it is lost once a tool call ends the conversation, and opens no turn after tool results. Writes no reasoning.",
+        "note": "Writes the system message inside the last user message, so it is lost once a tool call ends the conversation, and opens no turn after tool results. Writes no reasoning. Rejects a user message right after a tool result: the request for a summary in the middle of the work fails, and the agent writes the summary from the calls.",
         "drops": [
           "system",
           "opening-after-results",
           "reasoning"
         ],
-        "rejects": []
+        "rejects": [
+          {
+            "scenarios": [
+              "summary-request"
+            ],
+            "message": "After the optional system message, conversation roles must alternate"
+          }
+        ]
       }
     },
     {
@@ -479,6 +490,8 @@
             "scenarios": [
               "tool-result",
               "long-with-reminders",
+              "after-summary",
+              "summary-request",
               "reasoning"
             ],
             "message": "Conversation roles must alternate"
@@ -508,6 +521,8 @@
             "scenarios": [
               "tool-result",
               "long-with-reminders",
+              "after-summary",
+              "summary-request",
               "reasoning"
             ],
             "message": "Conversation roles must alternate"

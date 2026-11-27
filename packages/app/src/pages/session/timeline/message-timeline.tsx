@@ -97,6 +97,7 @@ import { filterVirtualIndexes } from "./virtual-items"
 import { beforeRevert } from "./model"
 import { createConversationFind, drawnResults, rowText } from "./conversation-find"
 import { ConversationFindBar } from "./conversation-find-bar"
+import { TeamNoticeLine } from "./team-notice-line"
 
 const emptyMessages: MessageType[] = []
 const emptyParts: PartType[] = []
@@ -360,7 +361,7 @@ export function MessageTimeline(props: {
    * closed.
    */
   onRetry?: (userMessageID: string) => void
-  /** «Continua» under a turn cut for its length: asks the model to go on. */
+  /** «Continue» under a turn cut for its length: asks the model to go on. */
   onContinue?: (userMessageID: string) => void
   scroll: { overflow: boolean; bottom: boolean; jump: boolean }
   onResumeScroll: () => void
@@ -1331,13 +1332,13 @@ export function MessageTimeline(props: {
     )
   }
 
-  // «Continua» under a turn: only the last one, with the conversation still.
+  // «Continue» under a turn: only the last one, with the conversation still.
   const continueOf = (userMessageID: string) =>
     props.onContinue && activeMessageID() === userMessageID && sessionStatus().type === "idle"
       ? props.onContinue
       : undefined
 
-  // «Riprova» under a turn: only the last one, with the conversation still (sending again an older message would land at
+  // «Retry» under a turn: only the last one, with the conversation still (sending again an older message would land at
   // the bottom), and only a message with words or pictures (one of only comments has nothing to send again).
   const retryOf = (userMessageID: string) => {
     const resendable = getMsgParts(userMessageID).some(
@@ -1428,6 +1429,48 @@ export function MessageTimeline(props: {
           </TimelineRowFrame>
         )
       }
+      case "TeamNotice": {
+        const noticeRow = row as Accessor<TimelineRowByTag<"TeamNotice">>
+        const noticeLabel = () => {
+          const { kind, agent } = noticeRow()
+          if (kind === "stopped") return language.t("session.team.stopped")
+          return language.t(`session.team.${kind}.${agent ? "agent" : "dev"}`, { agent: agent ?? "" })
+        }
+        const noticeOpenKey = () => `team-notice:${noticeRow().userMessageID}`
+        return (
+          <TimelineRowFrame row={noticeRow}>
+            <div data-slot="session-turn-message-container" class="w-full px-4 md:px-5">
+              <div data-slot="session-turn-compaction">
+                <Show when={noticeRow().text} fallback={<MessageDivider label={noticeLabel()} />}>
+                  <TeamNoticeLine
+                    kind={noticeRow().kind}
+                    label={noticeLabel()}
+                    excerpt={noticeRow().excerpt}
+                    text={noticeRow().text}
+                    open={toolOpen[noticeOpenKey()] === true}
+                    onOpenChange={(value) => {
+                      setToolOpen(noticeOpenKey(), value)
+                      onSizeChange?.()
+                    }}
+                  />
+                </Show>
+              </div>
+            </div>
+          </TimelineRowFrame>
+        )
+      }
+      case "Summarized": {
+        const summarizedRow = row as Accessor<TimelineRowByTag<"Summarized">>
+        return (
+          <TimelineRowFrame row={summarizedRow}>
+            <div data-slot="session-turn-message-container" class="w-full px-4 md:px-5">
+              <div data-slot="session-turn-compaction">
+                <MessageDivider label={language.t("ui.messagePart.compaction")} />
+              </div>
+            </div>
+          </TimelineRowFrame>
+        )
+      }
       case "TurnDivider": {
         const turnDividerRow = row as Accessor<TimelineRowByTag<"TurnDivider">>
         return (
@@ -1501,6 +1544,18 @@ export function MessageTimeline(props: {
             <div data-slot="session-turn-message-container" class="w-full px-4 pt-2 md:px-5">
               <div data-slot="session-turn-resumed" class="text-14-regular text-text-weak">
                 {language.t("session.length.resumed")}
+              </div>
+            </div>
+          </TimelineRowFrame>
+        )
+      }
+      case "Repeated": {
+        const repeatedRow = row as Accessor<TimelineRowByTag<"Repeated">>
+        return (
+          <TimelineRowFrame row={repeatedRow}>
+            <div data-slot="session-turn-message-container" class="w-full px-4 pt-2 md:px-5">
+              <div data-slot="session-turn-repeated" class="text-14-regular text-text-weak">
+                {language.t("session.repeat.stopped")}
               </div>
             </div>
           </TimelineRowFrame>

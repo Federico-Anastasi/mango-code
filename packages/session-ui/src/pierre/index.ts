@@ -19,6 +19,12 @@ const unsafeCSS = `
   --diffs-bg: var(--opencode-diffs-bg, var(--color-background-stronger));
 }
 
+/* the library writes this line in English, whatever the language of the app; whether a file ends with a newline does not
+   concern the user */
+[data-no-newline] {
+  display: none;
+}
+
 [data-diff],
 [data-file] {
   /* Pierre 1.2 mixes these override targets at 12% in light mode and 20% in dark mode. */

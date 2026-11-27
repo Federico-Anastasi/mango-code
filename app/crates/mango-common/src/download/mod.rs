@@ -57,6 +57,8 @@ pub enum Trouble {
     Network(String),
     /// The server answers but does not give the file (it is not there, the repo is gated).
     Server(String),
+    /// The server is busy or down for a moment (429, 5xx): trying again later may work, as after a dropped connection.
+    Busy(String),
     /// What arrived is not the catalog's file (another hash, more bytes): it was discarded.
     WrongFile(String),
 }
@@ -64,7 +66,7 @@ pub enum Trouble {
 impl std::fmt::Display for Trouble {
     fn fmt(&self, out: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Trouble::Network(t) | Trouble::Server(t) | Trouble::WrongFile(t) => out.write_str(t),
+            Trouble::Network(t) | Trouble::Server(t) | Trouble::Busy(t) | Trouble::WrongFile(t) => out.write_str(t),
         }
     }
 }
@@ -306,6 +308,7 @@ fn request(f: &RemoteFile, from: u64, max_wait: Duration) -> Result<ureq::http::
                  and save your token in «Other models» (or put it in HF_TOKEN, or in %USERPROFILE%\\.cache\\huggingface\\token)"
         ))
         .into()),
+        Err(ureq::Error::StatusCode(c)) if c == 429 || c >= 500 => Err(Trouble::Busy(tr!("il server risponde {c}", "the server answers {c}")).into()),
         Err(ureq::Error::StatusCode(c)) => Err(Trouble::Server(tr!("il server risponde {c}", "the server answers {c}")).into()),
         Err(e) => Err(Trouble::Network(crate::internet::network_failure(e, &f.url).to_string()).into()),
     }

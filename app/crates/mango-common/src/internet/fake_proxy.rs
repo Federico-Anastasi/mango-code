@@ -1,6 +1,7 @@
 //! An office proxy, fake: it listens on a port of this computer, records the first line of each request it gets, and then does what it is told.
-//! `chain.pem` and `leaf-key.pem` are a test certificate (valid a hundred years, for `downloads.example.test`) signed by a root generated once: the root's
-//! key was thrown away, nobody can make more, and the root must not be installed on any computer.
+//! `chain.pem` and `leaf-key.pem` are a test certificate (valid a hundred years, issued for `scarichi.esempio.test`, not for the host the tests ask for: they only need the client to refuse a
+//! certificate whose root it does not know) signed by a root generated once: the root's key was thrown away, nobody can make more, and the
+//! root must not be installed on any computer.
 #![allow(dead_code)]
 
 use std::io::{BufRead, BufReader, Read, Write};

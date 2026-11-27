@@ -196,8 +196,8 @@ export const CompactionPart = Schema.Struct({
   ...partBase,
   type: Schema.Literal("compaction"),
   auto: Schema.Boolean,
-  overflow: Schema.optional(Schema.Boolean),
   tail_start_id: Schema.optional(MessageID),
+  users_from_id: Schema.optional(MessageID),
 }).annotate({ identifier: "CompactionPart" })
 export type CompactionPart = Types.DeepMutable<Schema.Schema.Type<typeof CompactionPart>>
 

@@ -98,7 +98,7 @@ async function settled(model: string) {
 }
 
 beforeAll(async () => {
-  env = await start([{ text: "Eccomi." }], { window: true, context: 65536, reasoning: ["fake"], otherModels: ["second", "third", "huge", "giant"], bytes: { huge: 10 * 2 ** 40, giant: 10 * 2 ** 40 }, files, env: { MANGO_HF_URL: base } });
+  env = await start([{ text: "Here I am." }], { window: true, context: 65536, reasoning: ["fake"], otherModels: ["second", "third", "huge", "giant"], bytes: { huge: 10 * 2 ** 40, giant: 10 * 2 ** 40 }, files, env: { MANGO_HF_URL: base } });
   // the third model and the giant one are not on the computer: they are among the tested ones, to download
   fs.rmSync(path.join(env.modelsDir, "third.gguf"));
   fs.rmSync(path.join(env.modelsDir, "giant.gguf"));
@@ -259,7 +259,7 @@ test("«Togli dal computer» asks in a window, and «Togli» deletes the file an
 
 test("«Un altro modello»: a GGUF chosen in the Windows dialog is analyzed, added to the models with its file left where it is, and taken off again", async () => {
   // a file of the user with a header only: an architecture the count does not know, so the memory is an estimate
-  const mine = path.join(env.root, "elsewhere", "mio-modello.gguf");
+  const mine = path.join(env.root, "elsewhere", "my-model.gguf");
   fs.mkdirSync(path.dirname(mine), { recursive: true });
   const string = (s: string) => {
     const bytes = Buffer.from(s);
@@ -280,20 +280,20 @@ test("«Un altro modello»: a GGUF chosen in the Windows dialog is analyzed, add
   const picked = await answer(env.app.pid!, "-Path", mine);
   expect(picked.code, picked.output).toBe(0);
   await waitUntil(() => exists('[data-slot="settings-other-analysis"]'), "the analysis of the file");
-  expect(await p.evaluate(`document.querySelector('[data-slot="settings-other-analysis"]').innerText`)).toContain("mio-modello");
+  expect(await p.evaluate(`document.querySelector('[data-slot="settings-other-analysis"]').innerText`)).toContain("my-model");
   expect(await exists('[data-slot="settings-other-estimated"]')).toBe(true);
   await mouseClick('[data-action="settings-other-model-add"]');
-  await waitUntil(async () => (await section("Sul computer"))?.includes("local-mio-modello") === true, "the model among those on the computer");
-  expect(await p.evaluate(`document.querySelector('[data-slot="settings-other-model-line"]').innerText`)).toContain("mio-modello");
-  expect((await get("models")).models.find((m: { key: string }) => m.key === "local-mio-modello")).toMatchObject({ user: true, present: true, own_files: [mine] });
+  await waitUntil(async () => (await section("Sul computer"))?.includes("local-my-model") === true, "the model among those on the computer");
+  expect(await p.evaluate(`document.querySelector('[data-slot="settings-other-model-line"]').innerText`)).toContain("my-model");
+  expect((await get("models")).models.find((m: { key: string }) => m.key === "local-my-model")).toMatchObject({ user: true, present: true, own_files: [mine] });
 
   // taken off: its row asks, says the file stays where it is, and the file is still there
-  await mouseClick(`${row("local-mio-modello")} button`);
-  await waitUntil(() => exists(`${row("local-mio-modello")} [data-action="settings-model-remove"]`), "its choices");
-  await mouseClick(`${row("local-mio-modello")} [data-action="settings-model-remove"]`);
+  await mouseClick(`${row("local-my-model")} button`);
+  await waitUntil(() => exists(`${row("local-my-model")} [data-action="settings-model-remove"]`), "its choices");
+  await mouseClick(`${row("local-my-model")} [data-action="settings-model-remove"]`);
   await waitUntil(() => exists('[data-action="settings-model-remove-confirm"]'), "the window of the question");
   expect((await p.evaluate(`document.querySelector('[data-action="settings-model-remove-confirm"]').closest('[role="dialog"]').innerText`)) as string).toContain("resta dov'è");
   await mouseClick('[data-action="settings-model-remove-confirm"]');
-  await waitUntil(async () => !(await section("Sul computer"))?.includes("local-mio-modello"), "the model gone from the list");
+  await waitUntil(async () => !(await section("Sul computer"))?.includes("local-my-model"), "the model gone from the list");
   expect(fs.existsSync(mine)).toBe(true);
 }, 240_000);

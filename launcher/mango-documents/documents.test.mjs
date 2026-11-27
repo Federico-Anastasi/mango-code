@@ -531,7 +531,39 @@ describe("calls and protocol", () => {
     await expect(create({ type: "pdf", file: p("e.pdf"), content: "![x](https://example.com/a.png)" })).rejects.toThrow(/download it into the project first/);
     await expect(create({ type: "pdf", file: p("e.pdf"), content: "x", header: "hello" }).then(() => create({ type: "xlsx", file: p("i.xlsx"), content: "| a |\n|---|\n| 1 |", header: "no" }))).rejects.toThrow(/only used for docx and pdf/);
     await expect(read({ file: p("does-not-exist.docx") })).rejects.toThrow(/does not exist/);
-    await expect(read({ file: p("logo.png") })).rejects.toThrow(/unsupported format.*\.doc/);
+    await expect(read({ file: p("logo.png") })).rejects.toThrow(/not a text file/);
+  });
+
+  test("reads a text file as it is, in parts when it is long", async () => {
+    fs.writeFileSync(p("prices.csv"), "﻿item;price\nbike;350\nhelmet;45\n");
+    fs.writeFileSync(p("shop.json"), '{ "name": "Bike shop", "open": true }');
+    fs.writeFileSync(p("notes.txt"), Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from("città\r\n", "utf16le")]));
+    const csv = await read({ file: p("prices.csv") });
+    expect(csv).toContain("item;price\nbike;350\nhelmet;45");
+    expect(csv).not.toContain("﻿");
+    expect(await read({ file: p("shop.json") })).toContain('{ "name": "Bike shop", "open": true }');
+    expect(await read({ file: p("notes.txt") })).toContain("città");
+
+    const lines = Array.from({ length: 3000 }, (_, i) => `line ${i + 1}: ${"x".repeat(20)}`);
+    fs.writeFileSync(p("long.txt"), lines.join("\n"));
+    const first = await read({ file: p("long.txt") });
+    expect(first).toContain("line 1:");
+    expect(first).toMatch(/continue with part=2/);
+    const parts = Number(/Part 1 of (\d+)/.exec(first)?.[1]);
+    expect(parts).toBeGreaterThan(1);
+    expect(await read({ file: p("long.txt"), part: String(parts) })).toContain("line 3000:");
+    await expect(read({ file: p("long.txt"), part: String(parts + 1) })).rejects.toThrow(/invalid part/);
+  });
+
+  test("a long text file of short lines is read in parts without slowing down, and one too big is refused with a sentence", async () => {
+    const rows = Array.from({ length: 1_500_000 }, (_, i) => `a${i % 9}`);
+    fs.writeFileSync(p("rows.csv"), rows.join("\n"));
+    const started = Date.now();
+    const first = await read({ file: p("rows.csv") });
+    expect(Date.now() - started).toBeLessThan(5000);
+    expect(first).toMatch(/Part 1 of \d+/);
+    fs.writeFileSync(p("huge.csv"), Buffer.alloc(51 * 1024 * 1024, "a"));
+    await expect(read({ file: p("huge.csv") })).rejects.toThrow(/«huge\.csv» is too big to read as text: 51 MB, the limit is 50 MB/);
   });
 
   test("the MCP server lists the four tools and answers calls", async () => {

@@ -8,6 +8,7 @@ import {
   pictureSeconds,
   pictureSides,
   pictureStage,
+  pictureTime,
   pictureWords,
 } from "./picture-state"
 
@@ -55,6 +56,19 @@ describe("what the part tells of the picture", () => {
     expect(pictureSeconds({ start: 1000, end: 16_400 })).toBe(15)
     expect(pictureSeconds({ start: 1000 })).toBeUndefined()
     expect(pictureSeconds(undefined)).toBeUndefined()
+  })
+  test("a picture waiting for the user's permission says so and counts no time", () => {
+    expect(pictureWords({ stage: "asking" }).key).toBe("ui.picture.stage.asking")
+    expect(pictureTime({ stage: "asking" }, { start: 1000, end: undefined })).toBeUndefined()
+  })
+  test("a picture in the line has no time to count, and one that began counts from there, not from the part's start", () => {
+    const time = { start: 1000, end: undefined }
+    expect(pictureTime({ stage: "waiting" }, time)).toBeUndefined()
+    expect(pictureTime({ stage: "waiting", began: 5000 }, time)).toBeUndefined()
+    expect(pictureTime({ stage: "preparing", began: 21_000 }, time)).toEqual({ start: 21_000, end: undefined })
+    expect(pictureSeconds(pictureTime({ file: "a.png", began: 21_000 }, { start: 1000, end: 41_400 }))).toBe(20)
+    expect(pictureTime({ stage: "rewriting" }, time)).toEqual({ start: 1000, end: undefined })
+    expect(pictureTime({ stage: "drawing" }, undefined)).toBeUndefined()
   })
   test("the file name, from either kind of path", () => {
     expect(pictureFileName({ file: "C:\\P\\immagini\\vespa-2.png" })).toBe("vespa-2.png")

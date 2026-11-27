@@ -107,4 +107,34 @@ describe("config HttpApi", () => {
       })
     }),
   )
+
+  it.live(
+    "serves the providers without the keys their config reads from the environment",
+    Effect.gen(function* () {
+      process.env.MANGO_SERVER_KEY_SERVER_1 = "sk-invented-server-key"
+      yield* Effect.addFinalizer(() => Effect.sync(() => delete process.env.MANGO_SERVER_KEY_SERVER_1))
+      const tmp = yield* tmpdirEffect({
+        config: {
+          formatter: false,
+          lsp: false,
+          provider: {
+            "server-1": {
+              npm: "@ai-sdk/openai-compatible",
+              options: { baseURL: "http://127.0.0.1:8080/v1", apiKey: "{env:MANGO_SERVER_KEY_SERVER_1}" },
+              models: { model: {} },
+            },
+          },
+        },
+      })
+
+      const response = yield* Effect.promise(() =>
+        Promise.resolve(app().request("/config", { headers: { "x-opencode-directory": tmp.path } })),
+      )
+
+      expect(response.status).toBe(200)
+      const text = yield* Effect.promise(() => response.text())
+      expect(text).not.toContain("sk-invented-server-key")
+      expect(JSON.parse(text).provider["server-1"].options).toEqual({ baseURL: "http://127.0.0.1:8080/v1" })
+    }),
+  )
 })

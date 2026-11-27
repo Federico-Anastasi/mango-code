@@ -54,7 +54,7 @@
           "attachment": {{OR_ATTACHMENT}},
           "modalities": { "input": {{OR_INPUT_MODALITIES}}, "output": ["text"] },
           "temperature": true,
-          "limit": { "context": {{OR_CTX}}, "output": {{OR_OUTPUT}} },
+          "limit": { "context": {{OR_CTX}}, "output": {{OR_CTX}} },
           "cost": { "input": {{OR_COST_IN}}, "output": {{OR_COST_OUT}}, "cache_read": {{OR_COST_CACHE}} },
           "variants": {
             "low": { "reasoning": { "effort": "low" } },
@@ -104,13 +104,7 @@
     "auto": true,
     "prune": false
   },
-  "_compaction": "prune false: pruning old tool outputs changes the old part of the conversation and the engine re-reads everything after it. Auto compaction summarizes once when the context is full.",
-
-  "skills": {
-    "paths": ["{{SELF}}\\mango-plugin\\skills"]
-  },
-
-  "instructions": ["{{SELF}}\\opencode-home\\MANGO.md"{{ROLE_INSTRUCTIONS}}],
+  "_compaction": "prune false: pruning old tool outputs changes the old part of the conversation and the engine re-reads everything after it. Auto compaction summarizes once when 90% of the context is used (earlier on a small context, which keeps 8,192 tokens free).",
 
   "plugin": [{{PLUGIN_LIST}}],
   "_plugin": "Normally empty: the plugins in the plugin folder next to this file load by themselves. Filled only for the Team manager, whose config folder is elsewhere, with absolute paths (for the dev it would load the plugin twice).",

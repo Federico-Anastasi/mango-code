@@ -1,4 +1,4 @@
-// mango-code: every way into the settings opens the page in its tab (`settings-page.tsx`): the gear and «Impostazioni»
+// mango-code: every way into the settings opens the page in its tab (`settings-page.tsx`): the gear and «Settings»
 // on the last section seen, the other doors on their section and row.
 import { makeEventListener } from "@solid-primitives/event-listener"
 import { onMount } from "solid-js"

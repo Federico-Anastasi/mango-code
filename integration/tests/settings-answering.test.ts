@@ -55,7 +55,7 @@ afterAll(() => {
 test("while a conversation answers the settings open and say, at the top, who is answering and what applies when", async () => {
   await mouseClick('[aria-label="Nuova conversazione"]');
   await waitUntil(() => exists('[contenteditable="true"]'), "the composer of a new conversation");
-  await p.evaluate(`(() => { const el = document.querySelector('[contenteditable="true"]'); el.focus(); document.execCommand('insertText', false, "Scrivi il riepilogo di ottobre"); })()`);
+  await p.evaluate(`(() => { const el = document.querySelector('[contenteditable="true"]'); el.focus(); document.execCommand('insertText', false, "Write the October summary"); })()`);
   await Bun.sleep(300);
   await p.send("Input.dispatchKeyEvent", { type: "keyDown", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, text: "\r" });
   await p.send("Input.dispatchKeyEvent", { type: "keyUp", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 });

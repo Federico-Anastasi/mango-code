@@ -23,7 +23,7 @@ const KEY = "sk-or-v1-test-key";
 const MINIMAL_LAUNCH = path.join(ROOT, "launch-minimal.json");
 const MANAGER = { MANGO_TEAM_ROLE: "manager", MANGO_TEAM_AGENT: "team", MANGO_TEAM_LAUNCH: MINIMAL_LAUNCH };
 
-const VARIABLES = ["MANGO_TEAM_ROLE", "MANGO_TEAM_AGENT", "MANGO_TEAM_DIR", "MANGO_TEAM_LAUNCH", "MANGO_AGENT_MAX", "MANGO_AGENT_DIR", "MANGO_AGENT_ID", "MANGO_HOME", "MANGO_OPENROUTER_KEY"];
+const VARIABLES = ["MANGO_TEAM_ROLE", "MANGO_TEAM_AGENT", "MANGO_TEAM_DIR", "MANGO_TEAM_LAUNCH", "MANGO_AGENT_MAX", "MANGO_AGENT_DIR", "MANGO_AGENT_ID", "MANGO_HOME", "MANGO_OPENROUTER_KEY", "MANGO_APP_RUN"];
 let loads = 0;
 const copies: string[] = [];
 
@@ -83,7 +83,7 @@ describe("the manager is an agent of the app's server", () => {
     expect(link("team-link-manager.json")).toEqual({ serverUrl: "http://127.0.0.1:1", sessionID: "of-the-team", directory: PROJECT, agent: "team", model });
 
     // the manager's instructions enter only the team's conversation
-    const manager = fs.readFileSync(path.join(LAUNCHER, "opencode-home", "MANGO-manager.md"), "utf8");
+    const manager = fs.readFileSync(path.join(LAUNCHER, "harness", "shared", "team-manager.md"), "utf8");
     const team = { system: ["base"] };
     await p["experimental.chat.system.transform"]({ sessionID: "of-the-team" }, team);
     expect(team.system).toEqual(["base", manager]);
@@ -109,7 +109,8 @@ describe("the manager is an agent of the app's server", () => {
     expect(await names({})).toEqual([...base, ...agents].sort());
   });
 
-  test("the dev's answer reaches the manager with its agent, its model and its project", async () => {
+  /** The manager's server: what reaches the manager's conversation, and the link that points at it. */
+  async function managerServer() {
     const received: { id: string; folder: string | null; body: any }[] = [];
     const server = Bun.serve({
       hostname: "127.0.0.1",
@@ -121,19 +122,44 @@ describe("the manager is an agent of the app's server", () => {
         return new Response(null, { status: 204 });
       },
     });
+    const model = { providerID: "openrouter", modelID: "deepseek/x" };
+    fs.writeFileSync(
+      path.join(TEAM, "team-link-manager.json"),
+      JSON.stringify({ serverUrl: `http://127.0.0.1:${server.port}`, sessionID: "ses_m", directory: PROJECT, agent: "team", model }),
+    );
+    return { received, model, server };
+  }
+
+  test("the dev's answer reaches the manager with its agent, its model and its project, marked as the Team's and not the user's", async () => {
+    const { received, model, server } = await managerServer();
     try {
-      const model = { providerID: "openrouter", modelID: "deepseek/x" };
-      fs.writeFileSync(
-        path.join(TEAM, "team-link-manager.json"),
-        JSON.stringify({ serverUrl: `http://127.0.0.1:${server.port}`, sessionID: "ses_m", directory: PROJECT, agent: "team", model }),
-      );
       const dev = await plugin({ MANGO_TEAM_ROLE: "dev" });
       const outcome = await dev.tool.ask_manager.execute({ message: "done" }, {});
       expect(outcome).toContain("Message sent to the manager");
       expect(received).toHaveLength(1);
       expect(received[0].id).toBe("ses_m");
       expect(decodeURIComponent(received[0].folder!)).toBe(PROJECT);
-      expect(received[0].body).toEqual({ parts: [{ type: "text", text: "[DEV]\ndone" }], agent: "team", model });
+      expect(received[0].body).toEqual({ parts: [{ type: "text", text: "[DEV]\ndone", metadata: { team: { kind: "report" } } }], agent: "team", model });
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test("an agent's message and the automatic notice of a turn that ended without one carry the Team's mark and who wrote them", async () => {
+    const { received, server } = await managerServer();
+    try {
+      const agent = await plugin({ MANGO_TEAM_ROLE: "agent", MANGO_AGENT_ID: "2" });
+      await agent.tool.ask_manager.execute({ message: "prices checked" }, {});
+      expect(received[0].body.parts).toEqual([{ type: "text", text: "[AGENT 2]\nprices checked", metadata: { team: { kind: "report", agent: "2" } } }]);
+
+      const dev = await plugin({ MANGO_TEAM_ROLE: "dev" });
+      await dev["chat.message"]({ sessionID: "ses_dev" }, { parts: [{ type: "text", text: "work" }] });
+      const idle = { event: { type: "session.idle", properties: { sessionID: "ses_dev" } } };
+      await dev.event(idle); // the reminder to the dev itself
+      await dev.event(idle);
+      const notice = received[received.length - 1].body.parts[0];
+      expect(notice.text).toStartWith("[DEV] (automatic: turn ended without ask_manager)");
+      expect(notice.metadata).toEqual({ team: { kind: "automatic" } });
     } finally {
       server.stop(true);
     }
@@ -160,6 +186,7 @@ describe("hidden dev and agents", () => {
       MANGO_AGENT_MAX: "2",
       MANGO_AGENT_DIR: path.join(TEAM, "mango-agents"),
       MANGO_OPENROUTER_KEY: KEY,
+      MANGO_APP_RUN: "run-x",
     });
     // the manager already has a conversation: it has its link
     await manager["chat.message"]({ sessionID: "ses_m", agent: "team" });
@@ -179,6 +206,7 @@ describe("hidden dev and agents", () => {
     expect(start.env.OPENCODE_CONFIG_DIR).toBe(path.join(TEAM, "dev-home"));
     expect(start.env.XDG_DATA_HOME).toBe(path.join(TEAM, "dev", "data"));
     expect(start.env.MANGO_OPENROUTER_KEY).toBe(KEY); // inherited from the server, not from a file
+    expect(start.env.MANGO_TEAM_HIDDEN).toBe("run-x"); // what the app stops when it restarts the agent
     const texts = entries.filter((v) => v.type === "message").map((v) => v.text);
     expect(texts[0]).toStartWith("[START] You are the DEV");
     expect(texts[1]).toBe("read the README");
@@ -207,5 +235,132 @@ describe("hidden dev and agents", () => {
 
     expect(await manager.tool.close_agent.execute({ agent: "1" }, {})).toContain("Agent 1 closed");
     expect(await manager.tool.list_agents.execute({}, {})).toContain("agent 1: not started");
+  }, 60_000);
+});
+
+describe("the Team ends", () => {
+  const registry = () => (globalThis as Record<symbol, any>)[Symbol.for("mango.team")];
+  const pidOf = (file: string) => Number(fs.readFileSync(path.join(TEAM, file), "utf8"));
+  const alive = (pid: number) => {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  const killAll = () => {
+    for (const f of ["dev.pid", "mango-agents/agent-1.pid"]) {
+      try {
+        spawnSync("taskkill", ["/PID", String(pidOf(f)), "/T", "/F"]);
+      } catch {}
+    }
+  };
+  const until = async (what: string, check: () => boolean) => {
+    for (let i = 0; i < 100 && !check(); i++) await Bun.sleep(100);
+    if (!check()) throw new Error(`timed out waiting for ${what}`);
+  };
+
+  // The conversation's server: what the plugin asks of it (stop an answer, write a line in the conversation).
+  let calls: { path: string; body: any }[] = [];
+  let server: ReturnType<typeof Bun.serve>;
+  let manager: Record<string, any>;
+  let devPid = 0;
+  let agentPid = 0;
+
+  beforeAll(() => {
+    server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      async fetch(req) {
+        const body = req.method === "POST" ? await req.json().catch(() => null) : null;
+        calls.push({ path: new URL(req.url).pathname, body });
+        return Response.json(new URL(req.url).pathname.endsWith("/abort") ? true : { info: {}, parts: [] });
+      },
+    });
+  });
+  afterAll(() => {
+    killAll();
+    server.stop(true);
+  });
+
+  /** A Team with the dev and agent 1 started; `instruction`: whether the dev was given work (the agent only said it was ready). */
+  async function team(instruction: boolean) {
+    killAll();
+    calls = [];
+    fs.rmSync(TEAM, { recursive: true, force: true });
+    fs.mkdirSync(TEAM, { recursive: true });
+    const spec = async (name: string) => ({ port: await freePort(), config: path.join(TEAM, `${name}-home`), xdg: path.join(TEAM, name) });
+    const launchFile = path.join(TEAM, "launch.json");
+    fs.writeFileSync(launchFile, JSON.stringify({ exe: FAKE, dev: await spec("dev"), agents: [{ id: 1, ...(await spec("agent-1")) }] }));
+    manager = await plugin(
+      { MANGO_TEAM_ROLE: "manager", MANGO_TEAM_AGENT: "team", MANGO_TEAM_LAUNCH: launchFile, MANGO_AGENT_MAX: "1", MANGO_AGENT_DIR: path.join(TEAM, "mango-agents") },
+      `http://127.0.0.1:${server.port}`,
+    );
+    await manager["chat.message"]({ sessionID: "ses_m", agent: "team" });
+    expect(await manager.tool.ask_dev.execute({ instruction: instruction ? "work on it" : "[START] wait" }, {})).toContain("Instruction sent");
+    expect(await manager.tool.launch_agent.execute({ agent: "1" }, {})).toContain("started and connected");
+    devPid = pidOf("dev.pid");
+    agentPid = pidOf("mango-agents/agent-1.pid");
+    expect(alive(devPid) && alive(agentPid)).toBe(true);
+  }
+
+  const answering = (sessionID: string) => manager.event({ event: { type: "session.status", properties: { sessionID, status: { type: "busy" } } } });
+  const ended = async () => {
+    await until("the dev and the agent to end", () => !alive(devPid) && !alive(agentPid));
+    for (const f of ["dev.pid", "team-link.json", "mango-agents/agent-1.pid", "team-link-agent-1.json"]) expect(fs.existsSync(path.join(TEAM, f))).toBe(false);
+  };
+  const notices = () => calls.filter((c) => c.path === "/session/ses_m/message");
+
+  test("turning it off in a working conversation ends the dev and the agents, cuts the manager's answer and says so", async () => {
+    await team(true);
+    await answering("ses_m");
+
+    expect(await registry().stop("ses_m")).toEqual({ working: true, failed: [] });
+
+    await ended();
+    expect(calls.filter((c) => c.path === "/session/ses_m/abort")).toHaveLength(1);
+    expect(notices()).toHaveLength(1);
+    const part = notices()[0].body.parts[0];
+    expect(notices()[0].body.noReply).toBe(true);
+    expect(part.metadata).toEqual({ team: { kind: "stopped" } });
+    expect(part.text).toContain("stopped");
+  }, 60_000);
+
+  test("with nothing working the Team ends and the conversation says nothing", async () => {
+    await team(false);
+    expect(await registry().stop("ses_m")).toEqual({ working: false, failed: [] });
+    await ended();
+    expect(calls).toEqual([]);
+  }, 60_000);
+
+  test("a Team without a conversation answering but with the dev at work is stopped and the line goes to its conversation", async () => {
+    await team(true);
+    expect(await registry().stop()).toEqual({ working: true, failed: [] });
+    await ended();
+    expect(calls.filter((c) => c.path.endsWith("/abort"))).toEqual([]);
+    expect(notices()).toHaveLength(1);
+  }, 60_000);
+
+  test("deleting or archiving the conversation ends its Team, silently", async () => {
+    await team(true);
+    await manager.event({ event: { type: "session.updated", properties: { info: { id: "ses_m", time: { created: 1, updated: 2 } } } } });
+    expect(alive(devPid)).toBe(true);
+    await manager.event({ event: { type: "session.updated", properties: { info: { id: "ses_m", time: { created: 1, updated: 2, archived: 3 } } } } });
+    await ended();
+
+    await team(true);
+    await manager.event({ event: { type: "session.deleted", properties: { info: { id: "ses_m" } } } });
+    await ended();
+    expect(calls).toEqual([]);
+  }, 120_000);
+
+  test("another conversation of the Team going away leaves this one's Team running", async () => {
+    await team(true);
+    await manager["chat.message"]({ sessionID: "ses_other", agent: "team" });
+    await manager["chat.message"]({ sessionID: "ses_m", agent: "team" });
+    await manager.event({ event: { type: "session.deleted", properties: { info: { id: "ses_other" } } } });
+    await Bun.sleep(500);
+    expect(alive(devPid) && alive(agentPid)).toBe(true);
   }, 60_000);
 });

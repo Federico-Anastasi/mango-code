@@ -299,30 +299,12 @@ export interface Hooks {
    * Called before session compaction starts. Allows plugins to customize
    * the compaction prompt.
    *
-   * - `context`: Additional context strings appended to the default prompt
-   * - `prompt`: If set, replaces the default compaction prompt entirely
+   * - `context`: Additional context strings appended to the instruction
+   * - `prompt`: If set, replaces the instruction of the harness entirely
    */
   "experimental.session.compacting"?: (
     input: { sessionID: string },
     output: { context: string[]; prompt?: string },
-  ) => Promise<void>
-  /**
-   * Called after compaction succeeds and before a synthetic user
-   * auto-continue message is added.
-   *
-   * - `enabled`: Defaults to `true`. Set to `false` to skip the synthetic
-   *   user "continue" turn.
-   */
-  "experimental.compaction.autocontinue"?: (
-    input: {
-      sessionID: string
-      agent: string
-      model: Model
-      provider: ProviderContext
-      message: UserMessage
-      overflow: boolean
-    },
-    output: { enabled: boolean },
   ) => Promise<void>
   "experimental.text.complete"?: (
     input: { sessionID: string; messageID: string; partID: string },

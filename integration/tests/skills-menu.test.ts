@@ -73,6 +73,6 @@ test("a skill added while the window was in the background is in the menu when t
 
 test("a skill added during a turn, as the model may do, is in the menu when the turn ends", async () => {
   addSkill("polish");
-  for await (const _ of mc.turn(id, env.project, "Ciao", { model: "fake" }));
+  for await (const _ of mc.turn(id, env.project, "Hello", { model: "fake" }));
   expect(await menuOffers("polish")).toBe(true);
 }, 60_000);

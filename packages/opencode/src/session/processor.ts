@@ -27,10 +27,12 @@ import { Database } from "@opencode-ai/core/database/database"
 import { Usage, type LLMEvent } from "@opencode-ai/llm"
 import { savedTimings } from "@/provider/engine-timings"
 import { toolInputProgress } from "./tool-input-progress"
+import { ARGUMENTS, CHECK_EVERY, TEXT, repeatedAt, type Rule } from "./repetition"
 
 const DOOM_LOOP_THRESHOLD = 3
-/** `blank`: the answer was cut because it went on with blank characters only. */
-export type Result = "compact" | "stop" | "continue" | "blank"
+/** `blank`: the answer was cut because it went on with blank characters only. `repeat`: it was cut because it wrote the
+ *  same text again and again. `called`: an answer that had to be a summary called a tool. */
+export type Result = "compact" | "stop" | "continue" | "blank" | "repeat" | "called"
 
 // A small model sometimes ends a sentence and then writes line breaks until the answer's token limit: minutes in
 // which the user sees nothing happen. No text ends with this many blank characters: the answer is cut there.
@@ -77,7 +79,10 @@ interface ProcessorContext extends Input {
   snapshot: string | undefined
   blocked: boolean
   needsCompaction: boolean
-  blank: boolean
+  /** Why the answer is being cut: after the cut what arrives is not part of it. */
+  cut: "blank" | "repeat" | "called" | undefined
+  /** The length of the text of a part (its id) when it was last looked at for a repetition. */
+  checked: Record<string, number>
   currentText: SessionV1.TextPart | undefined
   reasoningMap: Record<string, SessionV1.ReasoningPart>
   /** Incoming parameters of the tools still being dictated, for the progress. */
@@ -90,6 +95,10 @@ const TOOL_INPUT_PROGRESS_MS = 250
 type StreamEvent = LLMEvent
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/SessionProcessor") {}
+
+// mango-code: llama.cpp says it could not read a call with the format it expected, or with arguments that are not JSON
+const unreadable = (error: unknown) =>
+  /does not match the expected .+ format|Failed to parse tool call/i.test(errorMessage(error))
 
 const layer = Layer.effect(
   Service,
@@ -122,12 +131,21 @@ const layer = Layer.effect(
         snapshot: initialSnapshot,
         blocked: false,
         needsCompaction: false,
-        blank: false,
+        cut: undefined,
+        checked: {},
         currentText: undefined,
         reasoningMap: {},
         toolInput: {},
       }
       let aborted = false
+
+      // The text of a part is looked at again once enough of it came since the last look: what it ends with is the same
+      // text repeated, or not. `undefined`: not a loop, or not time to look; else the length of the text to keep.
+      const looping = (key: string, text: string, rule: Rule) => {
+        if (text.length - (ctx.checked[key] ?? 0) < CHECK_EVERY) return undefined
+        ctx.checked[key] = text.length
+        return repeatedAt(text, rule)
+      }
 
       const parse = (e: unknown) =>
         MessageV2.fromError(e, {
@@ -292,7 +310,13 @@ const layer = Layer.effect(
 
       const handleEvent = Effect.fnUntraced(function* (value: StreamEvent) {
         // what arrives after the cut is not part of the answer: its end would close a turn that is asked again
-        if (ctx.blank) return
+        if (ctx.cut) return
+        // a request for a summary declares the tools but runs none: a call ends the answer, and the summary is written
+        // without the model (`SessionCompaction.complete`)
+        if (ctx.assistantMessage.summary && value.type.startsWith("tool-")) {
+          ctx.cut = "called"
+          return
+        }
         switch (value.type) {
           case "reasoning-start":
             if (value.id in ctx.reasoningMap) return
@@ -320,6 +344,17 @@ const layer = Layer.effect(
               field: "text",
               delta: value.text,
             })
+            const thought = ctx.reasoningMap[value.id]
+            if (thought.text.length - thought.text.trimEnd().length >= BLANK_RUN) {
+              thought.text = thought.text.trimEnd()
+              ctx.cut = "blank"
+              return
+            }
+            const keptThought = looping(thought.id, thought.text, TEXT)
+            if (keptThought === undefined) return
+            thought.text = thought.text.slice(0, keptThought)
+            thought.metadata = { ...thought.metadata, harness: { repeated: true } }
+            ctx.cut = "repeat"
             return
 
           case "reasoning-end":
@@ -330,9 +365,6 @@ const layer = Layer.effect(
             return
 
           case "tool-input-start":
-            if (ctx.assistantMessage.summary) {
-              throw new Error(`Tool call not allowed while generating summary: ${value.name}`)
-            }
             yield* ensureToolCall(value)
             return
 
@@ -340,6 +372,12 @@ const layer = Layer.effect(
             if (!(value.id in ctx.toolcalls)) yield* ensureToolCall(value)
             const typing = (ctx.toolInput[value.id] ??= { text: "", sentAt: 0 })
             typing.text += value.text
+            if (looping(value.id, typing.text, ARGUMENTS) !== undefined) {
+              ctx.cut = "repeat"
+              delete ctx.toolInput[value.id]
+              yield* updateToolCall(value.id, (match) => ({ ...match, metadata: { ...match.metadata, harness: { repeated: true } } }))
+              return
+            }
             const now = Date.now()
             if (now - typing.sentAt < TOOL_INPUT_PROGRESS_MS) return
             typing.sentAt = now
@@ -358,9 +396,6 @@ const layer = Layer.effect(
           }
 
           case "tool-call": {
-            if (ctx.assistantMessage.summary) {
-              throw new Error(`Tool call not allowed while generating summary: ${value.name}`)
-            }
             yield* ensureToolCall(value)
             delete ctx.toolInput[value.id]
             const input = isRecord(value.input) ? value.input : { value: value.input }
@@ -484,7 +519,12 @@ const layer = Layer.effect(
               usage: value.usage ?? new Usage({}),
               metadata: value.providerMetadata,
             })
-            ctx.assistantMessage.finish = value.reason
+            // an answer cut for its length with no room left for the summary has no room to go on: the summary comes
+            // next, not a second try (the message's finish says so, for the loop and for the interface)
+            const full =
+              !ctx.assistantMessage.summary &&
+              isOverflow({ cfg: yield* config.get(), tokens: usage.tokens, model: ctx.model })
+            ctx.assistantMessage.finish = full && value.reason === "length" ? "context" : value.reason
             ctx.assistantMessage.cost += usage.cost
             ctx.assistantMessage.tokens = usage.tokens
             // The step's message is published by reference and the cleanup below completes it a moment later: the
@@ -523,12 +563,7 @@ const layer = Layer.effect(
                 messageID: ctx.assistantMessage.parentID,
               })
               .pipe(Effect.ignore, Effect.forkIn(scope))
-            if (
-              !ctx.assistantMessage.summary &&
-              isOverflow({ cfg: yield* config.get(), tokens: usage.tokens, model: ctx.model })
-            ) {
-              ctx.needsCompaction = true
-            }
+            if (full) ctx.needsCompaction = true
             return
           }
 
@@ -558,8 +593,14 @@ const layer = Layer.effect(
             })
             if (ctx.currentText.text.length - ctx.currentText.text.trimEnd().length >= BLANK_RUN) {
               ctx.currentText.text = ctx.currentText.text.trimEnd()
-              ctx.blank = true
+              ctx.cut = "blank"
+              return
             }
+            const keep = looping(ctx.currentText.id, ctx.currentText.text, TEXT)
+            if (keep === undefined) return
+            ctx.currentText.text = ctx.currentText.text.slice(0, keep)
+            ctx.currentText.metadata = { ...ctx.currentText.metadata, harness: { repeated: true } }
+            ctx.cut = "repeat"
             return
 
           case "text-end":
@@ -653,8 +694,8 @@ const layer = Layer.effect(
             yield* status.set(ctx.sessionID, { type: "idle" })
             return
           }
+          // the summary takes care of it (or, for a request for a summary, a shorter request): no error to show yet
           ctx.needsCompaction = true
-          yield* events.publish(Session.Event.Error, { sessionID: ctx.sessionID, error })
           return
         }
         ctx.assistantMessage.error = error
@@ -671,7 +712,8 @@ const layer = Layer.effect(
           messageID: input.assistantMessage.id,
         })
         ctx.needsCompaction = false
-        ctx.blank = false
+        ctx.cut = undefined
+        ctx.checked = {}
         ctx.shouldBreak = (yield* config.get()).experimental?.continue_loop_on_deny !== true
 
         return yield* Effect.gen(function* () {
@@ -689,7 +731,7 @@ const layer = Layer.effect(
 
             yield* stream.pipe(
               Stream.tap((event) => handleEvent(event)),
-              Stream.takeUntil(() => ctx.needsCompaction || ctx.blank),
+              Stream.takeUntil(() => ctx.needsCompaction || ctx.cut !== undefined),
               Stream.runDrain,
             )
           }).pipe(
@@ -705,8 +747,10 @@ const layer = Layer.effect(
               (cause) => !Cause.hasInterruptsOnly(cause),
               (cause) => Effect.fail(Cause.squash(cause)),
             ),
-            Effect.retry(
-              SessionRetry.policy({
+            // mango-code: a call the engine could not read is asked again at once, as many times as the harness says
+            Effect.retry({ times: streamInput.commands?.retries ?? 0, while: unreadable }),
+            Effect.retry({
+              schedule: SessionRetry.policy({
                 parse,
                 set: (info) => {
                   return status.set(ctx.sessionID, {
@@ -717,14 +761,16 @@ const layer = Layer.effect(
                   })
                 },
               }),
-            ),
+              // past the harness's tries a call the engine could not read is the turn's error, as it is for the harness
+              while: (error) => !(streamInput.commands && unreadable(error)),
+            }),
             Effect.catch(halt),
             Effect.ensuring(cleanup()),
           )
 
           if (ctx.needsCompaction) return "compact"
           if (ctx.blocked || ctx.assistantMessage.error) return "stop"
-          if (ctx.blank) return "blank"
+          if (ctx.cut) return ctx.cut
           return "continue"
         })
       })

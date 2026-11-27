@@ -2,15 +2,17 @@
 // Four tools for all the formats: the model chooses the action, not the library. The protocol is spoken
 // by hand (JSON-RPC over stdio, one line per message), like the other Mango Code MCPs. It runs with the
 // bundled Bun runtime: the user's PC has neither Python nor Node.
+import fs from "node:fs";
 import path from "node:path";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
-import { STYLES, operationList, existingFile, writeAtomic } from "./common.mjs";
+import { MAX_READ, STYLES, operationList, existingFile, writeAtomic } from "./common.mjs";
 
 // stdout is the protocol channel: any message from the libraries goes to stderr.
 console.log = console.warn = console.error;
 
 const FORMATS = ["docx", "xlsx", "pptx", "pdf"];
+const OLD_OFFICE = ["doc", "xls", "ppt"];
 
 const MODULES = {
   docx: { create: () => import("./docx.mjs").then((m) => m.createDocx), edit: () => import("./docx-edit.mjs") },
@@ -93,12 +95,12 @@ const TOOLS = [
   },
   {
     name: "read",
-    description: "Reads a Word, Excel, PowerPoint or PDF file and returns its content with the structure: headings, tables, FORMULAS and values of the sheets, slides with notes, PDF form fields. Use it before editing a file and instead of read for these formats. If the text is long it is truncated and says how to continue with 'part'.",
+    description: "Reads a Word, Excel, PowerPoint or PDF file and returns its content with the structure: headings, tables, FORMULAS and values of the sheets, slides with notes, PDF form fields. Use it before editing a file and instead of read for these formats. Any text file (csv, json, txt and the like) is returned as it is. If the text is long it is truncated and says how to continue with 'part'.",
     inputSchema: {
       type: "object",
       properties: {
         file: { type: "string", description: "Path of the file (or name in the project folder)" },
-        part: { type: "string", description: "Which part: xlsx = name of the sheet, also with a range (Expenses!A1:F80); pptx and pdf = slides or pages (2-4); docx = number of the block (2)" },
+        part: { type: "string", description: "Which part: xlsx = name of the sheet, also with a range (Expenses!A1:F80); pptx and pdf = slides or pages (2-4); docx and text files = number of the block (2)" },
       },
       required: ["file"],
     },
@@ -162,8 +164,45 @@ export async function create({ type, file, content, style, header }) {
   return `File created: ${destination} (${kb(data.length)})${warningList(warnings)}`;
 }
 
+const MB = 1024 * 1024;
+const MAX_TEXT_BYTES = 50 * MB;
+
+/** A file that is not a document: its text, in blocks of at most MAX_READ characters that end with a line. */
+function readText(file, part) {
+  const size = fs.statSync(file).size;
+  if (size > MAX_TEXT_BYTES) throw new Error(`«${path.basename(file)}» is too big to read as text: ${Math.round(size / MB)} MB, the limit is ${MAX_TEXT_BYTES / MB} MB`);
+  const bytes = fs.readFileSync(file);
+  // Notepad and PowerShell 5.1 save in UTF-16 with its byte order mark
+  const utf16 = bytes[0] === 0xff && bytes[1] === 0xfe;
+  const text = (utf16 ? bytes.subarray(2).toString("utf16le") : bytes.toString("utf8")).replace(/^\ufeff/, "");
+  if (text.includes("\0")) throw new Error(`«${path.basename(file)}» is not a text file. This reads text files and ${FORMATS.map((f) => `.${f}`).join(", ")}`);
+  const lines = text.replace(/\r?\n$/, "").split(/\r?\n/);
+  const pieces = lines.flatMap((line) => line.match(new RegExp(`[^]{1,${MAX_READ}}`, "g")) ?? [""]);
+  const groups = [];
+  let used = 0;
+  for (const piece of pieces) {
+    const last = groups.at(-1);
+    if (!last || used + piece.length >= MAX_READ) {
+      groups.push([piece]);
+      used = piece.length;
+    } else {
+      last.push(piece);
+      used += 1 + piece.length;
+    }
+  }
+  const n = part === undefined ? 1 : Number(part);
+  if (!Number.isInteger(n) || n < 1 || n > groups.length) throw new Error(`invalid part «${part}»: the file is read in ${groups.length} ${groups.length === 1 ? "part (the 1st)" : `parts (1 to ${groups.length})`}`);
+  const head = [
+    `Text file: ${path.basename(file)} — ${lines.length} lines.`,
+    groups.length > 1 ? `Part ${n} of ${groups.length}${n < groups.length ? ` (continue with part=${n + 1})` : ""}` : "",
+  ].filter(Boolean);
+  return `${head.join("\n")}\n\n${groups[n - 1].join("\n") || "(the file is empty)"}`;
+}
+
 export async function read({ file, part }) {
   existingFile(file);
+  const ext = path.extname(file).toLowerCase().slice(1);
+  if (!FORMATS.includes(ext) && !OLD_OFFICE.includes(ext)) return readText(file, part === undefined || part === null ? undefined : String(part));
   const format = formatOf(file);
   const { read: readFile } = await MODULES[format].edit();
   return readFile(file, { part: part === undefined || part === null ? undefined : String(part) });

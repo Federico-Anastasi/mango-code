@@ -99,7 +99,7 @@ test("on: the code gives the models and a reply in pieces; a wrong or missing ke
   expect(wrong.status).toBe(401);
   expect((await wrong.json()).error.message).toContain("chiave");
   expect((await fetch(`http://${c.address}/mango/models`)).status).toBe(401);
-  expect((await c.get("/v1/models", c.key.slice(0, 47) + "0")).status).toBe(401);
+  expect((await c.get("/v1/models", c.key.slice(0, 47) + (c.key.endsWith("0") ? "1" : "0"))).status).toBe(401);
 });
 
 test("the GPUs' routes and the engine's writes stay on the PC", async () => {

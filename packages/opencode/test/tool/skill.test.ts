@@ -91,6 +91,21 @@ Use this skill.
     }),
   )
 
+  it.instance("a skill built into the agent is given with its text and no folder", () =>
+    Effect.gen(function* () {
+      const registry = yield* ToolRegistry.Service
+      const agent = { name: "build", mode: "primary" as const, permission: [], options: {} }
+      const tool = (yield* registry.tools({ agent })).find((tool) => tool.id === SkillTool.id)
+      if (!tool) throw new Error("Skill tool not found")
+      const result = yield* tool.execute({ name: "word" }, { ...baseCtx, ask: () => Effect.void })
+      expect(result.output).toStartWith('<skill_content name="word">\n# Skill: word\n\n')
+      expect(result.output).toEndWith("\n\n</skill_content>")
+      expect(result.output).not.toContain("Base directory")
+      expect(result.output).not.toContain("<skill_files>")
+      expect(result.output).not.toMatch(/[a-z]:\\|SKILL\.md/i)
+    }),
+  )
+
   it.instance("execute says a skill removed after the start no longer exists", () =>
     Effect.gen(function* () {
       const dir = (yield* TestInstance).directory

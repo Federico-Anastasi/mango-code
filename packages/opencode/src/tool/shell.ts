@@ -28,6 +28,7 @@ import { LeftRunning } from "./shell/left-running"
 import { Session } from "@/session/session"
 import type { SessionID } from "@/session/schema"
 import { which } from "@opencode-ai/core/util/which"
+import { withoutKeys } from "@/util/mango-secrets"
 import { BashArity } from "@/permission/arity"
 
 export { Parameters } from "./shell/prompt"
@@ -303,8 +304,9 @@ const ask = Effect.fn("ShellTool.ask")(function* (ctx: Tool.Context, scan: Scan,
 // command. In PowerShell 7 on the same line: it prints a longer error for a script of several lines. PowerShell 5.1
 // quotes the whole line of an error, so there the command starts on a line of its own and the quote is only the
 // model's text; its errors then count lines from 2, and the notes of the prompt say so. Running the command as a
-// script block keeps line 1 but changes exit codes, parse errors and `return`: measured and left out.
-const PS_UTF8 = "[Console]::OutputEncoding=[Text.Encoding]::UTF8;"
+// script block keeps line 1 but changes exit codes, parse errors and `return`: measured and left out. On a Windows in
+// another language its errors are in that language: they are asked in English, which the model reads best.
+const PS_SETUP = "[Threading.Thread]::CurrentThread.CurrentUICulture='en-US';[Console]::OutputEncoding=[Text.Encoding]::UTF8;"
 
 // cmd has the same trouble: its messages and the programs that follow the console are written in the code page of the
 // computer. `chcp` changes the page, but a cmd takes it once, when it starts, and converts everything it writes with
@@ -322,7 +324,7 @@ const CMD_MAX = 8175
 function cmd(shell: string, command: string, cwd: string, env: NodeJS.ProcessEnv) {
   if (process.platform === "win32" && Shell.ps(shell)) {
     const name = Shell.name(shell)
-    const prefix = name === "powershell" ? PS_UTF8 + "\n" : PS_UTF8
+    const prefix = name === "powershell" ? PS_SETUP + "\n" : PS_SETUP
     return ChildProcess.make(shell, ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", prefix + command], {
       cwd,
       // PowerShell 7 colours its errors with escape codes even when nobody is looking: the model reads them as text.
@@ -463,7 +465,7 @@ export const ShellTool = Tool.define(
         { env: {} },
       )
       return {
-        ...process.env,
+        ...withoutKeys(process.env),
         ...extra.env,
       }
     })

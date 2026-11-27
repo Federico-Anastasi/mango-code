@@ -92,7 +92,7 @@ impl Options {
 
 /// The PC as it is: GPUs of every brand, processor, RAM, and the general engine's build that suits it.
 fn hardware() -> Result<Value> {
-    let hw = engine_cfg::detect()?;
+    let hw = engine_cfg::detect_bare()?;
     Ok(json!({
         "gpus": hw.gpus.iter().map(|g| json!({
             "index": g.index, "name": g.name, "vendor": g.vendor, "memory_mib": g.memory_mib,
@@ -325,6 +325,7 @@ fn measure_tune(p: &mut Trial, points: &[String], point_tokens: &[usize], repeat
             gpus_used: Vec::<Gpu>::new(),
             gguf: PathBuf::from(&a.model),
             slots: None,
+            fallback: None,
         })
     });
     let m = EngineManager::new(planner, Box::new(engine_cfg::gpu_memory), &logs);
@@ -404,7 +405,7 @@ fn profile(o: Options) -> Result<()> {
     };
     let gpus: Vec<String> = match o.one("--gpus") {
         Some(s) => s.split(';').map(str::trim).filter(|s| !s.is_empty()).map(String::from).collect(),
-        None => engine_cfg::detect()?.gpus.into_iter().map(|g| g.name).collect(),
+        None => engine_cfg::detect_bare()?.gpus.into_iter().map(|g| g.name).collect(),
     };
     let id = o.one("--id").map(String::from).unwrap_or_else(|| format!("my-pc/{model}"));
     let j = tune::profile(trial, &id, model, &engine, &build, &gpus, o.one("--note").unwrap_or(""))?;

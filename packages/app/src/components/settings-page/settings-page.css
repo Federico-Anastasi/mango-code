@@ -361,13 +361,26 @@
   border-top: 1px solid var(--mango-line);
 }
 
+/* a choice of a model as every row of the suite: its name and what it does on the left, the control on the right, what
+   it opens on (the cards, the values) below the whole row */
 .settings-page-field {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  gap: 8px 16px;
+  gap: 2px 16px;
   padding: 13px 16px;
   min-width: 0;
+}
+
+.settings-page-field > :is([data-slot="segmented-control-v2"], [data-component="select-v2"]) {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  justify-self: end;
+}
+
+.settings-page-field > :not(b, small, [data-slot="segmented-control-v2"], [data-component="select-v2"]) {
+  grid-column: 1 / -1;
+  margin-top: 8px;
 }
 
 .settings-page-field + .settings-page-field,
@@ -376,7 +389,7 @@
 }
 
 .settings-page-field > b {
-  flex: 1 1 140px;
+  grid-column: 1;
   font-size: 13px;
   font-weight: 600;
   line-height: 18px;
@@ -384,7 +397,7 @@
 }
 
 .settings-page-field > small {
-  flex: 1 1 100%;
+  grid-column: 1;
   font-size: 13px;
   line-height: 18px;
   color: var(--mango-text-muted);
@@ -400,7 +413,6 @@
 
 .settings-page-cards {
   display: flex;
-  flex: 1 1 100%;
   flex-wrap: wrap;
   gap: 8px 16px;
 }
@@ -412,10 +424,9 @@
   font-size: 13px;
 }
 
-/* «Personale» of the context: the minus, the number, the plus, and what it can be */
+/* «Custom» of the context: the minus, the number, the plus, and what it can be */
 .settings-page-context-custom {
   display: flex;
-  flex: 1 1 100%;
   flex-wrap: wrap;
   align-items: center;
   gap: 8px;
@@ -430,7 +441,6 @@
 /* the six values of the style, written one by one */
 .settings-page-values {
   display: grid;
-  flex: 1 1 100%;
   grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
   gap: 10px 16px;
 }
@@ -508,7 +518,7 @@
   color: var(--mango-text-muted);
 }
 
-/* «Un altro modello»: a link is long, the box takes the room up to the buttons */
+/* «Another model»: a link is long, the box takes the room up to the buttons */
 [data-action="settings-other-model-search"] [data-component="text-input-v2"] {
   width: 100%;
 }
@@ -652,6 +662,91 @@
   padding-inline: 0;
 }
 
+/* Agent: the harnesses, the one shown with the background of the active entry */
+.settings-page-harness[aria-current="true"] {
+  background: var(--mango-raised);
+}
+
+.settings-page-harness-pick {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.settings-page-harness [data-component="text-input-v2"] {
+  max-width: 280px;
+}
+
+/* a text the model reads: as it is, or to be changed */
+.settings-page-edit {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 4px 16px 13px;
+}
+
+.settings-page-text {
+  margin: 0;
+  max-height: 320px;
+  overflow: auto;
+  padding: 10px 12px;
+  border: 1px solid var(--mango-line);
+  border-radius: 7px;
+  background: var(--mango-ground);
+  color: var(--mango-text-muted);
+  font-family: var(--mango-font-code);
+  font-size: 12.5px;
+  font-variant-ligatures: none;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.settings-page-edit [data-slot="textarea-v2-textarea"] {
+  font-family: var(--mango-font-code);
+  font-size: 12.5px;
+  font-variant-ligatures: none;
+  line-height: 1.6;
+}
+
+.settings-page-edit-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+/* a hook or a tool of a harness: the row opens on its text */
+.settings-page-hook + .settings-page-hook {
+  border-top: 1px solid var(--mango-line);
+}
+
+.settings-page-hook-open {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.settings-page-number {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--mango-text-muted);
+}
+
 /* --- A narrow screen: two screens, the sections and the one chosen (the bar has the way back); what is touched is 44 px */
 @media (max-width: 639px) {
   .settings-page-nav {
@@ -721,6 +816,18 @@
   .settings-page-field,
   [data-component="settings-v2-row"] {
     min-height: 52px;
+  }
+
+  /* the control goes under the name when there is no room beside it */
+  .settings-page-field {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .settings-page-field > :is([data-slot="segmented-control-v2"], [data-component="select-v2"]) {
+    grid-column: 1;
+    grid-row: auto;
+    justify-self: start;
+    margin-top: 6px;
   }
 
   /* a control the thumb can find: the segments, the plus and minus and the switch reach 44 px */

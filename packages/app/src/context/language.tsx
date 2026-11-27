@@ -33,11 +33,14 @@ type PluralKey =
   | "session.followupDock.summary"
   | "session.revertDock.summary"
   | "settings.computer.tailored.models"
+  | "settings.links.servers.count"
+  | "settings.links.servers.models"
   | "settings.move.models"
   | "settings.agent.count.tools"
   | "settings.agent.count.mcp"
   | "settings.agent.count.skills"
   | "settings.agent.count.files"
+  | "settings.agent.count.hooks"
 type Source = { dict: Record<string, string> }
 
 function cookie(locale: Locale) {

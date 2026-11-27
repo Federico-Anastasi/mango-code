@@ -34,13 +34,13 @@ pub use general::Placement;
 pub use image::{image_models, image_plan, image_plan_for, image_views, Draws, ImageCatalog, ImageEntry, ImagePlan, ImageView, ImageViews};
 pub use view::{after_failure, taken_before_start, CardsTaken, computer_view, engine_label, engine_updates, models_view, recommended, AfterFailure, ComputerView, EngineUpdate, Limits, ModelView, Recommendation, Verdict, Where};
 pub use speed::{cpu_speed, Speed};
-pub use hardware::{gpu_memory, detect, choose_build, Cpu, Hardware, Vendor, Gpu};
+pub use hardware::{gpu_memory, detect, detect_bare, choose_build, Cpu, Hardware, Vendor, Gpu};
 pub use profiles::{profile_for, ProfileHardware, Measurements, Profile};
 
 use anyhow::{bail, Result};
 use catalog::{load_models, model_cfg, require, setup_for, ModelsFile, Setup};
 use mango_common::download::installed_engine;
-use mango_common::{tr, PostCall, Paths, ProcSpec};
+use mango_common::{tr, Build, PostCall, Paths, ProcSpec};
 use std::path::{Path, PathBuf};
 
 /// The engine to start and what is needed downstream.
@@ -64,6 +64,10 @@ pub struct EnginePlan {
     /// The slot files the manager keeps for an official llama.cpp engine; `None` for the profiles' engines, which keep
     /// their own on-disk memory.
     pub slots: Option<SlotCache>,
+    /// For a model on the integrated graphics that borrows the PC's memory: the same model on the processor, started once
+    /// in its place when that start does not hold (`Hardware::borrows_ram`). `None` for any other plan, and when the model
+    /// does not fit on the processor.
+    pub fallback: Option<Box<EnginePlan>>,
 }
 
 /// Where and for whom the manager keeps the official engine's slot files (`memory.rs`).
@@ -154,7 +158,7 @@ pub fn plan(paths: &Paths, model_key: Option<&str>, port: u16) -> Result<EngineP
 /// Like `plan`, without the `excluded` GPUs (GPU indexes): they have been released for another job.
 /// A model that needs one doesn't start (error with the reason).
 pub fn plan_excluding(paths: &Paths, model_key: Option<&str>, port: u16, excluded: &[u32]) -> Result<EnginePlan> {
-    plan_for(paths, model_key, port, &detect()?, excluded)
+    plan_for(paths, model_key, port, &detect(paths)?, excluded)
 }
 
 /// Like `plan_excluding`, on given hardware instead of this PC's.
@@ -185,6 +189,37 @@ fn build_plan(
     hw: &Hardware,
     excluded: &[u32],
     read_shape: impl FnOnce(&Path, &str, &str) -> Result<split::ModelShape>,
+) -> Result<EnginePlan> {
+    let processor = Hardware { integrated: false, ..hw.clone() };
+    let key = model_key.unwrap_or(&file.default);
+    if setup_for(paths, key, &model_cfg(file, key)?, hw, &choices::read(paths)?.scope(key).choices).is_ok_and(|s| s.for_integrated(paths, hw)) {
+        return plan_on(paths, file, model_key, port, &processor, excluded, read_shape, None);
+    }
+    let mut plan = plan_on(paths, file, model_key, port, hw, excluded, read_shape, None)?;
+    if plan.gpus_used.iter().any(|g| hw.borrows_ram(g)) {
+        // Without the integrated graphics no card counts, and no profile is measured for such a PC: no GGUF is read.
+        let build = Some(choose_build(hw));
+        plan.fallback = plan_on(paths, file, model_key, port, &processor, excluded, |_, _, _| bail!("no profile without cards"), build)
+            .map_err(|e| mango_common::startup_log(paths, &format!("no plan on the processor for {key} if the integrated graphics fails: {e:#}")))
+            .ok()
+            .map(Box::new);
+    }
+    Ok(plan)
+}
+
+/// `build_plan` without the fallback. `stands_in_for`: the build of the plan this one stands in for on the processor
+/// (`EnginePlan::fallback`): its program runs the model with no card (`-dev none`), so the processor's own build need not
+/// be on the disk.
+#[allow(clippy::too_many_arguments)]
+fn plan_on(
+    paths: &Paths,
+    file: &ModelsFile,
+    model_key: Option<&str>,
+    port: u16,
+    hw: &Hardware,
+    excluded: &[u32],
+    read_shape: impl FnOnce(&Path, &str, &str) -> Result<split::ModelShape>,
+    stands_in_for: Option<Build>,
 ) -> Result<EnginePlan> {
     let key = model_key.unwrap_or(&file.default);
     let cfg = model_cfg(file, key)?;
@@ -245,7 +280,10 @@ fn build_plan(
     let Parts { ctx, gpus_used, env, args: setup_args, args_after, disk_memory } = parts;
     check_left(&cfg.label, &gpus_used, excluded, &unused)?;
     if matches!(setup, Setup::General { .. }) && gpus_used.is_empty() {
-        setup.on_processor();
+        match stands_in_for {
+            Some(build) => setup = Setup::General { build },
+            None => setup.on_processor(),
+        }
     }
     let dir = installed_engine(paths, setup.engine(), setup.build()).ok_or_else(|| {
         user(
@@ -332,6 +370,7 @@ fn build_plan(
         gpus_used,
         gguf,
         slots: slot_cache,
+        fallback: None,
     })
 }
 
@@ -358,6 +397,16 @@ pub(crate) fn profile_fit(cfg: &catalog::ModelCfg, p: &Profile, hw: &Hardware, e
         return Ok((want, manual_gpus(p, gpus)?));
     }
     let available: Vec<Gpu> = gpus.into_iter().filter(|g| !excluded.contains(&g.index)).collect();
+    if available.is_empty() {
+        bail!(
+            "{}",
+            tr!(
+                "Per il modello «{}» non c'è nessuna scheda video da usare: mancano, hanno troppa poca memoria o sono segnate come non usate.",
+                "There is no graphics card to use for the model «{}»: there are none, they have too little memory or they are marked as not used.",
+                cfg.label
+            )
+        );
+    }
     let (ctk, ctv) = cache_types(p);
     let Some(shape) = cfg.shape(ctk, ctv)? else { return Ok((want, available)) };
     let placement = split::partition(&available, &shape, want, p.mtp.is_some(), cfg.encoder_bytes())?;
@@ -366,7 +415,7 @@ pub(crate) fn profile_fit(cfg: &catalog::ModelCfg, p: &Profile, hw: &Hardware, e
 }
 
 /// The cards a profile that declares them by hand uses: those of its `CUDA_VISIBLE_DEVICES`, or all.
-fn manual_gpus(p: &Profile, gpus: Vec<Gpu>) -> Result<Vec<Gpu>> {
+pub(crate) fn manual_gpus(p: &Profile, gpus: Vec<Gpu>) -> Result<Vec<Gpu>> {
     let Some(list) = p.env.get("CUDA_VISIBLE_DEVICES") else { return Ok(gpus) };
     list.split(',')
         .map(|s| {

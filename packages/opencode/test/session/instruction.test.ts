@@ -138,6 +138,7 @@ describe("Instruction.resolve", () => {
         )
         expect(results.length).toBe(1)
         expect(results[0].filepath).toBe(path.join(dir, "subdir", "AGENTS.md"))
+        expect(results[0].content).toBe("Instructions from: subdir/AGENTS.md\n# Subdir Instructions")
       }),
     ),
   )
@@ -222,8 +223,8 @@ describe("Instruction.system", () => {
 
         const rules = yield* svc.system()
         expect(rules).toHaveLength(2)
-        expect(rules[0]).toBe(`Instructions from: ${path.join(globalTmp, "AGENTS.md")}\n# Global Instructions`)
-        expect(rules[1]).toBe(`Instructions from: ${path.join(projectTmp, "AGENTS.md")}\n# Project Instructions`)
+        expect(rules[0]).toBe("Instructions from: AGENTS.md\n# Global Instructions")
+        expect(rules[1]).toBe("Instructions from: AGENTS.md\n# Project Instructions")
       }).pipe(provideInstance(projectTmp), provideInstruction({ home: globalTmp, config: globalTmp }))
     }),
   )

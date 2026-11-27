@@ -181,6 +181,17 @@ describe("Home V2 session index", () => {
     expect(index?.sessions.map((item) => item.id)).toEqual(["b"])
   })
 
+  test("a session archived and then restored comes back to the Home list", () => {
+    const queryClient = new QueryClient()
+    const cache = createHomeSessionIndexCache(queryClient, "server")
+    const sessions = [{ id: "a", time: { created: 1, updated: 1 } }, { id: "b", time: { created: 1, updated: 1 } }] as Session[]
+    queryClient.setQueryData(cache.indexKey, { sessions, eventSequence: 0 })
+    cache.remove("a")
+    cache.apply({ type: "session.updated", properties: { info: { id: "a", time: { created: 1, updated: 2 } } } } as never)
+    const index = queryClient.getQueryData<{ sessions: Session[]; eventSequence: number }>(cache.indexKey)
+    expect(cache.sessions(index, undefined).map((item) => item.id).toSorted()).toEqual(["a", "b"])
+  })
+
   test("keeps the session out of the Home list when the index is not mounted", () => {
     const queryClient = new QueryClient()
     const cache = createHomeSessionIndexCache(queryClient, "server")

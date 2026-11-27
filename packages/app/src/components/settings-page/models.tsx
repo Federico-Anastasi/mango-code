@@ -15,7 +15,7 @@ import { useLanguage } from "@/context/language"
 import { useMango } from "@/context/mango"
 import { contextLabel, type CatalogEntry, type Download } from "@/utils/mango-state"
 import { arrivingRows, diskLabel, downloadLine, removeLines } from "./lines"
-import { ContextField, StyleField } from "./model-choices"
+import { ContextField, HarnessField, StyleField } from "./model-choices"
 import { createModelMove, ModelMoveActions, ModelMoveBack, ModelMoveStatus, WithPaths } from "./models-folder"
 import { cardsText } from "@/components/mango-text"
 import type { MangoModelChoices } from "@/utils/mango-desktop"
@@ -24,6 +24,7 @@ import { createCommands, useControl } from "./control"
 import { SettingsImages } from "./images"
 import { OtherModel } from "./other-model"
 import { RemoveModelDialog } from "./remove-model"
+import { reasoningOf } from "@/utils/mango-reasoning"
 
 const WHERE_LABELS = {
   auto: "settings.models.where.auto",
@@ -59,7 +60,7 @@ export const SettingsModels: Component<{ focus?: string }> = (props) => {
   const view = control.view
   const [ui, setUi] = createStore<{
     open?: string
-    /** «Mostra i valori», by model: it stays with its model when the list changes. */
+    /** «Show the values», by model: it stays with its model when the list changes. */
     values: Record<string, boolean>
   }>({ values: {} })
   const commands = createCommands(control.now)
@@ -93,7 +94,7 @@ export const SettingsModels: Component<{ focus?: string }> = (props) => {
     return model?.phase === "loading" && model.model === key
   }
 
-  /** A model's row: in «In arrivo» while it comes, otherwise its own; none when the list does not have it. */
+  /** A model's row: in «Arriving» while it comes, otherwise its own; none when the list does not have it. */
   const rowOf = (key: string) => {
     if (arrivingRows(downloads()).some((download) => download.model === key))
       return `[data-download-row="${CSS.escape(key)}"]`
@@ -129,7 +130,7 @@ export const SettingsModels: Component<{ focus?: string }> = (props) => {
           if (reveal(focus)) used = focus
           return
         }
-        // «Usa come predefinito» is only on a model that is not the default one, «Togli dal computer» on one whose
+        // «Use as default» is only on a model that is not the default one, «Remove from the computer» on one whose
         // files Mango Code downloaded (a file of the user's is taken off the list)
         const host =
           field === "settings.models.default.action"
@@ -198,7 +199,9 @@ export const SettingsModels: Component<{ focus?: string }> = (props) => {
                 model={model}
                 open={ui.open === model.key}
                 onToggle={() => setUi("open", ui.open === model.key ? undefined : model.key)}
-                isDefault={view.state?.default_model === model.key}
+                // a server's model made the default (Settings › Links) is the one the app starts on
+                isDefault={!view.state?.server_model && view.state?.default_model === model.key}
+                remote={mango.state()?.model?.phase === "remote"}
                 inUse={inUse(model.key)}
                 loading={loading(model.key)}
                 gpus={view.computer?.gpus.filter((gpu) => gpu.used).map((gpu) => gpu.name) ?? []}
@@ -301,7 +304,7 @@ type RowProps = {
 }
 
 /**
- * «2 schede · 128K · 18,2 GB»: where it runs with these choices, its context, its weight, and «memoria stimata» for a
+ * «2 cards · 128K · 18.2 GB»: where it runs with these choices, its context, its weight, and «estimated memory» for a
  * model of the user that the count does not know.
  */
 function facts(model: CatalogEntry, language: ReturnType<typeof useLanguage>) {
@@ -326,6 +329,8 @@ const PresentModel: Component<
     onDefault: () => void
     showValues: boolean
     onShowValues: (shown: boolean) => void
+    /** The engine of another PC answers: where the model runs, its context, style and reasoning are chosen there. */
+    remote: boolean
   }
 > = (props) => {
   const language = useLanguage()
@@ -405,90 +410,105 @@ const PresentModel: Component<
 
       <Show when={props.open}>
         <div class="settings-page-detail" data-slot="settings-model-detail">
-          <div class="settings-page-field">
-            <b data-slot="settings-field-title">{language.t("settings.models.where.title")}</b>
-            <SegmentedControlV2
-              value={props.model.choices.where}
-              disabled={!models() || props.busy}
-              onChange={(value) => {
-                if (!value) return
-                const where = value as MangoModelChoices["where"]
-                // «Scelgo io» starts from the cards it uses now, or all of them: a choice of no card is not valid
-                const gpus =
-                  where !== "pick"
-                    ? []
-                    : props.model.verdict.where?.gpus.length
-                      ? props.model.verdict.where.gpus
-                      : props.gpus
-                void choose({ where, gpus })
-              }}
-              data-action="settings-model-where"
-              aria-label={language.t("settings.models.where.title")}
-            >
-              <For each={props.model.limits.where}>
-                {(where) => (
-                  <SegmentedControlItemV2 value={where}>{language.t(WHERE_LABELS[where])}</SegmentedControlItemV2>
-                )}
-              </For>
-            </SegmentedControlV2>
-            <small>{props.model.verdict.reason}</small>
-            <Show when={props.model.choices.where === "pick"}>
-              <div class="settings-page-cards">
-                <For each={props.gpus}>
-                  {(gpu) => (
-                    <label class="settings-page-card">
-                      <Switch
-                        checked={props.model.choices.gpus.includes(gpu)}
-                        disabled={!models() || props.busy}
-                        onChange={(checked) =>
-                          void choose({
-                            gpus: checked
-                              ? [...props.model.choices.gpus, gpu]
-                              : props.model.choices.gpus.filter((name) => name !== gpu),
-                          })
-                        }
-                      />
-                      <span>{gpu}</span>
-                    </label>
-                  )}
-                </For>
-              </div>
-            </Show>
-          </div>
-
-          <ContextField model={props.model} disabled={!models() || props.busy} choose={choose} />
-
-          <StyleField
-            model={props.model}
-            disabled={!models() || props.busy}
-            choose={choose}
-            showValues={props.showValues}
-            onShowValues={props.onShowValues}
-          />
-
-          <Show when={props.model.limits.reasoning.length}>
+          <Show when={props.remote}>
+            <p class="settings-page-note" data-slot="settings-model-remote">
+              {language.t("settings.models.remote")}
+            </p>
+          </Show>
+          <Show when={!props.remote}>
             <div class="settings-page-field">
-              <b data-slot="settings-field-title">{language.t("settings.models.reasoning.title")}</b>
+              <b data-slot="settings-field-title">{language.t("settings.models.where.title")}</b>
               <SegmentedControlV2
-                value={props.model.choices.reasoning ?? props.model.limits.reasoning.at(-1)}
+                value={props.model.choices.where}
                 disabled={!models() || props.busy}
                 onChange={(value) => {
-                  if (value) void choose({ reasoning: value })
+                  if (!value) return
+                  const where = value as MangoModelChoices["where"]
+                  // «I choose» starts from the cards it uses now, or all of them: a choice of no card is not valid
+                  const gpus =
+                    where !== "pick"
+                      ? []
+                      : props.model.verdict.where?.gpus.length
+                        ? props.model.verdict.where.gpus
+                        : props.gpus
+                  void choose({ where, gpus })
                 }}
-                data-action="settings-model-reasoning"
-                aria-label={language.t("settings.models.reasoning.title")}
+                data-action="settings-model-where"
+                aria-label={language.t("settings.models.where.title")}
               >
-                <For each={props.model.limits.reasoning}>
-                  {(level) => (
-                    <SegmentedControlItemV2 value={level}>
-                      {language.t(REASONING_LABELS[level as keyof typeof REASONING_LABELS])}
-                    </SegmentedControlItemV2>
+                <For each={props.model.limits.where}>
+                  {(where) => (
+                    <SegmentedControlItemV2 value={where}>{language.t(WHERE_LABELS[where])}</SegmentedControlItemV2>
                   )}
                 </For>
               </SegmentedControlV2>
-              <small>{language.t("settings.models.reasoning.description")}</small>
+              <small>{props.model.verdict.reason}</small>
+              <Show when={props.model.choices.where === "pick"}>
+                <div class="settings-page-cards">
+                  {/* the cards in use, and one chosen before it was left out in Computer, to take it off the choice; the
+                    last card chosen stays: a choice of no card is not valid */}
+                  <For each={[...props.gpus, ...props.model.choices.gpus.filter((name) => !props.gpus.includes(name))]}>
+                    {(gpu) => (
+                      <label class="settings-page-card">
+                        <Switch
+                          checked={props.model.choices.gpus.includes(gpu)}
+                          disabled={
+                            !models() ||
+                            props.busy ||
+                            (props.model.choices.gpus.length === 1 && props.model.choices.gpus[0] === gpu)
+                          }
+                          onChange={(checked) =>
+                            void choose({
+                              gpus: checked
+                                ? [...props.model.choices.gpus, gpu]
+                                : props.model.choices.gpus.filter((name) => name !== gpu),
+                            })
+                          }
+                        />
+                        <span>{gpu}</span>
+                      </label>
+                    )}
+                  </For>
+                </div>
+              </Show>
             </div>
+
+            <ContextField model={props.model} disabled={!models() || props.busy} choose={choose} />
+
+            <StyleField
+              model={props.model}
+              disabled={!models() || props.busy}
+              choose={choose}
+              showValues={props.showValues}
+              onShowValues={props.onShowValues}
+            />
+
+            <Show when={props.model.limits.reasoning.length}>
+              <div class="settings-page-field">
+                <b data-slot="settings-field-title">{language.t("settings.models.reasoning.title")}</b>
+                <SegmentedControlV2
+                  value={reasoningOf(props.model).shown}
+                  disabled={!models() || props.busy}
+                  onChange={(value) => {
+                    if (value) void choose({ reasoning: value })
+                  }}
+                  data-action="settings-model-reasoning"
+                  aria-label={language.t("settings.models.reasoning.title")}
+                >
+                  <For each={props.model.limits.reasoning}>
+                    {(level) => (
+                      <SegmentedControlItemV2 value={level}>
+                        {language.t(REASONING_LABELS[level as keyof typeof REASONING_LABELS])}
+                      </SegmentedControlItemV2>
+                    )}
+                  </For>
+                </SegmentedControlV2>
+                <small>{language.t("settings.models.reasoning.description")}</small>
+              </div>
+            </Show>
           </Show>
+
+          <HarnessField model={props.model} disabled={!models() || props.busy} choose={choose} />
 
           <div class="settings-page-actions">
             <Show when={!props.isDefault}>

@@ -308,7 +308,7 @@ pub(crate) mod fixture {
     }
 
     pub fn gpu(index: u32, name: &str, memory_mib: u64, cc: (u32, u32)) -> Gpu {
-        Gpu { index, name: name.into(), vendor: Vendor::Nvidia, memory_mib, cuda_driver: None, cc: Some(cc) }
+        Gpu { index, name: name.into(), vendor: Vendor::Nvidia, memory_mib, shared_mib: 0, cuda_driver: None, cc: Some(cc) }
     }
 
     /// The three cards RTX 3060 Ti, GTX 1080 and GTX 1660 SUPER, in PCI order.

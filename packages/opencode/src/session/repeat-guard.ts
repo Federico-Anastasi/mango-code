@@ -3,9 +3,9 @@
 // the conversation longer. Here, for each conversation, the last failed call is remembered: an identical call (same
 // tool, same input) is not run again and the model receives the previous error with a request to change the input.
 // Any successful call in between erases the memory, because the world may have changed (a file created, a server
-// restarted). It applies to every tool.
+// restarted). A failure of the network or of the time may be tried again once as it is. It applies to every tool.
 
-type Failure = { key: string; error: string }
+type Failure = { key: string; error: string; passing: boolean }
 
 const lastFailure = new Map<string, Failure>()
 
@@ -28,6 +28,9 @@ function message(error: unknown) {
   return error instanceof Error ? error.message : String(error)
 }
 
+/** A failure of the network or of the time: the same call may work a moment later, so it is held only the second time. */
+const PASSING = /fetch failed|timed? ?out|ETIMEDOUT|ECONNRESET|ECONNREFUSED|EAI_AGAIN|socket hang up|\bHTTP (429|5\d\d)\b/i
+
 /** Wraps the `execute` of a tool for a conversation. */
 export function guardExecute<A, O, R>(
   sessionID: string,
@@ -37,7 +40,7 @@ export function guardExecute<A, O, R>(
   return async (args, opts) => {
     const key = callKey(tool, args)
     const failed = lastFailure.get(sessionID)
-    if (failed?.key === key)
+    if (failed?.key === key && !failed.passing)
       throw new Error(
         `This is the same call (same tool, same input) that has just failed with this error: ${failed.error}\n` +
           "I am not running it again: change the input according to the error, then retry.",
@@ -47,8 +50,10 @@ export function guardExecute<A, O, R>(
       lastFailure.delete(sessionID)
       return result
     } catch (error) {
-      // Stopped by the user: not an error of the tool.
-      if (!opts.abortSignal?.aborted) lastFailure.set(sessionID, { key, error: message(error) })
+      // Stopped by the user: not an error of the tool, and the memory stays as it was.
+      if (opts.abortSignal?.aborted) throw error
+      const text = message(error)
+      lastFailure.set(sessionID, { key, error: text, passing: PASSING.test(text) && !(failed?.key === key && failed.passing) })
       throw error
     }
   }

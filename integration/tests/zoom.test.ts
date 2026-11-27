@@ -96,7 +96,7 @@ test.skipIf(!!process.env.MANGO_OFF_SCREEN)("the chat and the Preview panel zoom
   env = await start([{ text: "ok" }], { window: true, noDebug: true, env: { MANGO_WINDOW_CDP: String(DEBUG) } });
   const mc = new MangoCode((await find(env.data))!);
   const id = await mc.createSession(env.project, { title: "zoom" });
-  for await (const _ of mc.turn(id, env.project, "Ciao", { model: "fake" }));
+  for await (const _ of mc.turn(id, env.project, "Hello", { model: "fake" }));
   const conversation = `${env.agent}/${btoa(String.fromCharCode(...new TextEncoder().encode(env.project))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, "")}/session/${id}`;
   let p = await page(DEBUG, (t) => t.url.startsWith(env!.agent), 90_000);
   await p.send("Page.navigate", { url: conversation });

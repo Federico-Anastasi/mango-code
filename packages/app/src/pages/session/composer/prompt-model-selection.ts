@@ -1,4 +1,4 @@
-import { batch, createMemo, startTransition } from "solid-js"
+import { batch, createEffect, createMemo, on, startTransition } from "solid-js"
 import { useModels } from "@/context/models"
 import type { ModelKey, ModelSelection } from "@/context/local"
 import { getConfiguredAgentVariant, resolveModelVariant } from "@/context/model-variant"
@@ -36,7 +36,31 @@ export function createPromptModelSelection(input: { agent: () => { model?: Model
     })[0]
   }
 
+  // An agent that brings its own model (the Team's manager) gives it to the draft as soon as it is the draft's agent,
+  // whatever model the box held (a new draft starts with the model of the conversation it was opened from); leaving it
+  // gives back the model of new conversations.
+  const agentModel = createMemo(() => {
+    const model = input.agent()?.model
+    return model ? { providerID: model.providerID, modelID: model.modelID } : undefined
+  })
+  createEffect(
+    on(
+      () => [prompt.ready(), agentModel()?.providerID, agentModel()?.modelID] as const,
+      ([ready, providerID, modelID], previous) => {
+        if (!ready) return
+        if (providerID && modelID) {
+          const held = prompt.model.current()
+          if (held?.providerID !== providerID || held.modelID !== modelID) prompt.model.set({ providerID, modelID })
+          return
+        }
+        if (previous?.[1]) prompt.model.set(undefined)
+      },
+    ),
+  )
+
+  // Until the project's agents and settings have arrived the model of new conversations is not known: none is guessed.
   const current = () => {
+    if (!sync().data.model_ready) return
     const key = [prompt.model.current(), input.agent()?.model, configured(), recent(), fallback()].find(
       (item): item is ModelKey => !!item && valid(item),
     )
@@ -50,9 +74,17 @@ export function createPromptModelSelection(input: { agent: () => { model?: Model
       .filter((item): item is NonNullable<typeof item> => !!item),
   )
 
+  const missing = () => {
+    const named = prompt.model.current()
+    if (!named || providers.all().size === 0) return
+    const model = { providerID: named.providerID, modelID: named.modelID }
+    if (!valid(model)) return model
+  }
+
   const selection = {
     ready: models.ready,
     current,
+    missing,
     recent: recentModels,
     list: models.list,
     cycle(direction: 1 | -1) {

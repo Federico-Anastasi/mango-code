@@ -60,6 +60,24 @@ macro_rules! tr {
     };
 }
 
+/// A date written `YYYY-MM-DD`, the way the interface writes dates in the chosen language: «26 ottobre 2026»,
+/// «October 26, 2026». Text that is not such a date is returned as it was written.
+pub fn long_date(date: &str) -> String {
+    long_date_in(lang(), date)
+}
+
+fn long_date_in(lang: Lang, date: &str) -> String {
+    use chrono::Datelike;
+    const IT: [&str; 12] = ["gennaio", "febbraio", "marzo", "aprile", "maggio", "giugno", "luglio", "agosto", "settembre", "ottobre", "novembre", "dicembre"];
+    const EN: [&str; 12] = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+    let Ok(day) = chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d") else { return date.to_string() };
+    let month = day.month0() as usize;
+    match lang {
+        Lang::It => format!("{} {} {}", day.day(), IT[month], day.year()),
+        Lang::En => format!("{} {}, {}", EN[month], day.day(), day.year()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -87,6 +105,15 @@ mod tests {
         let s = crate::tr!("{n} modelli su {}", "{n} models on {}", "C:");
         let expected = if lang() == Lang::It { "3 modelli su C:" } else { "3 models on C:" };
         assert_eq!(s, expected);
+    }
+
+    #[test]
+    fn a_date_is_written_in_the_language_asked() {
+        assert_eq!(long_date_in(Lang::It, "2026-10-26"), "26 ottobre 2026");
+        assert_eq!(long_date_in(Lang::En, "2026-10-26"), "October 26, 2026");
+        assert_eq!(long_date_in(Lang::It, "2026-01-05"), "5 gennaio 2026");
+        assert_eq!(long_date_in(Lang::En, "2026-01-05"), "January 5, 2026");
+        assert_eq!(long_date_in(Lang::En, "the 26th"), "the 26th");
     }
 
     #[test]

@@ -35,6 +35,7 @@ import { iife } from "@/util/iife"
 import { errorMessage } from "@/util/error"
 import { isRecord } from "@/util/record"
 import { isMedia } from "@/util/media"
+import { rebuild } from "./compacted"
 import type { SystemError } from "bun"
 import type { Provider } from "@/provider/provider"
 import { Effect, Schema } from "effect"
@@ -139,7 +140,7 @@ function providerMeta(metadata: Record<string, any> | undefined) {
 export const toModelMessagesEffect = Effect.fnUntraced(function* (
   input: WithParts[],
   model: Provider.Model,
-  options?: { stripMedia?: boolean; toolOutputMaxChars?: number },
+  options?: { stripMedia?: boolean; toolOutputMaxChars?: number; mediaInToolResult?: boolean },
 ) {
   const result: UIMessage[] = []
   const toolNames = new Set<string>()
@@ -151,7 +152,9 @@ export const toModelMessagesEffect = Effect.fnUntraced(function* (
   //
   // Only apply this workaround if the model actually supports that media input -
   // otherwise unsupportedParts() will turn it into a user-visible error.
-  const supportsMediaInToolResult = model.api.npm === "@ai-sdk/anthropic"
+  // mango-code: a `commands` harness gives its pictures inside the tool message, as the template of its model reads them
+  // (the provider writes them as parts of that message: provider.ts).
+  const supportsMediaInToolResult = model.api.npm === "@ai-sdk/anthropic" || options?.mediaInToolResult === true
 
   // Can the model read this kind of file? An image to a text-only model, or an office document to any
   // model, must not be sent: the provider would reject it or turn it into an error that pushes the model
@@ -239,12 +242,6 @@ export const toModelMessagesEffect = Effect.fnUntraced(function* (
           }
         }
 
-        if (part.type === "compaction") {
-          userMessage.parts.push({
-            type: "text",
-            text: "What did we do so far?",
-          })
-        }
         if (part.type === "subtask") {
           userMessage.parts.push({
             type: "text",
@@ -254,6 +251,9 @@ export const toModelMessagesEffect = Effect.fnUntraced(function* (
       }
       if (userMessage.parts.length > 0) result.push(userMessage)
     }
+
+    // the model's summary is not a message of the conversation: the agent writes the one the model reads
+    if (msg.info.role === "assistant" && msg.info.summary) continue
 
     if (msg.info.role === "assistant") {
       const differentModel = `${model.providerID}/${model.id}` !== `${msg.info.providerID}/${msg.info.modelID}`
@@ -450,7 +450,7 @@ export const toModelMessagesEffect = Effect.fnUntraced(function* (
 export function toModelMessages(
   input: WithParts[],
   model: Provider.Model,
-  options?: { stripMedia?: boolean; toolOutputMaxChars?: number },
+  options?: { stripMedia?: boolean; toolOutputMaxChars?: number; mediaInToolResult?: boolean },
 ): Promise<ModelMessage[]> {
   return Effect.runPromise(toModelMessagesEffect(input, model, options))
 }
@@ -606,65 +606,17 @@ export const get = Effect.fn("MessageV2.get")(function* (input: { sessionID: Ses
   }
 })
 
+/** The conversation the model reads: `msgs` newest first, as `stream` gives them; from the latest summary on it is put
+ *  together as `compacted.ts` says, and the messages are in the order the model reads them, not the order they were made. */
 export function filterCompacted(msgs: Iterable<WithParts>) {
-  const result = [] as WithParts[]
-  const completed = new Set<string>()
-  let retain: MessageID | undefined
-  for (const msg of msgs) {
-    result.push(msg)
-    if (retain) {
-      if (msg.info.id === retain) break
-      continue
-    }
-    if (msg.info.role === "user" && completed.has(msg.info.id)) {
-      const part = msg.parts.find((item): item is CompactionPart => item.type === "compaction")
-      if (!part) continue
-      if (!part.tail_start_id) break
-      retain = part.tail_start_id
-      if (msg.info.id === retain) break
-      continue
-    }
-    if (msg.info.role === "user" && completed.has(msg.info.id) && msg.parts.some((part) => part.type === "compaction"))
-      break
-    if (msg.info.role === "assistant" && msg.info.summary && msg.info.finish && !msg.info.error)
-      completed.add(msg.info.parentID)
-  }
-  result.reverse()
-  const compactionIndex = result.findLastIndex(
-    (msg) =>
-      msg.info.role === "user" &&
-      msg.parts.some((item): item is CompactionPart => item.type === "compaction" && item.tail_start_id !== undefined),
-  )
-  const compaction = result[compactionIndex]
-  const part = compaction?.parts.find(
-    (item): item is CompactionPart => item.type === "compaction" && item.tail_start_id !== undefined,
-  )
-  const summaryIndex = compaction
-    ? result.findIndex(
-        (msg, index) =>
-          index > compactionIndex &&
-          msg.info.role === "assistant" &&
-          msg.info.summary &&
-          msg.info.parentID === compaction.info.id,
-      )
-    : -1
-  const tailIndex = part?.tail_start_id ? result.findIndex((msg) => msg.info.id === part.tail_start_id) : -1
-  if (tailIndex >= 0 && tailIndex < compactionIndex && summaryIndex > compactionIndex) {
-    return [
-      ...result.slice(compactionIndex, summaryIndex + 1),
-      ...result.slice(tailIndex, compactionIndex),
-      ...result.slice(summaryIndex + 1),
-    ]
-  }
-  return result
+  return rebuild([...msgs].reverse())
 }
 
 export const filterCompactedEffect = Effect.fnUntraced(function* (sessionID: SessionID) {
   return filterCompacted(yield* stream(sessionID))
 })
 
-// filterCompacted reorders messages for model consumption
-// ([compaction-user, summary, ...retained tail..., continue-user]), so array
+// filterCompacted reorders messages for model consumption (the user's messages, the summary, the tail), so array
 // position is not chronological. IDs are only a deterministic tie-breaker
 // because imported messages do not necessarily have monotonic IDs.
 export function latest(msgs: WithParts[]) {
@@ -716,10 +668,24 @@ export function fromError(
         ),
       },
     }
+  // mango-code: an external server or the Team's cloud: the sentences the app says when the server is added, in the
+  // language of the app, with the server's own reason after them, instead of the service's or the HTTP client's words alone
+  if ((ctx.providerID.startsWith("server-") || ctx.providerID === "openrouter") && APIError.isInstance(error)) {
+    const sentence = serverSentence(error.data.statusCode, error.data.isRetryable)
+    if (sentence) {
+      const reason = error.data.statusCode === undefined ? undefined : (serverReason(error.data.responseBody) ?? error.data.message)
+      const said = `${sentence.what}${sentence.advice ? `: ${sentence.advice}` : ""}.`
+      // `metadata.retrying`: while the agent tries again the retry line says only what happened (`SessionRetry.retryable`)
+      return {
+        ...error,
+        data: { ...error.data, message: reason ? `${said} (${reason})` : said, metadata: { ...error.data.metadata, retrying: sentence.what } },
+      }
+    }
+  }
   // mango-code: this PC's engine that closes in the middle of an answer drops the connection: the user reads that, not
   // the HTTP client's words. It closes when it crashes, and also when the model is changed or the cards are lent, so the
   // sentence promises nothing; while the agent tries again the retry line says more (`SessionRetry.retryable`).
-  // `metadata.engine` lets the interface offer «Riprova» once the agent has stopped trying.
+  // `metadata.engine` lets the interface offer «Retry» once the agent has stopped trying.
   if (
     ctx.providerID === "mango" &&
     !engineIsRemote() &&
@@ -735,6 +701,47 @@ export function fromError(
       },
     }
   return error
+}
+
+/** What an external server's refusal means for the user, and what to do about it; none for a refusal of the request's own
+ *  shape (another 4xx). */
+function serverSentence(status: number | undefined, retryable: boolean): { what: string; advice?: string } | undefined {
+  if (status === undefined)
+    return retryable
+      ? {
+          what: tr("Il server non risponde", "The server does not answer"),
+          advice: tr("controlla che sia acceso e raggiungibile", "check that it is on and reachable"),
+        }
+      : undefined
+  if (status === 401 || status === 403)
+    return {
+      what: tr(`Il server rifiuta la chiave (${status})`, `The server refuses the key (${status})`),
+      advice: tr("controllala in Impostazioni › Collegamenti", "check it in Settings › Connections"),
+    }
+  if (status === 402) return { what: tr("Il servizio chiede un pagamento o del credito (402)", "The service asks for a payment or credit (402)") }
+  if (status === 429)
+    return {
+      what: tr("Il server rifiuta per troppe richieste o per un limite raggiunto (429)", "The server refuses for too many requests or a limit reached (429)"),
+      advice: tr("riprova più tardi", "try again later"),
+    }
+  if (status >= 500)
+    return {
+      what: tr(`Il server risponde con un errore (${status})`, `The server answers with an error (${status})`),
+      advice: tr("riprova quando funziona", "try again when it works"),
+    }
+}
+
+/** The reason in an OpenAI-compatible error body: OpenRouter's real one in `metadata.raw`, else `message`; short. */
+function serverReason(body: string | undefined) {
+  if (!body) return
+  try {
+    const error = JSON.parse(body)?.error
+    const raw = error?.metadata?.raw
+    const reason = typeof raw === "string" && raw.trim() ? raw : typeof error?.message === "string" ? error.message : undefined
+    return reason?.trim().slice(0, 200) || undefined
+  } catch {
+    return body.trim().slice(0, 200) || undefined
+  }
 }
 
 function classifyError(

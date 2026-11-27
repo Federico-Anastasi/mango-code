@@ -39,10 +39,10 @@ pub enum ModelState {
         place: Where,
         notice: Option<String>,
     },
-    /// `reason` is the manager's sentence. `taken`: the sentence that says another program holds the card, when it does:
-    /// the manager's, when it did not start the model for that, otherwise the one seen after the failure. `proposal`: a model
-    /// on the disk that fits now.
-    Failed { model: String, label: String, reason: String, taken: Option<String>, proposal: Option<Proposal> },
+    /// `reason` is the sentence for the user; `detail` the whole error, when it says more or `taken` replaces it. `taken`:
+    /// the sentence that says another program holds the card, when it does: the engine's, when it refused to start the model
+    /// for that, otherwise the one seen after the failure. `proposal`: a model on the disk that fits now.
+    Failed { model: String, label: String, reason: String, detail: Option<String>, taken: Option<String>, proposal: Option<Proposal> },
     /// The graphics cards are lent to another job.
     Lent { model: String, label: String },
     /// The engine in use is another PC's. `reachable`: it answered the last time it was asked, a few seconds ago.
@@ -75,6 +75,11 @@ pub struct State {
     pub model: ModelState,
     /// The model the app loads when it opens; none while no model is on the computer.
     pub default_model: Option<String>,
+    /// The model of new conversations when it is an external server's (`<server>/<model>`): then no local model loads at
+    /// start, and a computer without models is not at its first start.
+    pub server_model: Option<String>,
+    /// The name the user reads for `server_model`.
+    pub server_label: Option<String>,
     /// The models being downloaded, in the order they were asked.
     pub downloads: Vec<Download>,
     /// The model of the image engine that stayed on after a picture; none while the engine is off.
@@ -130,6 +135,10 @@ impl FailureKey {
 pub struct Known {
     pub labels: BTreeMap<String, String>,
     pub default_model: Option<String>,
+    /// The model of new conversations when it is an external server's, `<server>/<model>`.
+    pub server_model: Option<String>,
+    /// The name the user reads for `server_model`.
+    pub server_label: Option<String>,
 }
 
 impl Shared {
@@ -200,12 +209,18 @@ pub fn model_state(engine: &PublicState, remote: Option<&engine_remote::Info>, l
             (None, None) => ModelState::None,
         };
     }
-    let failed = |model: &String, reason: &str, taken: Option<&String>| ModelState::Failed {
-        model: model.clone(),
-        label: label(model),
-        reason: reason.to_string(),
-        taken: taken.or(after.taken.as_ref()).cloned(),
-        proposal: after.proposal.clone(),
+    // The interface shows the sentence; the whole error, when it says more, is behind "Technical details".
+    let failed = |model: &String, reason: &str, taken: Option<&String>| {
+        let taken = taken.or(after.taken.as_ref()).cloned();
+        let sentence = mango_common::without_detail(reason);
+        ModelState::Failed {
+            model: model.clone(),
+            label: label(model),
+            detail: (taken.is_some() || sentence != reason).then(|| reason.to_string()),
+            reason: sentence,
+            taken,
+            proposal: after.proposal.clone(),
+        }
     };
     if let Some(f) = &engine.failed {
         return failed(&f.model, &f.reason, f.taken.as_ref());
@@ -296,7 +311,7 @@ impl engine::http::Control for Routes {
 fn about_this_computer(st: &AppState, path: &str) -> anyhow::Result<Value> {
     use anyhow::Context;
     let paths = st.paths.get().with_context(|| tr!("percorsi non ancora noti", "paths not known yet"))?;
-    let hw = engine_cfg::detect().with_context(|| tr!("Non riesco a guardare l'hardware di questo computer", "Cannot look at the hardware of this computer"))?;
+    let hw = engine_cfg::detect(paths).with_context(|| tr!("Non riesco a guardare l'hardware di questo computer", "Cannot look at the hardware of this computer"))?;
     Ok(match path {
         "/control/models" => {
             let images = engine_cfg::image_views(paths, &hw)?;
@@ -344,7 +359,7 @@ fn look_after_failure(st: &AppState, key: &FailureKey) -> anyhow::Result<AfterFa
     use anyhow::Context;
     let paths = st.paths.get().with_context(|| tr!("percorsi non ancora noti", "paths not known yet"))?;
     let engine = st.engine.get().with_context(|| tr!("Mango Code si sta ancora avviando.", "Mango Code is still starting."))?;
-    let hw = engine_cfg::detect()?;
+    let hw = engine_cfg::detect(paths)?;
     let used = if key.in_use.is_some() { Vec::new() } else { engine.memory_of_others() };
     let default = st.control.known.lock().unwrap().default_model.clone();
     let a = engine_cfg::after_failure(paths, &hw, &used, &key.model, default.as_deref(), key.in_use.as_deref())?;
@@ -366,6 +381,8 @@ fn state(app: &AppHandle, st: &AppState, engine: &PublicState) -> State {
         catalog_revision: st.control.catalog_revision.load(Ordering::SeqCst),
         model: model_state(engine, remote.as_ref(), &label, &after),
         default_model: known.default_model.clone(),
+        server_model: known.server_model.clone(),
+        server_label: known.server_label.clone(),
         downloads: st.downloads.get().map(|d| d.list()).unwrap_or_default(),
         image_loaded: st.images.get().and_then(|images| images.manager().loaded()),
         conversation_model: engine.conversation_model.clone().filter(|_| remote.is_none()),
@@ -475,9 +492,9 @@ mod tests {
     #[test]
     fn a_failed_start_is_failed_with_its_reason() {
         let failed = PublicState { failed: Some(PublicFailure { model: "toq".into(), reason: "It does not fit.".into(), taken: None }), ..running("3.6") };
-        assert_eq!(shown(&failed), json!({ "phase": "failed", "model": "toq", "label": "Model toq", "reason": "It does not fit.", "taken": null, "proposal": null }));
+        assert_eq!(shown(&failed), json!({ "phase": "failed", "model": "toq", "label": "Model toq", "reason": "It does not fit.", "detail": null, "taken": null, "proposal": null }));
         let crashed = PublicState { model: Some("3.6".into()), error: Some("The engine closed.".into()), ..engine(Phase::Error) };
-        assert_eq!(shown(&crashed), json!({ "phase": "failed", "model": "3.6", "label": "Model 3.6", "reason": "The engine closed.", "taken": null, "proposal": null }));
+        assert_eq!(shown(&crashed), json!({ "phase": "failed", "model": "3.6", "label": "Model 3.6", "reason": "The engine closed.", "detail": null, "taken": null, "proposal": null }));
         assert_eq!(
             failure(&crashed, 4, 1),
             Some(FailureKey { model: "3.6".into(), reason: "The engine closed.".into(), catalog: 4, attempts: 1, in_use: None })
@@ -567,6 +584,7 @@ mod tests {
             serde_json::to_value(model_state(&failed, None, &label, &after)).unwrap(),
             json!({
                 "phase": "failed", "model": "toq", "label": "Model toq", "reason": "out of memory",
+                "detail": "out of memory",
                 "taken": "Probably another program takes 5.8 GB of the RTX 3060 Ti.",
                 "proposal": { "model": "ling", "label": "Ling", "where": { "placement": "gpu", "gpus": ["RTX 3060 Ti"], "context": 131_072 } }
             })
@@ -574,7 +592,7 @@ mod tests {
     }
 
     /// A model the manager did not start because other programs hold its card: the sentence that says so is the manager's,
-    /// whatever the look after the failure found; the detail stays in `reason`.
+    /// whatever the look after the failure found; the whole error stays in `detail`.
     #[test]
     fn a_start_refused_beside_another_program_says_the_managers_sentence() {
         let sentence = "On the GTX 1080 another program is using 4.8 GB: there is not enough memory left for this model.";
@@ -582,8 +600,18 @@ mod tests {
         let refused = PublicState { failed: Some(PublicFailure { model: "3.6".into(), reason: reason.clone(), taken: Some(sentence.into()) }), ..engine(Phase::Error) };
         for after in [AfterFailure::default(), AfterFailure { proposal: None, taken: Some("Probably another program takes 3.7 GB of the GTX 1080.".into()) }] {
             let shown = serde_json::to_value(model_state(&refused, None, &label, &after)).unwrap();
-            assert_eq!((&shown["taken"], &shown["reason"]), (&json!(sentence), &json!(reason)), "{shown}");
+            assert_eq!((&shown["taken"], &shown["detail"]), (&json!(sentence), &json!(reason)), "{shown}");
         }
+    }
+
+    /// A start that failed shows its sentence; the technical detail (the engine's last lines) is apart, for "Technical
+    /// details", never in the line above the box.
+    #[test]
+    fn a_failed_start_shows_its_sentence_and_keeps_the_detail_apart() {
+        let reason = "The engine closed right away. (technical detail: exit code 3221225477\nllama_model_load: error)";
+        let failed = PublicState { failed: Some(PublicFailure { model: "toq".into(), reason: reason.into(), taken: None }), ..engine(Phase::Error) };
+        let shown = serde_json::to_value(model_state(&failed, None, &label, &AfterFailure::default())).unwrap();
+        assert_eq!((&shown["reason"], &shown["detail"]), (&json!("The engine closed right away."), &json!(reason)), "{shown}");
     }
 
     #[test]

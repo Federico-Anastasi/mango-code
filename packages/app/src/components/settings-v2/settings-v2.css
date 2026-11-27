@@ -387,7 +387,7 @@
   color: var(--mango-error);
 }
 
-/* mango-code: the "Prompt" page (what the model reads) */
+/* mango-code: the notes, errors and weights of the settings sections that show what the model reads */
 .settings-v2-prompt-note {
   font-size: 13px;
   font-weight: 400;

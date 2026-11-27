@@ -14,7 +14,7 @@ import { canSend } from "@/utils/mango-state"
 const NAMED = 40
 
 /**
- * `onChange`: the bubbles changed (one more, «Non è partito» with Retry): the conversation goes to its end if it was
+ * `onChange`: the bubbles changed (one more, «It did not leave» with Retry): the conversation goes to its end if it was
  * there, so that what changed is seen.
  */
 export function MangoPendingBubbles(props: {

@@ -17,7 +17,7 @@ mod support;
 const FAKE: &str = env!("CARGO_BIN_EXE_fake-engine");
 
 fn gpu(i: u32) -> Gpu {
-    Gpu { index: i, name: format!("GPU {i}"), vendor: Vendor::Nvidia, memory_mib: 8192, cuda_driver: Some((12, 6)), cc: Some((8, 6)) }
+    Gpu { index: i, name: format!("GPU {i}"), vendor: Vendor::Nvidia, memory_mib: 8192, shared_mib: 0, cuda_driver: Some((12, 6)), cc: Some((8, 6)) }
 }
 
 /// Two fake models: «a» uses GPUs 0 and 2, «b» all three. The same rules as the real plan: a model that needs a
@@ -29,6 +29,10 @@ fn planner(log: PathBuf, save: bool, chunk_ms: u64, start_ms: u64, save_ms: u64)
             "b" => vec![0, 1, 2],
             // The plan is fine, the program is not there: it does not start.
             "broken" => vec![1],
+            // On the integrated graphics, with the plan on the processor to start in its place; its program is not there
+            // when a test writes the file `integrated-broken`, and the file `integrated-off` turns the graphics off: the
+            // plan is then the processor's.
+            "integrated" => vec![0],
             // It splits itself over the GPUs that remain.
             "c" => [0, 1, 2].into_iter().filter(|i| !excluded.contains(i)).collect(),
             k => bail!("The requested model is not among Mango Code's («{k}»)"),
@@ -44,6 +48,10 @@ fn planner(log: PathBuf, save: bool, chunk_ms: u64, start_ms: u64, save_ms: u64)
         if std::fs::read_to_string(log.with_file_name("refuse")).is_ok_and(|k| k.trim() == key) {
             bail!("«{key}» does not fit with these choices");
         }
+        // The same, with a technical detail after the sentence: a file that is gone.
+        if std::fs::read_to_string(log.with_file_name("refuse-detail")).is_ok_and(|k| k.trim() == key) {
+            return Err(mango_common::user_error("The model is not on disk.", format!(r"file not found: C:\models\{key}.gguf")));
+        }
         if let Some(i) = gpus.iter().find(|i| excluded.contains(i)) {
             bail!("it needs GPU {i}, which has been released");
         }
@@ -53,7 +61,7 @@ fn planner(log: PathBuf, save: bool, chunk_ms: u64, start_ms: u64, save_ms: u64)
             key: key.into(),
             spec: ProcSpec {
                 name: format!("engine-{key}"),
-                exe: if key == "broken" { r"C:\does\not\exist.exe".into() } else { FAKE.into() },
+                exe: if key == "broken" || (key == "integrated" && log.with_file_name("integrated-broken").exists()) { r"C:\does\not\exist.exe".into() } else { FAKE.into() },
                 args: vec![
                     "-m".into(),
                     format!(r"C:\fake\{key}.gguf"),
@@ -83,6 +91,20 @@ fn planner(log: PathBuf, save: bool, chunk_ms: u64, start_ms: u64, save_ms: u64)
             gpus_used: gpus.into_iter().map(gpu).collect(),
             gguf: format!(r"C:\fake\{key}.gguf").into(),
             slots: None,
+            fallback: None,
+        })
+        .map(|mut plan| {
+            if key == "integrated" {
+                let mut processor = plan.clone();
+                processor.spec.exe = FAKE.into();
+                processor.spec.args.extend(["-dev".into(), "none".into()]);
+                processor.gpus_used.clear();
+                if log.with_file_name("integrated-off").exists() {
+                    return processor;
+                }
+                plan.fallback = Some(Box::new(processor));
+            }
+            plan
         })
     })
 }
@@ -249,6 +271,19 @@ fn unknown_model_and_routes_without_an_engine() {
     assert_eq!(json_of(ok(get(&b.url("/props"), &[])))["model_path"], json!(r"C:\fake\a.gguf"));
 }
 
+/// What a conversation is told when its model will not start is the sentence alone: the detail (a path of the PC) stays in
+/// the state, behind «Technical details».
+#[test]
+fn a_conversation_whose_model_will_not_start_is_told_the_sentence_without_the_detail() {
+    let b = fixture();
+    std::fs::write(b._dir.path().join("refuse-detail"), "a").unwrap();
+    let (status, v) = b.control("/v1/chat/completions", json!({ "model": "a", "messages": [] }));
+    assert_eq!(status, 422, "{v}");
+    let message = v["error"]["message"].as_str().unwrap();
+    assert!(message.contains("The model is not on disk."), "{v}");
+    assert!(!message.contains("gguf") && !message.contains("technical detail") && !message.contains("dettaglio"), "{v}");
+}
+
 #[test]
 fn releasing_a_gpu_the_model_does_not_use_does_not_stop_it() {
     let b = fixture();
@@ -293,7 +328,13 @@ fn the_model_switch_waits_for_the_in_flight_request() {
     b.text("a");
     let (end_a, start_b) = std::thread::scope(|sc| {
         let ha = sc.spawn(|| b.ask("a").last().unwrap().0);
-        std::thread::sleep(Duration::from_millis(10));
+        // «b» is asked once «a»'s request has reached the engine: a fixed pause loses that order on a busy runner.
+        let asked = || b.routes_to_engine().iter().filter(|r| *r == "a POST /v1/chat/completions").count();
+        let t0 = Instant::now();
+        while asked() < 2 {
+            assert!(t0.elapsed() < Duration::from_secs(10), "«a»'s second request never reached the engine");
+            std::thread::sleep(Duration::from_millis(5));
+        }
         let hb = sc.spawn(|| b.ask("b").first().unwrap().0);
         (ha.join().unwrap(), hb.join().unwrap())
     });
@@ -764,6 +805,7 @@ fn an_engine_that_runs_out_of_memory_says_so_in_a_sentence() {
                 gpus_used: vec![gpu(0)],
                 gguf: r"C:\fake\a.gguf".into(),
                 slots: None,
+                fallback: None,
             })
         }),
         Box::new(Vec::new),
@@ -1275,7 +1317,7 @@ fn given_back_after_the_next_check(used: &Cards, gpu: usize, checks: &Count) -> 
 
 /// Another program holds GPU 1. «a» does not use it and starts; «b» uses it and does not start: no engine is opened, the
 /// state says which card in `taken` and keeps the detail in `reason`, and a request that names «b» gets 422, which the
-/// agent does not retry. «Riprova» (`retry`) starts «b» anyway, without asking the check again.
+/// agent does not retry. «Retry» (`retry`) starts «b» anyway, without asking the check again.
 #[test]
 fn a_model_without_room_beside_another_program_does_not_start_until_retry() {
     let (b, checks) = fixture_with_cards(cards(&[(0, 300), (1, 4900), (2, 0)]), 300);
@@ -1397,7 +1439,7 @@ fn the_memory_of_an_engine_that_closed_by_itself_is_not_another_programs() {
     given_back.join().unwrap();
 }
 
-/// A model started with «Riprova» beside another program is in use: a change of its context loads it again, without the
+/// A model started with «Retry» beside another program is in use: a change of its context loads it again, without the
 /// check that would turn it off.
 #[test]
 fn a_model_in_use_is_loaded_again_beside_another_program() {
@@ -1623,4 +1665,73 @@ fn the_port_of_the_engine_that_leaves_is_told_while_the_next_one_loads() {
     let told = b.m.ports();
     assert_eq!(told.len(), 1);
     assert_ne!(told[0], old);
+}
+
+fn on_the_processor() -> String {
+    tr!("La grafica integrata non ha retto il modello: gira sul processore.", "The integrated graphics could not hold the model: it runs on the processor.")
+}
+
+/// A model on the integrated graphics whose start does not hold starts once on the processor, with the plan that came with
+/// it: the state says it in one line, no failure is left, and the model answers.
+#[test]
+fn a_model_that_does_not_start_on_the_integrated_graphics_runs_on_the_processor() {
+    let b = fixture();
+    std::fs::write(b.log.with_file_name("integrated-broken"), "").unwrap();
+    b.m.choose("integrated");
+    until("«integrated» running", Duration::from_secs(10), || b.running("integrated"));
+    let s = b.m.state();
+    assert_eq!((s.failed.map(|f| f.model), s.gpus.len()), (None, 0), "on the processor");
+    assert_eq!(s.notice.as_deref(), Some(on_the_processor().as_str()));
+    let log = std::fs::read_to_string(b._dir.path().join("manager.log")).unwrap();
+    assert!(log.contains("\"event\":\"fallback\""), "{log}");
+    assert_eq!(b.text("integrated"), "I am the engine integrated");
+}
+
+/// A model that went to the processor stays there when the choices are compared again (another choice, an engine that
+/// arrives): its plan still names the integrated graphics, but the plan it runs is that plan's own fallback. Loading it
+/// again there would skip the check of the free RAM and cost another load.
+#[test]
+fn a_model_on_the_processor_after_the_integrated_graphics_is_not_loaded_again_by_a_choice() {
+    let b = fixture();
+    let broken = b.log.with_file_name("integrated-broken");
+    std::fs::write(&broken, "").unwrap();
+    b.m.choose("integrated");
+    until("«integrated» running", Duration::from_secs(10), || b.running("integrated"));
+    std::fs::remove_file(&broken).unwrap();
+    b.m.reload_if_changed();
+    std::thread::sleep(Duration::from_secs(2));
+    let s = b.m.state();
+    assert_eq!((s.phase, s.gpus.len(), s.notice.as_deref()), (Phase::Running, 0, Some(on_the_processor().as_str())));
+}
+
+/// The user turns the integrated graphics off after a model went to the processor: the processor is now its plan, the
+/// line goes, and turning it on again tries the integrated graphics again.
+#[test]
+fn turning_the_integrated_graphics_off_after_a_fallback_takes_its_line_away() {
+    let b = fixture();
+    let broken = b.log.with_file_name("integrated-broken");
+    let off = b.log.with_file_name("integrated-off");
+    std::fs::write(&broken, "").unwrap();
+    b.m.choose("integrated");
+    until("«integrated» running", Duration::from_secs(10), || b.running("integrated"));
+    std::fs::write(&off, "").unwrap();
+    b.m.reload_if_changed();
+    let s = b.m.state();
+    assert_eq!((s.phase, s.gpus.len(), s.notice), (Phase::Running, 0, None), "the same plan, without the line");
+    std::fs::remove_file(&broken).unwrap();
+    std::fs::remove_file(&off).unwrap();
+    b.m.reload_if_changed();
+    until("«integrated» on the integrated graphics", Duration::from_secs(10), || b.running("integrated") && b.m.state().gpus.len() == 1);
+}
+
+/// The same when other programs hold the memory it counts on: it is not refused, it starts on the processor.
+#[test]
+fn a_model_without_room_on_the_integrated_graphics_runs_on_the_processor() {
+    let (b, checks) = fixture_with_cards(cards(&[(0, 4000), (1, 0), (2, 0)]), 300);
+    b.m.choose("integrated");
+    until("«integrated» running", Duration::from_secs(10), || b.running("integrated"));
+    let s = b.m.state();
+    assert_eq!((s.failed.map(|f| f.model), s.gpus.len(), count(&checks)), (None, 0, 1));
+    let reason = format!("Another program holds GPU [0]. {}", tr!("Gira sul processore.", "It runs on the processor."));
+    assert_eq!(s.notice.as_deref(), Some(reason.as_str()), "the line says why, not that the graphics failed");
 }

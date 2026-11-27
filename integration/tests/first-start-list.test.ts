@@ -65,7 +65,7 @@ async function mouseClick(selector: string) {
 }
 
 beforeAll(async () => {
-  env = await start([{ text: "Eccomi." }], { window: true, noModels: true, otherModels: ["second"], files, env: { MANGO_HF_URL: base } });
+  env = await start([{ text: "Here I am." }], { window: true, noModels: true, otherModels: ["second"], files, env: { MANGO_HF_URL: base } });
   p = await windowPage(env.cdp!, env.agent, 120_000);
   await waitUntil(() => p.evaluate(`location.href === ${JSON.stringify(env.agent + "/")} && !!document.querySelector('[data-component="mango-welcome"]')`), "the welcome on the Home", 120_000);
 }, 240_000);
@@ -99,6 +99,8 @@ test("both paused, the Home stands still with «Riprendi», which goes on with t
   await p.evaluate(`window.__MANGO_DESKTOP__.models.pause("fake")`);
   await waitUntil(() => exists('[data-component="mango-download"][data-state="paused"]'), "the paused download on the Home");
   expect(await p.evaluate(`document.querySelector('[data-component="mango-download"] h2').innerText`)).toContain("in pausa");
+  // a paused download does not go on by itself at the next start: the card does not promise it
+  expect(await p.evaluate(`document.querySelector('[data-component="mango-download"]').textContent`)).not.toContain("al prossimo avvio");
   const stopped = (await entry("fake")).done;
   await Bun.sleep(1500);
   expect((await entry("fake")).done).toBe(stopped);

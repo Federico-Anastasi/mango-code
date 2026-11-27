@@ -505,7 +505,7 @@ fn computer(model: String) -> Computer {
         .output()
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
         .unwrap_or_default();
-    match engine_cfg::hardware::detect() {
+    match engine_cfg::hardware::detect_bare() {
         Ok(hw) => Computer {
             windows,
             cpu: format!("{} ({} cores)", hw.cpu.name, hw.cpu.cores),

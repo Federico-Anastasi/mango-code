@@ -103,6 +103,9 @@ export function createHomeSessionIndexCache(queryClient: QueryClient, server: st
       return removed.size === 0 ? sessions : sessions.filter((session) => !removed.has(session.id))
     },
     apply(event: HomeSessionEvent) {
+      // mango-code: a session taken off the list (archived) that comes back (restored) is listed again
+      const info = event.properties.info
+      if (event.type !== "session.deleted" && !info.parentID && typeof info.time.archived !== "number") removed.delete(info.id)
       if (!queryClient.getQueryState(indexKey)) return
       const next = appendHomeSessionEvent(queryClient.getQueryData<HomeSessionEvents>(eventsKey), event)
       if (queryClient.isFetching({ queryKey: indexKey, exact: true }) > 0) {

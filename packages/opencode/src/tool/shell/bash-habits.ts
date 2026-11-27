@@ -90,7 +90,8 @@ const SAME_JOB: [RegExp, string][] = [
 ]
 
 // `ls -la a b c`: PowerShell takes several names separated by commas.
-const LIST_SEVERAL = /^(\s*)ls\s+-[1AFahlrt]+((?:\s+[^\s|;&<>]+){2,})(?=\s*$|\s*[;|&\n])/
+const NAME = /"[^"]*"|'[^']*'|[^\s|;&<>'"]+/g
+const LIST_SEVERAL = new RegExp(String.raw`^(\s*)ls\s+-[1AFahlrt]+((?:\s+(?:${NAME.source})){2,})(?=\s*$|\s*[;|&\n])`)
 
 // Where a filter's own words end: at the end of the command or before the next operator.
 const END = String.raw`(?=\s*(?:$|[;|&\n)]))`
@@ -183,7 +184,7 @@ export function adapt(input: { command: string; directory: string; missing: (nam
     .toReversed()
     .reduce((command, start) => {
       if (piped.has(start)) return command.slice(0, start) + filter(command.slice(start), input.missing)
-      const rest = command.slice(start).replace(LIST_SEVERAL, (_, lead: string, names: string) => `${lead}Get-ChildItem -Force ${names.trim().split(/\s+/).join(",")}`)
+      const rest = command.slice(start).replace(LIST_SEVERAL, (_, lead: string, names: string) => `${lead}Get-ChildItem -Force ${[...names.matchAll(NAME)].map(([name]) => name).join(",")}`)
       const [pattern, instead] = SAME_JOB.find(([pattern]) => pattern.test(rest)) ?? []
       const next = pattern && instead ? rest.replace(pattern, instead) : python ? rest.replace(/^(\s*)python3(?=\s|$)/, "$1python") : rest
       return command.slice(0, start) + next

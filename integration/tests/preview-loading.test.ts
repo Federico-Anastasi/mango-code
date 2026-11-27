@@ -87,7 +87,7 @@ beforeAll(async () => {
   mc = new MangoCode((await find(env.data))!);
   p = await page(DEBUG, (t) => t.url.startsWith(env.agent));
   const id = await mc.createSession(env.project, { title: "caricamento" });
-  for await (const _ of mc.turn(id, env.project, "Ciao", { model: "fake" }));
+  for await (const _ of mc.turn(id, env.project, "Hello", { model: "fake" }));
   fs.writeFileSync(path.join(env.project, "picture.png"), PNG);
   fs.writeFileSync(path.join(env.project, "doc.pdf"), PDF);
   fs.writeFileSync(path.join(env.project, "vector.svg"), SVG);
@@ -164,7 +164,7 @@ test("a page on its way shows the app's own message, then the page", async () =>
   await Bun.sleep(500);
   expect(await state()).toMatchObject({ loading: true, url: "", visible: false });
   expect(await status()).toBe("Carico l'anteprima…");
-  windowPhoto("anteprima-in-caricamento", ratio);
+  windowPhoto("preview-loading", ratio);
   await until("the page arrives", (s) => s.url.endsWith("/first?ms=11000") && !s.loading, 15_000);
   await waitFor(`!document.querySelector('[data-slot="preview-status"]')`);
   expect(await state()).toMatchObject({ failed: null });
@@ -215,7 +215,7 @@ test("an address that does not answer is given up, with a sentence and a way to 
   await waitFor(`document.querySelector('[data-slot="preview-status"]')?.textContent.startsWith("Non riesco ad aprire")`);
   expect(await state()).toMatchObject({ failed: `${base}/hang`, url: "", loading: false, visible: false });
   expect(await status()).toBe(`Non riesco ad aprire ${base}/hang: non risponde.`);
-  windowPhoto("anteprima-non-risponde", ratio);
+  windowPhoto("preview-not-answering", ratio);
   // the server is back: "Riprova" opens the same address
   hanging = false;
   await p.evaluate(`document.querySelector('[data-action="preview-retry"]').click()`);

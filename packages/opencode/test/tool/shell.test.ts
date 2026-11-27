@@ -345,6 +345,24 @@ describe("tool.shell", () => {
         ),
       ),
     )
+
+    // On a Windows in another language PowerShell writes its errors in that language; the model reads them in English,
+    // without the escape codes of the colours.
+    it.live(`gives the model PowerShell's errors in English and without colours [${item.label}]`, () =>
+      withShell(
+        item,
+        runIn(
+          projectRoot,
+          Effect.gen(function* () {
+            const result = yield* run({ command: "Write-Item -Path nothing.txt; Get-Item missing-file.txt; Get-ChildItem -la" })
+            expect(result.output).toContain("is not recognized")
+            expect(result.output).toContain("Cannot find path")
+            expect(result.output).toContain("A parameter cannot be found")
+            expect(result.output).not.toContain("\x1b")
+          }),
+        ),
+      ),
+    )
   }
 
   // What a command leaves running in Git Bash or cmd keeps the command's output open after the shell has ended, and its

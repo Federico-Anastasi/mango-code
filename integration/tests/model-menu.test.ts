@@ -36,7 +36,7 @@ beforeAll(async () => {
   mc = new MangoCode((await find(env.data))!);
   p = await page(DEBUG, (t) => t.url.startsWith(env.agent));
   id = await mc.createSession(env.project, { title: "modelli" });
-  for await (const _ of mc.turn(id, env.project, "Ciao", { model: "fake" }));
+  for await (const _ of mc.turn(id, env.project, "Hello", { model: "fake" }));
   await p.send("Page.navigate", { url: `${env.agent}/${b64(env.project)}/session/${id}` });
 }, 200_000);
 
@@ -44,7 +44,7 @@ afterAll(() => {
   p?.close();
   env?.close();
   Bun.sleepSync(1500);
-});
+}, 60_000);
 
 async function waitFor(condition: string, ms = 20_000) {
   for (let t = 0; t < ms; t += 250) {
@@ -92,7 +92,7 @@ test("each row of the menu that fits says where it runs, as the top bar's menu; 
     await atSizes(env.app.pid!, p, [[860, 800], [390, 800]], async (width) => {
       await Bun.sleep(900);
       const shot = await p.send("Page.captureScreenshot", { format: "png" });
-      fs.writeFileSync(path.join(process.env.MC_PHOTOS!, `menu-modelli-${width}.png`), Buffer.from(shot.result.data, "base64"));
+      fs.writeFileSync(path.join(process.env.MC_PHOTOS!, `menu-models-${width}.png`), Buffer.from(shot.result.data, "base64"));
     });
   }
   // closed before the next test: a menu still open would be read with the top bar's one

@@ -1,6 +1,6 @@
 # launcher: what the app installs as resources
 
-A real coding agent, opencode, running against a **local, offline model**, on your own hardware. This folder is the tree
+A real coding agent, opencode, running against a **local model** on your own hardware, or against a server you add. This folder is the tree
 the desktop app installs as its `resources` (and reads live from the repo when it is built there): the model and engine
 catalogs, the profiles, the agent's template, plugins and instructions, the MCP servers and the skills. The app is in
 `app/README.md`; using Mango Code from another program is in `docs/INTEGRATION.md`.
@@ -8,6 +8,7 @@ catalogs, the profiles, the agent's template, plugins and instructions, the MCP 
 ```
 opencode  --provider mango, /v1 OpenAI-compatible-->  llama-server (official, prism or toq)
                                                       model from mango-models.json
+opencode  --provider server-<n>, /v1 ---------------> a server the user added (Settings › Connections)
 ```
 
 The engine and agent binaries and the GGUF files are not in git: the repo has the code that gets them (the fork tags in
@@ -32,8 +33,9 @@ Claude Code's skills and `CLAUDE.md` of the user's home and the external skills 
 `_EXTERNAL_SKILLS`), nor opencode's own commands. It talks to no server but the local engine (and the web, when the agent
 searches): `OPENCODE_DISABLE_AUTOUPDATE`, `_MODELS_FETCH`, `_SHARE`, `_LSP_DOWNLOAD`. The list is in `agent-cfg`.
 
-`OPENCODE_DISABLE_PROJECT_CONFIG` is not set: it also turns off the project's `AGENTS.md` and `CLAUDE.md`. The price: a repo
-with its own `opencode.json` can change our settings.
+`OPENCODE_DISABLE_PROJECT_CONFIG` is set: the project's own `opencode.json` and `.opencode` folder are not read, because
+they could start plugins, MCP servers and other providers with nothing asked. The project's context (`AGENTS.md`,
+`CLAUDE.md`, `.claude/`, `.mcp.json`) comes through `opencode-home/plugin/mango-project.js`.
 
 ### The config is generated, not written
 
@@ -46,7 +48,9 @@ absolute paths, i.e. machine state: it lives in `<data>`, never in the repo. The
 ### The discipline plugin, and why it injects at the end
 
 `opencode-home/plugin/mango-discipline.js` is loaded once inside opencode, with its state in memory. It re-injects the
-discipline reminder and adds the web instructions of the request's model to the system prompt.
+discipline reminder and adds the web instructions of the request's model to the system prompt. The reminder belongs to
+Mango Harness 1 (the hooks `discipline-messages` and `discipline-calls`, with their texts, in `harness/mango-harness-1/`):
+Mango Harness 2 has hooks of its own and no discipline reminder.
 
 **The reminder is appended AT THE END** — last part of the user message, or the tail of a tool's output. **Never in
 the system prompt.** The system prompt is the prefix llama.cpp keeps in cache: touching it would mean re-prefilling
@@ -63,7 +67,7 @@ one that costs tens of seconds of GPU.
 - **Few tools in the prefill**: the tool definitions are paid for at every turn. Capturing the real request, they weighed
   twice the system prompt, and `chrome-devtools` alone was 25,429 characters over 29 tools; the 13 that are duplicates or
   useless here are cut at the source.
-- **Native skills**: `skill` is a tool of the product. It reads the `SKILL.md` format, the one of ours.
+- **Native skills**: `skill` is a tool of the product. It reads the `SKILL.md` files of the project and of the extra folders, and the skills built into the agent with their harness.
 - **Permissions declared one by one**: full autonomy is there, but you see what you are granting and removing a
   permission is one line.
 
@@ -72,7 +76,9 @@ one that costs tens of seconds of GPU.
 A cloud **manager**, a local **dev** and up to 4 cloud **agents**, as peer, independent opencode sessions that talk
 through the tools of `opencode-home/plugin/mango-team.js` (`ask_dev`, `ask_manager`, `launch_agent`, `ask_agent`,
 `close_agent`). Whoever sends an instruction does not wait: the other side's summary arrives later, as a separate message.
-The roles' instructions are `MANGO-manager.md`, `MANGO-dev.md` and `MANGO-agent.md`; how the app runs it (the manager is the
+The roles' instructions are `harness/shared/team-manager.md` (added by the plugin to the manager's conversations),
+`team-dev.md` and `team-agent.md` (built into the agent, which puts the one of the process's role, `MANGO_TEAM_ROLE`, in the
+`{{role}}` line of the prompt); how the app runs it (the manager is the
 agent `team` of the app's server, dev and agents are hidden `opencode serve` processes, the ports, the keys) is in
 `app/README.md`, "The Team". The agents are on OpenRouter, not on the local GPUs: the cloud entries are in `mango-models.json`
 (`cloud` block), and an agent costs real tokens at every turn.
@@ -132,8 +138,8 @@ profiles' memory: 6 GiB for everything and 24 hours; taking a model off removes 
 prompt ends (`X-Mango-Stable-Prompt`), so the working folder and the date, which come last, are not part of what is kept; the
 tools, which the model's template puts after the system text, are read again by a conversation of another folder or day.
 
-Models without images get their own web instructions: `mango-discipline.js` adds `MANGO-web-text.md` (pages are read
-with `take_snapshot`) instead of `MANGO-web-images.md`, depending on the request's model: whether it sees images is
+Models without images get their own web instructions: `mango-discipline.js` adds `harness/shared/web-text.md` (pages are read
+with `take_snapshot`) instead of `web-images.md`, depending on the request's model: whether it sees images is
 in its configuration (`modalities`), which the agent reads again without restarting.
 
 ### The engines (forks `mango-prism` and `mango-toq`)
@@ -175,7 +181,7 @@ context measured on its hardware. The agent's config uses the **effective** ctx 
   `research` (search + top-N already-extracted pages in ONE call, skips the anti-bot ones — fewer round trips for a slow
   model) · `search_images` (DDG Images via vqd token: direct URLs). Engines chosen by **probing**: Brave 429, Ecosia 403,
   Mojeek empty. If an engine changes markup, its parser is fixed (~15 lines each).
-- **Skills** in `mango-plugin/skills/`: **capabilities** (word/excel/powerpoint/pdf, which use the `documents_*` tools of the
+- **Skills** in `harness/mango-harness-1/skills/`, one file each (a `desc:` line, an empty line, the text), built into the agent: they have no file on the PC, so the prompt and the skill tool show the model no place for them. **Capabilities** (word/excel/powerpoint/pdf, which use the `documents_*` tools of the
   `mango-documents` server: no Python or LibreOffice; frontend-design) + **discipline** (verify-before-done, debugging,
   test-first). Chosen for the **absence of subagents** (disabled), for a PC without Python or Node, and for the local
   models' real flaws. Every skill's description is in the prompt at every turn: a skill earns its place or it goes.
@@ -198,18 +204,18 @@ context measured on its hardware. The agent's config uses the **effective** ctx 
 
 | file | what |
 |---|---|
-| `opencode-home/` | the agent's home: config template, plugins, instructions |
+| `opencode-home/` | the agent's home: config template, plugins |
 | `opencode-home/opencode.template.json` | opencode's config **with the why of every entry**. The real file is generated |
-| `opencode-home/plugin/mango-discipline.js` | discipline reminder (injected at the end) and the web instructions of the request's model |
+| `opencode-home/plugin/mango-discipline.js` | the discipline reminder of Mango Harness 1 (injected at the end) and the web instructions of the request's model |
 | `opencode-home/plugin/mango-web-diet.js` | removes repeated page trees from the context (not the requested ones) |
 | `opencode-home/plugin/mango-project.js` | the project context as in Claude Code: `CLAUDE.md`, `.claude/rules`, `.claude/skills`, `.mcp.json` |
 | `opencode-home/plugin/mango-documents.js` | Word, Excel, PowerPoint, PDF attachments converted to text for the model |
 | `opencode-home/plugin/mango-team.js` | the Team's tools and the links between its sessions |
-| `opencode-home/MANGO*.md` | the instructions: answers, file reading, no subagents; the Team's roles; how to look at a web page |
 | `mango-documents/` | the MCP server for Office and PDF documents: create, read, edit, convert (MIT libraries, no Python) |
 | `mango-websearch-mcp.js` | our own web search MCP: direct scrapers + Readability |
 | `mango-chrome-mcp.mjs`, `mango-mcp-stdout.cjs`, `mango-mcp-watchdog.cjs` | the browser MCP wrapper, its output thread and its freeze guard |
-| `mango-plugin/skills/` | the skills |
+| `harness/` | the harnesses, one folder each, built into the agent (`packages/opencode/src/session/harness-fixed.ts`). `mango-harness-1/`: opencode's own tools with the discipline reminders (`harness.json`, `hooks.md`), its skills (`skills/`, with the licenses of the ones adapted from other projects), the texts of the compaction (`compaction.md`) and everything the model reads before the project's own instructions (`prompt.md`: how it answers, what Mango Code is, how it reads files and makes documents; its lines `{{programs}}` and `{{role}}` are filled by the agent from `MANGO_PC_PROGRAMS`, the programs installed on this PC that the app detects at every start, and from `MANGO_TEAM_ROLE`). `mango-harness-2/`: the same files for the harness built on a terminal and a few commands of its own (`terminal`, `read`, `search`, `page_view`, …), plus its system prompt (`prompt.md`), the tools' declarations (`tools.json`) and its skills (`skills/`) |
+| `harness/shared/` | the texts that do not depend on the harness, chosen by the process's role or by the request's model: the Team's roles (`team-manager.md`, `team-dev.md`, `team-agent.md`) and how to look at a web page (`web-text.md`, `web-images.md`). The plugins read the first and the web ones; the roles of the dev and the agents are built into the agent |
 | `mango-models.json` | **the models**: paths, HF repos with sha256, maximum context, memory; the ones that make images are marked `image` and stay out of `order`. Single source |
 | `mango-engines.json` | the engines to download: official llama.cpp, our two forks, and stable-diffusion.cpp (`sd`) for the models that make images, with url, size and sha256 of every build |
 | `profiles/3060ti-1080-1660s/` | **the profiles for the RTX 3060 Ti + GTX 1080 + GTX 1660 SUPER**: for each model engine, arguments, env, context and measured notes. The app reads them (`engine-cfg`) |

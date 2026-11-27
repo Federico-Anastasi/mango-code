@@ -7,9 +7,12 @@ import { Icon as IconV2 } from "@opencode-ai/ui/v2/icon"
 import { TextInputV2 } from "@opencode-ai/ui/v2/text-input-v2"
 import { createMediaQuery } from "@solid-primitives/media"
 import { useNavigate, useSearchParams } from "@solidjs/router"
+import * as Sentry from "@sentry/solid"
 import {
   type Component,
   createEffect,
+  ErrorBoundary,
+  type ParentComponent,
   createMemo,
   createSignal,
   For,
@@ -265,30 +268,63 @@ const Results: Component<{ found: Found[]; onPick: (item: Found) => void }> = (p
   )
 }
 
+/** An error in a section stays in it: the other sections and the conversations go on. A new section starts clean. */
+export const SectionBoundary: ParentComponent = (props) => {
+  const language = useLanguage()
+  return (
+    <ErrorBoundary
+      fallback={(error, reset) => {
+        console.error("settings section", error)
+        Sentry.captureException(error)
+        return (
+          <div data-slot="settings-section-failed">
+            <p class="settings-page-error" role="alert">
+              {language.t("settings.section.failed", {
+                message: error instanceof Error ? error.message : String(error),
+              })}
+            </p>
+            <ButtonV2 variant="neutral" onClick={reset} data-action="settings-section-retry">
+              {language.t("mango.action.retry")}
+            </ButtonV2>
+          </div>
+        )
+      }}
+    >
+      {props.children}
+    </ErrorBoundary>
+  )
+}
+
 /** One section of the page. */
 const Pane: Component<{ section: SettingsSection; focus?: string }> = (props) => {
   return (
     <div class="settings-page-pane settings-v2-panel" data-pane={props.section}>
-      <Switch>
-        <Match when={props.section === "models"}>
-          <SettingsModels focus={props.focus} />
-        </Match>
-        <Match when={props.section === "computer"}>
-          <SettingsComputer />
-        </Match>
-        <Match when={props.section === "agent"}>
-          <SettingsAgent focus={props.focus} />
-        </Match>
-        <Match when={props.section === "links"}>
-          <SettingsLinks />
-        </Match>
-        <Match when={props.section === "general"}>
-          <SettingsGeneral focus={props.focus} />
-        </Match>
-        <Match when={props.section === "help"}>
-          <SettingsHelp />
-        </Match>
-      </Switch>
+      <Show when={props.section} keyed>
+        {(section) => (
+          <SectionBoundary>
+            <Switch>
+              <Match when={section === "models"}>
+                <SettingsModels focus={props.focus} />
+              </Match>
+              <Match when={section === "computer"}>
+                <SettingsComputer />
+              </Match>
+              <Match when={section === "agent"}>
+                <SettingsAgent focus={props.focus} />
+              </Match>
+              <Match when={section === "links"}>
+                <SettingsLinks />
+              </Match>
+              <Match when={section === "general"}>
+                <SettingsGeneral focus={props.focus} />
+              </Match>
+              <Match when={section === "help"}>
+                <SettingsHelp />
+              </Match>
+            </Switch>
+          </SectionBoundary>
+        )}
+      </Show>
     </div>
   )
 }

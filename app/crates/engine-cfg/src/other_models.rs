@@ -434,7 +434,7 @@ fn analyze_repo(paths: &Paths, hw: &Hardware, repo: &Repo, start: &dyn Fn(&HfFil
     Ok(Analysis { name, source: "hugging-face".into(), gated: repo.gated, estimated: info.memory.estimated.is_some(), variants: proposals, warnings: info.warnings() })
 }
 
-/// Marks the quantization to propose. On the cards: the largest that fits with the context «Automatico» wants
+/// Marks the quantization to propose. On the cards: the largest that fits with the context «Automatic» wants
 /// (`AUTO_CTX`, or the model's own if smaller), otherwise the largest that fits; never F16, BF16 or F32, which are for
 /// whoever chooses them. If none fits there, on the processor speed counts more than quality: Q4_K_M, or the nearest
 /// below it that fits (by size, or, without a Q4_K_M, by the bits in the name); if none is below, the smallest that
@@ -1096,7 +1096,7 @@ mod tests {
         let card = pc(vec![crate::hardware::fixture::nvidia(0, "NVIDIA GeForce RTX 3060 Ti", 8192, (8, 6), (12, 6))], 32_768);
         let (cpu, small) = (pc(vec![], 32_768), pc(vec![], 1024));
         let contexts: Vec<_> = analyze_test(&t, &card, &test_repo(), &g).variants.iter().map(|v| v.context).collect();
-        // the test model holds 40,960 tokens, less than 64,000: that is the context «Automatico» wants of it
+        // the test model holds 40,960 tokens, less than 64,000: that is the context «Automatic» wants of it
         assert_eq!(contexts, [Some(40_960), Some(32_768), Some(40_960)]);
         assert_eq!(proposed(&card, test_repo().files), ["Q4_K_M"], "Q8_0 fits the 8 GB card too, but with less context");
         let big = pc(vec![crate::hardware::fixture::nvidia(0, "NVIDIA GeForce RTX 4090", 24_564, (8, 9), (12, 6))], 32_768);
@@ -1111,7 +1111,7 @@ mod tests {
         assert_eq!(proposed(&small, test_repo().files), Vec::<String>::new(), "none fits: none proposed");
     }
 
-    /// On the cards: the largest that keeps the context «Automatico» wants (64,000, or the model's own if smaller);
+    /// On the cards: the largest that keeps the context «Automatic» wants (64,000, or the model's own if smaller);
     /// if none keeps it, the largest; never F16, BF16 or F32 unless only those fit.
     #[test]
     fn on_the_cards_the_largest_with_the_automatic_context_is_proposed_never_unquantized() {

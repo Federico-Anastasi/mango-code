@@ -87,6 +87,7 @@
   font-size: 13px;
   line-height: 1;
   color: var(--mango-text);
+  text-overflow: ellipsis;
 }
 
 [data-component="text-input-v2"] [data-slot="text-input-v2-input"]::placeholder {

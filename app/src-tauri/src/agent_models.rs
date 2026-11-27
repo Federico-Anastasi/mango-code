@@ -6,38 +6,52 @@
 //! PC's models are that PC's, and they are read at the start.
 
 use crate::AppState;
+use agent_cfg::servers::Servers;
 use agent_cfg::AgentModel;
 use mango_common::Paths;
 use std::sync::Mutex;
 use std::time::Duration;
 use tauri::{AppHandle, Manager};
 
-/// What the agent was told: the models and the default.
+/// What the agent was told: the models, the default and the external servers.
 #[derive(Default)]
-pub struct Declared(Mutex<Option<(Vec<AgentModel>, Option<String>)>>);
+pub struct Declared(Mutex<Known>);
+
+#[derive(Default)]
+enum Known {
+    /// Before the launch, or with another PC's engine: nothing is to be told.
+    #[default]
+    Nothing,
+    Told(Vec<AgentModel>, Option<String>, Servers),
+    /// The last writing failed: the next change is written whatever it is.
+    Unwritten,
+}
 
 impl Declared {
     /// What the launch of the agent declared.
-    pub fn launched(&self, models: &[AgentModel], default: Option<&str>) {
-        *self.0.lock().unwrap() = Some((models.to_vec(), default.map(str::to_string)));
+    pub fn launched(&self, models: &[AgentModel], default: Option<&str>, servers: &Servers) {
+        *self.0.lock().unwrap() = Known::Told(models.to_vec(), default.map(str::to_string), servers.clone());
     }
 
     /// The agent no longer knows these models: another PC's engine is in use, or the agent is starting again.
     pub fn forget(&self) {
-        *self.0.lock().unwrap() = None;
+        *self.0.lock().unwrap() = Known::Nothing;
     }
 
-    /// Whether the models now differ from what the agent knows; if they do, they are taken as told. Nothing is known
-    /// before the launch, and then nothing is to be told.
-    fn changed(&self, models: &[AgentModel], default: Option<&str>) -> bool {
+    fn unwritten(&self) {
+        *self.0.lock().unwrap() = Known::Unwritten;
+    }
+
+    /// Whether the models now differ from what the agent knows; if they do, they are taken as told.
+    fn changed(&self, models: &[AgentModel], default: Option<&str>, servers: &Servers) -> bool {
         let mut known = self.0.lock().unwrap();
-        match known.as_ref() {
-            Some((m, d)) if m.as_slice() == models && d.as_deref() == default => false,
-            Some(_) => {
-                *known = Some((models.to_vec(), default.map(str::to_string)));
+        match &*known {
+            Known::Nothing => false,
+            Known::Told(m, d, s) if m.as_slice() == models && d.as_deref() == default && s == servers => false,
+            Known::Told(..) | Known::Unwritten => {
+                *known = Known::Told(models.to_vec(), default.map(str::to_string), servers.clone());
                 true
             }
-            None => false,
         }
     }
 }
@@ -56,13 +70,15 @@ pub fn tell(app: &AppHandle, paths: &Paths, catalog: &[engine_cfg::ModelEntry], 
         return;
     }
     let models = of(catalog);
-    if !st.declared.changed(&models, default) {
+    // As the launch saw them: a server whose key is missing is one without a key.
+    let (servers, _) = crate::servers::for_the_agent(paths);
+    if !st.declared.changed(&models, default, &servers) {
         return;
     }
-    if let Err(e) = agent_cfg::set_models(paths, &models, default) {
+    if let Err(e) = agent_cfg::set_models(paths, &models, default, &servers) {
         crate::startup_log(paths, &format!("the agent's models not written again: {e:#}"));
         // Written again the next time something changes.
-        st.declared.forget();
+        st.declared.unwritten();
         return;
     }
     let paths = paths.clone();
@@ -92,16 +108,21 @@ mod tests {
     /// Only a change the agent would see is told: a context, a model, the default. Before the launch nothing is.
     #[test]
     fn the_agent_is_told_only_what_changed_since_it_was_told() {
+        let none = Servers::default();
         let d = Declared::default();
-        assert!(!d.changed(&[model("a", 65_536)], None), "no agent launched yet");
-        d.launched(&[model("a", 65_536), model("b", 32_768)], None);
-        assert!(!d.changed(&[model("a", 65_536), model("b", 32_768)], None));
-        assert!(d.changed(&[model("a", 32_768), model("b", 32_768)], None), "a context chosen");
-        assert!(!d.changed(&[model("a", 32_768), model("b", 32_768)], None), "already told");
-        assert!(d.changed(&[model("a", 32_768), model("b", 32_768)], Some("a")), "the first model arrived");
-        assert!(d.changed(&[model("a", 32_768), model("b", 32_768), model("mine", 8_192)], Some("a")), "a model of the user");
+        assert!(!d.changed(&[model("a", 65_536)], None, &none), "no agent launched yet");
+        d.launched(&[model("a", 65_536), model("b", 32_768)], None, &none);
+        assert!(!d.changed(&[model("a", 65_536), model("b", 32_768)], None, &none));
+        assert!(d.changed(&[model("a", 32_768), model("b", 32_768)], None, &none), "a context chosen");
+        assert!(!d.changed(&[model("a", 32_768), model("b", 32_768)], None, &none), "already told");
+        assert!(d.changed(&[model("a", 32_768), model("b", 32_768)], Some("a"), &none), "the first model arrived");
+        assert!(d.changed(&[model("a", 32_768), model("b", 32_768), model("mine", 8_192)], Some("a"), &none), "a model of the user");
+        let one = Servers { default: Some(agent_cfg::servers::ModelRef { server: "server-1".into(), model: "x".into() }), ..Servers::default() };
+        assert!(d.changed(&[model("a", 32_768), model("b", 32_768), model("mine", 8_192)], Some("a"), &one), "a default on a server");
+        d.unwritten();
+        assert!(d.changed(&[model("a", 32_768), model("b", 32_768), model("mine", 8_192)], Some("a"), &one), "written again after a failure");
         d.forget();
-        assert!(!d.changed(&[model("a", 65_536)], None), "another PC's engine: nothing to tell");
+        assert!(!d.changed(&[model("a", 65_536)], None, &none), "another PC's engine: nothing to tell");
     }
 
     /// The request the agent gets: a POST to its reload route, with a JSON body (the agent refuses any other with 415).

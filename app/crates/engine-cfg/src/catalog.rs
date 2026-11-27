@@ -341,12 +341,23 @@ impl Setup {
         }
     }
 
-    /// The engine is not on the disk and the app brings it by itself: a new version of one it has (an update), or the
-    /// small processor-only build of official llama.cpp on a PC that already has the engine for its cards.
-    pub fn arrives(&self, paths: &Paths) -> bool {
+    /// The engine is not on the disk and the app brings it by itself: a new version of one it has (an update), the small
+    /// processor-only build of official llama.cpp on a PC that already has the engine for its cards, or the build for the
+    /// integrated graphics the user turned on (`for_integrated`).
+    pub fn arrives(&self, paths: &Paths, hw: &Hardware) -> bool {
         let processor = matches!(self, Setup::General { build: Build::Cpu });
         mango_common::download::older_engine(paths, self.engine(), self.build())
             || (processor && mango_common::download::other_build_installed(paths, self.engine(), Build::Cpu))
+            || self.for_integrated(paths, hw)
+    }
+
+    /// The general engine's build for the integrated graphics, which the user turned on on a PC that has another build
+    /// of it: until it arrives the models run on the processor (`build_plan`).
+    pub fn for_integrated(&self, paths: &Paths, hw: &Hardware) -> bool {
+        matches!(self, Setup::General { .. })
+            && hw.gpus.iter().any(|g| hw.borrows_ram(g))
+            && mango_common::download::installed_engine(paths, self.engine(), self.build()).is_none()
+            && mango_common::download::other_build_installed(paths, self.engine(), self.build())
     }
 }
 
@@ -411,7 +422,7 @@ pub struct ModelEntry {
 /// The local models (cloud ones stay out) in catalog order, the recommended ones first and then the user's, and the
 /// default's key.
 pub fn catalog(paths: &Paths) -> Result<(Vec<ModelEntry>, String)> {
-    catalog_for(paths, &crate::hardware::detect()?)
+    catalog_for(paths, &crate::hardware::detect(paths)?)
 }
 
 pub fn catalog_for(paths: &Paths, hw: &Hardware) -> Result<(Vec<ModelEntry>, String)> {
@@ -420,7 +431,12 @@ pub fn catalog_for(paths: &Paths, hw: &Hardware) -> Result<(Vec<ModelEntry>, Str
     let mut entries = Vec::new();
     for key in file.local() {
         let cfg = model_cfg(&file, key)?;
-        let assessed = crate::view::assess(paths, &file, key, &cfg, hw, &choices, &[]);
+        let mut assessed = crate::view::assess(paths, &file, key, &cfg, hw, &choices, &[]);
+        // Until the engine for the integrated graphics arrives the model runs on the processor (`build_plan`): the entry
+        // says what starts now.
+        if assessed.setup.as_ref().is_ok_and(|s| s.for_integrated(paths, hw)) {
+            assessed = crate::view::assess(paths, &file, key, &cfg, &Hardware { integrated: false, ..hw.clone() }, &choices, &[]);
+        }
         let engine = cfg.engine_with(&assessed.setup);
         let mut missing = None;
         for rel in [cfg.gguf_for(engine), cfg.mmproj.as_deref()].into_iter().flatten() {
@@ -440,7 +456,7 @@ pub fn catalog_for(paths: &Paths, hw: &Hardware) -> Result<(Vec<ModelEntry>, Str
         let used_engine = assessed.setup.as_ref().ok().map(|a| (a.engine().to_string(), a.build()));
         match &assessed.setup {
             Ok(a) if installed_engine(paths, a.engine(), a.build()).is_none() => {
-                waits_engine = weights && a.arrives(paths);
+                waits_engine = weights && a.arrives(paths, hw);
                 missing.get_or_insert(tr!("manca il motore {} ({})", "the engine {} ({}) is missing", a.engine(), a.build().as_str()));
             }
             Err(e) => {
@@ -486,7 +502,7 @@ pub fn download_of(paths: &Paths, key: &str, hw: &Hardware) -> Result<DownloadPl
         // Whether it fits is not told: what these models ask of a card and of the processor is not measured yet.
         return Ok(DownloadPlan {
             engine: IMAGE_ENGINE.to_string(),
-            build: image_build(hw),
+            build: crate::image::engine_on(paths, hw).0,
             bytes: cfg.files.iter().map(|f| f.size).sum(),
             weights: cfg.files.iter().all(|f| mango_common::model_files::listed(&paths.models.join(&f.path)).is_some_and(|m| m.is_file())),
             fits: Ok(()),

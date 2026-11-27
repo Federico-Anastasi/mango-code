@@ -215,7 +215,7 @@ const ImageModelRow: Component<RowProps> = (props) => {
   )
 }
 
-/** «Riscrivi la richiesta» and «Chi riscrive»: choices of the interface, kept with the others (`images.*`). */
+/** «Rewrite the request» and «Who rewrites»: choices of the interface, kept with the others (`images.*`). */
 const RewriteRows: Component = () => {
   const language = useLanguage()
   const settings = useSettings()

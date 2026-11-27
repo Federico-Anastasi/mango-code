@@ -89,6 +89,19 @@ describe("plugin.trigger", () => {
     ),
   )
 
+  it.instance("a hook no plugin listens to does not read the settings: a broken file does not stop it", () =>
+    withProject(
+      ["export default async () => ({", `  ${JSON.stringify(systemHook)}: () => {},`, "})", ""].join("\n"),
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        yield* Effect.promise(() => Bun.write(path.join(test.directory, ".mango", "settings.json"), "{ broken"))
+        const plugin = yield* Plugin.Service
+        const out = { env: {} as Record<string, string> }
+        expect(yield* plugin.trigger("shell.env", { cwd: test.directory, sessionID: "ses_1" }, out)).toBe(out)
+      }),
+    ),
+  )
+
   it.instance("awaits asynchronous hooks", () =>
     withProject(
       [

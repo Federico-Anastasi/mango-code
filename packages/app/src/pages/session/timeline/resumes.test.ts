@@ -1,13 +1,13 @@
 import { describe, expect, test } from "bun:test"
 import type { AssistantMessage, Message, Part, UserMessage } from "@opencode-ai/sdk/v2"
-import { foldResumes } from "./resumes"
+import { foldResumes, heldAnswer } from "./resumes"
 
 const user = (id: string) => ({ id, role: "user", time: { created: 1 } }) as UserMessage
 const assistant = (id: string, parentID: string) =>
   ({ id, role: "assistant", parentID, time: { created: 2, completed: 3 } }) as AssistantMessage
 const words = (messageID: string) => ({ id: `p_${messageID}`, type: "text", messageID, text: "Ciao." }) as Part
-const resume = (messageID: string) =>
-  ({ id: `p_${messageID}`, type: "text", sessionID: "ses_1", messageID, synthetic: true, text: "Go on.", metadata: { resume: "length" } }) as Part
+const resume = (messageID: string, kind = "length") =>
+  ({ id: `p_${messageID}`, type: "text", sessionID: "ses_1", messageID, synthetic: true, text: "Go on.", metadata: { resume: kind } }) as Part
 const note = (messageID: string) =>
   ({ id: `p_${messageID}`, type: "text", sessionID: "ses_1", messageID, synthetic: true, text: "Look at this." }) as Part
 
@@ -31,6 +31,14 @@ describe("a turn the agent took up again by itself", () => {
     expect(folded.messages.map((message) => (message.role === "assistant" ? message.parentID : message.id))).toEqual(["u1", "u1", "u1", "u1"])
   })
 
+  test("the message that asks again after a cut for blank lines or for repeating belongs to the turn too", () => {
+    for (const kind of ["blank", "repeat"]) {
+      const messages: Message[] = [user("u1"), assistant("a1", "u1"), user("u2"), assistant("a2", "u2")]
+      const folded = foldResumes(messages, partsOf([words("u1"), resume("u2", kind)]))
+      expect(folded.messages.map((message) => message.id)).toEqual(["u1", "a1", "a2"])
+    }
+  })
+
   test("other synthetic messages (a comment on a file) stay turns of their own, and with nothing to fold the list is the same one", () => {
     const messages: Message[] = [user("u1"), assistant("a1", "u1"), user("u2"), assistant("a2", "u2")]
     const folded = foldResumes(messages, partsOf([words("u1"), note("u2")]))
@@ -42,4 +50,23 @@ describe("a turn the agent took up again by itself", () => {
     const messages: Message[] = [user("u2"), assistant("a2", "u2")]
     expect(foldResumes(messages, partsOf([resume("u2")])).messages).toBe(messages)
   })
+})
+
+describe("an answer the harness held back", () => {
+  const held = (messageID: string) =>
+    ({ id: `p_${messageID}`, type: "text", sessionID: "ses_1", messageID, synthetic: true, text: "Open the source.", metadata: { harness: { held: true } } }) as Part
+
+  test("the message that asks the model again belongs to the turn before it, like one taken up for its length", () => {
+    const messages: Message[] = [user("u1"), assistant("a1", "u1"), user("u2"), assistant("a2", "u2")]
+    const folded = foldResumes(messages, partsOf([words("u1"), held("u2")]))
+    expect(folded.messages.map((message) => (message.role === "assistant" ? message.parentID : message.id))).toEqual(["u1", "u1", "u1"])
+  })
+})
+
+test("the answer the harness held back is not shown; the other texts are", () => {
+  const answer = (metadata?: Record<string, unknown>) =>
+    ({ id: "p_a1", type: "text", sessionID: "ses_1", messageID: "a1", text: "It costs 24 euro.", metadata }) as Part
+  expect(heldAnswer(answer({ harness: { held: true } }))).toBe(true)
+  expect(heldAnswer(answer())).toBe(false)
+  expect(heldAnswer(answer({ resume: "length" }))).toBe(false)
 })

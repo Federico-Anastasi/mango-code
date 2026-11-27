@@ -4,6 +4,7 @@ import { useServerSync } from "@/context/server-sync"
 import { useSync } from "@/context/sync"
 import { same } from "@/utils/same"
 import { foldResumes } from "./resumes"
+import { teamNotice } from "./team-notice"
 
 const emptyUserMessages: UserMessage[] = []
 const sessionFreshness = 15_000
@@ -99,10 +100,15 @@ export function createTimelineModel(input: {
   }
 }
 
-/** The user's messages: not the ones the agent wrote itself to take up a cut answer, which belong to the turn before. */
+/**
+ * The user's messages: not the ones the agent wrote itself to take up a cut answer, which belong to the turn before, and
+ * not what the Team put in the conversation.
+ */
 export function selectUserMessages(messages: Message[], parts: (messageID: string) => Part[]) {
   const { resumes } = foldResumes(messages, parts)
-  return messages.filter((message): message is UserMessage => message.role === "user" && !resumes.has(message.id))
+  return messages.filter(
+    (message): message is UserMessage => message.role === "user" && !resumes.has(message.id) && !teamNotice(parts(message.id)),
+  )
 }
 
 export function isTimelineReady(messages: Message[] | undefined, loading: boolean) {

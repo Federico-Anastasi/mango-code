@@ -6,7 +6,8 @@
 //!   CUDA version the driver supports. No process to launch (so no console window), no text to interpret, and the
 //!   errors have a type. The index is that of `CUDA_DEVICE_ORDER=PCI_BUS_ID`, the same that `CUDA_VISIBLE_DEVICES`
 //!   needs.
-//! - **all the others** from DXGI (Windows' graphics system): brand from the vendor id, dedicated memory. DXGI
+//! - **all the others** from DXGI (Windows' graphics system): brand from the vendor id, dedicated memory, and the PC's
+//!   memory the adapter may borrow (what the integrated graphics runs on, when the user lets it). DXGI
 //!   sees the NVIDIA cards too, but doesn't give the CUDA version and for NVIDIA ones NVML rules; DXGI's NVIDIA
 //!   cards are only used if NVML doesn't answer (broken driver): they stay in the list, without CUDA version, and
 //!   the build will be Vulkan.
@@ -19,10 +20,10 @@
 
 use crate::user;
 use anyhow::{Context, Result};
-use mango_common::{tr, Build};
+use mango_common::{tr, Build, Paths};
 use nvml_wrapper::error::NvmlError;
 use nvml_wrapper::Nvml;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use windows::core::{w, PCWSTR};
 use windows::Win32::Graphics::Dxgi::{CreateDXGIFactory1, IDXGIFactory1, DXGI_ADAPTER_FLAG_SOFTWARE};
@@ -35,7 +36,7 @@ use windows::Win32::System::SystemInformation::{
     SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX,
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Vendor {
     Nvidia,
@@ -44,7 +45,7 @@ pub enum Vendor {
     Other,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Gpu {
     /// NVIDIA: position in PCI order (that of `CUDA_VISIBLE_DEVICES`). The others: the position after the NVIDIA ones.
     pub index: u32,
@@ -52,6 +53,9 @@ pub struct Gpu {
     pub vendor: Vendor,
     /// Dedicated memory.
     pub memory_mib: u64,
+    /// Memory of the PC that Windows lets the adapter borrow; 0 for the cards read from NVML. Only the integrated graphics
+    /// is planned on it (`Hardware::borrows_ram`).
+    pub shared_mib: u64,
     /// Maximum CUDA version the NVIDIA driver supports, e.g. (12, 6). `None` if it isn't an NVIDIA or NVML doesn't answer.
     pub cuda_driver: Option<(u32, u32)>,
     /// CUDA compute capability, e.g. (8, 6). NVIDIA with NVML only.
@@ -60,7 +64,7 @@ pub struct Gpu {
 
 impl Gpu {
     /// The graphics built into the processor. The BIOS gives it part of the PC's own memory, and whether it counts as a
-    /// card depends on how much (`counts`). Windows does not say it in the adapter's description, so the name tells, and
+    /// card depends on how much (`Hardware::counts`). Windows does not say it in the adapter's description, so the name tells, and
     /// only a name that says it for certain is taken as integrated: any other is a card. Intel's integrated graphics are
     /// the HD, UHD and Iris ones, «Graphics» alone, «Arc Graphics» and the Arc 100V and 100T series; its discrete cards
     /// are the Arc A and B series (also the M ones of laptops), Iris Xe MAX and the Data Center GPUs. AMD's integrated
@@ -95,10 +99,15 @@ impl Gpu {
         }
     }
 
-    /// The card can hold a model: something is left on it after the reserve, and integrated graphics was given the
-    /// memory of a card.
-    pub fn counts(&self) -> bool {
+    /// Something is left on the card's own memory after the reserve; integrated graphics needs the memory of a card.
+    pub(crate) fn holds_a_model(&self) -> bool {
         self.memory_mib >= if self.is_integrated() { MIN_INTEGRATED_GPU_MEMORY_MIB } else { MIN_GPU_MEMORY_MIB }
+    }
+
+    /// Integrated graphics without the memory of a card: the models can use it only on the PC's memory, when the user
+    /// lets them (`Hardware::borrows_ram`).
+    pub fn needs_ram(&self) -> bool {
+        self.is_integrated() && !self.holds_a_model()
     }
 
     /// The card has tensor cores, which llama.cpp's fast paths for reading the prompt count on. Volta and Ampere and
@@ -114,7 +123,7 @@ impl Gpu {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Cpu {
     pub name: String,
     /// Physical cores (not threads).
@@ -123,25 +132,35 @@ pub struct Cpu {
     pub avx512: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Hardware {
     pub gpus: Vec<Gpu>,
     pub cpu: Cpu,
     pub ram_mib: u64,
+    /// The user lets the models use the integrated graphics on the PC's memory (Settings › Computer); off at first.
+    #[serde(default)]
+    pub integrated: bool,
     /// Why NVML didn't answer although the NVIDIA driver is there (an old card with a legacy driver, a broken
     /// installation). The NVIDIA cards then come from DXGI, without CUDA. For the startup log.
     pub nvml_error: Option<String>,
 }
 
-/// Memory that Windows (screen, DWM) and the CUDA context take from each card (measured, see `split.rs`) plus a
-/// margin for the engine's compute buffers (1024 MiB, what `-fit` would leave free by default).
-pub(crate) const GPU_RESERVE_MIB: u64 = 1100 + 1024;
+/// Margin for the engine's compute buffers: what `-fit` would leave free by default.
+const COMPUTE_MARGIN_MIB: u64 = 1024;
+
+/// Memory that Windows (screen, DWM) and the CUDA context take from each card (measured, see `split.rs`) plus the
+/// margin for the engine's compute buffers.
+pub(crate) const GPU_RESERVE_MIB: u64 = 1100 + COMPUTE_MARGIN_MIB;
+
+/// RAM left to Windows and the other programs when a model takes the PC's memory: on the processor, or on the
+/// integrated graphics that borrows it.
+pub(crate) const RAM_RESERVE_MIB: u64 = 4096;
 
 /// A card counts only if something is left on it after the reserve. On a 2 GiB card (a GT 710) no model fits:
 /// counting it would pick an engine build for a card no model uses.
 const MIN_GPU_MEMORY_MIB: u64 = GPU_RESERVE_MIB + 1;
 
-/// Integrated graphics counts from an 8 GB setting up: a Ryzen AI Max, or a mini PC set that way. What a laptop gives
+/// Integrated graphics counts when the BIOS gives it 8 GB or more: a Ryzen AI Max, or a mini PC set that way. What a laptop gives
 /// by default (512 MiB to 4 GiB) is taken from the processor's memory without leaving room for a model and its
 /// context. Windows reports a setting some MiB short (8176 for 8 GB), hence the margin.
 const MIN_INTEGRATED_GPU_MEMORY_MIB: u64 = 7 * 1024;
@@ -153,9 +172,57 @@ const CUDA_13_BUILD: (u32, u32) = (13, 4);
 const CC_MIN_CUDA_13: (u32, u32) = (7, 5);
 
 impl Hardware {
-    /// The cards that count (`Gpu::counts`); software adapters are not in the list at all.
+    /// What tells a card apart in the choices and on screen: its name, and with other cards of the same name `#1`, `#2`…
+    /// in their order (for NVIDIA the PCI one, which does not change while the cards stay in their slots).
+    pub fn card_id(&self, g: &Gpu) -> String {
+        let twins: Vec<u32> = self.gpus.iter().filter(|o| o.name == g.name).map(|o| o.index).collect();
+        if twins.len() < 2 {
+            return g.name.clone();
+        }
+        format!("{} #{}", g.name, twins.iter().filter(|&&i| i < g.index).count() + 1)
+    }
+
+    /// Whether `entry` of a choice names `g`: its id, or its name, which names every card that has it.
+    pub fn names(&self, entry: &str, g: &Gpu) -> bool {
+        entry == g.name || entry == self.card_id(g)
+    }
+
+    /// The cards that count (`counts`); software adapters are not in the list at all.
     pub fn usable(&self) -> impl Iterator<Item = &Gpu> {
-        self.gpus.iter().filter(|s| s.counts())
+        self.gpus.iter().filter(|g| self.counts(g))
+    }
+
+    /// The card can hold a model. The integrated graphics never counts beside a dedicated card that does: a model takes
+    /// one kind of memory, and with Vulkan the engine leaves it out by itself there. Alone, it counts with the memory of a
+    /// card from the BIOS, or on the PC's memory when the user lets it (`borrows_ram`).
+    pub fn counts(&self, g: &Gpu) -> bool {
+        if !g.is_integrated() {
+            return g.holds_a_model();
+        }
+        !self.dedicated_counts() && (g.holds_a_model() || self.borrows_ram(g))
+    }
+
+    /// A dedicated card of the PC can hold a model.
+    pub(crate) fn dedicated_counts(&self) -> bool {
+        self.gpus.iter().any(|d| !d.is_integrated() && d.holds_a_model())
+    }
+
+    /// The integrated graphics runs the models on the PC's memory: the user lets it, its own memory is not a card's, no
+    /// dedicated card counts and some memory is left to borrow.
+    pub fn borrows_ram(&self, g: &Gpu) -> bool {
+        self.integrated && g.needs_ram() && !self.dedicated_counts() && self.borrowable_mib(g) > 0
+    }
+
+    /// The PC's memory the integrated graphics can take for a model: what Windows lets it borrow, never more than the RAM
+    /// left to Windows and the other programs, less the engine's margin. Whether it really holds is seen at the start
+    /// (`taken_before_start`), where the processor takes over if it does not.
+    pub(crate) fn borrowable_mib(&self, g: &Gpu) -> u64 {
+        g.shared_mib.min(self.ram_mib.saturating_sub(RAM_RESERVE_MIB)).saturating_sub(COMPUTE_MARGIN_MIB)
+    }
+
+    /// The memory of `g` a model can count on for its weights and cache.
+    pub fn model_memory_mib(&self, g: &Gpu) -> u64 {
+        if self.borrows_ram(g) { self.borrowable_mib(g) } else { g.memory_mib.saturating_sub(GPU_RESERVE_MIB) }
     }
 
     /// The PC has Turing cards (compute capability 7.5) and none of them has tensor cores: the GTX 16 family. An engine
@@ -168,8 +235,20 @@ impl Hardware {
     }
 }
 
-/// Reads this PC's hardware.
-pub fn detect() -> Result<Hardware> {
+/// This PC's hardware with the user's choice on the integrated graphics: what every plan and every verdict reads.
+pub fn detect(paths: &Paths) -> Result<Hardware> {
+    Ok(Hardware { integrated: crate::choices::read(paths)?.computer.integrated, ..detect_bare()? })
+}
+
+/// This PC's hardware as it is, without the user's choices. Development builds read it from the JSON file `MANGO_HARDWARE`
+/// names, when set: the integration tests give the app a computer other than the one they run on.
+pub fn detect_bare() -> Result<Hardware> {
+    if cfg!(debug_assertions) {
+        if let Some(file) = std::env::var_os("MANGO_HARDWARE") {
+            let text = std::fs::read_to_string(&file).with_context(|| format!("MANGO_HARDWARE {}", file.to_string_lossy()))?;
+            return serde_json::from_str(&text).with_context(|| format!("MANGO_HARDWARE {}", file.to_string_lossy()));
+        }
+    }
     let (nvidia, nvml_error) = match nvidia_gpus() {
         Ok(gpus) => (gpus.into_iter().map(|(gpu, _)| gpu).collect(), None),
         // No NVIDIA driver on this PC: nothing to report.
@@ -178,7 +257,7 @@ pub fn detect() -> Result<Hardware> {
         // keep the app from starting: DXGI's cards stand in (`merge`) and at worst the model runs on the processor.
         Err(e) => (Vec::new(), Some(e.to_string())),
     };
-    Ok(Hardware { gpus: merge(nvidia, dxgi_gpus()?), cpu: cpu()?, ram_mib: ram_mib()?, nvml_error })
+    Ok(Hardware { gpus: merge(nvidia, dxgi_gpus()?), cpu: cpu()?, ram_mib: ram_mib()?, integrated: false, nvml_error })
 }
 
 /// Which llama.cpp build suits this hardware.
@@ -226,7 +305,7 @@ fn nvidia_gpus() -> Result<Vec<(Gpu, u64)>, NvmlError> {
         .into_iter()
         .enumerate()
         .map(|(i, (_, name, memory_mib, used_mib, cc))| {
-            (Gpu { index: i as u32, name, vendor: Vendor::Nvidia, memory_mib, cuda_driver: Some(cuda_driver), cc: Some(cc) }, used_mib)
+            (Gpu { index: i as u32, name, vendor: Vendor::Nvidia, memory_mib, shared_mib: 0, cuda_driver: Some(cuda_driver), cc: Some(cc) }, used_mib)
         })
         .collect())
 }
@@ -300,6 +379,7 @@ struct DxgiGpu {
     name: String,
     vendor_id: u32,
     memory_mib: u64,
+    shared_mib: u64,
     /// What Windows' counters name the adapter by.
     luid: u64,
 }
@@ -324,6 +404,7 @@ fn dxgi_gpus() -> Result<Vec<DxgiGpu>> {
                 name: String::from_utf16_lossy(&d.Description[..end]),
                 vendor_id: d.VendorId,
                 memory_mib: d.DedicatedVideoMemory as u64 / (1 << 20),
+                shared_mib: d.SharedSystemMemory as u64 / (1 << 20),
                 luid: u64::from(d.AdapterLuid.HighPart as u32) << 32 | u64::from(d.AdapterLuid.LowPart),
             });
         }
@@ -352,7 +433,7 @@ fn merge(nvidia: Vec<Gpu>, dxgi: Vec<DxgiGpu>) -> Vec<Gpu> {
     let mut gpus = nvidia;
     for (vendor, d) in beside_nvml(gpus.is_empty(), &dxgi) {
         let index = gpus.len() as u32;
-        gpus.push(Gpu { index, name: d.name.clone(), vendor, memory_mib: d.memory_mib, cuda_driver: None, cc: None });
+        gpus.push(Gpu { index, name: d.name.clone(), vendor, memory_mib: d.memory_mib, shared_mib: d.shared_mib, cuda_driver: None, cc: None });
     }
     gpus
 }
@@ -410,11 +491,20 @@ fn physical_cores() -> Result<u32> {
     }
 }
 
+/// The RAM the programs leave free right now.
+pub fn free_ram_mib() -> Result<u64> {
+    Ok(memory_status()?.ullAvailPhys / (1 << 20))
+}
+
 fn ram_mib() -> Result<u64> {
+    Ok(memory_status()?.ullTotalPhys / (1 << 20))
+}
+
+fn memory_status() -> Result<MEMORYSTATUSEX> {
     let mut m = MEMORYSTATUSEX { dwLength: std::mem::size_of::<MEMORYSTATUSEX>() as u32, ..Default::default() };
     // SAFETY: `m` is initialized with its length, as the function requires.
     unsafe { GlobalMemoryStatusEx(&mut m) }.with_context(|| tr!("Non riesco a leggere la memoria del computer.", "I can't read the computer's memory."))?;
-    Ok(m.ullTotalPhys / (1 << 20))
+    Ok(m)
 }
 
 #[cfg(test)]
@@ -422,11 +512,17 @@ pub(crate) mod fixture {
     use super::*;
 
     pub fn nvidia(index: u32, name: &str, memory_mib: u64, cc: (u32, u32), cuda_driver: (u32, u32)) -> Gpu {
-        Gpu { index, name: name.into(), vendor: Vendor::Nvidia, memory_mib, cuda_driver: Some(cuda_driver), cc: Some(cc) }
+        Gpu { index, name: name.into(), vendor: Vendor::Nvidia, memory_mib, shared_mib: 0, cuda_driver: Some(cuda_driver), cc: Some(cc) }
     }
 
     pub fn other(index: u32, name: &str, vendor: Vendor, memory_mib: u64) -> Gpu {
-        Gpu { index, name: name.into(), vendor, memory_mib, cuda_driver: None, cc: None }
+        Gpu { index, name: name.into(), vendor, memory_mib, shared_mib: 0, cuda_driver: None, cc: None }
+    }
+
+    /// The processor's graphics, with the memory the BIOS gives it and the memory of the PC it may borrow.
+    pub fn integrated(index: u32, name: &str, memory_mib: u64, shared_mib: u64) -> Gpu {
+        let vendor = if name.starts_with("Intel") { Vendor::Intel } else { Vendor::Amd };
+        Gpu { index, name: name.into(), vendor, memory_mib, shared_mib, cuda_driver: None, cc: None }
     }
 
     pub fn fake_cpu() -> Cpu {
@@ -434,7 +530,19 @@ pub(crate) mod fixture {
     }
 
     pub fn pc(gpus: Vec<Gpu>, ram_mib: u64) -> Hardware {
-        Hardware { gpus, cpu: fake_cpu(), ram_mib, nvml_error: None }
+        Hardware { gpus, cpu: fake_cpu(), ram_mib, integrated: false, nvml_error: None }
+    }
+
+    /// Two identical cards, RTX 3060 12 GB, and a GTX 1080, in PCI order.
+    pub fn twin_gpus() -> Hardware {
+        pc(
+            vec![
+                nvidia(0, "NVIDIA GeForce RTX 3060", 12288, (8, 6), (12, 6)),
+                nvidia(1, "NVIDIA GeForce GTX 1080", 8192, (6, 1), (12, 6)),
+                nvidia(2, "NVIDIA GeForce RTX 3060", 12288, (8, 6), (12, 6)),
+            ],
+            65_536,
+        )
     }
 
     /// Three cards, RTX 3060 Ti + GTX 1080 + GTX 1660 SUPER (driver 560.94: CUDA 12.6), in PCI order.
@@ -454,6 +562,20 @@ pub(crate) mod fixture {
 mod tests {
     use super::fixture::*;
     use super::*;
+
+    #[test]
+    fn identical_cards_are_told_apart_by_their_order_and_a_name_alone_names_them_all() {
+        let hw = twin_gpus();
+        let ids: Vec<String> = hw.gpus.iter().map(|g| hw.card_id(g)).collect();
+        assert_eq!(ids, ["NVIDIA GeForce RTX 3060 #1", "NVIDIA GeForce GTX 1080", "NVIDIA GeForce RTX 3060 #2"]);
+        let named = |entry: &str| hw.gpus.iter().filter(|g| hw.names(entry, g)).map(|g| g.index).collect::<Vec<_>>();
+        assert_eq!(named("NVIDIA GeForce RTX 3060 #2"), [2]);
+        assert_eq!(named("NVIDIA GeForce RTX 3060"), [0, 2]);
+        assert_eq!(named("NVIDIA GeForce GTX 1080"), [1]);
+        assert_eq!(named("NVIDIA GeForce RTX 3060 #3"), Vec::<u32>::new());
+        let three = three_gpus();
+        assert!(three.gpus.iter().all(|g| three.card_id(g) == g.name), "a card without a twin keeps its name");
+    }
 
     /// Real brand strings of Intel and AMD processors, as the CPU gives them.
     #[test]
@@ -531,6 +653,61 @@ mod tests {
         }
         let below = pc(vec![other(0, "AMD Radeon(TM) 8060S Graphics", Vendor::Amd, 6144)], 58_000);
         assert_eq!((below.usable().count(), choose_build(&below)), (0, Build::Cpu));
+    }
+
+    /// A laptop with only the processor's graphics (values as Windows gives them for a Ryzen 7 5825U with 16 GB): off at
+    /// first; with the user's switch on it is the card of the plan, with the PC's memory it may borrow, less what Windows
+    /// and the other programs keep and the engine's margin.
+    #[test]
+    fn integrated_graphics_borrows_the_ram_when_the_user_lets_it() {
+        let mut hw = pc(vec![integrated(0, "AMD Radeon(TM) Graphics", 512, 7_700)], 15_700);
+        assert_eq!((hw.usable().count(), choose_build(&hw)), (0, Build::Cpu), "off at first");
+
+        hw.integrated = true;
+        assert_eq!(hw.usable().map(|g| g.name.as_str()).collect::<Vec<_>>(), ["AMD Radeon(TM) Graphics"]);
+        assert_eq!(choose_build(&hw), Build::Vulkan);
+        assert!(hw.borrows_ram(&hw.gpus[0]));
+        assert_eq!(hw.model_memory_mib(&hw.gpus[0]), 7_700 - 1024, "the memory it may borrow, less the engine's margin");
+
+        hw.ram_mib = 8_000;
+        assert_eq!(hw.model_memory_mib(&hw.gpus[0]), 8_000 - 4096 - 1024, "never more than the RAM Windows and the programs leave");
+        hw.ram_mib = 5_000;
+        assert_eq!((hw.usable().count(), choose_build(&hw)), (0, Build::Cpu), "nothing left to borrow");
+    }
+
+    /// The integrated graphics is never added to a dedicated card that counts, whatever memory it has: a model runs on one
+    /// kind of memory, and the engine with Vulkan leaves the integrated one out by itself when there is a dedicated card.
+    #[test]
+    fn with_a_dedicated_card_the_integrated_graphics_does_not_count() {
+        let mut hw = three_gpus();
+        hw.gpus.push(integrated(3, "Intel(R) UHD Graphics 630", 128, 32_000));
+        hw.integrated = true;
+        assert_eq!(hw.usable().count(), 3);
+        assert_eq!(choose_build(&hw), Build::Cuda12);
+
+        let mut amd = pc(vec![other(0, "AMD Radeon RX 7800 XT", Vendor::Amd, 16_368), integrated(1, "AMD Radeon(TM) 8060S Graphics", 32_768, 16_000)], 64_000);
+        assert_eq!(amd.usable().map(|g| g.name.as_str()).collect::<Vec<_>>(), ["AMD Radeon RX 7800 XT"]);
+        amd.integrated = true;
+        assert_eq!(amd.usable().map(|g| g.name.as_str()).collect::<Vec<_>>(), ["AMD Radeon RX 7800 XT"]);
+        assert!(!amd.borrows_ram(&amd.gpus[1]));
+    }
+
+    /// Integrated graphics given the memory of a card by the BIOS counts on that memory, switch or not: it does not borrow.
+    #[test]
+    fn integrated_graphics_with_a_card_of_memory_does_not_borrow() {
+        let mut hw = pc(vec![integrated(0, "AMD Radeon(TM) 8060S Graphics", 65_536, 31_000)], 64_000);
+        for on in [false, true] {
+            hw.integrated = on;
+            assert_eq!(hw.usable().count(), 1);
+            assert!(!hw.borrows_ram(&hw.gpus[0]));
+            assert_eq!(hw.model_memory_mib(&hw.gpus[0]), 65_536 - GPU_RESERVE_MIB);
+        }
+    }
+
+    #[test]
+    fn dxgi_gives_the_memory_an_adapter_may_borrow() {
+        let dxgi = vec![DxgiGpu { name: "AMD Radeon(TM) Graphics".into(), vendor_id: 0x1002, memory_mib: 512, shared_mib: 7_700, luid: 0x200 }];
+        assert_eq!(merge(vec![], dxgi)[0].shared_mib, 7_700);
     }
 
     /// Next to an NVIDIA card with CUDA the engine uses only that one, as with any card of another brand.
@@ -637,8 +814,8 @@ mod tests {
     fn merging_nvml_and_dxgi_does_not_duplicate_the_nvidia_cards() {
         let nvml = vec![nvidia(0, "NVIDIA GeForce RTX 3060", 12_288, (8, 6), (12, 6))];
         let dxgi = vec![
-            DxgiGpu { name: "NVIDIA GeForce RTX 3060".into(), vendor_id: 0x10DE, memory_mib: 12_090, luid: 0x100 },
-            DxgiGpu { name: "AMD Radeon(TM) Graphics".into(), vendor_id: 0x1002, memory_mib: 512, luid: 0x200 },
+            DxgiGpu { name: "NVIDIA GeForce RTX 3060".into(), vendor_id: 0x10DE, memory_mib: 12_090, shared_mib: 0, luid: 0x100 },
+            DxgiGpu { name: "AMD Radeon(TM) Graphics".into(), vendor_id: 0x1002, memory_mib: 512, shared_mib: 0, luid: 0x200 },
         ];
         let v = merge(nvml, dxgi);
         assert_eq!(v.len(), 2);
@@ -650,7 +827,7 @@ mod tests {
     /// list of `detect`. An adapter the counters do not give is not in the reading, and the cards after it keep their numbers.
     #[test]
     fn the_memory_in_use_is_read_for_every_brand_with_the_numbers_of_the_list() {
-        let dxgi = |luid: u64, vendor_id: u32, memory_mib: u64| DxgiGpu { name: String::new(), vendor_id, memory_mib, luid };
+        let dxgi = |luid: u64, vendor_id: u32, memory_mib: u64| DxgiGpu { name: String::new(), vendor_id, memory_mib, shared_mib: 0, luid };
         let adapters = [dxgi(0x100, 0x10DE, 12_090), dxgi(0x200, 0x1002, 16_368), dxgi(0x300, 0x8086, 128), dxgi(0x400, 0x1002, 8_176)];
         let gib = |n: u64| n << 30;
         let in_use = HashMap::from([(0x100, gib(1)), (0x200, gib(15)), (0x300, 5 << 20), (0x999, gib(3))]);
@@ -675,7 +852,7 @@ mod tests {
 
     #[test]
     fn if_nvml_is_silent_dxgis_nvidia_cards_stay_without_cuda() {
-        let dxgi = vec![DxgiGpu { name: "NVIDIA GeForce GTX 1650".into(), vendor_id: 0x10DE, memory_mib: 4096, luid: 0x100 }];
+        let dxgi = vec![DxgiGpu { name: "NVIDIA GeForce GTX 1650".into(), vendor_id: 0x10DE, memory_mib: 4096, shared_mib: 0, luid: 0x100 }];
         let v = merge(vec![], dxgi);
         assert_eq!(v.len(), 1);
         assert_eq!((v[0].vendor, v[0].cuda_driver, v[0].cc), (Vendor::Nvidia, None, None));
@@ -689,8 +866,8 @@ mod tests {
     fn an_old_small_nvidia_card_read_from_dxgi_leaves_the_processor() {
         for memory_mib in [1024, 2048] {
             let dxgi = vec![
-                DxgiGpu { name: "NVIDIA GeForce GT 710".into(), vendor_id: 0x10DE, memory_mib, luid: 0x100 },
-                DxgiGpu { name: "Intel(R) Graphics".into(), vendor_id: 0x8086, memory_mib: 128, luid: 0x200 },
+                DxgiGpu { name: "NVIDIA GeForce GT 710".into(), vendor_id: 0x10DE, memory_mib, shared_mib: 0, luid: 0x100 },
+                DxgiGpu { name: "Intel(R) Graphics".into(), vendor_id: 0x8086, memory_mib: 128, shared_mib: 0, luid: 0x200 },
             ];
             let hw = pc(merge(vec![], dxgi), 16_384);
             assert_eq!(hw.usable().count(), 0, "{memory_mib} MiB");
@@ -702,7 +879,7 @@ mod tests {
     #[test]
     #[ignore = "requires an RTX 3060 Ti, a GTX 1080 and a GTX 1660 SUPER"]
     fn detects_the_three_real_gpus() {
-        let hw = detect().unwrap();
+        let hw = detect_bare().unwrap();
         println!("{hw:#?}");
         // The three NVIDIA cards, and the CPU's integrated graphics (Intel UHD 630, 128 MiB) which doesn't count.
         let names: Vec<&str> = hw.usable().map(|s| s.name.as_str()).collect();

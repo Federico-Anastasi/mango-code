@@ -784,6 +784,42 @@ const layer = Layer.effect(
       }),
     )
 
+    /** mango-code: the OpenAI-compatible provider writes a tool result with pictures as the JSON text of its parts. The
+     *  engine and the chat templates read a tool message made of parts, the text and then each picture as `image_url`,
+     *  as a model that sees is trained on: such a message is written that way. Any other message stays as it is. */
+    function withToolPictures(body: Record<string, unknown>): Record<string, unknown> {
+      if (!Array.isArray(body.messages)) return body
+      const parts = (content: unknown) => {
+        if (typeof content !== "string" || !content.startsWith("[{")) return undefined
+        const value: unknown = iife(() => {
+          try {
+            return JSON.parse(content)
+          } catch {
+            return undefined
+          }
+        })
+        if (!Array.isArray(value)) return undefined
+        const written = value.map((part: { type?: unknown; text?: unknown; mediaType?: unknown; data?: unknown }) =>
+          part?.type === "text" && typeof part.text === "string"
+            ? { type: "text", text: part.text }
+            : (part?.type === "media" || part?.type === "image-data") &&
+                typeof part.mediaType === "string" &&
+                part.mediaType.startsWith("image/") &&
+                typeof part.data === "string"
+              ? { type: "image_url", image_url: { url: `data:${part.mediaType};base64,${part.data}` } }
+              : undefined,
+        )
+        return written.every(Boolean) && written.some((part) => part?.type === "image_url") ? written : undefined
+      }
+      return {
+        ...body,
+        messages: body.messages.map((message: { role?: unknown; content?: unknown }) => {
+          const written = message?.role === "tool" ? parts(message.content) : undefined
+          return written ? { ...message, content: written } : message
+        }),
+      }
+    }
+
     const list = Effect.fn("Provider.list")(() => InstanceState.use(state, (s) => s.providers))
 
     async function resolveSDK(model: Model, s: State, envs: Record<string, string | undefined>) {
@@ -795,10 +831,15 @@ const layer = Layer.effect(
           options["includeUsage"] = true
         }
 
-        // mango-code: the local engine sends its timings with every token (see engine-timings.ts).
-        if (model.providerID === "mango" && model.api.npm.includes("@ai-sdk/openai-compatible")) {
-          options["metadataExtractor"] = engineTimingsExtractor(model.providerID)
-          options["transformRequestBody"] = (body: Record<string, unknown>) => ({ ...body, timings_per_token: true })
+        // mango-code: the local engine sends its timings with every token (see engine-timings.ts); the pictures of a tool
+        // result go inside its message, for any OpenAI-compatible server.
+        if (model.api.npm.includes("@ai-sdk/openai-compatible")) {
+          const local = model.providerID === "mango"
+          if (local) options["metadataExtractor"] = engineTimingsExtractor(model.providerID)
+          options["transformRequestBody"] = (body: Record<string, unknown>) => ({
+            ...withToolPictures(body),
+            ...(local ? { timings_per_token: true } : {}),
+          })
         }
 
         const baseURL = iife(() => {

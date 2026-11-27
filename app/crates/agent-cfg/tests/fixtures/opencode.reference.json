@@ -26,7 +26,7 @@
           "modalities": { "input": ["text"], "output": ["text"] },
           "temperature": true,
           "interleaved": "reasoning_content",
-          "limit": { "context": 122880, "output": 15360 },
+          "limit": { "context": 122880, "output": 122880 },
           "cost": { "input": 0, "output": 0, "cache_read": 0, "cache_write": 0 }
         }
       }
@@ -46,7 +46,7 @@
           "attachment": false,
           "modalities": { "input": ["text"], "output": ["text"] },
           "temperature": true,
-          "limit": { "context": 128000, "output": 4096 },
+          "limit": { "context": 128000, "output": 128000 },
           "cost": { "input": 0, "output": 0, "cache_read": 0 }
         }
       }
@@ -88,12 +88,6 @@
     "auto": true,
     "prune": false
   },
-
-  "skills": {
-    "paths": ["C:\\Test\\dist\\mango-plugin\\skills"]
-  },
-
-  "instructions": ["C:\\Test\\dist\\opencode-home\\MANGO.md", "C:\\Test\\dist\\opencode-home\\MANGO-web-text.md"],
 
   "plugin": [],
 

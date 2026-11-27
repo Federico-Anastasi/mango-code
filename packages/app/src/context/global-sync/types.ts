@@ -32,6 +32,8 @@ export type ProjectMeta = {
 
 export type State = {
   status: "loading" | "partial" | "complete"
+  /** The agents list and the settings have each arrived or failed to: what the model of a new conversation is read from. */
+  model_ready: boolean
   agent: Agent[]
   command: CommandInfo[]
   reference: ReferenceInfo[]

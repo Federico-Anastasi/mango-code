@@ -37,7 +37,7 @@ export function foldersEffect(request: HttpServerRequest.HttpServerRequest) {
       return failure(tr("«folders» deve essere un elenco di percorsi", "\"folders\" must be a list of paths"))
     const next = [...new Set(folders.map((c) => path.resolve(c)))]
     const missing = next.find((c) => !existsSync(c) || !statSync(c).isDirectory())
-    if (missing) return failure(tr(`non e' una cartella: ${missing}`, `not a folder: ${missing}`))
+    if (missing) return failure(tr(`non è una cartella: ${missing}`, `not a folder: ${missing}`))
 
     const changed = next.join("|") !== current.join("|")
     if (changed) registry().set(keyOf(directory), next)

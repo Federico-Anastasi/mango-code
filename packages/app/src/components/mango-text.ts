@@ -15,7 +15,7 @@ import {
 
 type Language = Pick<ReturnType<typeof useLanguage>, "t" | "intl">
 
-/** «2 schede», «1 scheda», «Processore». */
+/** «2 cards», «1 card», «Processor». */
 export function cardsText(where: Pick<Where, "placement" | "gpus"> & { context?: number }, language: Language) {
   if (where.placement === "cpu" || where.gpus.length === 0) return language.t("mango.where.cpu")
   return where.gpus.length === 1
@@ -23,13 +23,13 @@ export function cardsText(where: Pick<Where, "placement" | "gpus"> & { context?:
     : language.t("mango.where.cards.other", { count: where.gpus.length })
 }
 
-/** The line under a model in the menus: «2 schede · 128K». */
+/** The line under a model in the menus: «2 cards · 128K». */
 export function whereLine(where: Where | null, language: Language) {
   if (!where) return
   return `${cardsText(where, language)} · ${contextLabel(where.context)}`
 }
 
-/** Where a model loads, as a sentence goes on: «sulla RTX 3060 Ti», «sulle schede RTX 3060 Ti + GTX 1080», «sul processore». */
+/** Where a model loads, as a sentence goes on: «on the RTX 3060 Ti», «on the cards RTX 3060 Ti + GTX 1080», «on the processor». */
 export function onWhere(where: Where, language: Language) {
   const cards = whereCards(where)
   if (!cards || where.gpus.length === 0) return language.t("mango.on.cpu")
@@ -38,7 +38,7 @@ export function onWhere(where: Where, language: Language) {
     : language.t("mango.on.cards", { cards })
 }
 
-/** The model proposed after a failed start: «Ci sta sulla sola RTX 3060 Ti.» */
+/** The model proposed after a failed start: «It fits on the RTX 3060 Ti alone.» */
 export function fitsText(where: Where, language: Language) {
   const cards = whereCards(where)
   if (!cards || where.gpus.length === 0) return language.t("mango.fits.cpu")
@@ -47,7 +47,7 @@ export function fitsText(where: Where, language: Language) {
     : language.t("mango.fits.cards", { cards })
 }
 
-/** «meno di un minuto», «circa 12 minuti», «circa 2 h», «circa 2 h e 5 min». */
+/** «less than a minute», «about 12 minutes», «about 2 h», «about 2 h 5 min». */
 export function etaText(seconds: number, language: Language) {
   const eta = etaParts(seconds)
   if (eta.kind === "lessThanMinute") return language.t("mango.eta.lessThanMinute")
@@ -57,7 +57,7 @@ export function etaText(seconds: number, language: Language) {
   return language.t("mango.eta.hoursMinutes", { hours: eta.hours, minutes: eta.minutes })
 }
 
-/** «0,5 di 18,2 GB», «24 MB al secondo», «circa 12 minuti»: what has arrived, how fast, how long still, when known. */
+/** «0.5 of 18.2 GB», «24 MB per second», «about 12 minutes»: what has arrived, how fast, how long still, when known. */
 export function downloadParts(download: Download, language: Language) {
   const locale = language.intl()
   const eta = etaSeconds(download)
@@ -89,15 +89,15 @@ export function downloadFailedText(download: Download, language: Language) {
     : language.t("mango.status.downloadFailed.bare", { model: download.label })
 }
 
-/** What a download does, as the Home and the status line say it: «Scarico Qwen3.6», «Aggiorno il motore». */
+/** What a download does, as the Home and the status line say it: «Downloading Qwen3.6», «Updating the engine». */
 export const downloadTitle = (download: Download, language: Language) =>
   download.engine_only
     ? language.t("mango.engine.updating")
     : language.t("mango.status.download", { model: download.label })
 
 /**
- * The models chosen together that wait for this download to end, said under it: «Dopo arriva Qwen3.5-4B.», «Dopo
- * arrivano altri 2 modelli.». Nothing for the engine the app came with, or when none waits.
+ * The models chosen together that wait for this download to end, said under it: «Qwen3.5-4B comes next.», «2 more
+ * models come next.». Nothing for the engine the app came with, or when none waits.
  */
 export function queueText(state: MangoState, current: Download, language: Language) {
   if (current.engine_only) return
@@ -108,7 +108,7 @@ export function queueText(state: MangoState, current: Download, language: Langua
     : language.t("mango.home.queue.other", { count: waiting.length })
 }
 
-/** A download in pause: «Lo scaricamento di Qwen3.6 è in pausa», «L'aggiornamento del motore è in pausa». */
+/** A download in pause: «The download of Qwen3.6 is paused», «The engine update is paused». */
 export const downloadPausedText = (download: Download, language: Language) =>
   download.engine_only
     ? language.t("mango.engine.paused")
@@ -123,7 +123,7 @@ export type StatusLine =
 
 /**
  * The line above the composer, from the most urgent: a start that failed (with the proposed model), a load with its
- * seconds («Scaricato.» if the model has just arrived), the cards lent, the other PC's engine that does not answer, the
+ * seconds («Downloaded.» if the model has just arrived), the cards lent, the other PC's engine that does not answer, the
  * first model's download or the engine the app came with, no model on the computer (`empty`: with a download that
  * stopped, its sentence), a model just ready. Nothing when all is quiet.
  */

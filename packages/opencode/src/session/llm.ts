@@ -25,8 +25,6 @@ import { LLMAISDK } from "./llm/ai-sdk"
 import { LLMRequestPrep } from "./llm/request"
 import { enqueueEngineRequest } from "@/provider/engine-queue"
 
-export const OUTPUT_TOKEN_MAX = ProviderTransform.OUTPUT_TOKEN_MAX
-
 export type StreamInput = {
   user: SessionV1.User
   sessionID: string
@@ -42,6 +40,9 @@ export type StreamInput = {
   tools: Record<string, Tool>
   retries?: number
   toolChoice?: "auto" | "required" | "none"
+  // mango-code: the conversation of a `commands` harness: its prompt, the bytes of it that are the same for every
+  // folder and day, and how many times a call the engine could not read is asked again. The agent adds nothing to it.
+  commands?: { system: string; stable: number; retries: number }
 }
 
 export type StreamRequest = StreamInput & {

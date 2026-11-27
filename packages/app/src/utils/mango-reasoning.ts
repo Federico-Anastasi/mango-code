@@ -12,21 +12,24 @@ const TEAM_LEVELS = ["low", "medium", "high"] as const
 
 const level = (value: unknown): value is ReasoningLevel => REASONING_LEVELS.some((item) => item === value)
 
-/** `limits.reasoning` is the list of levels (empty: the model does not reason); `choices.reasoning` one of them, or absent. */
-export function reasoningOf(entry: { limits: { reasoning: unknown }; choices: { reasoning?: unknown } }) {
-  const { reasoning: levels } = entry.limits
+/**
+ * `limits.reasoning` is the list of levels (empty: the model does not reason); `choices.reasoning` one of them, or absent;
+ * `shown` the one the model runs with: the choice, or the level its template takes by itself, or its last.
+ */
+export function reasoningOf(entry: {
+  limits: { reasoning: unknown; reasoningDefault?: unknown }
+  choices: { reasoning?: unknown }
+}) {
+  const { reasoning: offered, reasoningDefault } = entry.limits
   const { reasoning: chosen } = entry.choices
-  return {
-    levels: Array.isArray(levels) ? levels.filter(level) : [],
-    chosen: level(chosen) ? chosen : undefined,
-  }
+  const levels = Array.isArray(offered) ? offered.filter(level) : []
+  const own = level(chosen) && levels.includes(chosen) ? chosen : undefined
+  const unchosen = level(reasoningDefault) && levels.includes(reasoningDefault) ? reasoningDefault : levels.at(-1)
+  return { levels, chosen: level(chosen) ? chosen : undefined, shown: own ?? unchosen }
 }
 
 /** The choices of a model with the reasoning level chosen. */
 export const withReasoning = (choices: MangoModelChoices, value: ReasoningLevel): MangoModelChoices => ({ ...choices, reasoning: value })
-
-/** What a model does when nothing was chosen: its last level, as the app reads it. */
-const initial = (levels: readonly ReasoningLevel[]) => levels[levels.length - 1]
 
 export type ReasoningControl =
   | { source: "local"; key: string; levels: ReasoningLevel[]; value: ReasoningLevel; choices: MangoModelChoices }
@@ -35,7 +38,11 @@ export type ReasoningControl =
 /** The control the box shows for the model in use, or nothing when the model has no levels to choose from. */
 export function reasoningControl(input: {
   model?: { id: string; provider?: { id: string } }
-  catalog?: readonly { key: string; limits: { reasoning: unknown }; choices: MangoModelChoices }[]
+  catalog?: readonly {
+    key: string
+    limits: { reasoning: unknown; reasoningDefault?: unknown }
+    choices: MangoModelChoices
+  }[]
   /** The other PC's engine is in use: its models are not this catalog's. */
   remote?: boolean
   variants: { list: () => string[]; current: () => string | undefined }
@@ -53,13 +60,7 @@ export function reasoningControl(input: {
   if (model.provider?.id !== MANGO_PROVIDER || input.remote) return
   const entry = input.catalog?.find((item) => item.key === model.id)
   if (!entry) return
-  const { levels, chosen } = reasoningOf(entry)
-  if (levels.length < 2) return
-  return {
-    source: "local",
-    key: entry.key,
-    levels,
-    value: chosen && levels.includes(chosen) ? chosen : initial(levels),
-    choices: entry.choices,
-  }
+  const { levels, shown } = reasoningOf(entry)
+  if (levels.length < 2 || !shown) return
+  return { source: "local", key: entry.key, levels, value: shown, choices: entry.choices }
 }

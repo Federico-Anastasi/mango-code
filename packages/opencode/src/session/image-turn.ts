@@ -1,4 +1,4 @@
-import { Effect, Ref } from "effect"
+import { Effect } from "effect"
 import path from "path"
 import { ModelV2 } from "@opencode-ai/core/model"
 import { ProviderV2 } from "@opencode-ai/core/provider"
@@ -6,7 +6,7 @@ import type { FSUtil } from "@opencode-ai/core/fs-util"
 import type { Provider } from "@/provider/provider"
 import type { Question } from "@/question"
 import type { LLM } from "./llm"
-import { draw, fileName, pictureFile, pictureFilePart, pictureOutput, requireApp, sides, type Job } from "@/tool/image"
+import { draw, fileName, pictureFile, pictureFilePart, pictureOutput, pictureState, requireApp, sides, type Job } from "@/tool/image"
 import { rewrite } from "@/server/shared/mango-image-rewrite"
 import { tr } from "@/util/mango-language"
 
@@ -93,32 +93,16 @@ export function run(
     const name = fileName(first.slice(0, Math.max(1, whole)).join(" "))
     const guess = yield* pictureFile(turn.fs, turn.directory, name)
     const guessed = path.relative(turn.directory, guess)
-    const progress = (job: Pick<Job, "status" | "step" | "steps"> & { preview?: string | null }) => ({
+    const progress = (job: Pick<Job, "status" | "step" | "steps"> & { preview?: string | null }, began?: number) => ({
       title: job.status === "drawing" ? `${guessed} (${job.step}/${job.steps})` : guessed,
       input: { ...input, prompt: description, name },
-      metadata: {
-        stage: job.status,
-        step: job.step,
-        steps: job.steps,
-        preview: job.preview ?? null,
-        file: guess,
-        width,
-        height,
-      },
+      metadata: pictureState(job, began, { file: guess, width, height }),
     })
     yield* turn.show(progress({ status: "waiting", step: 0, steps: 0 }))
 
-    // The job is asked about every so often and most answers say nothing new: the part is written when they do.
-    const last = yield* Ref.make("waiting/0/0/")
     const drawn = yield* draw(
       { prompt: description, width, height, file: guess, model: asked.model, seed: asked.seed, stayOn: true },
-      {
-        report: (job) =>
-          Effect.gen(function* () {
-            const key = `${job.status}/${job.step}/${job.steps}/${job.preview ?? ""}`
-            if ((yield* Ref.getAndSet(last, key)) !== key) yield* turn.show(progress(job))
-          }),
-      },
+      { report: (job, began) => turn.show(progress(job, began)) },
     )
 
     // The name was free when it was chosen; the app says the one the picture really has. The person asked for this
@@ -133,6 +117,7 @@ export function run(
         file,
         width,
         height,
+        began: drawn.began,
         seed: drawn.job.seed,
         model: drawn.job.model,
         request: asked.request,

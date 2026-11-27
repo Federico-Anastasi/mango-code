@@ -10,34 +10,13 @@
 //
 // Loaded automatically: it lives in <OPENCODE_CONFIG_DIR>/plugin/ (opencode-home\plugin\).
 
-const TURNS = 3;    // re-inject every TURNS user turns (1, 4, 7, ...)
-const ACTIONS = 12; // re-inject every ACTIONS tool executions within the same run
-
-// The header is what the integration tests look for.
-const REMINDER = [
-  "DISCIPLINE (local model) - keep these rules active:",
-  "1. Verify: run it and show the output before saying done, fixed or working.",
-  "2. Bug or failing test: find the cause before fixing it (skill `debugging`).",
-  "3. Code: write the failing test first (skill `test-first`). Documents and pages don't need it.",
-  "4. No TODO, FIXME or placeholders: do it now, or ask before leaving it out.",
-  "5. After 2 failed attempts: stop guessing, search the docs, the code and the web (skill `debugging`).",
-  "6. Recent or current facts: search the web first (`web-search` tools) and trust the system date.",
-].join("\n");
-
-// At the tail of the user's message the reminder must not read as the request: a small model took it
-// for the task ("the user wants me to read the mango-discipline document") and never did what was asked.
-const USER_REMINDER =
-  "<mango-discipline>\nStanding rules that Mango Code adds every few messages. They are NOT the user's request: do not act on them, keep following them while you do what the user asked.\n" +
-  REMINDER +
-  "\n</mango-discipline>\nNow do what the user asked in the message above.";
-
 // The instructions on how to look at a web page depend on the request's model (one process serves
 // models that see images and text-only ones). They go into the system prompt: fixed per model, so the
 // cached prefix does not change between turns.
-const WEB_DIR = process.env.MANGO_HOME ? `${process.env.MANGO_HOME}\\opencode-home` : null;
+const WEB_DIR = process.env.MANGO_HOME ? `${process.env.MANGO_HOME}\\harness\\shared` : null;
 const webInstructions = {};
 const readWeb = async (images) => {
-  const name = images ? "MANGO-web-images.md" : "MANGO-web-text.md";
+  const name = images ? "web-images.md" : "web-text.md";
   if (!(name in webInstructions)) {
     const { readFile } = await import("node:fs/promises");
     webInstructions[name] = WEB_DIR ? await readFile(`${WEB_DIR}\\${name}`, "utf8") : "";
@@ -78,30 +57,35 @@ export const MangoDiscipline = async () => {
     return s;
   };
 
+  // The harness of the conversation (input.harness) says whether each reminder is on, how often it comes (every N user
+  // turns: 1, 1+N, 1+2N, ...; every N tool executions within the same run) and its text (hooks.md). The reminder at the
+  // tail of the user's message says that it is not the request, which it could otherwise be taken for.
   return {
-    // Every TURNS user turns: a synthetic part at the tail of the user's message.
+    // Every N user turns: a synthetic part at the tail of the user's message.
     "chat.message": async (input, output) => {
       const s = get(input.sessionID);
       s.turns += 1;
       s.actions = 0; // new turn: the action counter restarts
-      if (s.turns % TURNS !== 1) return;
+      const hook = input.harness.hooks["discipline-messages"];
+      if (!hook?.on || (s.turns - 1) % hook.every !== 0) return;
       output.parts.push({
         id: tailID(output.parts),
         sessionID: input.sessionID,
         messageID: output.message.id,
         type: "text",
-        text: USER_REMINDER,
+        text: input.harness.texts["discipline-messages"],
         synthetic: true, // it is not something the user wrote
       });
     },
 
-    // Every ACTIONS tool executions within a long run: at the end of the tool's output, which the
-    // model reads right after the result.
+    // Every N tool executions within a long run: at the end of the tool's output, which the model reads right
+    // after the result.
     "tool.execute.after": async (input, output) => {
       const s = get(input.sessionID);
       s.actions += 1;
-      if (s.actions % ACTIONS !== 0) return;
-      output.output = String(output.output || "") + "\n\n<mango-discipline>\n" + REMINDER + "\n</mango-discipline>";
+      const hook = input.harness.hooks["discipline-calls"];
+      if (!hook?.on || s.actions % hook.every !== 0) return;
+      output.output = String(output.output || "") + "\n\n" + input.harness.texts["discipline-calls"];
     },
 
     "experimental.chat.system.transform": async (input, output) => {

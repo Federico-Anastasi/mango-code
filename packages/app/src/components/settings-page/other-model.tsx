@@ -1,6 +1,6 @@
-// mango-code: Settings › Models › «Un altro modello»: a model from Hugging Face (a name to search, or a link) or a GGUF
+// mango-code: Settings › Models › «Another model»: a model from Hugging Face (a name to search, or a link) or a GGUF
 // already on the computer. Before adding it the app says how it would run here: each quantization with its weight, where
-// it runs and its context, the one it proposes chosen, and «memoria stimata» for a kind of model it does not know yet.
+// it runs and its context, the one it proposes chosen, and «estimated memory» for a kind of model it does not know yet.
 // Added, it is in the models list, to download or ready.
 import { Tag } from "@opencode-ai/ui/v2/badge-v2"
 import { ButtonV2 } from "@opencode-ai/ui/v2/button-v2"

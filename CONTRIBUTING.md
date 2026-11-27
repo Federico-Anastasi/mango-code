@@ -24,7 +24,7 @@ How to build is in the README, under [Build from source](README.md#build-from-so
 
 ```powershell
 cd app; cargo test --workspace                     # the app and its crates
-cd packages/app; bun run test:unit                 # the web interface
+cd packages/app; bun run test                      # the web interface
 cd integration; bun test                           # end-to-end, with a fake engine (no graphics card used)
 cd launcher/mango-documents; bun test              # the document tools
 ```

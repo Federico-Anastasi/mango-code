@@ -1,6 +1,7 @@
 import type { SnapshotFileDiff } from "@opencode-ai/sdk/v2"
 import type { PartGroup } from "@opencode-ai/session-ui/message-part"
 import { Data, Equal } from "effect"
+import type { TeamNoticeKind } from "./team-notice"
 
 export type SummaryDiff = SnapshotFileDiff & { file: string }
 
@@ -15,9 +16,22 @@ export namespace TimelineRow {
     userMessageID: string
     anchor: boolean
   }> {}
+  /** What the Team put in the conversation (it was stopped, or the dev or an agent wrote to the manager): a line, not a message of the user's. */
+  export class TeamNotice extends Data.TaggedClass("TeamNotice")<{
+    userMessageID: string
+    kind: TeamNoticeKind
+    agent: string | undefined
+    text: string
+    excerpt: string
+  }> {}
   export class TurnDivider extends Data.TaggedClass("TurnDivider")<{
     userMessageID: string
     label: "compaction" | "interrupted"
+  }> {}
+  /** Where the conversation was summarized in the middle of a turn. */
+  export class Summarized extends Data.TaggedClass("Summarized")<{
+    userMessageID: string
+    messageID: string
   }> {}
   export class AssistantPart extends Data.TaggedClass("AssistantPart")<{
     userMessageID: string
@@ -56,6 +70,12 @@ export namespace TimelineRow {
     /** The message that was cut. */
     messageID: string
   }> {}
+  /** An answer cut because it kept writing the same text: a line where it was cut. */
+  export class Repeated extends Data.TaggedClass("Repeated")<{
+    userMessageID: string
+    /** The message that was cut. */
+    messageID: string
+  }> {}
   /** The turn ended cut for its length: a sentence, and the way to go on. `again`: it had already been taken up once. */
   export class LengthStop extends Data.TaggedClass("LengthStop")<{
     userMessageID: string
@@ -70,6 +90,7 @@ export namespace TimelineRow {
     | TurnGap
     | CommentStrip
     | UserMessage
+    | TeamNotice
     | TurnDivider
     | AssistantPart
     | Thinking
@@ -78,6 +99,8 @@ export namespace TimelineRow {
     | Retry
     | TurnStats
     | Resumed
+    | Repeated
+    | Summarized
     | LengthStop
     | EmptyAnswer
 
@@ -89,6 +112,8 @@ export namespace TimelineRow {
         return `comment-strip:${row.userMessageID}`
       case "UserMessage":
         return `user-message:${row.userMessageID}`
+      case "TeamNotice":
+        return `team-notice:${row.userMessageID}`
       case "TurnDivider":
         return `turn-divider:${row.userMessageID}:${row.label}`
       case "AssistantPart":
@@ -105,6 +130,10 @@ export namespace TimelineRow {
         return `turn-stats:${row.userMessageID}`
       case "Resumed":
         return `resumed:${row.userMessageID}:${row.messageID}`
+      case "Summarized":
+        return `summarized:${row.userMessageID}:${row.messageID}`
+      case "Repeated":
+        return `repeated:${row.userMessageID}:${row.messageID}`
       case "LengthStop":
         return `length-stop:${row.userMessageID}`
       case "EmptyAnswer":

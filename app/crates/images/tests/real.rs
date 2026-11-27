@@ -35,7 +35,7 @@ fn a_picture_is_made_and_one_is_stopped_on_a_real_card() {
     mango_common::download::install_engine(&paths, "sd", Build::Cuda12, &AtomicBool::new(false), &mut |_, _| {}).unwrap();
 
     // The computer with that card alone: the plan draws there.
-    let mut hw = engine_cfg::detect().unwrap();
+    let mut hw = engine_cfg::detect_bare().unwrap();
     hw.gpus.retain(|g| g.index == card);
     assert_eq!(hw.gpus.len(), 1, "no card {card} here");
     println!("card {card}: {}, {} MiB in use before", hw.gpus[0].name, used_mib(card));
@@ -154,7 +154,7 @@ fn a_model_that_writes_is_put_aside_for_a_picture_and_comes_back() {
         opencode: base.join("opencode"),
         data: base.join("data"),
     };
-    let mut hw = engine_cfg::detect().unwrap();
+    let mut hw = engine_cfg::detect_bare().unwrap();
     hw.gpus.retain(|g| g.index == card);
     assert_eq!(hw.gpus.len(), 1, "no card {card} here");
 
@@ -162,7 +162,7 @@ fn a_model_that_writes_is_put_aside_for_a_picture_and_comes_back() {
     let (p, h) = (paths.clone(), hw.clone());
     let engine = EngineManager::new(Box::new(move |key, port, excluded| engine_cfg::plan_for(&p, Some(key), port, &h, excluded)), Box::new(engine_cfg::gpu_memory), &base);
     let (p, h) = (paths.clone(), hw.clone());
-    engine.set_room_check(Box::new(move |key, lent, used| engine_cfg::taken_before_start(&p, &h, used, key, lent)));
+    engine.set_room_check(Box::new(move |key, lent, used| engine_cfg::taken_before_start(&p, &h, used, engine_cfg::hardware::free_ram_mib()?, key, lent)));
     let (p, h) = (paths.clone(), hw.clone());
     let pictures = ImageManager::new(Box::new(move |key, port| engine_cfg::image_plan_for(&p, key, port, &h)), images::lender(engine.clone()), &base);
     let (p, h) = (paths.clone(), hw.clone());
@@ -200,7 +200,7 @@ fn a_model_that_writes_is_put_aside_for_a_picture_and_comes_back() {
             let job = call("GET", &format!("{url}/control/image/jobs/{id}"), None).1;
             if job["status"] == "drawing" && !lent {
                 let state = call("GET", &format!("{url}/engine"), None).1;
-                assert_eq!((state["phase"].as_str(), state["released_gpus"][0].as_u64(), state["loans"][0]["who"].as_str()), (Some("released"), Some(u64::from(card)), Some("Mango Code: image")), "{state}");
+                assert_eq!((state["phase"].as_str(), state["released_gpus"][0].as_u64(), state["loans"][0]["who"].as_str()), (Some("released"), Some(u64::from(card)), Some(images::borrower().as_str())), "{state}");
                 lent = true;
             }
             if ["done", "failed", "cancelled"].contains(&job["status"].as_str().unwrap()) {

@@ -21,11 +21,14 @@
 import fs from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const DIST = path.resolve(HERE, "..", "..", "launcher");
 const STAGING = path.join(HERE, "staging");
+// Where cargo builds: app/target, or the folder CARGO_TARGET_DIR names.
+const TARGET = path.resolve(HERE, "..", process.env.CARGO_TARGET_DIR || "target");
 // Tauri copies the staging under <installation>/resources: Paths::discover() looks there.
 const ROOT = path.join(STAGING, "resources");
 
@@ -47,6 +50,7 @@ const FILES = [
   "package.json",
   "mango-websearch-mcp.js",
   "mango-chrome-mcp.mjs",
+  "mango-linux-path.mjs",
   "mango-mcp-stdout.cjs",
   "mango-mcp-watchdog.cjs",
   "mango-documents/mcp.mjs",
@@ -63,19 +67,17 @@ const FILES = [
   "mango-documents/xlsx-edit.mjs",
   "mango-documents/chart-xlsx.mjs",
   "mango-documents/profile.mjs",
-  "opencode-home/MANGO.md",
-  "opencode-home/MANGO-agent.md",
-  "opencode-home/MANGO-dev.md",
-  "opencode-home/MANGO-manager.md",
-  "opencode-home/MANGO-web-images.md",
-  "opencode-home/MANGO-web-text.md",
+  // Read by the plugins; the prompt and the roles' texts are built into the agent.
+  "harness/shared/team-manager.md",
+  "harness/shared/web-images.md",
+  "harness/shared/web-text.md",
   "opencode-home/opencode.template.json",
   // Carried together with node_modules, so the first start does not go online to install the plugin.
   "opencode-home/package.json",
 ];
 
 // Whole folders: allowed only if every file is tracked by git (nothing personal).
-const TRACKED_DIRS = ["chat-templates", "mango-plugin", "opencode-home/plugin", "profiles"];
+const TRACKED_DIRS = ["chat-templates", "opencode-home/plugin", "profiles"];
 
 // Node packages: roots and node_modules folder from which the closure is computed.
 const NODE = [
@@ -205,14 +207,44 @@ const skill = tracked(path.join("..", "optimize"));
 if (!skill.length) throw new Error("optimize: no file tracked by git");
 for (const f of skill) copy(path.join(DIST, f), path.relative("..", f));
 // mango-tune, the skill's measuring tool, goes next to it: whoever installs the app uses the skill without building.
-const TUNE = path.resolve(HERE, "..", "target", "release", "mango-tune.exe");
+const TUNE = path.join(TARGET, "release", "mango-tune.exe");
 if (!fs.existsSync(TUNE)) throw new Error(`${TUNE} missing: cargo build --release -p engine --bin mango-tune in app/`);
 copy(TUNE, "optimize/mango-tune.exe");
 // mango-launch, which runs one request from a script (`mango-launch -p`, docs/INTEGRATION.md), goes at the top of the resources:
 // the installed app is the folder above them.
-const LAUNCH = path.resolve(HERE, "..", "target", "release", "mango-launch.exe");
+const LAUNCH = path.join(TARGET, "release", "mango-launch.exe");
 if (!fs.existsSync(LAUNCH)) throw new Error(`${LAUNCH} missing: cargo build --release -p engine --bin mango-launch in app/`);
 copy(LAUNCH, "mango-launch.exe");
+
+// Git for Windows, whole, in `git/`: its Git Bash is the terminal of Mango Harness 2 and its git makes every project a
+// repository, also on a PC without Git. The official release, version and SHA-256 fixed here, kept in `cache/` between
+// builds and unpacked by the tar of Windows (the tar of Git Bash would be another program).
+const GIT = {
+  url: "https://github.com/git-for-windows/git/releases/download/v2.56.1.windows.1/Git-2.56.1-64-bit.tar.bz2",
+  sha256: "d7d89e69855f00e73d957b513c49538a420c465c84b9d212cf1add400eecdf54",
+};
+const gitArchive = path.join(HERE, "cache", path.basename(GIT.url));
+const sha256 = (file) => createHash("sha256").update(fs.readFileSync(file)).digest("hex");
+if (!fs.existsSync(gitArchive) || sha256(gitArchive) !== GIT.sha256) {
+  const response = await fetch(GIT.url);
+  if (!response.ok) throw new Error(`${GIT.url}: ${response.status}`);
+  fs.mkdirSync(path.dirname(gitArchive), { recursive: true });
+  fs.writeFileSync(gitArchive, Buffer.from(await response.arrayBuffer()));
+  if (sha256(gitArchive) !== GIT.sha256) throw new Error(`${gitArchive}: SHA-256 is not ${GIT.sha256}`);
+}
+fs.mkdirSync(path.join(ROOT, "git"));
+execFileSync(path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "tar.exe"), ["-xf", gitArchive, "-C", path.join(ROOT, "git")]);
+// Its links point into /proc (`dev/fd`, `etc/mtab`), which the MSYS runtime gives by itself: on Windows they are left
+// broken, and the installer takes files only.
+const links = (dir) =>
+  fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
+    const whole = path.join(dir, e.name);
+    return e.isSymbolicLink() ? [whole] : e.isDirectory() ? links(whole) : [];
+  });
+for (const link of links(path.join(ROOT, "git"))) fs.rmSync(link);
+for (const program of ["bin/bash.exe", "cmd/git.exe"]) {
+  if (!fs.existsSync(path.join(ROOT, "git", program))) throw new Error(`git/${program} is not in ${GIT.url}`);
+}
 
 // The licenses travel with the program: whoever receives the installer also receives the texts and, in NOTICE.md,
 // where the source code is.

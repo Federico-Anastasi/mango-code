@@ -32,7 +32,7 @@ export function PhonePreview() {
               aria-label={language.t("preview.phone.back")}
               data-action="preview-back"
             />
-            <h1 class="min-w-0 flex-1 truncate px-1 text-[16px] leading-6 text-v2-text-text-base [font-weight: 500]">
+            <h1 class="min-w-0 flex-1 truncate px-1 text-[16px] leading-6 text-v2-text-text-base [font-weight:500]">
               {view.title || language.t("preview.title")}
             </h1>
             <Show when={!view.kind}>

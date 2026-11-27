@@ -32,6 +32,8 @@ export function resolveDefaultModel(
 ) {
   if (current !== undefined) return current ?? undefined
   if (!legacy) return undefined
-  const [providerID, modelID] = legacy.split("/")
-  return { providerID, modelID }
+  // a model's own id may have slashes ("vendor/model" on a cloud service): only the first one ends the provider
+  const at = legacy.indexOf("/")
+  if (at <= 0) return undefined
+  return { providerID: legacy.slice(0, at), modelID: legacy.slice(at + 1) }
 }

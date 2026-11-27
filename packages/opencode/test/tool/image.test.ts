@@ -80,9 +80,53 @@ function control(
   return { server, seen }
 }
 
+// Two jobs in one line, as the app makes them: the second waits until the first has ended, whatever the order of the
+// questions. `firstEnded` is when the first one said so.
+function line() {
+  let ended = 0
+  const polls = [0, 0]
+  const job = (n: number, status: string, step = 0) => ({
+    id: `image-${n}`,
+    status,
+    model: "z-image-turbo",
+    prompt: "",
+    width: 768,
+    height: 768,
+    seed: status === "done" ? 42 : null,
+    step,
+    steps: 8,
+    seconds: 1,
+    error: null,
+    detail: null,
+    file: null,
+    preview: null,
+  })
+  let next = 0
+  const server = Bun.serve({
+    port: 0,
+    hostname: "127.0.0.1",
+    async fetch(request) {
+      const pathname = new URL(request.url).pathname
+      await request.text()
+      if (pathname === "/control/image") return Response.json({ models: [{ key: "z-image-turbo", ready: true }] })
+      if (pathname === "/control/image/generate") return Response.json(job(++next, "waiting"), { status: 202 })
+      if (pathname.endsWith("/picture")) return Response.json({ png: PNG })
+      const n = Number(pathname.split("-").at(-1))
+      if (n === 2 && !ended) return Response.json(job(2, "waiting"))
+      polls[n - 1]++
+      if (polls[n - 1] < 3) return Response.json(job(n, polls[n - 1] === 1 ? "preparing" : "drawing", polls[n - 1]))
+      if (n === 1 && !ended) ended = Date.now()
+      return Response.json(job(n, "done", 8))
+    },
+  })
+  process.env.MANGO_CONTROL_URL = `http://127.0.0.1:${server.port}`
+  return { server, firstEnded: () => ended }
+}
+
 function context(over: Partial<Tool.Context> = {}) {
   const asks: unknown[] = []
   const titles: string[] = []
+  const marks: { at: number; metadata: Record<string, unknown> }[] = []
   const ctx: Tool.Context = {
     sessionID: SessionID.make("ses_test-image-session"),
     messageID: MessageID.make("msg_test"),
@@ -90,11 +134,15 @@ function context(over: Partial<Tool.Context> = {}) {
     agent: "build",
     abort: AbortSignal.any([]),
     messages: [],
-    metadata: (input) => Effect.sync(() => void (input.title && titles.push(input.title))),
+    metadata: (input) =>
+      Effect.sync(() => {
+        if (input.title) titles.push(input.title)
+        if (input.metadata) marks.push({ at: Date.now(), metadata: input.metadata })
+      }),
     ask: (input) => Effect.sync(() => void asks.push(input)),
     ...over,
   }
-  return { ctx, asks, titles }
+  return { ctx, asks, titles, marks }
 }
 
 const it = testEffect(LayerNode.compile(LayerNode.group([FSUtil.node, Truncate.node, Agent.node])))
@@ -137,6 +185,31 @@ describe("tool.image_generate", () => {
 
       expect(asks).toHaveLength(0)
       expect(fake.seen.find((r) => r.path === "/control/image/generate")!.body).toMatchObject({ width: 1024, height: 1024 })
+    }),
+  )
+
+  it.instance("a picture that waits for its turn says so and starts its clock only when its own turn comes", () =>
+    Effect.gen(function* () {
+      const fake = line()
+      const first = context()
+      const second = context()
+      const both = yield* Effect.all(
+        [run({ prompt: "a dog", name: "dog" }, first.ctx), run({ prompt: "a cat", name: "cat" }, second.ctx)],
+        { concurrency: "unbounded" },
+      ).pipe(Effect.ensuring(Effect.sync(() => fake.server.stop(true))))
+
+      // first the wait for the user's permission, which counts no time
+      expect(first.marks[0].metadata).toEqual({ stage: "asking" })
+      const staged = (marks: typeof first.marks) => marks.filter((mark) => mark.metadata.stage && mark.metadata.stage !== "asking")
+      const waited = staged(second.marks).filter((mark) => mark.at < fake.firstEnded())
+      expect(waited.length).toBeGreaterThan(0)
+      expect(waited.every((mark) => mark.metadata.stage === "waiting" && mark.metadata.began === undefined)).toBe(true)
+      expect(staged(first.marks)[0].metadata.stage).toBe("preparing")
+      expect(typeof staged(first.marks)[0].metadata.began).toBe("number")
+      const begun = staged(second.marks).find((mark) => mark.metadata.stage !== "waiting")!
+      expect(begun.metadata.began as number).toBeGreaterThanOrEqual(fake.firstEnded())
+      expect(staged(first.marks)[0].metadata.began).toEqual(both[0].metadata.began)
+      expect(begun.metadata.began).toEqual(both[1].metadata.began)
     }),
   )
 

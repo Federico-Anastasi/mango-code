@@ -71,7 +71,7 @@ beforeAll(async () => {
       { tool: "write", arguments: { filePath: path.join(project, "doc.pdf"), content: PDF } },
       { tool: "write", arguments: { filePath: path.join(project, "picture.png"), content: "x" } },
       { tool: "write", arguments: { filePath: path.join(project, "page.html"), content: "x" } },
-      { text: "Fatto." },
+      { text: "Done." },
     ],
     { window: true, env: { MANGO_AGENT_PORT: String(AGENT), MANGO_ENGINE_PORT: String(ENGINE), WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${DEBUG}` } },
   );
@@ -155,10 +155,10 @@ test("a PDF and a picture open in the panel, by their own address", async () => 
   expect(await open("doc.pdf")).toBe("ok");
   const pdf = await shown();
   expect(decodeURI(pdf.url)).toBe("file:///" + path.join(env.project, "doc.pdf").replace(/\\/g, "/"));
-  windowPhoto("pdf-nel-pannello", ratio);
+  windowPhoto("pdf-in-the-panel", ratio);
   expect(await open("picture.png")).toBe("ok");
   expect(decodeURI((await shown()).url)).toBe("file:///" + path.join(env.project, "picture.png").replace(/\\/g, "/"));
-  windowPhoto("immagine-nel-pannello", ratio);
+  windowPhoto("picture-in-the-panel", ratio);
 }, 60_000);
 
 test("a web page opens in the panel, by its own address, and runs", async () => {
@@ -168,7 +168,7 @@ test("a web page opens in the panel, by its own address, and runs", async () => 
     expect(decodeURI(page.url)).toBe("file:///" + path.join(env.project, file).replace(/\\/g, "/"));
     expect(page.title).toBe("ran");
   }
-  windowPhoto("pagina-nel-pannello", ratio);
+  windowPhoto("page-in-the-panel", ratio);
 }, 60_000);
 
 test("an SVG is drawn as a picture: its script never runs", async () => {
@@ -205,7 +205,7 @@ test("a click on the card of a file opens it in the panel of that conversation, 
   fs.truncateSync(path.join(env.project, "picture.png"), 51 * 1024 * 1024);
   await p.evaluate(`${card("picture.png")}.click()`);
   await waitFor(`document.body.innerText.includes("Troppo grande per l'anteprima")`);
-  windowPhoto("file-troppo-grande", ratio);
+  windowPhoto("file-too-large", ratio);
   fs.writeFileSync(path.join(env.project, "picture.png"), PNG);
 }, 120_000);
 
@@ -216,7 +216,7 @@ test("Open on an html file in the chat shows it in the panel", async () => {
   const page = await shown();
   expect(decodeURI(page.url)).toEndWith("/page.html");
   expect(page.title).toBe("ran");
-  windowPhoto("apri-html-nel-pannello", ratio);
+  windowPhoto("open-html-in-the-panel", ratio);
 }, 120_000);
 
 test("when the window moves to another page of the app the panel does not stay over it as a blank rectangle", async () => {
@@ -225,7 +225,7 @@ test("when the window moves to another page of the app the panel does not stay o
   await p.send("Page.navigate", { url: `${env.agent}/` });
   await Bun.sleep(3000);
   expect(await p.evaluate(`window.__MANGO_DESKTOP__.preview.state()`)).toMatchObject({ visible: false });
-  windowPhoto("home-senza-pannello", ratio);
+  windowPhoto("home-without-panel", ratio);
 }, 60_000);
 
 test("a file outside every project opens in the panel too", async () => {

@@ -77,7 +77,7 @@ async function photo(name: string) {
   if (!process.env.MC_PHOTOS) return;
   fs.mkdirSync(process.env.MC_PHOTOS, { recursive: true });
   const shot = await p.send("Page.captureScreenshot", { format: "png" });
-  fs.writeFileSync(path.join(process.env.MC_PHOTOS, `primo-avvio-${name}.png`), Buffer.from(shot.result.data, "base64"));
+  fs.writeFileSync(path.join(process.env.MC_PHOTOS, `first-start-${name}.png`), Buffer.from(shot.result.data, "base64"));
 }
 
 async function write(message: string) {
@@ -99,7 +99,7 @@ const chats = () =>
   );
 
 beforeAll(async () => {
-  env = await start([{ text: "Eccomi." }], {
+  env = await start([{ text: "Here I am." }], {
     window: true,
     noModels: true,
     // as many models as the catalog lists on the Home, so that the list is longer than a laptop's window
@@ -135,7 +135,7 @@ test("the Home welcomes with what it found and the model it recommends; nothing 
   for (const gpu of computer.gpus) expect(found).toContain(gpu.name);
   expect(found).toContain(`${computer.cpu} · ${computer.cores} core`);
   expect(found).toMatch(new RegExp(`Spazio libero\\s+\\S+ \\S+ su ${path.parse(env.modelsDir).root.slice(0, 2)}`));
-  await photo("1-benvenuto");
+  await photo("1-welcome");
 }, 60_000);
 
 test("the language at the top right changes the Home and is the app's choice; the other one brings it back", async () => {
@@ -162,7 +162,7 @@ test("the list chooses more than one model, with their weight together", async (
   expect(await exists('[data-option-key="fake"] input:checked')).toBe(true);
   await mouseClick('[data-option-key="second"] input');
   await waitUntil(async () => (await text()).includes("Scarica e comincia · 2 modelli, 8 MB"), "two models chosen");
-  await photo("2-elenco");
+  await photo("2-list");
   // a model that does not fit is there to read, not to take: its box is off and the row says why
   expect(await p.evaluate(`document.querySelector('[data-option-key="huge"] input').disabled`)).toBe(true);
   expect(await p.evaluate(`document.querySelector('[data-option-key="huge"]').innerText`)).toContain("non ci sta");
@@ -198,15 +198,15 @@ test("with no model on the computer and none coming the composer does not send, 
   await waitUntil(() => exists('[data-component="mango-status"][data-kind="empty"]'), "the line that says no model is there");
   expect(await text()).toContain("Sul computer non c'è nessun modello: per scrivere ne serve uno.");
   const before = chats().length;
-  await write("Riordina le fatture di settembre");
+  await write("Sort the September invoices");
   await Bun.sleep(1500);
   // the text stays in the box: nothing waits, nothing reached the agent, the button is off
-  expect(await p.evaluate(`document.querySelector('[contenteditable="true"]').innerText.trim()`)).toBe("Riordina le fatture di settembre");
+  expect(await p.evaluate(`document.querySelector('[contenteditable="true"]').innerText.trim()`)).toBe("Sort the September invoices");
   expect(await p.evaluate(`document.querySelector('[data-action="prompt-submit"]').disabled`)).toBe(true);
   expect(await exists('[data-slot="mango-pending-item"]')).toBe(false);
   expect(await p.evaluate("location.pathname")).toMatch(/\/new-session$/);
   expect(chats().length).toBe(before);
-  await photo("2b-senza-modelli");
+  await photo("2b-no-models");
   await p.evaluate(`(() => { document.querySelector('[contenteditable="true"]').focus(); document.execCommand('selectAll'); document.execCommand('delete'); })()`);
   await mouseClick('[data-action="mango-choose-model"]');
   await waitUntil(() => p.evaluate(`location.pathname === "/settings" && !!document.querySelector('[data-component="settings-models"]')`) as Promise<boolean>, "Models in the settings");
@@ -219,7 +219,7 @@ test("one button downloads the model and the app is in use meanwhile", async () 
   await waitUntil(() => exists('[data-component="mango-downloading"]'), "the download on the Home");
   await waitUntil(async () => /Fake model · scarico \d+%/.test(await barText()), "the download in the top bar");
   expect(await text()).toContain("Intanto, il primo progetto");
-  await photo("3-scarico");
+  await photo("3-downloading");
 }, 60_000);
 
 test("while it downloads the theme, the dictation, the model's settings and the first project are in reach", async () => {
@@ -247,12 +247,12 @@ test("while it downloads the theme, the dictation, the model's settings and the 
   expect(await barText()).toMatch(/^Fake model · scarico \d+%$/);
 
   // the first project: an existing folder, chosen in the Windows dialog, joins the projects
-  const folder = path.join(env.root, "mio-progetto");
+  const folder = path.join(env.root, "my-project");
   fs.mkdirSync(folder);
   await mouseClick('[data-action="mango-open-folder"]');
   const picked = await answer(env.app.pid!, "-Path", folder);
   expect(picked.code, picked.output).toBe(0);
-  await waitUntil(async () => (await text()).includes("mio-progetto"), "the project in the list");
+  await waitUntil(async () => (await text()).includes("my-project"), "the project in the list");
 
   // «Cambia modello» is Models in the settings, with the download among the models, and the way back is the Home
   await mouseClick('[data-action="mango-change-model"]');
@@ -270,15 +270,15 @@ test("a message written while it downloads waits, then leaves by itself when the
   // waited for as it reads, not for any words: a download whose size is not known yet leaves «Nessun modello in uso»
   await waitUntil(async () => /^Fake model · (scarico \d+%|carico)$/.test(await composerText()), "the model under the box");
   expect(await p.evaluate(`document.body.innerHTML.includes("Scrivi pure: il messaggio parte quando il modello è pronto")`)).toBe(true);
-  await write("Riordina le fatture di ottobre");
+  await write("Sort the October invoices");
   await waitUntil(() => exists('[data-slot="mango-pending-item"]'), "the waiting message");
   expect(await text()).toContain("In attesa: parte da sola appena il modello è pronto");
   expect(chats().length).toBe(before);
-  await photo("4-in-attesa");
+  await photo("4-waiting");
   // its X puts it back in the box, and nothing waits any more; written again, it waits again
   await mouseClick('[data-action="mango-pending-restore"]');
   await waitUntil(async () => !(await exists('[data-slot="mango-pending-item"]')), "nothing waiting after the X");
-  expect(await p.evaluate(`document.querySelector('[contenteditable="true"]').innerText.trim()`)).toBe("Riordina le fatture di ottobre");
+  expect(await p.evaluate(`document.querySelector('[contenteditable="true"]').innerText.trim()`)).toBe("Sort the October invoices");
   await p.evaluate(`document.querySelector('[contenteditable="true"]').focus()`);
   await p.send("Input.dispatchKeyEvent", { type: "keyDown", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, text: "\r" });
   await p.send("Input.dispatchKeyEvent", { type: "keyUp", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 });
@@ -287,7 +287,7 @@ test("a message written while it downloads waits, then leaves by itself when the
   // A second conversation, its message sent while the model is still on its way, and the conversation made on the
   // server only once the model is ready (the request is held here): the message leaves with the model the box names,
   // never with the agent's own pick, «second», which is not on the computer.
-  const second = "Prepara il riepilogo di novembre";
+  const second = "Prepare the November summary";
   const sent: unknown[] = [];
   p.on("Network.requestWillBeSent", (e) => {
     if (/\/prompt_async/.test(e.request.url) && e.request.postData?.includes(second)) sent.push(JSON.parse(e.request.postData).model);
@@ -312,11 +312,11 @@ test("a message written while it downloads waits, then leaves by itself when the
   await p.send("Network.disable");
   expect(sent).toEqual([{ providerID: "mango", modelID: "fake" }]);
   await waitUntil(() => chats().some((r: { body: unknown }) => JSON.stringify(r.body).includes(second)), "the second message at the engine");
-  await waitUntil(() => chats().some((r: { body: unknown }) => JSON.stringify(r.body).includes("Riordina le fatture di ottobre")), "the message at the engine");
+  await waitUntil(() => chats().some((r: { body: unknown }) => JSON.stringify(r.body).includes("Sort the October invoices")), "the message at the engine");
   await waitUntil(async () => !(await exists('[data-slot="mango-pending-item"]')), "the waiting message gone");
-  await waitUntil(async () => (await text()).includes("Eccomi."), "the answer");
+  await waitUntil(async () => (await text()).includes("Here I am."), "the answer");
   expect(await barText()).toBe("Fake model");
-  await photo("5-pronto");
+  await photo("5-ready");
 }, 180_000);
 
 test("«è pronto» is the explanation of the first time: after «Ho capito» it does not come back, not after a restart", async () => {

@@ -2,15 +2,17 @@
 // Each item has its weight in tokens, measured by the engine with the first request of a conversation: where it
 // is missing it is `null` and the page writes "not measured", never an estimate.
 
-export const PROMPT_KINDS = ["tools", "mcp", "skills", "instructions", "plugins"] as const
+export const PROMPT_KINDS = ["tools", "mcp", "skills", "instructions", "plugins", "hooks"] as const
 export type PromptKind = (typeof PROMPT_KINDS)[number]
 
-/** The rows of the Agent section: what each lists. Instructions and plugins are one row, both are text added to the prompt. */
+/** The rows of the Agent section: what each lists. Instructions and plugins are one row, both are text added to the
+ *  prompt. The hooks add their texts while the model works: they weigh nothing in the prompt. */
 export const PROMPT_GROUPS = [
   { id: "tools", kinds: ["tools"] },
   { id: "mcp", kinds: ["mcp"] },
   { id: "skills", kinds: ["skills"] },
   { id: "instructions", kinds: ["instructions", "plugins"] },
+  { id: "hooks", kinds: ["hooks"] },
 ] as const satisfies readonly { id: string; kinds: readonly PromptKind[] }[]
 export type PromptGroup = (typeof PROMPT_GROUPS)[number]
 
@@ -22,6 +24,8 @@ export type PromptItem = {
   enabled: boolean
   /** Which file the on/off comes from: `folder` if the folder changes it, `default` for all folders. */
   source: "default" | "folder" | null
+  /** A tool: the words the model knows it by. */
+  description?: string
 }
 
 export type PromptSettings = { directory: string; items: PromptItem[] }
@@ -32,7 +36,15 @@ function parseItem(value: unknown): PromptItem | undefined {
   if (typeof raw.type !== "string" || typeof raw.name !== "string" || typeof raw.enabled !== "boolean") return
   if (raw.tokens !== null && typeof raw.tokens !== "number") return
   if (raw.source !== null && raw.source !== "default" && raw.source !== "folder") return
-  return { type: raw.type, name: raw.name, tokens: raw.tokens, enabled: raw.enabled, source: raw.source }
+  if (raw.description !== undefined && typeof raw.description !== "string") return
+  return {
+    type: raw.type,
+    name: raw.name,
+    tokens: raw.tokens,
+    enabled: raw.enabled,
+    source: raw.source,
+    ...(raw.description !== undefined ? { description: raw.description } : {}),
+  }
 }
 
 /** From the response of `GET /mango/settings`; `undefined` if it is not the expected one. */
@@ -50,6 +62,8 @@ export function parsePromptSettings(body: unknown): PromptSettings | undefined {
  * while it is on (a plugin that only works behind the scenes); once it is off it is listed, to turn it back on.
  */
 export function itemsOf(settings: PromptSettings, kind: PromptKind | "base"): PromptItem[] {
+  // the hooks weigh nothing: they stay in the order the agent gives them
+  if (kind === "hooks") return settings.items.filter((item) => item.type === kind)
   return settings.items
     .filter((item) => item.type === kind && (item.tokens !== 0 || !item.enabled))
     .toSorted((a, b) => (b.tokens ?? -1) - (a.tokens ?? -1) || a.name.localeCompare(b.name))
@@ -60,7 +74,7 @@ export function promptTotal(settings: PromptSettings): { tokens: number; unmeasu
   let tokens = 0
   let unmeasured = 0
   for (const item of settings.items) {
-    if (!item.enabled) continue
+    if (!item.enabled || item.type === "hooks") continue
     if (item.tokens === null) unmeasured++
     else tokens += item.tokens
   }
@@ -107,6 +121,6 @@ export function promptShares(settings: PromptSettings) {
       .reduce((sum, item) => sum + (item.tokens ?? 0), 0)
   return [
     { id: "base" as const, tokens: measured(["base"]) },
-    ...PROMPT_GROUPS.map((group) => ({ id: group.id, tokens: measured(group.kinds) })),
+    ...PROMPT_GROUPS.filter((group) => group.id !== "hooks").map((group) => ({ id: group.id, tokens: measured(group.kinds) })),
   ].filter((share) => share.tokens > 0)
 }

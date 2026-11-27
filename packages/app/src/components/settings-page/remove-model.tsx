@@ -1,4 +1,4 @@
-// mango-code: «Togli dal computer» asks first, in a window of the app: the model's name, the space it frees at most (the
+// mango-code: «Remove from the computer» asks first, in a window of the app: the model's name, the space it frees at most (the
 // files it shares with another model stay) and whether it stops. A model from a file the user chose is only taken off
 // the list: the window says so, and names the file that stays where it is.
 import { useDialog } from "@opencode-ai/ui/context/dialog"

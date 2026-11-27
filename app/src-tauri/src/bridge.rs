@@ -48,7 +48,7 @@ pub const INIT_SCRIPT: &str = r#"
     log("console", args.map(describe).join(" "));
   };
   // These wait for the user (a dialog) or do slow work on purpose: their time says nothing.
-  const waits = new Set(["pick_folders", "report_problem", "update_check", "engine_remote_connect", "other_models_pick_file", "other_models_search", "other_models_analyze", "token_save"]);
+  const waits = new Set(["pick_folders", "report_problem", "update_check", "engine_remote_connect", "servers_add", "servers_refresh", "other_models_pick_file", "other_models_search", "other_models_analyze", "token_save"]);
   const call = (cmd, args) => {
     if (waits.has(cmd)) return invoke(cmd, args);
     const t0 = performance.now();
@@ -223,9 +223,9 @@ pub const INIT_SCRIPT: &str = r#"
     computer: Object.freeze({
       setGpuUsed: (name, used) => call("computer_set_gpu_used", { name, used }),
       setSmallModels: (smallModels) => call("computer_set_small_models", { smallModels }),
-      // «Come si ottimizza»: the folder of the skill that tunes Mango Code on this PC, in File Explorer
+      // «How it is tuned»: the folder of the skill that tunes Mango Code on this PC, in File Explorer
       openOptimize: () => call("computer_open_optimize"),
-      // «Aggiorna il motore»: the models on the disk that wait for the engine the app came with download it; it answers
+      // «Update the engine»: the models on the disk that wait for the engine the app came with download it; it answers
       // the sentence to show
       updateEngine: () => call("computer_update_engine"),
     }),
@@ -234,6 +234,21 @@ pub const INIT_SCRIPT: &str = r#"
       state: () => call("engine_share_state"),
       setEnabled: (enabled) => call("engine_share_set_enabled", { enabled }),
       newKey: () => call("engine_share_new_key"),
+    }),
+    // «Use a server»: state() = { list: [{ id, label, url, key, models: [{ id, label, ctx, images, price?, name? }] }],
+    // default: { server, model } | null }; add(address, key, context, asDefault) checks the server and saves it
+    // ({ context: number } when the server does not say the context: nothing saved, the page asks with that number), with
+    // its first model as the default if asked (the first start), then the app starts again; refresh(id) reads its models
+    // again and answers what changed ({ gone: the name of the default model that is gone or null, context: { from, to }
+    // or null }); remove(id) takes it away and the app starts again; setDefault(server, model) chooses the model of new
+    // conversations on a server, null for the local one. They reject like `models`.
+    servers: Object.freeze({
+      state: () => call("servers_state"),
+      add: (address, key, context, asDefault) =>
+        call("servers_add", { address, key: key ?? null, context: context ?? null, asDefault: asDefault ?? null }),
+      refresh: (id) => call("servers_refresh", { id }),
+      remove: (id) => call("servers_remove", { id }),
+      setDefault: (server, model) => call("servers_set_default", { server: server ?? null, model: model ?? null }),
     }),
     // "Use the engine of another PC": connect(code) checks the pasted code with that PC and, if it is
     // right, the app starts again on its engine; it rejects with { code, message } (bad_code, rejected, unreachable, no_models, not_mango).
@@ -758,6 +773,11 @@ pub fn install(app: &App) -> tauri::Result<()> {
                 crate::engine_share::engine_share_set_enabled,
                 crate::engine_share::engine_share_new_key,
                 crate::engine_remote::engine_remote_connect,
+                crate::servers::servers_state,
+                crate::servers::servers_add,
+                crate::servers::servers_refresh,
+                crate::servers::servers_remove,
+                crate::servers::servers_set_default,
                 crate::engine_remote::engine_remote_disconnect,
                 crate::report::ui_log,
                 crate::report::report_problem,

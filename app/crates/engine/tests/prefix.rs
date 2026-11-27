@@ -54,9 +54,10 @@ fn planner(dir: PathBuf, hybrid: bool, read_ms: u64) -> Box<engine::Planner> {
             label: key.into(),
             ctx: 65536,
             images: false,
-            gpus_used: vec![Gpu { index: 0, name: "GPU 0".into(), vendor: Vendor::Nvidia, memory_mib: 8192, cuda_driver: Some((12, 6)), cc: Some((8, 6)) }],
+            gpus_used: vec![Gpu { index: 0, name: "GPU 0".into(), vendor: Vendor::Nvidia, memory_mib: 8192, shared_mib: 0, cuda_driver: Some((12, 6)), cc: Some((8, 6)) }],
             gguf: format!(r"C:\fake\{key}.gguf").into(),
             slots: Some(SlotCache { folder: slots, memory: dir.join("memory"), model: key.into(), signature: "test".into() }),
+            fallback: None,
         })
     })
 }
@@ -104,6 +105,16 @@ impl Fixture {
     }
 
     fn send(&self, c: &Chat) -> u16 {
+        code_of(&self.reply(c))
+    }
+
+    /// The `X-Mango-Prefix-Read` header of the reply to a conversation request, read as JSON.
+    fn prefix_read(&self, c: &Chat) -> Option<Value> {
+        let reply = self.reply(c);
+        reply.headers().get(engine::prefix::PREFIX_READ).map(|v| serde_json::from_str(v.to_str().unwrap()).unwrap())
+    }
+
+    fn reply(&self, c: &Chat) -> support::Reply {
         let mut messages = vec![
             json!({ "role": "system", "content": format!("{}\n<env> Working directory: {} </env>", c.stable, c.folder) }),
             json!({ "role": "user", "content": c.question }),
@@ -118,7 +129,7 @@ impl Fixture {
         if c.marker {
             headers.push((engine::prefix::STABLE_PROMPT, length.as_str()));
         }
-        code_of(&post(&self.url("/v1/chat/completions"), &headers, &body.to_string()))
+        post(&self.url("/v1/chat/completions"), &headers, &body.to_string())
     }
 
     /// What the engine read, in order: `(route, tokens read, tokens in the prompt)`.
@@ -189,6 +200,18 @@ fn a_new_conversation_reads_only_what_is_its_own() {
         }
         assert_eq!(b.prefix_files().len(), 1, "the same file serves every folder");
     }
+}
+
+/// The reply to the conversation whose system prompt was read for it says how many tokens that was and how long it
+/// took, so that the line under the answer counts them; a conversation that finds the prompt ready says nothing.
+#[test]
+fn the_reply_says_the_system_prompt_read_for_it() {
+    let b = fixture_with(false, 1);
+    let s = words("rule", STABLE_WORDS);
+    let read = b.prefix_read(&chat("a", &s, "C:/one", "first question")).expect("the first conversation read the prompt");
+    assert_eq!(read["prompt_n"], STABLE_WORDS as u64, "{read}");
+    assert!(read["prompt_ms"].as_f64().is_some_and(|ms| ms > 0.0), "{read}");
+    assert_eq!(b.prefix_read(&chat("a", &s, "C:/two", "second question")), None);
 }
 
 /// A conversation that goes on does not touch the slot: it has everything it needs there.

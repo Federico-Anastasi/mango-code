@@ -47,6 +47,14 @@ export const SkillTool = Tool.define(
             metadata: {},
           })
 
+          // mango-code: a skill built into the agent has no folder: the model is shown none
+          if (info.location === Skill.BUILT_IN)
+            return {
+              title: `Loaded skill: ${info.name}`,
+              output: [`<skill_content name="${info.name}">`, `# Skill: ${info.name}`, "", info.content.trim(), "", "</skill_content>"].join("\n"),
+              metadata: { name: info.name, dir: "" },
+            }
+
           const dir = path.dirname(info.location)
           const base = dir
           const files = yield* ripgrep.find({

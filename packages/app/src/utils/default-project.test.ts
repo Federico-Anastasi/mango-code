@@ -49,8 +49,8 @@ describe("which conversations belong to no project", () => {
   })
 
   test("a project is named as its list names it, and a folder with none by its own name", () => {
-    const project = { name: "Fatture", worktree: "D:\\work\\invoice-tool" }
-    expect(projectLabel({ directory: project.worktree, project, folders })).toBe("Fatture")
+    const project = { name: "Invoices", worktree: "D:\\work\\invoice-tool" }
+    expect(projectLabel({ directory: project.worktree, project, folders })).toBe("Invoices")
     expect(projectLabel({ directory: "D:\\work\\invoice-tool", folders })).toBe("invoice-tool")
   })
 

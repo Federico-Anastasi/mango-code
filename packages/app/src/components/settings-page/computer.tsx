@@ -1,8 +1,5 @@
-// mango-code: Settings › Computer: what
-// Mango Code found in this PC and how it uses it. Every card has «Usa per i modelli», off with its sentence when it cannot
-// be changed; where a model that fits one card runs; processor, memory, the engine (with «Aggiorna il motore» when the
-// app came with a new one) and the tailored setups, with how they are made (the folder of the skill to give to a
-// frontier AI). The changes go through the bridge; without it the controls stay visible, off, with «si fa dal computer».
+// mango-code: Settings › Computer, what Mango Code found in this PC and how it uses it. The changes go through the bridge;
+// without it the controls stay visible, off, with «si fa dal computer».
 import { ButtonV2 } from "@opencode-ai/ui/v2/button-v2"
 import { SegmentedControlItemV2, SegmentedControlV2 } from "@opencode-ai/ui/v2/segmented-control-v2"
 import { Switch } from "@opencode-ai/ui/v2/switch-v2"
@@ -32,9 +29,9 @@ export const SettingsComputer: Component = () => {
   const run = commands.run
   const busy = commands.anyBusy
   const size = (mib: number) => formatFileSize(mib * MIB, language.locale())
-  // What «Aggiorna il motore» answered: the new version is being downloaded. Shown while there is an update: once the
+  // What «Update the engine» answered: the new version is being downloaded. Shown while there is an update: once the
   // engine has arrived the line says it is this version's. A download of the engine that failed says why instead, with
-  // «Riprova», which asks it again.
+  // «Retry», which asks it again.
   const [engineNote, setEngineNote] = createSignal<string>()
   const engineFailed = () => {
     const download = control.view.state && engineUpdate(control.view.state)
@@ -88,10 +85,24 @@ export const SettingsComputer: Component = () => {
                   <For each={found().gpus}>
                     {(gpu) => (
                       <SettingsRowV2
-                        title={`${gpu.name} · ${size(gpu.memory_mib)}`}
+                        title={
+                          gpu.memory_mib
+                            ? `${gpu.name} · ${
+                                gpu.shared
+                                  ? language.t("settings.computer.sharedMemory", { size: size(gpu.memory_mib) })
+                                  : size(gpu.memory_mib)
+                              }`
+                            : gpu.name
+                        }
                         description={
                           <>
                             {gpu.note}
+                            <For each={found().gone.filter((entry) => {
+                                const name = entry.slice(0, entry.lastIndexOf(" #"))
+                                return gpu.name === name || gpu.name.startsWith(`${name} #`)
+                              })}>
+                              {(entry) => language.t("settings.computer.twinGone", { name: entry })}
+                            </For>
                             {error(gpu.name)}
                           </>
                         }
@@ -114,36 +125,40 @@ export const SettingsComputer: Component = () => {
               </SettingsListV2>
             </div>
 
-            <div class="settings-v2-section">
-              <h3 class="settings-v2-section-title">{language.t("settings.computer.small.section")}</h3>
-              <SettingsListV2>
-                <SettingsRowV2
-                  title={language.t(SMALL[found().small_models].title)}
-                  description={
-                    <>
-                      {language.t(SMALL[found().small_models].line)}
-                      {error("small")}
-                    </>
-                  }
-                >
-                  <SegmentedControlV2
-                    value={found().small_models}
-                    disabled={!computer() || busy()}
-                    onChange={(value) =>
-                      (value === "one" || value === "all") && void run("small", () => computer()?.setSmallModels(value))
+            {/* one card in use or none: nothing to choose between one card and all of them */}
+            <Show when={found().gpus.filter((gpu) => gpu.used && !gpu.note).length > 1}>
+              <div class="settings-v2-section">
+                <h3 class="settings-v2-section-title">{language.t("settings.computer.small.section")}</h3>
+                <SettingsListV2>
+                  <SettingsRowV2
+                    title={language.t(SMALL[found().small_models].title)}
+                    description={
+                      <>
+                        {language.t(SMALL[found().small_models].line)}
+                        {error("small")}
+                      </>
                     }
-                    data-action="settings-small-models"
                   >
-                    <SegmentedControlItemV2 value="one">
-                      {language.t("settings.models.where.one")}
-                    </SegmentedControlItemV2>
-                    <SegmentedControlItemV2 value="all">
-                      {language.t("settings.models.where.all")}
-                    </SegmentedControlItemV2>
-                  </SegmentedControlV2>
-                </SettingsRowV2>
-              </SettingsListV2>
-            </div>
+                    <SegmentedControlV2
+                      value={found().small_models}
+                      disabled={!computer() || busy()}
+                      onChange={(value) =>
+                        (value === "one" || value === "all") &&
+                        void run("small", () => computer()?.setSmallModels(value))
+                      }
+                      data-action="settings-small-models"
+                    >
+                      <SegmentedControlItemV2 value="one">
+                        {language.t("settings.models.where.one")}
+                      </SegmentedControlItemV2>
+                      <SegmentedControlItemV2 value="all">
+                        {language.t("settings.models.where.all")}
+                      </SegmentedControlItemV2>
+                    </SegmentedControlV2>
+                  </SettingsRowV2>
+                </SettingsListV2>
+              </div>
+            </Show>
 
             <div class="settings-v2-section">
               <h3 class="settings-v2-section-title">{language.t("settings.computer.rest")}</h3>
@@ -218,8 +233,8 @@ export const SettingsComputer: Component = () => {
 }
 
 /**
- * «llama.cpp per le schede video · è quello di questa versione di Mango Code», «· c'è una versione nuova», «· non ancora
- * installato».
+ * «llama.cpp for the graphics cards · it is the one of this version of Mango Code», «· this version of Mango Code brings
+ * a new one», «· not installed yet».
  */
 function engineLine(
   pc: Computer,

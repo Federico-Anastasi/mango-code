@@ -11,7 +11,7 @@ export type ModelState =
   | { phase: "none" }
   | { phase: "loading"; model: string; label: string; seconds: number; where: Where | null }
   | { phase: "ready"; model: string; label: string; where: Where; notice: string | null }
-  | { phase: "failed"; model: string; label: string; reason: string; taken: string | null; proposal: Proposal | null }
+  | { phase: "failed"; model: string; label: string; reason: string; detail: string | null; taken: string | null; proposal: Proposal | null }
   | { phase: "lent"; model: string; label: string }
   | { phase: "remote"; models: string[]; reachable: boolean }
 
@@ -32,6 +32,10 @@ export type MangoState = {
   catalog_revision: number
   model: ModelState
   default_model: string | null
+  /** The model of new conversations when it is an external server's, `<server>/<model>`. */
+  server_model: string | null
+  /** The name the user reads for `server_model`. */
+  server_label: string | null
   downloads: Download[]
   /** The model of the image engine that stayed on after a picture; none while the engine is off. */
   image_loaded: string | null
@@ -60,7 +64,7 @@ export type CatalogEntry = {
   images: boolean
   /** Added by the user («Another model»). */
   user: boolean
-  /** Its files that the user chose on the computer, where they are: «Togli» takes it off the list and leaves them. */
+  /** Its files that the user chose on the computer, where they are: «Remove» takes it off the list and leaves them. */
   ownFiles: string[]
   /** The folder that holds its downloaded files when the user moved them out of the models folder. */
   placedIn?: string
@@ -76,7 +80,13 @@ export type CatalogEntry = {
    * template offers: `["off", "on"]` or `["low", "medium", "high"]`, none when it offers nothing (or the model is not on the
    * computer yet).
    */
-  limits: { where: MangoModelChoices["where"][]; context: number[]; reasoning: string[] }
+  limits: {
+    where: MangoModelChoices["where"][]
+    context: number[]
+    reasoning: string[]
+    /** The level of `reasoning` the model takes when none is chosen; `null` when it is not known. */
+    reasoningDefault: string | null
+  }
   sampling: Sampling | null
 }
 
@@ -102,7 +112,8 @@ export type ImageModels = {
 }
 
 export type Computer = {
-  gpus: { name: string; memory_mib: number; used: boolean; note: string }[]
+  /** `shared`: the integrated graphics that borrows the PC's memory; `memory_mib` is then what a model can count on. */
+  gpus: { name: string; memory_mib: number; shared: boolean; used: boolean; note: string }[]
   small_models: "one" | "all"
   cpu: string
   cores: number
@@ -111,6 +122,8 @@ export type Computer = {
   /** `update`: the app came with a new version of the engine, and models on the disk wait for it. */
   engine: { label: string; installed: boolean; update: boolean }
   tailored: { models: number } | null
+  /** Cards left out by their number among identical ones (`name #2`) that are not here, while one of that name is. */
+  gone: string[]
 }
 
 const record = (value: unknown) =>
@@ -151,6 +164,7 @@ export function parseModelState(value: unknown): ModelState {
         model,
         label,
         reason: text(raw.reason) ?? "",
+        detail: text(raw.detail) || null,
         taken: text(raw.taken) || null,
         proposal: proposed && where ? { model: proposed, label: text(proposal?.label) ?? proposed, where } : null,
       }
@@ -197,6 +211,8 @@ export function parseState(value: unknown): MangoState | undefined {
     catalog_revision: count(raw.catalog_revision) ?? 0,
     model: parseModelState(raw.model),
     default_model: text(raw.default_model) ?? null,
+    server_model: text(raw.server_model) ?? null,
+    server_label: text(raw.server_label) ?? null,
     downloads,
     image_loaded: text(raw.image_loaded) ?? null,
     conversation_model: text(raw.conversation_model) ?? null,
@@ -295,6 +311,8 @@ function parseChoices(value: unknown): MangoModelChoices | undefined {
   if (!raw || !WHERE_CHOICES.has(raw.where as string) || !STYLES.has(raw.style as string)) return
   if (raw.context !== null && count(raw.context) === undefined) return
   if (raw.reasoning !== null && !REASONING_LEVELS.has(raw.reasoning as string)) return
+  // absent when the model uses the default harness (the app leaves it out of the file)
+  if (raw.harness !== undefined && raw.harness !== null && typeof raw.harness !== "string") return
   const sampling = parseSampling(raw.sampling)
   if (!sampling) return
   return {
@@ -304,6 +322,7 @@ function parseChoices(value: unknown): MangoModelChoices | undefined {
     style: raw.style as MangoModelChoices["style"],
     reasoning: raw.reasoning as string | null,
     sampling,
+    harness: (raw.harness as string | undefined) ?? null,
   }
 }
 
@@ -315,6 +334,7 @@ function parseLimits(value: unknown): CatalogEntry["limits"] | undefined {
     where: raw.where as MangoModelChoices["where"][],
     context: raw.context as number[],
     reasoning: strings(raw.reasoning).filter((level) => REASONING_LEVELS.has(level)),
+    reasoningDefault: REASONING_LEVELS.has(raw.reasoning_default as string) ? (raw.reasoning_default as string) : null,
   }
 }
 
@@ -339,7 +359,15 @@ export function parseComputer(value: unknown): Computer | undefined {
       const g = record(item)
       const name = text(g?.name)
       return g && name
-        ? [{ name, memory_mib: count(g.memory_mib) ?? 0, used: g.used !== false, note: text(g.note) ?? "" }]
+        ? [
+            {
+              name,
+              memory_mib: count(g.memory_mib) ?? 0,
+              shared: g.shared === true,
+              used: g.used !== false,
+              note: text(g.note) ?? "",
+            },
+          ]
         : []
     }),
     small_models: raw.small_models === "all" ? "all" : "one",
@@ -353,6 +381,7 @@ export function parseComputer(value: unknown): Computer | undefined {
     },
     engine: { label: text(engine.label) ?? "", installed: engine.installed === true, update: engine.update === true },
     tailored: tailored === undefined ? null : { models: tailored },
+    gone: (Array.isArray(raw.gone) ? raw.gone : []).flatMap((item) => text(item) ?? []),
   }
 }
 
@@ -399,11 +428,11 @@ export function messageWaits(state: MangoState | undefined) {
 }
 
 /**
- * No model on the computer and none on its way: a message would have no model to leave with nor one to wait for, so
- * the composer does not send until one is chosen in Models. Before the catalog has answered nothing is known.
+ * No model on the computer, none on its way and none of a server for the new conversations: a message would have no
+ * model to leave with nor one to wait for, so the composer does not send until one is chosen in Models. Before the catalog has answered nothing is known.
  */
 export function noModel(state: MangoState | undefined, catalog: CatalogEntry[] | undefined) {
-  if (!state || !catalog || state.model.phase !== "none" || downloading(state)) return false
+  if (!state || !catalog || state.model.phase !== "none" || downloading(state) || state.server_model) return false
   return !catalog.some((m) => m.present)
 }
 
@@ -497,6 +526,18 @@ export function conversationModel(state: MangoState | undefined) {
   if (download && !download.engine_only) return download.model
 }
 
+/**
+ * The model to put in the place of the one a conversation names when it is no longer on the computer (taken off it, or
+ * its entry removed): the model of new conversations if it is there, otherwise the first that is. None when the named
+ * model is there, is the one the engine runs or a download brings, or no model is left.
+ */
+export function replacementModel(state: MangoState | undefined, catalog: CatalogEntry[] | undefined, key: string) {
+  if (!state || !catalog || state.model.phase === "remote" || conversationModel(state) === key) return
+  if (catalog.find((m) => m.key === key)?.present) return
+  const present = catalog.filter((m) => m.present)
+  return (present.find((m) => m.key === state.default_model) ?? present[0])?.key
+}
+
 /** With no model in use, the download on its way (running or waiting its turn): the one the bar names. */
 export function comingDownload(state: MangoState) {
   const download = mainDownload(state)
@@ -513,6 +554,8 @@ export function homeView(state: MangoState | undefined, catalog: CatalogEntry[] 
   if (state.model.phase === "remote") return state.model.reachable ? ("usual" as const) : ("remote" as const)
   if (state.model.phase === "none" && engineUpdate(state)) return "engine" as const
   if (state.model.phase === "none" && !catalog && unreadable) return "unreadable" as const
+  // the conversations go to a server: nothing to download first
+  if (state.server_model) return "usual" as const
   if (!firstRun(state, catalog)) return "usual" as const
   return mainDownload(state) ? ("downloading" as const) : ("welcome" as const)
 }

@@ -62,4 +62,18 @@ describe("the same wrong call, repeated", () => {
     await exec("ses_c")({ file: "x" }, opts()).catch(() => {})
     expect(runs).toBe(4)
   })
+
+  test("a call that failed for the network or the time may be tried again as it is, once", async () => {
+    resetRepeatGuard()
+    for (const error of ["fetch failed", "The operation timed out.", "HTTP 503", "HTTP 429", "read ECONNRESET", "MCP error -32001: Request timed out"]) {
+      let runs = 0
+      const exec = guardExecute("ses_n", "web_open", async () => {
+        runs++
+        throw new Error(error)
+      })
+      for (let i = 0; i < 3; i++) await exec({ url: "https://example.com" }, opts()).catch(() => {})
+      expect(runs, error).toBe(2)
+      resetRepeatGuard()
+    }
+  })
 })

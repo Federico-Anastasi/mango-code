@@ -1,7 +1,7 @@
 import type { SessionMessageInfo } from "@opencode-ai/client/promise"
 import type { AssistantMessage, Message, Part, SessionStatus, UserMessage } from "@opencode-ai/sdk/v2"
 import { createMemo, type Accessor } from "solid-js"
-import { foldResumes } from "./resumes"
+import { foldResumes, heldAnswer } from "./resumes"
 import { reuseTimelineRows } from "./row-reconciliation"
 import { Timeline, TimelineRow } from "./rows"
 
@@ -30,11 +30,13 @@ export function createTimelineProjection(input: {
     })
     return result
   })
+  // mango-code: an answer the harness held back is not the user's to see
+  const shown = (messageID: string) => input.parts(messageID).filter((part) => !heldAnswer(part))
   const projection = createMemo(() =>
     Timeline.constructSessionMessageRows(
       input.sessionMessages(),
       (messageID) => messageByID().get(messageID) as UserMessage | AssistantMessage | undefined,
-      input.parts,
+      shown,
       input.status().type,
       input.inlineComments(),
       input.userMessages(),

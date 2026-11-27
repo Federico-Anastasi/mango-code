@@ -203,12 +203,11 @@ export function PromptInputV2(props: PromptInputV2Props) {
           data-slot="prompt-input-bar"
           data-picture={picture() ? "" : undefined}
           class="flex px-2"
-          classList={{ "h-11 items-center": !picture(), "min-h-11 items-start gap-x-1 py-[6px]": picture() }}
+          classList={{ "min-h-11 items-start py-2": !picture(), "min-h-11 items-start gap-x-1 py-[6px]": picture() }}
         >
           <div
             data-slot="prompt-input-controls"
-            class="flex min-w-0 flex-1 items-center gap-1"
-            classList={{ "flex-wrap": picture() }}
+            class="flex min-w-0 flex-1 flex-wrap items-center gap-1"
             aria-hidden={state.mode === "shell"}
             inert={state.mode === "shell" ? true : undefined}
             style={buttons()}
@@ -567,7 +566,7 @@ export function PromptInputV2Select(props: {
           as={ButtonV2}
           variant="ghost-muted"
           size="normal"
-          class={`max-w-[220px] justify-start ![font-weight: 400] ${props.class ?? ""}`}
+          class={`max-w-[220px] justify-start ![font-weight:400] ${props.class ?? ""}`}
           aria-label={props.title}
         >
           {props.currentIcon}

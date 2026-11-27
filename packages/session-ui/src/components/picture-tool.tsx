@@ -19,6 +19,7 @@ import {
   pictureFrameWidth,
   pictureProgress,
   pictureSeconds,
+  pictureTime,
   pictureSides,
   pictureWords,
 } from "./picture-state"
@@ -44,7 +45,8 @@ export function PictureTool(props: ToolProps) {
   const picture = () => (props.attachments ?? []).find((file) => file.mime.startsWith("image/"))
   const preview = () => (typeof props.metadata.preview === "string" ? props.metadata.preview : undefined)
   const file = () => (typeof props.metadata.file === "string" ? props.metadata.file : undefined)
-  const seconds = () => pictureSeconds(props.time)
+  const time = () => pictureTime(props.metadata, props.time)
+  const seconds = () => pictureSeconds(time())
   const facts = () => {
     const { width, height } = sides()
     const key = seconds() === undefined ? "ui.picture.factsSize" : "ui.picture.facts"
@@ -68,7 +70,7 @@ export function PictureTool(props: ToolProps) {
         icon="photo"
         status={stopped() || missing() ? "stopped" : props.status}
         // a finished picture says how long it took once, in the line under it
-        time={done() ? undefined : props.time}
+        time={done() ? undefined : time()}
         progress={words()}
         outcome={stopped() ? i18n.t("ui.picture.stopped") : missing() ? i18n.t("ui.picture.missing") : undefined}
         trigger={{ title: props.label.title, subtitle: pictureFileName(props.metadata) }}

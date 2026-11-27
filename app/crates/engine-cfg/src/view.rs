@@ -41,6 +41,17 @@ pub(crate) fn assess(paths: &Paths, file: &ModelsFile, key: &str, cfg: &ModelCfg
     }
     // The reason is shown to the user: the detail of an error is for the log.
     located.reason = mango_common::without_detail(&located.reason);
+    // only Automatic takes a tailored setup; an error reading it is already the setup's above
+    let tailored_off = if scope.choices.place == WhereChoice::Auto { crate::profiles::tailored_left_out(paths, key, hw).ok().flatten() } else { None };
+    if let Some(g) = tailored_off {
+        located.reason = tr!(
+            "L'assetto su misura per questo PC usa la scheda {} ({}), che hai segnato come non usata. {}",
+            "The setup tailored to this PC uses graphics card {} ({}), which you marked as not used. {}",
+            g.index,
+            g.name,
+            located.reason
+        );
+    }
     Assessed { setup, located }
 }
 
@@ -57,7 +68,10 @@ fn profile_located(cfg: &ModelCfg, p: &Profile, hw: &Hardware, scope: &choices::
     };
     let reason = if p.tailored() {
         let measured = match &p.measurements.date {
-            Some(d) => tr!("misurato il {d}", "measured on {d}"),
+            Some(d) => {
+                let d = mango_common::i18n::long_date(d);
+                tr!("misurato il {d}", "measured on {d}")
+            }
             None => tr!("non ancora misurato", "not measured yet"),
         };
         tr!("Ha un assetto su misura per questo PC, {measured}.", "It has a setup tailored to this PC, {measured}.")
@@ -197,6 +211,8 @@ pub struct Limits {
     /// What the model's chat template lets the user choose about its reasoning: "off" and "on", or "low", "medium" and
     /// "high"; empty when it offers nothing (also while the model is not on the computer: its template is in its file).
     pub reasoning: Vec<String>,
+    /// The level of `reasoning` the model takes when the user chose none.
+    pub reasoning_default: Option<String>,
 }
 
 /// A local model of the catalog for the app: what the plan says about it here, what can be chosen and what is chosen.
@@ -209,7 +225,7 @@ pub struct ModelView {
     pub images: bool,
     /// Added by the user («Another model»).
     pub user: bool,
-    /// Its files that Mango Code never downloaded (a GGUF the user chose on the computer), where they are: «Togli» takes
+    /// Its files that Mango Code never downloaded (a GGUF the user chose on the computer), where they are: «Remove» takes
     /// the model off the list and leaves them. Empty for a model whose files Mango Code downloads.
     pub own_files: Vec<String>,
     /// The folder where Mango Code's own files of the model are when the user put them outside the models folder
@@ -255,7 +271,13 @@ pub fn models_view(paths: &Paths, hw: &Hardware) -> Result<Vec<ModelView>> {
                 assess(paths, &file, key, &r.cfg, hw, &open, &[]).located.fit.map(|f| f.ctx)
             }
         };
-        let places = if r.cfg.requires_engine.is_some() { vec![WhereChoice::Auto] } else { general::places(hw, build, &scope) };
+        let offered = if r.cfg.requires_engine.is_some() { vec![WhereChoice::Auto] } else { general::places(hw, build, &scope) };
+        // A choice saved before a change in Computer that no longer offers it stays shown as chosen: the verdict says why
+        // it does not run, and the user picks another.
+        let places: Vec<WhereChoice> = [WhereChoice::Auto, WhereChoice::One, WhereChoice::All, WhereChoice::Cpu, WhereChoice::Pick]
+            .into_iter()
+            .filter(|p| offered.contains(p) || *p == scope.choices.place)
+            .collect();
         let (present, waits_engine, bytes) = match &r.assessed.setup {
             Ok(setup) => {
                 use mango_common::download::{engine_size, installed_engine};
@@ -264,7 +286,7 @@ pub fn models_view(paths: &Paths, hw: &Hardware) -> Result<Vec<ModelView>> {
                 let engine = engine_size(paths, setup.engine(), setup.build()).unwrap_or(0);
                 let installed = installed_engine(paths, setup.engine(), setup.build()).is_some();
                 let present = weights && installed;
-                let waits = weights && !installed && setup.arrives(paths);
+                let waits = weights && !installed && setup.arrives(paths, hw);
                 let bytes = if present || waits { r.recommendation.bytes } else { engine + if weights { 0 } else { r.recommendation.bytes } };
                 (present, waits, bytes)
             }
@@ -298,13 +320,13 @@ pub fn models_view(paths: &Paths, hw: &Hardware) -> Result<Vec<ModelView>> {
             sampling: Some(choices::effective_sampling(r.cfg.sampling, &scope.choices)).filter(|s| *s != Sampling::default()),
             verdict: Verdict {
                 fits: fit.is_some(),
-                place: fit.map(|f| Where { placement: f.placement, gpus: f.gpus.iter().map(|g| g.name.clone()).collect(), context: f.ctx }),
+                place: fit.map(|f| Where { placement: f.placement, gpus: f.gpus.iter().map(|g| hw.card_id(g)).collect(), context: f.ctx }),
                 reason: r.assessed.located.reason.clone(),
                 speed: r.recommendation.speed,
                 fastest: r.recommendation.fastest,
                 estimated: r.recommendation.estimated,
             },
-            limits: Limits { places, context: largest.map_or_else(Vec::new, offered_contexts), reasoning: reasoning.levels() },
+            limits: Limits { places, context: largest.map_or_else(Vec::new, offered_contexts), reasoning: reasoning.levels(), reasoning_default: reasoning::default_of_model(paths, &r.cfg).map(String::from) },
             tailored: crate::profiles::lookup(paths, key, hw)?.is_some_and(|p| p.tailored()),
             choices: Choices { reasoning: scope.choices.reasoning.as_deref().and_then(|c| reasoning.resolve(c)).map(String::from), ..scope.choices },
         });
@@ -350,7 +372,7 @@ pub fn after_failure(paths: &Paths, hw: &Hardware, used: &[(u32, u64, u64)], fai
     let full = models_view(paths, hw)?.into_iter().find(|v| v.key == failed);
     let taken = match full.as_ref().and_then(|v| v.verdict.place.as_ref().map(|p| (v, p))) {
         Some((_, before)) if !fits_now => {
-            let cards: Vec<Gpu> = hw.gpus.iter().filter(|g| before.gpus.contains(&g.name) && held_by_others(g, used) > 0).cloned().collect();
+            let cards: Vec<Gpu> = hw.gpus.iter().filter(|g| before.gpus.iter().any(|id| hw.names(id, g)) && held_by_others(g, used) > 0).cloned().collect();
             (!cards.is_empty()).then(|| in_use_sentence(&cards, used))
         }
         _ => None,
@@ -369,20 +391,47 @@ pub struct CardsTaken {
 
 /// Before `key` starts: whether it fits beside what the other programs hold on its cards now.
 /// `used` as `gpu_memory` gives it, read while no model of Mango Code is on the cards; the cards in `lent` are lent to
-/// another job, which holds them: the plan leaves them out, and what is used there is not looked at. `None` when it fits,
-/// and when nothing is known of the cards (an empty `used`, a model on the processor).
-pub fn taken_before_start(paths: &Paths, hw: &Hardware, used: &[(u32, u64, u64)], key: &str, lent: &[u32]) -> Result<Option<CardsTaken>> {
+/// another job, which holds them: the plan leaves them out, and what is used there is not looked at. On the integrated
+/// graphics that borrows the PC's memory, the RAM the other programs leave free (`free_ram_mib`) is what counts. `None`
+/// when it fits, and when nothing is known of the cards (an empty `used`, a model on the processor).
+pub fn taken_before_start(paths: &Paths, hw: &Hardware, used: &[(u32, u64, u64)], free_ram_mib: u64, key: &str, lent: &[u32]) -> Result<Option<CardsTaken>> {
     let used: Vec<(u32, u64, u64)> = used.iter().filter(|u| !lent.contains(&u.0)).copied().collect();
-    if hw.gpus.iter().all(|g| held_by_others(g, &used) == 0) {
+    let borrows = hw.gpus.iter().any(|g| hw.borrows_ram(g));
+    if !borrows && hw.gpus.iter().all(|g| held_by_others(g, &used) == 0) {
         return Ok(None);
     }
     let (file, choices) = (load_models(paths)?, choices::read(paths)?);
     let cfg = model_cfg(&file, key)?;
+    if borrows {
+        return Ok(ram_short(paths, &file, &choices, key, &cfg, hw, free_ram_mib, lent));
+    }
     let held = crowded(paths, &file, &choices, key, &cfg, hw, &used, lent);
     if held.is_empty() {
         return Ok(None);
     }
     Ok(Some(CardsTaken { sentence: in_use_sentence(&held, &used), cards: held.iter().map(|g| g.index).collect() }))
+}
+
+/// The integrated graphics that borrows the PC's memory, when the RAM the other programs leave free does not give `key` the
+/// plan it has on `hw`: the same card, the same context. `None` when it does, and for a model on the processor.
+#[allow(clippy::too_many_arguments)]
+fn ram_short(paths: &Paths, file: &ModelsFile, choices: &ChoicesFile, key: &str, cfg: &ModelCfg, hw: &Hardware, free_ram_mib: u64, lent: &[u32]) -> Option<CardsTaken> {
+    let fit = assess(paths, file, key, cfg, hw, choices, lent).located.fit?;
+    let cards: Vec<u32> = fit.gpus.iter().filter(|g| hw.borrows_ram(g)).map(|g| g.index).collect();
+    if cards.is_empty() {
+        return None;
+    }
+    let now = Hardware { ram_mib: hw.ram_mib.min(free_ram_mib + crate::hardware::RAM_RESERVE_MIB), ..hw.clone() };
+    let same = |f: &Fit| (f.placement, f.ctx, f.gpus.iter().map(|g| g.index).collect::<Vec<_>>()) == (fit.placement, fit.ctx, fit.gpus.iter().map(|g| g.index).collect());
+    if assess(paths, file, key, cfg, &now, choices, lent).located.fit.as_ref().is_some_and(same) {
+        return None;
+    }
+    let sentence = tr!(
+        "Gli altri programmi lasciano liberi solo {} GB di RAM: per questo modello sulla grafica integrata non bastano.",
+        "The other programs leave only {} GB of RAM free: it is not enough for this model on the integrated graphics.",
+        general::gb(free_ram_mib)
+    );
+    Some(CardsTaken { sentence, cards })
 }
 
 /// For the user: the memory in use on each of `cards` (at least one), held by another program.
@@ -461,7 +510,11 @@ fn offered_contexts(largest: u32) -> Vec<u32> {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct GpuView {
     pub name: String,
+    /// The memory a model can count on, for the integrated graphics that borrows the PC's memory (`shared`); otherwise
+    /// the card's own.
     pub memory_mib: u64,
+    /// The memory is the PC's, shared with the RAM.
+    pub shared: bool,
     /// The models use it.
     pub used: bool,
     /// Empty if the card can be used or left out as the user wants; otherwise why it can't, in a sentence.
@@ -519,6 +572,9 @@ pub struct ComputerView {
     pub engine: EngineView,
     /// How many models have a setup tailored to this computer; `None` if none.
     pub tailored: Option<TailoredView>,
+    /// Cards left out by their number among identical cards (`name #2`) that are not here while one card of that name
+    /// is: that card has the plain name now and is in use.
+    pub gone: Vec<String>,
 }
 
 pub fn computer_view(paths: &Paths, hw: &Hardware) -> Result<ComputerView> {
@@ -528,9 +584,17 @@ pub fn computer_view(paths: &Paths, hw: &Hardware) -> Result<ComputerView> {
     for key in file.local() {
         tailored += usize::from(crate::profiles::lookup(paths, key, hw)?.is_some_and(|p| p.tailored()));
     }
-    let update = engine_updates(paths, hw)?.into_iter().next();
+    let update = engine_updates(paths, hw)?.into_iter().find(|u| u.version);
     Ok(ComputerView {
         gpus: hw.gpus.iter().map(|g| gpu_view(g, hw, build, &choices)).collect(),
+        gone: choices
+            .computer
+            .unused_gpus
+            .iter()
+            .filter(|entry| !hw.gpus.iter().any(|g| hw.names(entry, g)))
+            .filter(|entry| entry.rsplit_once(" #").is_some_and(|(name, _)| hw.gpus.iter().any(|g| g.name == name)))
+            .cloned()
+            .collect(),
         small_models: choices.computer.small_models,
         cpu: hw.cpu.name.clone(),
         cores: hw.cpu.cores,
@@ -552,10 +616,13 @@ pub fn computer_view(paths: &Paths, hw: &Hardware) -> Result<ComputerView> {
 pub struct EngineUpdate {
     pub model: String,
     pub label: String,
+    /// A new version of an engine on the disk; not, the build the integrated graphics needs (`Setup::for_integrated`).
+    pub version: bool,
 }
 
-/// The engines to update, one for each engine and build. An engine never installed is not among them: the download of a
-/// model brings it. One without an engine for this computer (`download_of` refuses it) waits for nothing. None while the
+/// The engines to update, one for each engine and build. An engine never installed is not among them (the download of a
+/// model brings it), except the build of the pictures' engine that a change of cards asks for when a picture model's
+/// files are on the disk. One without an engine for this computer (`download_of` refuses it) waits for nothing. None while the
 /// engine in use is another PC's: this PC's is updated once the user is back to it.
 pub fn engine_updates(paths: &Paths, hw: &Hardware) -> Result<Vec<EngineUpdate>> {
     if paths.remote_engine().is_file() {
@@ -568,30 +635,65 @@ pub fn engine_updates(paths: &Paths, hw: &Hardware) -> Result<Vec<EngineUpdate>>
         if plan.fits.is_err() || seen.contains(&(plan.engine.clone(), plan.build)) {
             continue;
         }
-        updates.push(EngineUpdate { model: m.key, label: engine_label(&plan.engine, plan.build) });
+        let version = mango_common::download::older_engine(paths, &plan.engine, plan.build);
+        updates.push(EngineUpdate { model: m.key, label: engine_label(&plan.engine, plan.build), version });
+        seen.push((plan.engine, plan.build));
+    }
+    // The pictures' engine follows the cards the models use (`image_build`): a model whose files are on the disk waits
+    // for the build it needs as one that writes does.
+    for v in crate::image::image_views(paths, hw)?.models.into_iter().filter(|v| !v.present) {
+        let Ok(plan) = crate::download_of(paths, &v.key, hw) else { continue };
+        if !plan.weights || seen.contains(&(plan.engine.clone(), plan.build)) {
+            continue;
+        }
+        let version = mango_common::download::older_engine(paths, &plan.engine, plan.build);
+        updates.push(EngineUpdate { model: v.key, label: engine_label(&plan.engine, plan.build), version });
         seen.push((plan.engine, plan.build));
     }
     Ok(updates)
 }
 
 fn gpu_view(g: &crate::hardware::Gpu, hw: &Hardware, build: Build, choices: &ChoicesFile) -> GpuView {
-    let (name, memory_mib) = (g.name.clone(), g.memory_mib);
-    let off = |note: String| GpuView { name: name.clone(), memory_mib, used: false, note };
-    if g.is_integrated() && !g.counts() {
-        return off(tr!("È la grafica integrata del processore: i modelli non la usano.", "It is the processor's integrated graphics: the models don't use it."));
+    let name = hw.card_id(g);
+    let shared = g.needs_ram();
+    let memory_mib = if shared { hw.borrowable_mib(g) } else { g.memory_mib };
+    let off = |note: String| GpuView { name: name.clone(), memory_mib, shared, used: false, note };
+    // Only the memory the models can use is shown: beside a dedicated card that counts, the integrated graphics has none.
+    let left_out = |card: &crate::hardware::Gpu| choices.computer.unused_gpus.iter().any(|n| hw.names(n, card));
+    if g.is_integrated() && hw.dedicated_counts() {
+        let dedicated_used = hw.gpus.iter().any(|d| !d.is_integrated() && d.holds_a_model() && !left_out(d));
+        return GpuView { memory_mib: 0, ..off(if dedicated_used {
+            tr!(
+                "I modelli usano la scheda video dedicata: la grafica integrata non si somma a quella.",
+                "The models use the dedicated graphics card: the integrated graphics is not added to it."
+            )
+        } else {
+            tr!(
+                "La grafica integrata non si usa accanto a una scheda video dedicata, anche quando la scheda è esclusa.",
+                "The integrated graphics is not used beside a dedicated graphics card, also when the card is left out."
+            )
+        }) };
     }
-    if !g.counts() {
+    if shared {
+        if memory_mib == 0 {
+            return off(tr!("Il computer ha troppa poca RAM da prestare alla grafica integrata.", "The computer has too little RAM to lend to the integrated graphics."));
+        }
+        return GpuView { name, memory_mib, shared, used: hw.integrated, note: String::new() };
+    }
+    if !hw.counts(g) {
         return off(tr!("Ha troppa poca memoria per far girare un modello.", "It has too little memory to run a model."));
     }
     if build != Build::Vulkan && g.vendor != Vendor::Nvidia {
         return off(tr!("Il motore di questo computer usa solo le schede NVIDIA.", "This computer's engine only uses NVIDIA cards."));
     }
-    let note = if build == Build::Vulkan && hw.usable().count() > 1 {
+    // A card already left out (before the engine became this one) can come back, and the others can follow it: the
+    // verdict asks for one of the two.
+    let note = if build == Build::Vulkan && hw.usable().count() > 1 && !hw.usable().any(left_out) {
         tr!("Con il motore di questo computer non si può escludere una scheda sola.", "With this computer's engine a single card can't be left out.")
     } else {
         String::new()
     };
-    GpuView { name: name.clone(), memory_mib, used: !choices.computer.unused_gpus.contains(&name), note }
+    GpuView { name: name.clone(), memory_mib, shared, used: !left_out(g), note }
 }
 
 fn disk_view(models: &Path) -> Result<DiskView> {

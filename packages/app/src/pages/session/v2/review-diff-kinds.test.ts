@@ -78,9 +78,9 @@ describe("reviewDiffDirectory", () => {
 describe("reviewDiffRequests", () => {
   // The agent names a changed file from the folder it is asked about: from the file's own folder, the name alone.
   test("asks the file's own folder by its name, then the project by its path", () => {
-    expect(reviewDiffRequests("C:\\Progetti\\Contabilità prova B", "sub/x.md")).toEqual([
-      { directory: "C:\\Progetti\\Contabilità prova B\\sub", file: "x.md", context: undefined },
-      { directory: "C:\\Progetti\\Contabilità prova B", file: "sub/x.md", context: 3 },
+    expect(reviewDiffRequests("C:\\Projects\\Café accounts B", "sub/x.md")).toEqual([
+      { directory: "C:\\Projects\\Café accounts B\\sub", file: "x.md", context: undefined },
+      { directory: "C:\\Projects\\Café accounts B", file: "sub/x.md", context: 3 },
     ])
     expect(reviewDiffRequests("/repo/project/", "src/lib/a.ts")).toEqual([
       { directory: "/repo/project/src/lib", file: "a.ts", context: undefined },
@@ -89,8 +89,8 @@ describe("reviewDiffRequests", () => {
   })
 
   test("a file at the top of the project is asked from the project only", () => {
-    expect(reviewDiffRequests("C:\\Progetti\\Contabilità prova B", "fatture.md")).toEqual([
-      { directory: "C:\\Progetti\\Contabilità prova B", file: "fatture.md", context: 3 },
+    expect(reviewDiffRequests("C:\\Projects\\Café accounts B", "invoices.md")).toEqual([
+      { directory: "C:\\Projects\\Café accounts B", file: "invoices.md", context: 3 },
     ])
   })
 })

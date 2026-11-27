@@ -17,7 +17,7 @@ const CHUNK_TIMEOUT_MS = 60_000
 
 const DICTATION_OFF = () =>
   tr(
-    "dettatura spenta: il servizio di trascrizione non e' acceso",
+    "dettatura spenta: il servizio di trascrizione non è acceso",
     "dictation is off: the transcription service is not running",
   )
 

@@ -143,7 +143,7 @@ Every field is optional.
 
   "tool_output": { "max_lines": 200, "max_bytes": 8192 },
 
-  "compaction": { "auto": true, "tail_turns": 15 }
+  "compaction": { "auto": true }
 }
 ```
 
@@ -277,7 +277,7 @@ file, `disable: true` in frontmatter.
 ### Built-in agents
 
 opencode ships with `build`, `plan`, `general`, `explore`. Hidden internal agents:
-`compaction`, `title`, `summary`. To override a built-in's fields, define the
+`title`, `summary`. To override a built-in's fields, define the
 same key in `agent: { <name>: { ... } }`.
 
 ## Commands
@@ -353,8 +353,7 @@ Hook surface (mutate `output` in place; return `void`):
 - `shell.env`
 - `permission.ask`
 - `experimental.chat.messages.transform`, `experimental.chat.system.transform`,
-  `experimental.session.compacting`, `experimental.compaction.autocontinue`,
-  `experimental.text.complete`
+  `experimental.session.compacting`, `experimental.text.complete`
 
 Special object-shaped (not callbacks): `tool: { my_tool: { ... } }`,
 `auth: { ... }`, `provider: { ... }`.

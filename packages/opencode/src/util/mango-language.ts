@@ -42,7 +42,7 @@ export function setChosenLanguage(value: Language | null) {
   if (!file)
     throw new Error(
       tr(
-        "manca MANGO_SETTINGS: l'agente non e' stato avviato da Mango Code",
+        "manca MANGO_SETTINGS: l'agente non è stato avviato da Mango Code",
         "MANGO_SETTINGS is missing: the agent was not started by Mango Code",
       ),
     )

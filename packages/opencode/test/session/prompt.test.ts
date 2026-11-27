@@ -937,6 +937,193 @@ it.instance("loop gives up on a model that answers with blank lines every time",
   }),
 )
 
+// A text whose sentences all differ: it holds no repetition of its own.
+const distinct = (label: string, size: number) =>
+  Array.from({ length: Math.ceil(size / 20) }, (_, index) => `${label} ${index}. `).join("").slice(0, size) + "\n"
+
+const startTurn = Effect.gen(function* () {
+  const prompt = yield* SessionPrompt.Service
+  const sessions = yield* Session.Service
+  const session = yield* sessions.create({
+    title: "Pinned",
+    permission: [{ permission: "*", pattern: "*", action: "allow" }],
+  })
+  yield* prompt.prompt({
+    sessionID: session.id,
+    agent: "build",
+    noReply: true,
+    parts: [{ type: "text", text: "hello" }],
+  })
+  return { prompt, session, sessions }
+})
+
+const textsOf = (sessionID: SessionID) =>
+  Session.Service.use((sessions) => sessions.messages({ sessionID })).pipe(
+    Effect.map((messages) =>
+      messages.flatMap((message) =>
+        message.parts.flatMap((part) => (part.type === "text" ? [{ role: message.info.role, part }] : [])),
+      ),
+    ),
+  )
+
+it.instance("loop cuts an answer that repeats the same text, keeps it once, tells the model and asks it again", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useServerConfig(providerCfg)
+    const { prompt, session, sessions } = yield* startTurn
+    const block = distinct("Then I read the second column", 1500)
+    yield* llm.text(`Let me check the page:\n${block.repeat(14)}`)
+    yield* llm.text("checked")
+
+    const result = yield* prompt.loop({ sessionID: session.id })
+    expect(yield* llm.calls).toBe(2)
+    expect(result.parts.some((part) => part.type === "text" && part.text === "checked")).toBe(true)
+
+    const texts = yield* textsOf(session.id)
+    const cut = texts.filter((item) => item.role === "assistant" && item.part.text.includes("Let me check the page"))
+    expect(cut.map((item) => item.part.text)).toEqual([`Let me check the page:\n${block}`])
+    expect(cut[0].part.metadata).toMatchObject({ harness: { repeated: true } })
+    const wake = texts.find((item) => item.role === "user" && item.part.text.startsWith("Your answer stopped"))
+    expect(wake?.part.text).toContain("repeating")
+    expect(wake?.part.metadata?.resume).toBe("repeat")
+    // what the model reads next holds the copy kept once, and the wake
+    const sent = JSON.stringify((yield* llm.inputs).at(-1)?.messages)
+    expect(sent.split("Then I read the second column 3.").length - 1).toBe(1)
+    expect(sent).toContain("Your answer stopped")
+  }),
+)
+
+it.instance("loop cuts a reasoning that repeats the same text", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useServerConfig(providerCfg)
+    const { prompt, session, sessions } = yield* startTurn
+    const block = distinct("I should compare the two files again", 900)
+    yield* llm.push(reply().reason(`Thinking.\n${block.repeat(40)}`).stop())
+    yield* llm.text("checked")
+
+    const result = yield* prompt.loop({ sessionID: session.id })
+    expect(yield* llm.calls).toBe(2)
+    expect(result.parts.some((part) => part.type === "text" && part.text === "checked")).toBe(true)
+    const reasoning = (yield* sessions.messages({ sessionID: session.id })).flatMap((message) =>
+      message.parts.flatMap((part) => (part.type === "reasoning" ? [part] : [])),
+    )
+    expect(reasoning[0].text).toBe(`Thinking.\n${block}`)
+    expect(reasoning[0].metadata).toMatchObject({ harness: { repeated: true } })
+  }),
+)
+
+it.instance("loop cuts a reasoning that goes on with blank lines, like an answer", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useServerConfig(providerCfg)
+    const { prompt, session, sessions } = yield* startTurn
+    yield* llm.push(reply().reason(`Let me think.${"\n".repeat(5000)}`).stop())
+    yield* llm.text("checked")
+
+    yield* prompt.loop({ sessionID: session.id })
+    expect(yield* llm.calls).toBe(2)
+    const reasoning = (yield* sessions.messages({ sessionID: session.id })).flatMap((message) =>
+      message.parts.flatMap((part) => (part.type === "reasoning" ? [part.text] : [])),
+    )
+    expect(reasoning).toEqual(["Let me think."])
+    expect((yield* textsOf(session.id)).some((item) => item.role === "user" && item.part.text.startsWith("Your answer stopped"))).toBe(true)
+  }),
+)
+
+it.instance("loop cuts a call whose arguments repeat the same text, and does not make it", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useServerConfig(providerCfg)
+    const { prompt, session, sessions } = yield* startTurn
+    const { directory } = yield* TestInstance
+    const block = distinct("<li>one more line of the list</li>", 1000)
+    // the call is still being written when it is cut: its arguments have no end
+    yield* llm.push(reply().pendingTool("write", { filePath: path.join(directory, "loop.html"), content: block.repeat(100) }).hang())
+    yield* llm.text("checked")
+
+    yield* prompt.loop({ sessionID: session.id })
+    expect(yield* llm.calls).toBe(2)
+    expect(fs.existsSync(path.join(directory, "loop.html"))).toBe(false)
+    const parts = (yield* sessions.messages({ sessionID: session.id })).flatMap((message) => message.parts)
+    const call = parts.find((part) => part.type === "tool")
+    expect(call?.type === "tool" && call.state.status).toBe("error")
+    expect(call?.metadata).toMatchObject({ harness: { repeated: true } })
+    expect((yield* textsOf(session.id)).some((item) => item.role === "user" && item.part.text.startsWith("Your answer stopped"))).toBe(true)
+  }),
+)
+
+it.instance("loop lets through a file written with twenty identical blocks and a text repeated nine times", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useServerConfig(providerCfg)
+    const { prompt, session, sessions } = yield* startTurn
+    const { directory } = yield* TestInstance
+    const block = distinct("<li>one more line of the list</li>", 1500)
+    yield* llm.push(reply().tool("write", { filePath: path.join(directory, "list.html"), content: block.repeat(20) }))
+    yield* llm.text(distinct("The same long paragraph", 1000).repeat(9))
+
+    const result = yield* prompt.loop({ sessionID: session.id })
+    expect(yield* llm.calls).toBe(2)
+    expect(fs.readFileSync(path.join(directory, "list.html"), "utf8")).toBe(block.repeat(20))
+    if (result.info.role === "assistant") expect(result.info.finish).toBe("stop")
+    expect((yield* textsOf(session.id)).some((item) => item.role === "user" && item.part.synthetic)).toBe(false)
+  }),
+)
+
+it.instance("loop gives up on a model that repeats itself every time, after two new tries", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useServerConfig(providerCfg)
+    const { prompt, session, sessions } = yield* startTurn
+    const block = distinct("Again the same sentence", 1200)
+    for (const _ of [1, 2, 3, 4]) yield* llm.text(block.repeat(12))
+
+    const result = yield* prompt.loop({ sessionID: session.id })
+    expect(yield* llm.calls).toBe(3)
+    if (result.info.role === "assistant") expect(result.info.finish).toBe("stop")
+  }),
+)
+
+it.instance("the request has no limit on the length of the answer: the model may use what is left of the context", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useServerConfig(providerCfg)
+    const { prompt, session, sessions } = yield* startTurn
+    yield* llm.text("ok")
+
+    yield* prompt.loop({ sessionID: session.id })
+    const body = (yield* llm.inputs).at(-1) ?? {}
+    expect(Object.keys(body).filter((key) => /max|limit|predict/i.test(key))).toEqual([])
+  }),
+)
+
+it.instance("an answer cut because the context is full leads to the summary, not to a second try with the same room", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useServerConfig(providerCfg)
+    const { prompt, session, sessions } = yield* startTurn
+    // the context of the test model is 100,000 tokens: this answer used all of it but one token
+    yield* llm.push(reply().text("a long file, written until").usage({ input: 90_000, output: 9_999 }).length())
+    yield* llm.text("## Objective\n- write the long file")
+    yield* llm.text("went on")
+
+    const result = yield* prompt.loop({ sessionID: session.id })
+    expect(yield* llm.calls).toBe(3)
+    expect(result.parts.some((part) => part.type === "text" && part.text === "went on")).toBe(true)
+    const messages = yield* sessions.messages({ sessionID: session.id })
+    expect(messages.some((message) => message.parts.some((part) => part.type === "compaction"))).toBe(true)
+    expect(JSON.stringify((yield* llm.inputs).at(-1)?.messages)).not.toContain("Your answer was cut")
+    const finishes = messages.flatMap((message) => (message.info.role === "assistant" ? [message.info.finish] : []))
+    expect(finishes[0]).toBe("context")
+  }),
+)
+
+it.instance("an answer cut at a limit of the server far from the end of the context is still taken up once", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useServerConfig(providerCfg)
+    const { prompt, session, sessions } = yield* startTurn
+    yield* llm.push(reply().text("a long thought").usage({ input: 5_000, output: 4_000 }).length())
+    yield* llm.text("checked")
+
+    yield* prompt.loop({ sessionID: session.id })
+    expect(yield* llm.calls).toBe(2)
+    expect(JSON.stringify((yield* llm.inputs).at(-1)?.messages)).toContain("Your answer was cut")
+  }),
+)
+
 it.instance("loop takes up an answer cut for its length once, telling the model, and then lets it stop", () =>
   Effect.gen(function* () {
     const { llm } = yield* useServerConfig(providerCfg)
@@ -2385,6 +2572,8 @@ noLLMServer.instance(
       expect(notes.some((n) => n.includes("logo.png") && n.includes("Attachments"))).toBe(true)
       // an unreadable document tells the model instead of vanishing
       expect(notes.some((n) => n.includes("broken.docx") && n.includes("I could not read it"))).toBe(true)
+      // with the reader's own reason, not the wrapper's
+      expect(notes.find((n) => n.includes("broken.docx"))).not.toContain("Effect.tryPromise")
       expect(fs.existsSync(path.join(dir, "Attachments", "letter.docx"))).toBe(true)
       expect(fs.readFileSync(path.join(dir, "Attachments", "logo.png")).toString("base64")).toBe("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==")
       // the file parts stay: they are the ones the chat shows as attachments

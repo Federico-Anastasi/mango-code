@@ -5,12 +5,13 @@
 //! The generated config lives in `<data>/opencode-home` (OPENCODE_CONFIG_DIR). The distribution (`paths.dist`) is
 //! read-only: the app never writes there.
 //!
-//! Static files: plugins are COPIED (opencode only discovers them if they are in `<config>/plugin/`); instructions,
-//! skills and MCP scripts are REFERENCED by their path in `dist` (as the launcher does): they are big or have
+//! Static files: plugins are COPIED (opencode only discovers them if they are in `<config>/plugin/`);
+//! MCP scripts are REFERENCED by their path in `dist` (as the launcher does): they are big or have
 //! `node_modules` next to them, and there's no reason to duplicate them.
 
 pub mod tools;
 pub mod team;
+pub mod servers;
 
 use anyhow::{bail, Context, Result};
 use mango_common::{tr, Paths, ProcSpec};
@@ -23,6 +24,8 @@ const PROVIDER: &str = "mango";
 /// The environment variable that carries the key of another PC's engine to the agent, which reads it as `{env:…}` in its config
 /// and sends it to that engine.
 pub const ENGINE_KEY_VAR: &str = "MANGO_ENGINE_KEY";
+/// The name of the agent's process for the supervisor, and of its log (`<logs>\agent.log`).
+pub const PROCESS: &str = "agent";
 
 /// Plugins of `opencode-home/plugin` copied to the config folder. The other one, `mango-team.js`, imports npm packages,
 /// so it isn't copied but declared with its path in the distribution, where `node_modules` sits next to it (only with
@@ -32,7 +35,7 @@ const PLUGINS: &[&str] = &["mango-discipline.js", "mango-web-diet.js", "mango-do
 /// Template placeholders that concern the cloud provider: the `openrouter` block is discarded, but as long as it is
 /// in the text the bare placeholders must give valid JSON.
 const CLOUD_PLACEHOLDERS: &[&str] = &[
-    "OR_BASE_URL", "OR_API_KEY", "OR_MODEL_ID", "OR_LABEL", "OR_CTX", "OR_OUTPUT", "OR_COST_IN",
+    "OR_BASE_URL", "OR_API_KEY", "OR_MODEL_ID", "OR_LABEL", "OR_CTX", "OR_COST_IN",
     "OR_COST_OUT", "OR_COST_CACHE", "OR_ATTACHMENT", "OR_INPUT_MODALITIES",
 ];
 
@@ -70,6 +73,11 @@ pub struct AgentInputs {
     pub browser: BrowserInputs,
     /// The Team (see `team`), if there's an OpenRouter key.
     pub team: Option<team::TeamInputs>,
+    /// The external servers (see `servers`), each a provider beside the local models, and the model of new
+    /// conversations when it is a server's.
+    pub servers: servers::Servers,
+    /// The keys of the servers that have one, by `Server::credential`: they go to the agent in the environment only.
+    pub server_keys: Vec<(String, String)>,
 }
 
 /// Which config is generated: the app server's, or those of the Team's hidden processes.
@@ -119,12 +127,10 @@ pub fn plan(paths: &Paths, inp: &AgentInputs) -> Result<AgentPlan> {
     let config_dir = paths.data.join("opencode-home");
     fs::create_dir_all(&config_dir).with_context(|| cannot_create(&config_dir))?;
 
-    // Before the config: the `instructions` list points to the file, and it is checked that it exists.
-    let pc_md = tools::write_instructions(&config_dir, &inp.tools)?;
-    let bin = tools::install_bun_shim(&paths.data)?;
-    write_config(paths, inp, &exe, &pc_md, &config_dir, Role::App)?;
+    tools::install_bun_shim(&paths.data)?;
+    write_config(paths, inp, &exe, &config_dir, Role::App)?;
     if let Some(team) = &inp.team {
-        prepare_team(paths, inp, team, &exe, &pc_md)?;
+        prepare_team(paths, inp, team, &exe)?;
     }
 
     let url = format!("http://127.0.0.1:{}", inp.port);
@@ -137,12 +143,16 @@ pub fn plan(paths: &Paths, inp: &AgentInputs) -> Result<AgentPlan> {
         // What goes in the prompt, for all folders: the agent rereads it at every request and writes it from the
         // settings page. It lives in the app's data, so it follows MANGO_DATA.
         env("MANGO_SETTINGS", &paths.data.join("settings.json").to_string_lossy()),
+        // The programs installed on this PC, as the text the harness's prompt puts in its `{{programs}}` line: a fact of
+        // the PC, detected at every start. The Team's hidden processes inherit it.
+        env("MANGO_PC_PROGRAMS", &tools::programs(&inp.tools)),
         // The Windows display language, for the agent's texts when no language is chosen (Bun only knows the
         // regional format, which can differ).
         env("MANGO_SYSTEM_LANGUAGE", mango_common::i18n::system_lang().code()),
         // `bun` for the agent: the shim in `bin` (at the head of the PATH) launches this same executable as the Bun
-        // runtime.
-        env("PATH", &tools::path_with_bun(&bin, std::env::var_os("PATH").as_deref())),
+        // runtime. Then `git`: Git for Windows travels in the resources (`prepare-installer.mjs`), and every project is a
+        // repository also on a PC without Git.
+        env("PATH", &tools::agent_path(&paths.data, &paths.dist, std::env::var_os("PATH").as_deref())),
         env(tools::BUN_VAR, &exe.to_string_lossy()),
         // The agent's browser is the app's panel: without this port the browser server would not find the panel.
         env("MANGO_PANEL_CDP", &inp.browser.preview_port.to_string()),
@@ -157,7 +167,7 @@ pub fn plan(paths: &Paths, inp: &AgentInputs) -> Result<AgentPlan> {
         env("OPENCODE_DISABLE_LSP_DOWNLOAD", "1"),
         // Isolation: the app behaves as on a PC where nothing has ever been. Conversations, config, cache and logs
         // live only in the app's data (opencode finds them from the XDG variables); no Claude Code skills or
-        // CLAUDE.md (~/.claude) nor external skills (~/.agents): the skills are the product's, listed in the config.
+        // CLAUDE.md (~/.claude) nor external skills (~/.agents): the skills are the product's, built into the agent.
         env("XDG_DATA_HOME", &paths.data.join("agent").join("data").to_string_lossy()),
         env("XDG_CONFIG_HOME", &paths.data.join("agent").join("config").to_string_lossy()),
         env("XDG_CACHE_HOME", &paths.data.join("agent").join("cache").to_string_lossy()),
@@ -167,9 +177,12 @@ pub fn plan(paths: &Paths, inp: &AgentInputs) -> Result<AgentPlan> {
         // No built-in opencode commands and skills (/init, /review, customize-opencode): only the product's. The
         // project's context (CLAUDE.md, .claude/, .mcp.json) is added by mango-project.js.
         env("OPENCODE_DISABLE_BUILTIN_COMMANDS", "1"),
-        // Two additions: doom_loop is the only permission that
-        // stays "ask" and in the browser it would stop the agent waiting for a click; enabled_providers leaves only
-        // the running model in the selector.
+        // A project's own opencode.json and .opencode folder are not read: they can start plugins, MCP servers and
+        // other providers in the agent with nothing asked. Its context comes from mango-project.js (AGENTS.md too), and
+        // its .mcp.json servers start once the user allowed them.
+        env("OPENCODE_DISABLE_PROJECT_CONFIG", "1"),
+        // Two additions to the config: doom_loop is the only permission that stays "ask", and in the browser it would
+        // stop the agent waiting for a click; enabled_providers leaves only the running model in the selector.
         env(
             "OPENCODE_CONFIG_CONTENT",
             &json!({"enabled_providers": providers(inp), "permission": {"doom_loop": "allow"}}).to_string(),
@@ -178,6 +191,7 @@ pub fn plan(paths: &Paths, inp: &AgentInputs) -> Result<AgentPlan> {
     if let Some(team) = &inp.team {
         spec_env.extend(team_env(paths, team));
     }
+    spec_env.extend(inp.server_keys.iter().cloned());
     // Without a password: the server listens only on 127.0.0.1 and the agent only accepts local pages. With a
     // password the browser would ask for it at every reload.
     // Without the inherited SHELL: the shell tool (and its description in the system prompt) doesn't depend on how the
@@ -197,7 +211,7 @@ pub fn plan(paths: &Paths, inp: &AgentInputs) -> Result<AgentPlan> {
     }
 
     let spec = ProcSpec {
-        name: "agent".to_string(),
+        name: PROCESS.to_string(),
         exe,
         args: vec![
             "serve".into(),
@@ -222,27 +236,29 @@ fn cannot_create(path: &Path) -> String {
 }
 
 /// Writes a role's config in `dir`, with the plugins and the declaration that npm isn't needed.
-fn write_config(paths: &Paths, inp: &AgentInputs, exe: &Path, pc_md: &Path, dir: &Path, role: Role) -> Result<()> {
+fn write_config(paths: &Paths, inp: &AgentInputs, exe: &Path, dir: &Path, role: Role) -> Result<()> {
     fs::create_dir_all(dir).with_context(|| cannot_create(dir))?;
-    let config = render_config(paths, inp, exe, pc_md, role)?;
-    write_atomic(&dir.join("opencode.json"), &serde_json::to_string_pretty(&config)?)?;
+    let config = render_config(paths, inp, exe, role)?;
+    let file = dir.join("opencode.json");
+    mango_common::write_atomic(&file, serde_json::to_string_pretty(&config)?).with_context(|| tr!("impossibile scrivere {}", "cannot write {}", file.display()))?;
     install_plugins(paths, dir)?;
     skip_dependency_install(dir)
 }
 
-fn providers(inp: &AgentInputs) -> Vec<&'static str> {
+fn providers(inp: &AgentInputs) -> Vec<&str> {
+    let mut providers = vec![PROVIDER];
     if inp.team.is_some() {
-        vec![PROVIDER, team::PROVIDER_CLOUD]
-    } else {
-        vec![PROVIDER]
+        providers.push(team::PROVIDER_CLOUD);
     }
+    providers.extend(inp.servers.list.iter().map(|s| s.id.as_str()));
+    providers
 }
 
 /// The Team's hidden processes' configs, `launch.json` for the plugin and the cleanup of the earlier links.
-fn prepare_team(paths: &Paths, inp: &AgentInputs, team: &team::TeamInputs, exe: &Path, pc_md: &Path) -> Result<()> {
+fn prepare_team(paths: &Paths, inp: &AgentInputs, team: &team::TeamInputs, exe: &Path) -> Result<()> {
     let dir = team::folder(paths);
-    write_config(paths, inp, exe, pc_md, &dir.join("dev-home"), Role::Dev)?;
-    write_config(paths, inp, exe, pc_md, &dir.join("agent-home"), Role::Agent)?;
+    write_config(paths, inp, exe, &dir.join("dev-home"), Role::Dev)?;
+    write_config(paths, inp, exe, &dir.join("agent-home"), Role::Agent)?;
     write(&dir.join("launch.json"), &serde_json::to_string_pretty(&team::launch(paths, exe, team))?)?;
     // The links are rewritten by the processes at their first message: those of an earlier start point to dead sessions.
     let agents = dir.join("agents");
@@ -274,9 +290,11 @@ fn team_env(paths: &Paths, team: &team::TeamInputs) -> Vec<(String, String)> {
 
 /// The content of `opencode.json`: the `dist` template with the running model's numbers, plus the fixes for the end
 /// user (see the comments of the steps).
-fn render_config(paths: &Paths, inp: &AgentInputs, exe: &Path, pc_md: &Path, role: Role) -> Result<Value> {
+fn render_config(paths: &Paths, inp: &AgentInputs, exe: &Path, role: Role) -> Result<Value> {
     check_default(&inp.models, inp.default_model.as_deref())?;
-    let mut cfg = template(paths, &placeholders(paths, Some(inp), role)?)?;
+    let server_default = server_default(&inp.servers)?;
+    let mut cfg = template(paths, &placeholders(paths, Some(inp))?)?;
+    let provider_base = cfg.pointer(&format!("/provider/{PROVIDER}")).cloned().context("provider.mango is missing from the template")?;
 
     let root = cfg.as_object_mut().context("the config must be a JSON object")?;
     // No model on the computer yet: the agent starts without a default, and the conversations wait for the first model.
@@ -298,6 +316,16 @@ fn render_config(paths: &Paths, inp: &AgentInputs, exe: &Path, pc_md: &Path, rol
     if inp.engine_key.is_some() {
         root["provider"][PROVIDER]["options"]["apiKey"] = json!(format!("{{env:{ENGINE_KEY_VAR}}}"));
     }
+    // The Team's hidden processes work with the local and cloud models only.
+    if role == Role::App {
+        for s in &inp.servers.list {
+            root["provider"][s.id.as_str()] = server_provider(&provider_base, &base, s)?;
+        }
+        if let Some(r) = &server_default {
+            root.insert("model".into(), json!(r));
+            root.insert("small_model".into(), json!(r));
+        }
+    }
     // Without the Team the app uses no cloud models: the block (with a fake key and an openrouter.ai address) is
     // useless, and `enabled_providers` would exclude it anyway.
     let cloud = root
@@ -313,14 +341,8 @@ fn render_config(paths: &Paths, inp: &AgentInputs, exe: &Path, pc_md: &Path, rol
     }
     cfg.as_object_mut().context("the config must be a JSON object")?.insert("agent".into(), agents);
     strip_annotations(&mut cfg);
-    // After the fixed instructions: the section about the PC's tools (generated at every start).
-    cfg.get_mut("instructions")
-        .and_then(Value::as_array_mut)
-        .context("the instructions list is missing from the template")?
-        .push(json!(pc_md.to_string_lossy()));
     use_bundled_runtime(&mut cfg, exe, &paths.dist, &paths.data.join("mcp"))?;
     check_referenced_files(&cfg)?;
-    check_skills(&cfg)?;
 
     let left = cfg.to_string();
     if let Some(i) = left.find("{{") {
@@ -332,7 +354,7 @@ fn render_config(paths: &Paths, inp: &AgentInputs, exe: &Path, pc_md: &Path, rol
 /// The template's placeholders and their values. Without the inputs, those of an agent with no engine, model or Team:
 /// enough to read the parts of the template that do not depend on them (the base of a local model). Text values are
 /// escaped.
-fn placeholders(paths: &Paths, inp: Option<&AgentInputs>, role: Role) -> Result<Vec<(&'static str, String)>> {
+fn placeholders(paths: &Paths, inp: Option<&AgentInputs>) -> Result<Vec<(&'static str, String)>> {
     let mut vars = vec![
         ("BASE_URL", inp.map(|i| esc(&format!("{}/v1", i.engine_url))).unwrap_or_default()),
         // Always on: even for a text-only model the screenshot is useful, because the user sees it in the chat; the
@@ -345,13 +367,45 @@ fn placeholders(paths: &Paths, inp: Option<&AgentInputs>, role: Role) -> Result<
             Some(i) => team_plugin(paths, i)?,
             None => String::new(),
         }),
-        ("ROLE_INSTRUCTIONS", role_instructions(paths, role)),
     ];
     match inp.and_then(|i| i.team.as_ref()) {
         Some(t) => vars.extend(cloud_placeholders(t)),
         None => vars.extend(CLOUD_PLACEHOLDERS.iter().map(|k| (*k, "null".to_string()))),
     }
     Ok(vars)
+}
+
+/// An external server as an opencode provider: the local provider's block with the server's address, its key read from
+/// the environment (`Server::credential`) or the fake one the client needs, and one model for each of its models.
+fn server_provider(provider_base: &Value, model_base: &Value, s: &servers::Server) -> Result<Value> {
+    let mut p = provider_base.clone();
+    p["name"] = json!(s.label());
+    p["options"]["baseURL"] = json!(s.url);
+    p["options"]["apiKey"] = json!(if s.key { format!("{{env:{}}}", s.credential()) } else { "dummy".to_string() });
+    let models = s
+        .models
+        .iter()
+        .map(|m| {
+            let mut entry = model_entry(model_base, &AgentModel { key: m.id.clone(), label: m.label(), ctx: m.ctx, images: m.images })?;
+            if let Some(price) = m.price {
+                entry["cost"] = json!({ "input": price.input, "output": price.output });
+            }
+            Ok((m.id.clone(), entry))
+        })
+        .collect::<Result<serde_json::Map<_, _>>>()?;
+    p["models"] = Value::Object(models);
+    strip_annotations(&mut p);
+    Ok(p)
+}
+
+/// The model of new conversations when it is a server's, as the config writes it (`<server>/<model>`); it must be one of
+/// that server's models.
+fn server_default(servers: &servers::Servers) -> Result<Option<String>> {
+    let Some(r) = &servers.default else { return Ok(None) };
+    if !servers.list.iter().any(|s| s.id == r.server && s.models.iter().any(|m| m.id == r.model)) {
+        bail!("{}", tr!("il modello predefinito «{}» non è fra quelli del server", "the default model «{}» is not among the server's", r.model));
+    }
+    Ok(Some(format!("{}/{}", r.server, r.model)))
 }
 
 /// The default must be one of the models offered.
@@ -375,13 +429,14 @@ fn template(paths: &Paths, vars: &[(&str, String)]) -> Result<Value> {
     serde_json::from_str(&text).with_context(|| format!("{} is not valid JSON after the substitution", tpl_path.display()))
 }
 
-/// A local model in the config: the template's `local` entry with its name, images and limits.
+/// A local model in the config: the template's `local` entry with its name, images and limits. An answer may take the
+/// whole context, so that is also its limit: the request carries none.
 fn model_entry(base: &Value, m: &AgentModel) -> Result<Value> {
     let mut v = base.clone();
     v["name"] = json!(m.label);
     v["attachment"] = json!(m.images);
     v["modalities"]["input"] = serde_json::from_str(modalities(m.images))?;
-    v["limit"] = json!({ "context": m.ctx, "output": output_ceiling(m.ctx) });
+    v["limit"] = json!({ "context": m.ctx, "output": m.ctx });
     strip_annotations(&mut v);
     Ok(v)
 }
@@ -391,12 +446,12 @@ fn model_entry(base: &Value, m: &AgentModel) -> Result<Value> {
 /// and `default` is the model loaded when the app opens (`engine_cfg::startup_model`, `None` while no model is on the
 /// computer). The agent's own file must be there; the Team's hidden processes' are written if they are. The rest stays
 /// as it is. The agent reads it again when the app asks (`POST /mango/reload`), as soon as no conversation is answering.
-pub fn set_models(paths: &Paths, models: &[AgentModel], default: Option<&str>) -> Result<()> {
+pub fn set_models(paths: &Paths, models: &[AgentModel], default: Option<&str>, servers: &servers::Servers) -> Result<()> {
     check_default(models, default)?;
-    let base = template(paths, &placeholders(paths, None, Role::App)?)?
-        .pointer(&format!("/provider/{PROVIDER}/models/local"))
-        .cloned()
-        .context("the local model is missing from the template")?;
+    let server_default = server_default(servers)?;
+    let rendered = template(paths, &placeholders(paths, None)?)?;
+    let base = rendered.pointer(&format!("/provider/{PROVIDER}/models/local")).cloned().context("the local model is missing from the template")?;
+    let provider_base = rendered.pointer(&format!("/provider/{PROVIDER}")).cloned().context("provider.mango is missing from the template")?;
     let entries = models.iter().map(|m| Ok((m.key.clone(), model_entry(&base, m)?))).collect::<Result<serde_json::Map<_, _>>>()?;
     let team = team::folder(paths);
     let app = paths.data.join("opencode-home").join("opencode.json");
@@ -404,7 +459,7 @@ pub fn set_models(paths: &Paths, models: &[AgentModel], default: Option<&str>) -
         bail!("{}", tr!("manca la configurazione dell'agente: {}", "the agent's configuration is missing: {}", app.display()));
     }
     // The hidden agents of the Team work with their cloud model: only the app's server and the local dev get the default.
-    let files = [(app, true), (team.join("dev-home").join("opencode.json"), true), (team.join("agent-home").join("opencode.json"), false)];
+    let files = [(app.clone(), true), (team.join("dev-home").join("opencode.json"), true), (team.join("agent-home").join("opencode.json"), false)];
     for (file, local_default) in files.iter().filter(|(f, _)| f.is_file()) {
         let text = fs::read_to_string(file).with_context(|| tr!("impossibile leggere {}", "cannot read {}", file.display()))?;
         let mut cfg: Value = serde_json::from_str(&text).with_context(|| format!("{} is not valid JSON", file.display()))?;
@@ -412,10 +467,22 @@ pub fn set_models(paths: &Paths, models: &[AgentModel], default: Option<&str>) -
             Value::Object(entries.clone());
         if *local_default {
             let root = cfg.as_object_mut().context("the config must be a JSON object")?;
-            match default {
-                Some(key) => {
-                    root.insert("model".into(), json!(format!("{PROVIDER}/{key}")));
-                    root.insert("small_model".into(), json!(format!("{PROVIDER}/{key}")));
+            if file == &app {
+                let providers = root.get_mut("provider").and_then(Value::as_object_mut).context("the provider block is missing")?;
+                providers.retain(|id, _| !id.starts_with("server-"));
+                for s in &servers.list {
+                    providers.insert(s.id.clone(), server_provider(&provider_base, &base, s)?);
+                }
+            }
+            let reference = match (&server_default, default) {
+                (Some(r), _) if file == &app => Some(r.clone()),
+                (_, Some(key)) => Some(format!("{PROVIDER}/{key}")),
+                (_, None) => None,
+            };
+            match reference {
+                Some(r) => {
+                    root.insert("model".into(), json!(r));
+                    root.insert("small_model".into(), json!(r));
                 }
                 // No model on the computer: the agent goes on without a default, as before the first model.
                 None => {
@@ -424,7 +491,7 @@ pub fn set_models(paths: &Paths, models: &[AgentModel], default: Option<&str>) -
                 }
             }
         }
-        write_atomic(file, &serde_json::to_string_pretty(&cfg)?)?;
+        mango_common::write_atomic(file, serde_json::to_string_pretty(&cfg)?).with_context(|| tr!("impossibile scrivere {}", "cannot write {}", file.display()))?;
     }
     Ok(())
 }
@@ -439,7 +506,6 @@ fn cloud_placeholders(t: &team::TeamInputs) -> Vec<(&'static str, String)> {
         ("OR_MODEL_ID", esc(&m.id)),
         ("OR_LABEL", esc(&m.label)),
         ("OR_CTX", m.ctx.to_string()),
-        ("OR_OUTPUT", output_ceiling(m.ctx).to_string()),
         ("OR_COST_IN", m.input_cost.to_string()),
         ("OR_COST_OUT", m.output_cost.to_string()),
         ("OR_COST_CACHE", m.cache_cost.to_string()),
@@ -459,17 +525,6 @@ fn team_plugin(paths: &Paths, inp: &AgentInputs) -> Result<String> {
         bail!("{}", tr!("manca il plugin del Team: {}", "the Team plugin is missing: {}", plugin.display()));
     }
     Ok(format!("\"{}\"", esc(&plugin.to_string_lossy())))
-}
-
-/// The role's instructions, at the end of `instructions`. The manager doesn't have them here: the plugin adds them to
-/// the `team` agent's conversations only.
-fn role_instructions(paths: &Paths, role: Role) -> String {
-    let file = match role {
-        Role::App => return String::new(),
-        Role::Dev => "MANGO-dev.md",
-        Role::Agent => "MANGO-agent.md",
-    };
-    format!(", \"{}\"", esc(&paths.dist.join("opencode-home").join(file).to_string_lossy()))
 }
 
 /// The Team in the config: the cloud provider with the manager's and agents' models; for the app's server the `team`
@@ -504,11 +559,6 @@ fn apply_team(cfg: &mut Value, mut cloud: Value, t: &team::TeamInputs, role: Rol
         }
     }
     Ok(())
-}
-
-/// Generation ceiling: an eighth of the context, between 4k and 16k (same rule as the launcher).
-fn output_ceiling(ctx: u32) -> u32 {
-    (ctx / 8).clamp(4096, 16384)
 }
 
 fn modalities(images: bool) -> &'static str {
@@ -561,15 +611,13 @@ fn use_bundled_runtime(cfg: &mut Value, exe: &Path, dist: &Path, runtime: &Path)
     Ok(())
 }
 
-/// opencode silently ignores instructions and skills that don't exist, and a missing MCP would only show as «failed»
+/// A missing MCP script would only show as «failed»
 /// in the page: better to stop at start with the file's name.
 fn check_referenced_files(cfg: &Value) -> Result<()> {
     let mut files: Vec<&str> = Vec::new();
     fn strs(v: Option<&Value>) -> Vec<&str> {
         v.and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).collect()).unwrap_or_default()
     }
-    files.extend(strs(cfg.get("instructions")));
-    files.extend(strs(cfg.pointer("/skills/paths")));
     if let Some(servers) = cfg.get("mcp").and_then(Value::as_object) {
         for s in servers.values() {
             files.extend(strs(s.get("command")).into_iter().skip(1));
@@ -581,103 +629,6 @@ fn check_referenced_files(cfg: &Value) -> Result<()> {
         }
     }
     Ok(())
-}
-
-/// A skill whose frontmatter isn't valid YAML **disappears silently**: opencode discards it without writing anything in
-/// the log (`Skill.add` in packages/opencode/src/skill/index.ts stops at `isSkillFrontmatter`) and the model answers
-/// «Skill "powerpoint" not found». Its recovery for unquoted colons (`sanitize` in core/config/markdown.ts) only holds
-/// for the process's first instance: from the second on — and every conversation opens an instance on its folder —
-/// those skills are gone. It really happened: 15 skills at the first instance, 5 after. Here valid YAML is demanded
-/// with no shortcuts and it is said which file isn't.
-fn check_skills(cfg: &Value) -> Result<()> {
-    let Some(dirs) = cfg.pointer("/skills/paths").and_then(Value::as_array) else { return Ok(()) };
-    for dir in dirs.iter().filter_map(Value::as_str) {
-        let entries = fs::read_dir(dir).with_context(|| tr!("impossibile leggere le skill in {dir}", "cannot read the skills in {dir}"))?;
-        for entry in entries.flatten() {
-            let file = entry.path().join("SKILL.md");
-            if !file.is_file() {
-                continue;
-            }
-            let text = fs::read_to_string(&file).with_context(|| tr!("impossibile leggere {}", "cannot read {}", file.display()))?;
-            if let Some(reason) = wrong_frontmatter(&text) {
-                bail!("{}: {reason}", file.display());
-            }
-        }
-    }
-    Ok(())
-}
-
-/// `Some(reason)` if a SKILL.md's frontmatter doesn't read as YAML by itself.
-fn wrong_frontmatter(text: &str) -> Option<String> {
-    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
-    let lines: Vec<&str> = text.lines().collect();
-    if lines.first().map(|r| r.trim_end()) != Some("---") {
-        return Some("the line --- that opens the frontmatter is missing".into());
-    }
-    let Some(end) = lines[1..].iter().position(|r| r.trim_end() == "---").map(|p| p + 1) else {
-        return Some("the line --- that closes the frontmatter is missing".into());
-    };
-    let mut name = false;
-    let mut i = 1;
-    while i < end {
-        let line = lines[i];
-        let number = i + 1;
-        i += 1;
-        // Indented lines belong to the previous entry: whoever opened it checks them.
-        if line.trim().is_empty() || line.starts_with([' ', '\t']) {
-            continue;
-        }
-        let Some((key, rest)) = line.split_once(':') else {
-            return Some(format!("line {number}: {line:?} is not a «key: value» entry"));
-        };
-        let key = key.trim();
-        name |= key == "name";
-        if let Some(culprit) = plain_value_problem(rest.trim(), &lines[i..end]) {
-            return Some(format!(
-                "line {number}: {key} has an unquoted value that contains {culprit:?}, and YAML reads \
-                 something else; put the value in quotes"
-            ));
-        }
-        while i < end && (lines[i].trim().is_empty() || lines[i].starts_with([' ', '\t'])) {
-            i += 1;
-        }
-    }
-    (!name).then(|| "the name entry is missing, without which opencode discards the skill".to_string())
-}
-
-/// The piece that breaks a plain YAML scalar: `": "` opens a map, `:` at the end of a line too, `" #"` opens a comment
-/// that cuts the value. Outside plain scalars (quoted value, `|` or `>` block, `[]` or `{}` flow, anchor, tag) those
-/// characters are legitimate.
-fn plain_value_problem(value: &str, following: &[&str]) -> Option<&'static str> {
-    if value.is_empty() {
-        return None; // the entry continues in a block: sequence, map or | or > scalar
-    }
-    if value.starts_with(['"', '\'', '|', '>', '[', '{', '&', '*', '!']) {
-        return None;
-    }
-    // The indented lines that follow are part of the same plain scalar.
-    let mut parts = vec![value];
-    for line in following {
-        if line.trim().is_empty() {
-            continue;
-        }
-        if !line.starts_with([' ', '\t']) {
-            break;
-        }
-        parts.push(line.trim());
-    }
-    for part in parts {
-        if part.contains(": ") {
-            return Some(": ");
-        }
-        if part.ends_with(':') {
-            return Some(": at the end of a line");
-        }
-        if part.contains(" #") {
-            return Some(" #");
-        }
-    }
-    None
 }
 
 /// Copies the plugins to `<config>/plugin/`. The folder is emptied first: a plugin removed from the distribution must
@@ -706,13 +657,6 @@ fn skip_dependency_install(config_dir: &Path) -> Result<()> {
     write(&config_dir.join("package-lock.json"), &lock.to_string())
 }
 
-/// A file the agent may be reading meanwhile: written beside it and moved in place, so it is never read half written.
-fn write_atomic(path: &Path, text: &str) -> Result<()> {
-    let temporary = path.with_extension("json.tmp");
-    write(&temporary, text)?;
-    fs::rename(&temporary, path).with_context(|| tr!("impossibile scrivere {}", "cannot write {}", path.display()))
-}
-
 fn write(path: &Path, text: &str) -> Result<()> {
     fs::write(path, text).with_context(|| tr!("impossibile scrivere {}", "cannot write {}", path.display()))
 }
@@ -721,90 +665,4 @@ fn write(path: &Path, text: &str) -> Result<()> {
 fn esc(s: &str) -> String {
     let q = Value::String(s.to_string()).to_string();
     q[1..q.len() - 1].to_string()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// The real case: the Office skills' description has a colon inside, and without quotes YAML reads a map. The
-    /// agent silently discards it from the second instance on.
-    #[test]
-    fn description_with_a_colon_only_if_quoted() {
-        let broken = "---\nname: powerpoint\ndescription: Creates PowerPoint presentations (.pptx): slides and notes.\n---\n\n# Body\n";
-        let reason = wrong_frontmatter(broken).expect("it must be rejected");
-        assert!(reason.contains("description") && reason.contains("line 3"), "{reason}");
-
-        let right = broken.replace(
-            "description: Creates PowerPoint presentations (.pptx): slides and notes.",
-            "description: \"Creates PowerPoint presentations (.pptx): slides and notes.\"",
-        );
-        assert_eq!(wrong_frontmatter(&right), None);
-    }
-
-    #[test]
-    fn valid_frontmatters_pass() {
-        for text in [
-            // the four skills that loaded even before: clean YAML
-            "---\nname: pdf\ndescription: Creates PDFs (with correct accents), reads and merges.\n---\n",
-            // extra fields with simple values
-            "---\nname: theme-factory\ndescription: \"Themes: 10 ready.\"\nlicense: Complete terms in LICENSE.txt\n---\n",
-            // multi-line sequence and empty flow
-            "---\nname: research-after-failure\ndescription: Search before retrying.\nallowed-tools:\n  - Read\n  - Grep\n---\n",
-            "---\nname: no-deferred-work\ndescription: No TODOs.\nallowed-tools: []\nmodel: opus\n---\n",
-            // block scalar: inside, colons are legitimate
-            "---\nname: word\ndescription: |-\n  Creates Word documents (.docx): letters and minutes.\n---\n",
-            // a colon without a space after (a URL) doesn't open a map
-            "---\nname: webapp-testing\ndescription: Tests web apps.\nhomepage: https://example.com\n---\n",
-            // an attached hash is not a comment
-            "---\nname: excel\ndescription: Formulas and C# in sheets.\n---\n",
-        ] {
-            assert_eq!(wrong_frontmatter(text), None, "rejected: {text}");
-        }
-    }
-
-    #[test]
-    fn broken_frontmatters_are_reported() {
-        // a comment that would cut the value
-        assert!(wrong_frontmatter("---\nname: a\ndescription: short # not seen\n---\n").is_some());
-        // empty value: the entry continues in a block, it isn't a plain scalar
-        assert!(wrong_frontmatter("---\nname: a\ndescription:\n---\n").is_none());
-        assert!(wrong_frontmatter("---\nname: a\nlicense:\n---\n").is_none());
-        // plain scalar on several lines with a colon in the continuation
-        assert!(wrong_frontmatter("---\nname: a\ndescription: first part\n  second: breaks\n---\n").is_some());
-        // the closing is missing
-        let reason = wrong_frontmatter("---\nname: a\ndescription: b\n").unwrap();
-        assert!(reason.contains("closes"), "{reason}");
-        // the opening is missing
-        assert!(wrong_frontmatter("name: a\n---\n").is_some());
-        // the name is missing: opencode discards the skill (isSkillFrontmatter)
-        let reason = wrong_frontmatter("---\ndescription: without a name\n---\n").unwrap();
-        assert!(reason.contains("name"), "{reason}");
-        // a line that isn't an entry
-        assert!(wrong_frontmatter("---\nname: a\ntext only\n---\n").is_some());
-    }
-
-    /// With a broken skill the start stops and says which file it is: better here than a model that answers «Skill not
-    /// found» in front of the user.
-    #[test]
-    fn check_skills_stops_on_the_right_file() {
-        let root = std::env::temp_dir().join(format!("agent-cfg-skill-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&root);
-        fs::create_dir_all(root.join("powerpoint")).unwrap();
-        fs::create_dir_all(root.join("pdf")).unwrap();
-        fs::write(root.join("pdf").join("SKILL.md"), "---\nname: pdf\ndescription: Reads PDFs.\n---\n").unwrap();
-        fs::write(
-            root.join("powerpoint").join("SKILL.md"),
-            "---\nname: powerpoint\ndescription: Creates slides (.pptx): title and notes.\n---\n",
-        )
-        .unwrap();
-
-        let cfg = json!({ "skills": { "paths": [root.to_string_lossy()] } });
-        let e = check_skills(&cfg).unwrap_err().to_string();
-        assert!(e.contains("powerpoint") && e.contains("description"), "{e}");
-
-        // without skills.paths there is nothing to check
-        assert!(check_skills(&json!({})).is_ok());
-        fs::remove_dir_all(&root).unwrap();
-    }
 }

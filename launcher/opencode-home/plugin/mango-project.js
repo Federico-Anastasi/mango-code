@@ -5,11 +5,12 @@
 // Claude Code does, and it is what an app needs when it opens Mango Code on one of its folders. For every project
 // (every opencode instance has its own folder) the following are added to the config:
 //   - the instructions: CLAUDE.md, CLAUDE.local.md and .claude/rules/*.md, from the open folder up to the
-//     project root (opencode looks for them by itself, walking up); AGENTS.md is already read by opencode;
+//     project root (opencode looks for them by itself, walking up), and the nearest AGENTS.md (the app keeps
+//     opencode's own reading of the project off: its opencode.json and .opencode could start code);
 //   - the skills of the .claude/skills folders found while walking up;
 //   - the MCP servers of the first .mcp.json found while walking up (Claude Code format: "mcpServers"),
-//     translated to the opencode format. A name already used by Mango Code's servers stays ours (and the log
-//     says so).
+//     translated to the opencode format, switched off until the user allows them (see PROJECT_SERVERS). A name
+//     already used by Mango Code's servers stays ours (and the log says so).
 // The project root is the git repository's root if there is one, otherwise the open folder.
 // The extra folders an app declared for this folder (PUT /mango/extra-folders, agent server) give their
 // instructions like the open folder, without walking up and without .mcp.json; they are read at every request
@@ -21,8 +22,27 @@
 // prompt because the prompt is the prefix the engine keeps in memory: touching it would mean re-reading the
 // whole conversation. A rule without `paths:` is always in the prompt.
 
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+
+// The MCP servers of a project start programs: those of a .mcp.json start only once the user has allowed them, for
+// that file as it is (`mcpApproved` in Mango Code's own settings file, never in the project, which could allow itself).
+// Until then they are in the config switched off, and the agent's `/mango/project-servers` (same process) reads them
+// here to ask the user. The key is defined by packages/opencode/src/server/shared/mango-project-servers.ts.
+const PROJECT_SERVERS = Symbol.for("mango.projectServers");
+const projectServers = () => (globalThis[PROJECT_SERVERS] ??= new Map());
+
+function approvedHash(file) {
+  const settings = process.env.MANGO_SETTINGS;
+  if (!settings || !fs.existsSync(settings)) return undefined;
+  try {
+    return JSON.parse(fs.readFileSync(settings, "utf8").replace(/^﻿/, "")).mcpApproved?.[file.toLowerCase()];
+  } catch {
+    // An unreadable settings file allows nothing; the agent says why at the next request.
+    return undefined;
+  }
+}
 
 const FILE_TOOLS = new Set(["read", "edit", "write"]);
 
@@ -130,10 +150,16 @@ export const MangoProject = async ({ directory, worktree }) => {
   // Per conversation, the files that in-flight calls of the same message have already let in: the results of
   // that message are not yet in the history that reaches the plugin.
   const inProgress = new Map();
+  // A file as the model reads it in the prompt: its place from the open folder, never a place on the disk (the model
+  // opens and writes what it is shown).
+  const named = (file) => {
+    const relative = path.relative(directory, file).split(path.sep).join("/");
+    return path.isAbsolute(relative) ? path.basename(file) : relative;
+  };
   return {
     "experimental.chat.system.transform": async (_input, output) => {
       for (const dir of extraFolders(directory)) {
-        for (const f of instructionsIn(dir)) output.system.push("Instructions from: " + f + "\n" + fs.readFileSync(f, "utf8"));
+        for (const f of instructionsIn(dir)) output.system.push("Instructions from: " + named(f) + "\n" + fs.readFileSync(f, "utf8"));
       }
     },
     "tool.execute.after": async (input, output) => {
@@ -148,12 +174,14 @@ export const MangoProject = async ({ directory, worktree }) => {
       if (!fresh.length) return;
       for (const r of fresh) claimed.add(r.file);
       output.metadata = { ...output.metadata, rules: fresh.map((r) => r.file) };
-      output.output += "\n\n<system-reminder>\n" + fresh.map((r) => "Instructions from: " + r.file + "\n" + r.body).join("\n\n") + "\n</system-reminder>";
+      output.output += "\n\n<system-reminder>\n" + fresh.map((r) => "Instructions from: " + named(r.file) + "\n" + r.body).join("\n\n") + "\n</system-reminder>";
     },
     config: async (cfg) => {
       // Absolute paths, found here within the root: opencode looks for a relative path walking up to its
       // worktree, which outside git is the disk root (and that is how it found ~/.claude/rules).
       const instructions = [];
+      // AGENTS.md as opencode reads it, the nearest one only: the app keeps opencode's own reading of the project off.
+      instructions.push(...walkUp(directory, root, "AGENTS.md").slice(0, 1));
       for (const name of ["CLAUDE.md", "CLAUDE.local.md"]) instructions.push(...walkUp(directory, root, name));
       for (const dir of walkUp(directory, root, path.join(".claude", "rules"))) {
         instructions.push(...rulesIn(path.dirname(path.dirname(dir))).filter((r) => !r.globs).map((r) => r.file));
@@ -164,7 +192,7 @@ export const MangoProject = async ({ directory, worktree }) => {
       if (skills.length) cfg.skills = { ...(cfg.skills ?? {}), paths: [...(cfg.skills?.paths ?? []), ...skills] };
 
       const [file] = walkUp(directory, root, ".mcp.json");
-      if (!file) return;
+      if (!file) return void projectServers().delete(path.resolve(directory).toLowerCase());
       let servers;
       try {
         servers = JSON.parse(fs.readFileSync(file, "utf8").replace(/^﻿/, "")).mcpServers ?? {};
@@ -172,17 +200,24 @@ export const MangoProject = async ({ directory, worktree }) => {
         throw new Error(`${file} is not valid JSON: ${e.message}`);
       }
       cfg.mcp = cfg.mcp ?? {};
+      const hash = createHash("sha256").update(JSON.stringify(servers)).digest("hex");
+      const approved = approvedHash(file) === hash;
+      const listed = [];
       for (const [name, s] of Object.entries(servers)) {
         if (cfg.mcp[name]) {
           console.warn(`mango-project: the MCP server «${name}» of ${file} has the name of a Mango Code one, the Mango Code one stays`);
           continue;
         }
         const v = toOpencodeMcp(s);
+        if (!v) continue;
         // As in Claude Code, a stdio server starts in the project folder (the relative paths of .mcp.json
         // are relative to it).
-        if (v?.type === "local") v.cwd = path.dirname(file);
-        if (v) cfg.mcp[name] = v;
+        if (v.type === "local") v.cwd = path.dirname(file);
+        v.enabled = approved;
+        cfg.mcp[name] = v;
+        listed.push({ name, run: v.type === "local" ? v.command.join(" ") : v.url });
       }
+      projectServers().set(path.resolve(directory).toLowerCase(), { file, hash, approved, servers: listed });
     },
   };
 };

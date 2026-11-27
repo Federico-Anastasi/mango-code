@@ -73,18 +73,29 @@ impl Reasoning {
     }
 }
 
+/// A short conversation written by `template`, with `name` set to `value` if given; `None` if the template refuses it.
+fn write(template: &str, kwarg: Option<(&str, Value)>) -> Option<String> {
+    let request = json!({ "messages": [{ "role": "system", "content": "Be brief." }, { "role": "user", "content": "Hello." }] });
+    let mut context = context(&request, false);
+    if let Some((name, value)) = kwarg {
+        context[name] = value;
+    }
+    match probe(template, &context) {
+        Probe::Text(text) => Some(text),
+        _ => None,
+    }
+}
+
+/// The level `template` takes when a request chooses none: the one it writes the same as with no choice.
+pub(crate) fn default_level(template: &str, reasoning: &Reasoning) -> Option<&'static str> {
+    let unchosen = write(template, None)?;
+    reasoning.own().iter().copied().find(|level| reasoning.kwarg(level).and_then(|kwarg| write(template, Some(kwarg))).as_ref() == Some(&unchosen))
+}
+
 /// What `template` lets the user choose, found by writing a short conversation with each value: the template must write
 /// something else for the values it offers, and must not refuse them.
 pub(crate) fn of_template(template: &str) -> Reasoning {
-    let request = json!({ "messages": [{ "role": "system", "content": "Be brief." }, { "role": "user", "content": "Hello." }] });
-    let write = |name: &str, value: Value| {
-        let mut context = context(&request, false);
-        context[name] = value;
-        match probe(template, &context) {
-            Probe::Text(text) => Some(text),
-            _ => None,
-        }
-    };
+    let write = |name: &str, value: Value| write(template, Some((name, value)));
     let switch = template.contains("enable_thinking") && matches!((write("enable_thinking", true.into()), write("enable_thinking", false.into())), (Some(on), Some(off)) if on != off);
     if template.contains("reasoning_effort") {
         let effort = |value: &str| write("reasoning_effort", value.into());
@@ -98,31 +109,51 @@ pub(crate) fn of_template(template: &str) -> Reasoning {
     if switch { Reasoning::Switch } else { Reasoning::None }
 }
 
-/// What was read of a file, and the file as it was then: the size and the time of its last change.
-type Read = (u64, SystemTime, Reasoning);
+/// What was read of a file (what its template offers and the level it takes by itself), and the file as it was then: the
+/// size and the time of its last change.
+type Read = (u64, SystemTime, Reasoning, Option<&'static str>);
 
 /// The files read so far. A GGUF of tens of gigabytes is not opened again to answer a view or a request: only its size and
 /// date are looked at.
 static READ: LazyLock<Mutex<HashMap<PathBuf, Read>>> = LazyLock::new(Mutex::default);
 
-/// What the template in the GGUF at `path` lets the user choose; nothing if the file is not there or has no template.
-fn of_file(path: &Path) -> Reasoning {
-    let Some(meta) = mango_common::model_files::listed(path) else { return Reasoning::None };
-    let Ok(changed) = meta.modified() else { return Reasoning::None };
-    let kept = READ.lock().unwrap_or_else(std::sync::PoisonError::into_inner).get(path).filter(|(len, at, _)| (*len, *at) == (meta.len(), changed)).map(|(_, _, r)| r.clone());
-    if let Some(reasoning) = kept {
-        return reasoning;
+/// What the template in the GGUF at `path` lets the user choose, and the level it takes by itself; nothing if the file is
+/// not there or has no template.
+fn read_file(path: &Path) -> (Reasoning, Option<&'static str>) {
+    let Some(meta) = mango_common::model_files::listed(path) else { return Default::default() };
+    let Ok(changed) = meta.modified() else { return Default::default() };
+    let kept = READ.lock().unwrap_or_else(std::sync::PoisonError::into_inner).get(path).filter(|(len, at, ..)| (*len, *at) == (meta.len(), changed)).map(|(_, _, r, d)| (r.clone(), *d));
+    if let Some(found) = kept {
+        return found;
     }
-    let Ok(header) = read_header(path) else { return Reasoning::None };
-    let reasoning = header.strings.get("tokenizer.chat_template").map_or(Reasoning::None, |t| of_template(t));
-    READ.lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert(path.to_path_buf(), (meta.len(), changed, reasoning.clone()));
-    reasoning
+    let Ok(header) = read_header(path) else { return Default::default() };
+    let found = header.strings.get("tokenizer.chat_template").map_or_else(Default::default, |t| {
+        let reasoning = of_template(t);
+        let default = default_level(t, &reasoning);
+        (reasoning, default)
+    });
+    READ.lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert(path.to_path_buf(), (meta.len(), changed, found.0.clone(), found.1));
+    found
 }
 
-/// What the model's template lets the user choose: read from its weights, the first of its files that is on the disk.
+fn of_file(path: &Path) -> Reasoning {
+    read_file(path).0
+}
+
+/// The first of the model's weights that is on the disk: its template is the model's.
+fn weights(paths: &Paths, cfg: &ModelCfg) -> Option<PathBuf> {
+    let files = cfg.gguf.iter().map(String::as_str).chain(cfg.files.iter().map(|f| f.path.as_str()).filter(|p| p.ends_with(".gguf") && cfg.mmproj.as_deref() != Some(p)));
+    files.map(|rel| paths.models.join(rel)).find(|p| mango_common::model_files::listed(p).is_some_and(|m| m.is_file()))
+}
+
+/// What the model's template lets the user choose.
 pub(crate) fn of_model(paths: &Paths, cfg: &ModelCfg) -> Reasoning {
-    let weights = cfg.gguf.iter().map(String::as_str).chain(cfg.files.iter().map(|f| f.path.as_str()).filter(|p| p.ends_with(".gguf") && cfg.mmproj.as_deref() != Some(p)));
-    weights.map(|rel| paths.models.join(rel)).find(|p| mango_common::model_files::listed(p).is_some_and(|m| m.is_file())).map_or(Reasoning::None, |p| of_file(&p))
+    weights(paths, cfg).map_or(Reasoning::None, |p| of_file(&p))
+}
+
+/// The level the model's template takes when the user chose none.
+pub(crate) fn default_of_model(paths: &Paths, cfg: &ModelCfg) -> Option<&'static str> {
+    weights(paths, cfg).and_then(|p| read_file(&p).1)
 }
 
 #[cfg(test)]
@@ -170,6 +201,17 @@ mod tests {
         assert_eq!(of_template("{% if %}broken enable_thinking reasoning_effort"), Reasoning::None);
         // a model that always reasons (no switch in its template)
         assert!(levels("{% for m in messages %}{{ m.content }}{% endfor %}<think>").is_empty());
+    }
+
+    /// With no choice the template takes a level of its own: «high» (its `xhigh`) for the template of the tests, «medium»
+    /// for one that defaults to it, «on» for the switch.
+    #[test]
+    fn the_level_a_template_takes_by_itself_is_known() {
+        assert_eq!(default_level(EFFORT_TEMPLATE, &of_template(EFFORT_TEMPLATE)), Some("high"));
+        let medium = EFFORT_TEMPLATE.replace("default('xhigh')", "default('medium')");
+        assert_eq!(default_level(&medium, &of_template(&medium)), Some("medium"));
+        assert_eq!(default_level(SWITCH_TEMPLATE, &Reasoning::Switch), Some("on"));
+        assert_eq!(default_level("{% for m in messages %}{{ m.content }}{% endfor %}", &Reasoning::None), None);
     }
 
     #[test]

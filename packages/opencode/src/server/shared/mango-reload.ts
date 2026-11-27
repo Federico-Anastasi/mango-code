@@ -14,6 +14,12 @@ import { disposeAllInstancesAndEmitGlobalDisposed } from "@/server/global-lifecy
 // waits for the new one (InstanceStore). Only for the app on this PC: the phone service stops it.
 //   POST /mango/reload
 export const RELOAD_PATH = "/mango/reload"
+// The app restarts the agent (a server added, the Team's key): `/mango/quiet` answers 200 when no conversation is
+// answering, at once or when the last answer ends, so the restart does not cut one. After an hour, the longest the app
+// waits, it answers `{quiet: false}`; a request that is given up leaves nothing waiting.
+//   POST /mango/quiet
+export const QUIET_PATH = "/mango/quiet"
+const QUIET_MAX = "1 hour"
 
 /** Watches the conversations from the start of the server: the reload needs to know which ones are answering. */
 export const makeReload = Effect.gen(function* () {
@@ -22,6 +28,8 @@ export const makeReload = Effect.gen(function* () {
   // The conversations answering (busy or waiting to retry), with their folder.
   const answering = new Map<string, string>()
   let pending = false
+  // The requests of `/mango/quiet` waiting for the answers to end.
+  const quiet: Array<() => void> = []
   const dispose = disposeAllInstancesAndEmitGlobalDisposed().pipe(Effect.provideService(InstanceStore.Service, store))
 
   const listener = (event: GlobalEvent) => {
@@ -33,14 +41,13 @@ export const makeReload = Effect.gen(function* () {
     // A folder disposed for any reason has no conversation answering any more, also if it never said idle.
     if (payload?.type === "server.instance.disposed")
       for (const [session, directory] of answering) if (directory === payload.properties.directory) answering.delete(session)
-    if (!pending || answering.size > 0) return
-    pending = false
+    if ((!pending && quiet.length === 0) || answering.size > 0) return
     // Not inside the publication of the event that ended the answer: the conversation finishes first.
     setTimeout(() => {
-      if (answering.size > 0) {
-        pending = true
-        return
-      }
+      if (answering.size > 0) return
+      quiet.splice(0).forEach((done) => done())
+      if (!pending) return
+      pending = false
       // Nobody waits for this answer: a failure goes to the log.
       bridge.fork(dispose.pipe(Effect.catchCause((cause) => Effect.logError("mango reload failed", { cause }))))
     })
@@ -48,7 +55,7 @@ export const makeReload = Effect.gen(function* () {
   GlobalBus.on("event", listener)
   yield* Effect.addFinalizer(() => Effect.sync(() => GlobalBus.off("event", listener)))
 
-  return Effect.gen(function* () {
+  const reload = Effect.gen(function* () {
     if (answering.size > 0) {
       pending = true
       return HttpServerResponse.jsonUnsafe({ reloaded: false }, { status: 202 })
@@ -58,4 +65,25 @@ export const makeReload = Effect.gen(function* () {
       return HttpServerResponse.jsonUnsafe({ error: Cause.pretty(exit.cause) }, { status: 500 })
     return HttpServerResponse.jsonUnsafe({ reloaded: true })
   })
+  const waitQuiet = Effect.gen(function* () {
+    if (answering.size > 0)
+      yield* Effect.callback<void>((resume) => {
+        const done = () => resume(Effect.void)
+        quiet.push(done)
+        return Effect.sync(() => {
+          const at = quiet.indexOf(done)
+          if (at >= 0) quiet.splice(at, 1)
+        })
+      }).pipe(Effect.timeoutOption(QUIET_MAX))
+    return HttpServerResponse.jsonUnsafe({ quiet: answering.size === 0 })
+  })
+  /** Work that would interrupt an answer (disposing a folder): now if no conversation is answering, else as soon as
+   *  none is; a failure then goes to the log. */
+  const afterTheAnswers = (work: Effect.Effect<void>) =>
+    Effect.suspend(() => {
+      if (answering.size === 0) return work
+      quiet.push(() => bridge.fork(work.pipe(Effect.catchCause((cause) => Effect.logError("mango: work after the answers failed", { cause })))))
+      return Effect.void
+    })
+  return { reload, quiet: waitQuiet, afterTheAnswers }
 })

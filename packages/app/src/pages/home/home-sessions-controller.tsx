@@ -79,8 +79,7 @@ export function createHomeSessionsController(home: HomeController) {
     },
     retry: false,
     staleTime: 30_000,
-    // the list is re-read every time one returns to the History: changes made elsewhere (title, archive)
-    // do not always arrive as events to this cache
+    // the list is re-read every time one returns to the Home: the event stream may have been down meanwhile
     refetchOnMount: "always",
     refetchOnReconnect: true,
   }))

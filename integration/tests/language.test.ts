@@ -12,7 +12,7 @@ import { start, type Environment } from "./environment";
 let env: Environment;
 
 beforeAll(async () => {
-  env = await start([{ text: "ok" }]);
+  env = await start([{ text: "ok" }], { projectServersAsked: true });
 }, 200_000);
 
 afterAll(() => {

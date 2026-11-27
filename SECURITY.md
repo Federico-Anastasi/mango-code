@@ -7,25 +7,29 @@ open a public issue for a vulnerability.
 
 ## What Mango Code protects, and what it doesn't
 
-Mango Code runs a coding agent on your computer with access to the shell, your files and the web. It has **no
-sandbox**: the permission prompts help you see what the agent does, they are not an isolation boundary. If you need
-isolation, run it in a virtual machine.
+Mango Code runs an agent on your computer with access to the shell, your files and the web. It runs commands and
+changes files without asking first, and it has **no sandbox**: if you need isolation, run it in a virtual machine. The
+MCP servers of a project's `.mcp.json` start programs, so they start only once you allow them in the window; a change to
+that file asks again, and the approval is kept in Mango Code's data, never in the project. A project's own
+`opencode.json` and `.opencode` folder are not read. This keeps a project you open from starting programs by itself; the
+agent, which has a shell, could still allow them, as any program of yours could.
 
-- The agent server and the engine manager listen on `127.0.0.1` only, without a key: whoever can reach them is already
-  a user of the PC. Requests that carry an `Origin` other than Mango Code's own web interface are refused, so a web page
-  you visit cannot drive the agent or the model. A page the agent shows you is served from its folder, read-only, on
+- The agent server and the engine manager listen on `127.0.0.1` only, without a key: any program running on this PC
+  can reach them, also one of another Windows account signed in at the same time. Requests that carry an `Origin`
+  other than Mango Code's own web interface are refused, so a web page you visit cannot drive the agent or the model. A page the agent shows you is served from its folder, read-only, on
   a port of its own on `127.0.0.1`, kept until the app quits; a request that asks for another address is refused.
 - Access from your phone is off by default. When you turn it on, it uses a separate port on the addresses the settings show
   (your home network and Tailscale, never all the networks), a random key, a session cookie and numeric addresses only. If
-  Windows calls the home network public (a café's), the settings say so. A session there controls an agent with a shell, so it
-  is worth as much as the computer: share the link only with yourself.
+  Windows calls the home network public (a café's), the settings say so. At home the link and the session travel unencrypted
+  on the Wi-Fi (on Tailscale they are encrypted), and a session lasts 90 days. A session there controls an agent with a
+  shell, so it is worth as much as the computer: share the link only with yourself, and use it on a network you trust.
 - Sharing the engine with your other PCs is off by default ("Lend the engine to my PCs", in the settings under Connections). When you
   turn it on, the app opens a separate port on the addresses the settings show (your home network and Tailscale, never all
   the networks) and a PC that pastes the code (address and random key) can use your models: it cannot see your files,
   run commands, drive the agent or take the graphics cards, and only the routes of the model are open. Turning it off
   closes the port and removes the key; "New key" invalidates the code at once. At home the code and the requests travel
   unencrypted on the Wi-Fi (on Tailscale they are encrypted): give the code only to your own PCs. Whoever has it can also
-  make your model busy or reload it, and every refusal is a line in `logs\manager.log`, never the key.
+  make your model busy or reload it, and every refusal (at most 30 a minute) is a line in `logs\manager.log`, never the key.
 - Using the engine of another PC ("Use the engine of another PC", same page) keeps that PC's code in
   `remote-engine.json` in the Mango Code data folder, **in the clear**, like the phone's and the sharing's keys: it is in your
   Windows profile, readable by whoever can read your files. The key travels to that PC in a header, in the clear on the home Wi-Fi
@@ -36,9 +40,11 @@ isolation, run it in a virtual machine.
   Windows is set to use (or `HTTPS_PROXY` / `NO_PROXY`), never for this computer's or the local network's addresses. The app never installs a
   certificate and has no option to skip the check: behind a company filter whose certificate Windows does not know, downloads
   stop with a message instead of continuing unchecked.
-- The app stores your OpenRouter and Hugging Face keys in the Windows Credential Manager. It hands the OpenRouter key to
-  the agent in an environment variable, only when the Team is in use; it is never written in a config file. The agent's
-  commands can read it, as they can read anything else your user can.
+- The app stores your OpenRouter and Hugging Face keys, and the key of each server you add under Connections ("Use a
+  server"), in the Windows Credential Manager. It hands the OpenRouter key to the agent in an environment variable, only
+  when the Team is in use, and the key of each server in a variable of its own, every time the agent starts; none is
+  written in a config file. The shell and the local MCP servers the agent starts get the environment without them; the
+  agent's commands could still read them from the Credential Manager, as they can read anything else your user can.
 - The preview panel also shows a PDF, a picture or a web page of a project when you click its card: only a file inside a project (or
   in `Documents\Mango Code`), at most 50 MB. An SVG is drawn as a picture by a page that allows no script, never opened as a
   page; a web page runs in the panel like the ones the agent opens; the files the server hands out stay inert downloads. From the phone the same files are shown from memory by the web UI.

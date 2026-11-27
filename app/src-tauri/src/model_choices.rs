@@ -18,8 +18,8 @@ fn paths(app: &AppHandle) -> Result<Paths> {
     app.state::<AppState>().paths.get().cloned().with_context(|| tr!("Mango Code si sta ancora avviando.", "Mango Code is still starting."))
 }
 
-fn hardware() -> Result<engine_cfg::Hardware> {
-    engine_cfg::detect().with_context(|| tr!("Non riesco a guardare l'hardware di questo computer.", "Cannot look at the hardware of this computer."))
+fn hardware(paths: &Paths) -> Result<engine_cfg::Hardware> {
+    engine_cfg::detect(paths).with_context(|| tr!("Non riesco a guardare l'hardware di questo computer.", "Cannot look at the hardware of this computer."))
 }
 
 /// The model to load when the app opens; none = the first on disk.
@@ -29,7 +29,12 @@ pub async fn models_set_default(app: AppHandle, key: Option<String>) -> Result<(
         let paths = paths(app)?;
         // The model is one of the local models of the catalog.
         if let Some(key) = &key {
-            engine_cfg::download_of(&paths, key, &hardware()?)?;
+            engine_cfg::download_of(&paths, key, &hardware(&paths)?)?;
+        }
+        // The server's default goes first: if the local one is then not saved, the old local default is used. A list of
+        // servers that cannot be read has no default the agent uses: the local choice is not held up by it.
+        if let Err(e) = crate::servers::set_default(&paths, None) {
+            crate::startup_log(&paths, &format!("the default on a server not cleared: {e:#}"));
         }
         choices::set_default(&paths, key.as_deref())?;
         crate::choices_changed(app);
@@ -60,12 +65,20 @@ pub async fn models_set_choices(app: AppHandle, key: String, choices: Choices) -
     .await
 }
 
-/// A card, by name, is used by the models or left to the rest of the computer.
+/// A card, by name, is used by the models or left to the rest of the computer. The integrated graphics turned on may need
+/// a build of the engine the PC does not have yet: it is queued at once (`engine_update`), and the models run on the
+/// processor until it arrives.
 #[tauri::command]
 pub async fn computer_set_gpu_used(app: AppHandle, name: String, used: bool) -> Result<(), BridgeError> {
     blocking(app, move |app| {
-        choices::set_gpu_used(&paths(app)?, &name, used)?;
+        let paths = paths(app)?;
+        let hw = hardware(&paths)?;
+        choices::set_gpu_used(&paths, &hw, &name, used)?;
         crate::choices_changed(app);
+        let integrated_on = used && hw.gpus.iter().any(|g| hw.names(&name, g) && g.needs_ram());
+        if let (true, Some(downloads)) = (integrated_on, app.state::<AppState>().downloads.get()) {
+            engine_update(&paths, &hardware(&paths)?, downloads)?;
+        }
         Ok(())
     })
     .await
@@ -101,7 +114,8 @@ pub async fn models_remove(app: AppHandle, key: String) -> Result<(), BridgeErro
 
 fn remove(app: &AppHandle, key: &str) -> Result<()> {
     let st = app.state::<AppState>();
-    take_off(&paths(app)?, &hardware()?, st.downloads.get(), st.engine.get(), st.images.get(), key)
+    let paths = paths(app)?;
+    take_off(&paths, &hardware(&paths)?, st.downloads.get(), st.engine.get(), st.images.get(), key)
 }
 
 /// `remove` with what it works on: the queue of the downloads, the engine manager and the pictures, when they are there.
@@ -171,13 +185,14 @@ fn forget_defaults(paths: &Paths, key: &str) -> Result<()> {
     Ok(())
 }
 
-/// «Aggiorna il motore» in Settings › Computer, shown when the app came with a new version of an engine whose old one is
+/// «Update the engine» in Settings › Computer, shown when the app came with a new version of an engine whose old one is
 /// on the disk (`engine_cfg::engine_updates`): for each engine, the first model on the disk that waits for it is queued,
 /// also one paused or failed, and its download brings only the engine. The answer is the sentence for the user.
 #[tauri::command]
 pub async fn computer_update_engine(app: AppHandle) -> Result<String, BridgeError> {
     blocking(app, |app| {
-        let (paths, hw) = (paths(app)?, hardware()?);
+        let paths = paths(app)?;
+        let hw = hardware(&paths)?;
         let carriers: Vec<String> = engine_cfg::engine_updates(&paths, &hw)?.into_iter().map(|u| u.model).collect();
         if !carriers.is_empty() {
             let downloads = app.state::<AppState>().downloads.get().cloned();
@@ -195,9 +210,10 @@ pub async fn computer_update_engine(app: AppHandle) -> Result<String, BridgeErro
     .await
 }
 
-/// At the start, after the downloads of the last time: an engine the app came with a new version of, whose old version is
-/// on the disk, is queued with the first model on the disk that waits for it (`engine_cfg::engine_updates`), so that it
-/// arrives by itself and the app is not back at its first start. An engine already among the downloads stays as it is: a
+/// At the start, after the downloads of the last time, and when a card is turned on or off: an engine the app came with a
+/// new version of, whose old version is on the disk, or the build the integrated graphics needs, is queued with the first
+/// model on the disk that waits for it (`engine_cfg::engine_updates`), so that it arrives by itself and the app is not
+/// back at its first start. An engine already among the downloads stays as it is: a
 /// pause stays a pause. Then the old versions of the engines already updated go, if no process runs them.
 pub(crate) fn engine_update(paths: &Paths, hw: &Hardware, downloads: &Downloads) -> Result<()> {
     let queued = downloads.list();
@@ -213,7 +229,7 @@ pub(crate) fn engine_update(paths: &Paths, hw: &Hardware, downloads: &Downloads)
     Ok(())
 }
 
-/// «Come si ottimizza» in Settings › Computer: the folder of the skill that tunes Mango Code on this PC, to give to a
+/// «How it is tuned» in Settings › Computer: the folder of the skill that tunes Mango Code on this PC, to give to a
 /// frontier AI. In the installed app it is among the resources (`<dist>\optimize`), in the repo next to the app.
 #[tauri::command]
 pub async fn computer_open_optimize(app: AppHandle) -> Result<(), BridgeError> {

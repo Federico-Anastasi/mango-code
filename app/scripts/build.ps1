@@ -16,7 +16,8 @@
 param([string]$Opencode, [string]$Version, [switch]$InsecureUpdates, [ValidateSet("All", "Build", "Sign")][string]$Phase = "All")
 $ErrorActionPreference = "Stop"
 $app = Split-Path $PSScriptRoot -Parent
-$nsis = "$app\target\release\bundle\nsis"
+$target = if ($env:CARGO_TARGET_DIR) { [IO.Path]::GetFullPath([IO.Path]::Combine($app, $env:CARGO_TARGET_DIR)) } else { "$app\target" }
+$nsis = "$target\release\bundle\nsis"
 
 if ($Phase -ne "Sign") {
     # mango-tune.exe goes in the installer next to the optimize skill, mango-launch.exe at the top of the resources

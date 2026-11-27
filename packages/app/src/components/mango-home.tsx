@@ -4,7 +4,7 @@
 // models on the disk, the models that cannot be read, the start that failed with the model that fits now, the other
 // PC's engine that does not answer. Otherwise the Home as usual. Downloads and the way back from the
 // other PC go through the bridge of the app's window: without it (a phone, a browser) they are «done from the computer».
-import { createEffect, createMemo, createSignal, For, type JSX, Match, Show, Switch } from "solid-js"
+import { createEffect, createMemo, createResource, createSignal, For, type JSX, Match, Show, Switch } from "solid-js"
 import { formatFileSize } from "@opencode-ai/session-ui/project-file"
 import { ButtonV2 } from "@opencode-ai/ui/v2/button-v2"
 import { ProgressBarV2 } from "@opencode-ai/ui/v2/progress-bar-v2"
@@ -14,7 +14,8 @@ import { useTheme } from "@opencode-ai/ui/theme/context"
 import { useLanguage } from "@/context/language"
 import { failureText, useMango } from "@/context/mango"
 import { DictationRow } from "@/components/settings-page/dictation"
-import { mangoDesktopError } from "@/utils/mango-desktop"
+import { ServerModelList } from "@/components/server-model-list"
+import { mangoDesktopError, type MangoServerModel, type MangoServers } from "@/utils/mango-desktop"
 import {
   chosenBytes,
   contextLabel,
@@ -96,14 +97,14 @@ export function MangoHomePanel(props: Actions & { children: JSX.Element }) {
 }
 
 // It scrolls by itself only where it stands alone (the phone, and beside the projects): between the two the Home scrolls
-// it with the projects, and a panel that only looked scrollable would keep «Indietro» and «Scarica e comincia» from
+// it with the projects, and a panel that only looked scrollable would keep «Back» and «Download and start» from
 // staying in view at the bottom of the list. Beside the projects it is as high as the Home at most (`100cqh`, the
 // Home's scroll view): without that it grew with its list, never scrolled, and the buttons went below the window.
 const panel =
   "flex min-w-0 flex-1 flex-col gap-6 pb-16 pt-6 max-md:overflow-y-auto max-md:px-4 lg:max-h-[100cqh] lg:overflow-y-auto lg:pt-12"
 const card = "flex flex-col gap-3 rounded-[10px] border border-v2-border-border-base bg-v2-background-bg-base p-4"
 const title =
-  "text-[23px] leading-8 tracking-[-0.01em] text-v2-text-text-base [font-family:var(--mango-font-title)] [font-weight: 700]"
+  "text-[23px] leading-8 tracking-[-0.01em] text-v2-text-text-base [font-family:var(--mango-font-title)] [font-weight:700]"
 const note = "text-[13px] leading-5 text-v2-text-text-muted"
 const danger = "text-[13px] leading-5 text-text-danger"
 const row = "flex flex-col items-start rounded-[7px] px-3 py-2 text-left hover:bg-v2-overlay-simple-overlay-hover"
@@ -199,8 +200,18 @@ function Welcome() {
         })
       : language.t("mango.home.start", { size: formatFileSize(chosenBytes(catalog(), chosen()), language.intl()) })
 
+  // A server of many models was added here: the user chooses the one new conversations start with.
+  const [servers] = createResource(() => mango.bridge()?.servers, (bridge) => bridge.state())
+  const unchosen = () => {
+    const state = servers()
+    return state && !state.default ? state.list.find((server) => server.models.length > 1) : undefined
+  }
+
   return (
     <div data-component="mango-welcome" class={panel}>
+      <Show when={unchosen()} keyed>
+        {(server) => <ServerModelChoice server={server} bridge={mango.bridge()!.servers!} />}
+      </Show>
       <Show
         when={choosing()}
         fallback={
@@ -222,7 +233,7 @@ function Welcome() {
                     {language.t("mango.home.recommended")}
                   </span>
                   <div class="flex flex-col gap-1">
-                    <span class="text-[14px] leading-5 text-v2-text-text-base [font-weight: 600]">{model().label}</span>
+                    <span class="text-[14px] leading-5 text-v2-text-text-base [font-weight:600]">{model().label}</span>
                     <Show when={model().about}>{(about) => <span class={note}>{about()}</span>}</Show>
                   </div>
                   <ModelFacts model={model()} />
@@ -253,6 +264,7 @@ function Welcome() {
                 <span class={note}>{language.t("mango.home.choose.note")}</span>
               </button>
               <OtherPc />
+              <Server />
               <Show when={mango.bridge()?.models}>
                 <button type="button" data-action="mango-own-file" class={row} onClick={mango.openOtherModel}>
                   <span class="text-[14px] leading-5 text-v2-text-text-base">{language.t("mango.home.ownFile")}</span>
@@ -400,7 +412,14 @@ function Found() {
                 <For each={computer().gpus}>
                   {(gpu) => (
                     <span>
-                      {language.t("mango.home.gpu", { name: gpu.name, size: gb(gpu.memory_mib) })}
+                      {gpu.memory_mib
+                        ? language.t("mango.home.gpu", {
+                            name: gpu.name,
+                            size: gpu.shared
+                              ? language.t("settings.computer.sharedMemory", { size: gb(gpu.memory_mib) })
+                              : gb(gpu.memory_mib),
+                          })
+                        : gpu.name}
                       <Show when={!gpu.used || gpu.note}>
                         <span class="block text-v2-text-text-faint">
                           {gpu.note || language.t("mango.home.gpu.unused")}
@@ -489,6 +508,130 @@ function OtherPc() {
   )
 }
 
+/**
+ * The model new conversations start with, among the many of a server added at the first start (a cloud service lists
+ * hundreds): with a search, and the price of each when the service says it. Nothing is chosen for the user.
+ */
+function ServerModelChoice(props: { server: { id: string; label: string; models: MangoServerModel[] }; bridge: MangoServers }) {
+  const mango = useMango()
+  const language = useLanguage()
+  const [error, setError] = createSignal<string>()
+  const [busy, setBusy] = createSignal(false)
+  const choose = async (model: string) => {
+    setBusy(true)
+    setError(undefined)
+    try {
+      await props.bridge.setDefault(props.server.id, model)
+      await mango.refresh()
+    } catch (cause) {
+      setError(mangoDesktopError(cause).message)
+      setBusy(false)
+    }
+  }
+  return (
+    <div data-component="mango-server-choice" class={card}>
+      <div class="flex flex-col gap-1">
+        <h2 class={title}>{language.t("mango.home.serverChoice.title", { host: props.server.label })}</h2>
+        <p class={note}>{language.t("mango.home.serverChoice.body")}</p>
+      </div>
+      <ServerModelList models={props.server.models} search disabled={busy()} onPick={(model) => void choose(model)} />
+      <Show when={error()}>{(message) => <p class={danger}>{message()}</p>}</Show>
+    </div>
+  )
+}
+
+/**
+ * «Use a server»: the address of an OpenAI-compatible server and its key, if it asks for one; with a single model, that
+ * one becomes the model of new conversations (with more, the user chooses it above), and the app starts again, without
+ * downloading anything. A server that does not say the context of its models gets it here, proposed.
+ */
+function Server() {
+  const mango = useMango()
+  const language = useLanguage()
+  const [open, setOpen] = createSignal(false)
+  const [address, setAddress] = createSignal("")
+  const [key, setKey] = createSignal("")
+  const [context, setContext] = createSignal<number>()
+  const [said, setSaid] = createSignal<{ text: string; error: boolean }>()
+  const [busy, setBusy] = createSignal(false)
+  const connect = async () => {
+    const servers = mango.bridge()?.servers
+    if (!servers || !address().trim()) return
+    setBusy(true)
+    setSaid({ text: language.t("settings.links.servers.checking"), error: false })
+    try {
+      const added = await servers.add(address().trim(), key(), context(), true)
+      if (added.context !== null) {
+        setContext(added.context)
+        setSaid({ text: language.t("settings.links.servers.context"), error: false })
+      } else setSaid({ text: language.t("settings.links.servers.added"), error: false })
+    } catch (cause) {
+      setSaid({ text: mangoDesktopError(cause).message, error: true })
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <Show when={mango.bridge()?.servers}>
+      <div class="flex flex-col gap-2">
+        <button
+          type="button"
+          data-action="mango-server"
+          class={row}
+          aria-expanded={open()}
+          onClick={() => setOpen((value) => !value)}
+        >
+          <span class="text-[14px] leading-5 text-v2-text-text-base">{language.t("settings.links.servers.title")}</span>
+          <span class={note}>{language.t("mango.home.server.note")}</span>
+        </button>
+        <Show when={open()}>
+          <div class="flex flex-wrap items-center gap-2 px-3">
+            <TextInputV2
+              class="min-w-0 flex-1"
+              value={address()}
+              aria-label={language.t("settings.links.servers.addressLabel")}
+              placeholder="http://192.168.1.20:8080"
+              onInput={(event) => {
+                setAddress(event.currentTarget.value)
+                setContext(undefined)
+              }}
+            />
+            <TextInputV2
+              class="min-w-0 flex-1"
+              type="password"
+              value={key()}
+              aria-label={language.t("settings.links.servers.keyLabel")}
+              placeholder={language.t("settings.links.servers.keyPlaceholder")}
+              autocomplete="new-password"
+              onInput={(event) => setKey(event.currentTarget.value)}
+            />
+            <Show when={context() !== undefined}>
+              <TextInputV2
+                class="w-28"
+                inputMode="numeric"
+                value={String(context() ?? "")}
+                aria-label={language.t("settings.links.servers.contextLabel")}
+                onInput={(event) => {
+                  const n = Number(event.currentTarget.value.replace(/\D/g, ""))
+                  setContext(Number.isFinite(n) && n > 0 ? n : 0)
+                }}
+              />
+            </Show>
+            <ButtonV2
+              data-action="mango-server-connect"
+              disabled={busy() || !address().trim() || context() === 0}
+              onClick={() => void connect()}
+            >
+              {language.t("mango.home.remote.connect")}
+            </ButtonV2>
+          </div>
+          <Show when={said()}>{(s) => <p class={`px-3 ${s().error ? danger : note}`}>{s().text}</p>}</Show>
+        </Show>
+      </div>
+    </Show>
+  )
+}
+
 function Downloading(props: Actions) {
   const mango = useMango()
   const language = useLanguage()
@@ -523,7 +666,7 @@ function Downloading(props: Actions) {
       </div>
       <div class={card}>
         <div class="flex flex-col gap-1">
-          <span class="text-[14px] leading-5 text-v2-text-text-base [font-weight: 500]">
+          <span class="text-[14px] leading-5 text-v2-text-text-base [font-weight:500]">
             {language.t("mango.home.firstProject")}
           </span>
           <span class={note}>{language.t("mango.home.firstProject.note")}</span>
@@ -547,7 +690,7 @@ function Downloading(props: Actions) {
 
 /**
  * A download as the Home shows it: what it brings, how far it is, and Resume or Retry when it stands still. The first
- * model's, or the engine the app came with («Aggiorno il motore»).
+ * model's, or the engine the app came with («Updating the engine»).
  */
 function DownloadCard(props: { download: Download }) {
   const mango = useMango()
@@ -581,7 +724,7 @@ function DownloadCard(props: { download: Download }) {
       data-state={props.download.state}
       data-engine={props.download.engine_only ? "" : undefined}
     >
-      <h2 class="text-[14px] leading-5 text-v2-text-text-base [font-weight: 600]">
+      <h2 class="text-[14px] leading-5 text-v2-text-text-base [font-weight:600]">
         <Switch fallback={downloadTitle(props.download, language)}>
           <Match when={props.download.state === "paused"}>{downloadPausedText(props.download, language)}</Match>
           <Match when={props.download.state === "failed"}>{downloadFailedText(props.download, language)}</Match>
@@ -589,7 +732,11 @@ function DownloadCard(props: { download: Download }) {
       </h2>
       <ProgressBarV2 label={downloadTitle(props.download, language)} value={downloadPercent(props.download)} />
       <p class={note}>
-        {progress()}. {language.t("mango.home.downloading.resume")}
+        {progress()}.
+        {/* paused, it stays paused at the next start */}
+        <Show when={props.download.state !== "paused"}>
+          {` ${language.t("mango.home.downloading.resume")}`}
+        </Show>
       </p>
       <Show when={queued()}>
         {(text) => (
@@ -651,7 +798,7 @@ function FailedStart() {
       {(model) => (
         <div data-component="mango-failed" class={`${card} ${above}`}>
           <div class="flex flex-col gap-1">
-            <h2 class="text-[14px] leading-5 text-v2-text-text-base [font-weight: 600]">
+            <h2 class="text-[14px] leading-5 text-v2-text-text-base [font-weight:600]">
               {language.t("mango.failed.title", { model: model().label })}
             </h2>
             <Show when={model().taken ?? model().reason}>{(text) => <p class={note}>{text()}</p>}</Show>
@@ -703,7 +850,7 @@ function FailedStart() {
           </div>
           <Show when={error()}>{(message) => <p class={danger}>{message()}</p>}</Show>
           <div class="flex flex-wrap items-center gap-2">
-            <Show when={model().taken && model().reason}>
+            <Show when={model().detail}>
               <ButtonV2
                 variant="ghost"
                 size="small"
@@ -723,7 +870,7 @@ function FailedStart() {
               data-slot="mango-failed-details"
               class="whitespace-pre-wrap break-words text-[12px] leading-4 text-v2-text-text-muted"
             >
-              {model().reason}
+              {model().detail}
             </pre>
           </Show>
         </div>
@@ -754,7 +901,7 @@ function RemoteDown() {
   return (
     <div data-component="mango-remote-down" class={panel}>
       <div class={card}>
-        <h2 class="text-[14px] leading-5 text-v2-text-text-base [font-weight: 600]">
+        <h2 class="text-[14px] leading-5 text-v2-text-text-base [font-weight:600]">
           {language.t("mango.remote.title")}
         </h2>
         <p class={note}>{language.t("mango.remote.body")}</p>

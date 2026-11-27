@@ -83,7 +83,9 @@ describe("skill", () => {
       )
 
       expect(output).toContain("<location>/tmp/plugin.git#v1.3.0/SKILL.md</location>")
-      expect(output).toContain("<location>&lt;built-in&gt;</location>")
+      expect(output).toContain("<name>built-in-skill</name>")
+      expect(output).not.toContain("built-in&gt;")
+      expect(output.match(/<location>/g)).toHaveLength(1)
       expect(output).not.toContain("file://")
       expect(output).not.toContain("%23")
     }),
@@ -290,6 +292,26 @@ description: A skill in the .claude/skills directory.
         }),
       )
     }),
+  )
+
+  it.live("the skills of Mango Harness 1 are built in: listed by name and description, with no place on the disk", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const skill = yield* Skill.Service
+          const own = (yield* skill.all()).filter((s) => s.location === "<built-in>")
+          expect(own.map((s) => s.name)).toEqual(
+            expect.arrayContaining(["debugging", "excel", "frontend-design", "pdf", "powerpoint", "test-first", "verify-before-done", "word"]),
+          )
+          const pdf = yield* skill.require("pdf")
+          expect(pdf.description).toStartWith("Creates PDFs (with correct accents)")
+          expect(pdf.content).toStartWith("#")
+          const listed = Skill.fmt(yield* skill.available(), { verbose: true })
+          expect(listed).toContain("<name>pdf</name>")
+          expect(listed).not.toContain("<location>")
+        }),
+      { git: true },
+    ),
   )
 
   it.live("returns empty array when no skills exist", () =>

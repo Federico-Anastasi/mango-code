@@ -35,6 +35,7 @@ import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
 import { McpCatalog } from "./catalog"
 import { McpEvent } from "@opencode-ai/schema/mcp-event"
 import { McpBrowser } from "./browser"
+import { withoutKeys } from "@/util/mango-secrets"
 
 const DEFAULT_TIMEOUT = 30_000
 const CLIENT_OPTIONS = {
@@ -353,7 +354,7 @@ const layer = Layer.effect(
         args,
         cwd,
         env: {
-          ...process.env,
+          ...withoutKeys(process.env),
           ...(cmd === "opencode" ? { BUN_BE_BUN: "1" } : {}),
           ...mcp.environment,
         },

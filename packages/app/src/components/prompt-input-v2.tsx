@@ -5,10 +5,12 @@ import { ButtonV2 } from "@opencode-ai/ui/v2/button-v2"
 import { Icon } from "@opencode-ai/ui/v2/icon"
 import { TooltipV2 } from "@opencode-ai/ui/v2/tooltip-v2"
 import type { ReferenceInfo } from "@opencode-ai/sdk/v2/client"
+import { useParams } from "@solidjs/router"
 import { createEffect, createMemo, createSignal, on, Show } from "solid-js"
 import { ModelSelectorPopoverV2 } from "@/components/dialog-select-model"
 import { inMangoDesktop } from "@/utils/mango-desktop"
 import { TeamSwitch } from "@/components/team-switch"
+import { useAgentCall } from "@/components/settings-page/harnesses"
 import type { PromptInputProps } from "@/components/prompt-input/contracts"
 import { normalizePromptHistoryEntry, promptLength, type PromptHistoryComment } from "@/components/prompt-input/history"
 import { createPersistedPromptInputHistory } from "@/components/prompt-input/history-store"
@@ -27,11 +29,13 @@ import { createSessionTabs } from "@/pages/session/helpers"
 import { liveDictation } from "@/components/prompt-input/dictation"
 import { PromptVoiceButton } from "@/components/prompt-input/voice"
 import { showToast } from "@/utils/toast"
-import { MANGO_PROVIDER } from "@/utils/model-info"
+import { MANGO_PROVIDER, offeredProvider } from "@/utils/model-info"
 import { bringBackPending, failureText, useMango } from "@/context/mango"
 import { dismissReady, MangoNoticeLine, MangoStatusLine } from "@/components/mango-composer"
+import { MangoNotice } from "@/components/mango-notice"
+import { ProjectServersLine } from "@/components/mango-project-servers"
 import { composerParts, ModelLabel, modelTag } from "@/components/mango-model-bar"
-import { conversationModel, messageWaits, noModel } from "@/utils/mango-state"
+import { conversationModel, messageWaits, noModel, replacementModel } from "@/utils/mango-state"
 import { reasoningControl, withReasoning, type ReasoningLevel } from "@/utils/mango-reasoning"
 import { mangoDesktopError } from "@/utils/mango-desktop"
 import { PromptReasoning } from "@/components/prompt-reasoning"
@@ -67,6 +71,10 @@ export type PromptInputV2ComposerController = PromptInputV2Interaction & {
 export function PromptInputV2Composer(props: PromptInputV2ComposerProps) {
   const dialog = useDialog()
   const language = useLanguage()
+  const params = useParams()
+  const agentCall = useAgentCall()
+  const stopTeam = () =>
+    params.id ? agentCall("/mango/team/stop", {}, { method: "POST", body: JSON.stringify({ sessionID: params.id }) }) : Promise.resolve()
   const mango = useMango()
   // mango-code: a model of this PC is named from the app's state, as in the top bar (the engine's model, its load, the
   // first model's download); a model of another provider, the other PC's engine, or the engine on another model for a side
@@ -86,6 +94,26 @@ export function PromptInputV2Composer(props: PromptInputV2ComposerProps) {
 
   const picture = () => props.controller.picture
   const selection = () => props.controller.model.selection
+  // A model taken off the computer or off the app while the conversation names it: another one that is there takes its
+  // place, and a line above the box says so.
+  const [gone, setGone] = createSignal<string>()
+  createEffect(() => {
+    const current = selection().current()
+    if (current?.provider?.id !== MANGO_PROVIDER) return
+    const catalog = mango.catalog()
+    const key = replacementModel(mango.state(), catalog, current.id)
+    if (!key) return
+    selection().set({ modelID: key, providerID: MANGO_PROVIDER })
+    const label = (id: string) => catalog?.find((m) => m.key === id)?.label ?? id
+    setGone(language.t("mango.gone", { from: label(current.id), to: label(key) }))
+  })
+  createEffect(() => {
+    const named = selection().missing()
+    const now = selection().current()
+    if (!named || !now) return
+    selection().set({ modelID: now.id, providerID: now.provider.id })
+    setGone(language.t("mango.gone.elsewhere", { from: named.modelID, to: now.name }))
+  })
   // the choice shown while the app saves it
   const [asked, setAsked] = createSignal<ReasoningLevel>()
   const reasoning = createMemo(() => {
@@ -116,13 +144,17 @@ export function PromptInputV2Composer(props: PromptInputV2ComposerProps) {
       .finally(() => setAsked(undefined))
   }
   return (
-    <div class="flex flex-col gap-3">
+    <div class="flex flex-col gap-3 has-[>[role=status]]:pt-[var(--composer-clear,0px)]">
       <Show
         when={picture().on()}
         fallback={
           <>
             <MangoStatusLine />
             <MangoNoticeLine />
+            <Show when={gone()}>
+              {(text) => <MangoNotice text={text()} closeLabel={language.t("common.close")} onClose={() => setGone(undefined)} />}
+            </Show>
+            <ProjectServersLine />
           </>
         }
       >
@@ -153,7 +185,7 @@ export function PromptInputV2Composer(props: PromptInputV2ComposerProps) {
             when={picture().on()}
             fallback={
               <>
-                <TeamSwitch agents={props.controller.agents} />
+                <TeamSwitch agents={props.controller.agents} stop={stopTeam} />
                 <PromptInputV2ModelControl
                   loading={props.controller.model.loading}
                   title={language.t("command.model.choose")}
@@ -651,14 +683,14 @@ function PromptInputV2ModelControl(props: {
       </span>
     </>
   )
-  // Mango Code app: the menu lists the models on this PC, like the one in the top bar: choosing one uses it now, and
-  // «Manage models…» opens the settings on Models.
+  // Mango Code app: the menu lists the models on this PC, like the one in the top bar, and those of the external servers,
+  // one group each: choosing a local one uses it now, and «Manage models…» opens the settings on Models.
   if (inMangoDesktop()) {
     return (
       <Show when={!props.loading}>
         <ModelSelectorPopoverV2
           model={props.model}
-          provider={MANGO_PROVIDER}
+          providers={offeredProvider}
           manageLabel={language.t("mango.menu.manage")}
           onManage={mango.openModels}
           onPick={pick}
@@ -672,7 +704,7 @@ function PromptInputV2ModelControl(props: {
               variant="ghost-muted"
               size="normal"
               style={{ height: "28px" }}
-              class="min-w-0 max-w-[260px] justify-start ![font-weight: 400] group"
+              class="min-w-0 max-w-[260px] justify-start ![font-weight:400] group"
               data-action="prompt-model"
               data-control-type="popover"
             >
@@ -699,7 +731,7 @@ function PromptInputV2ModelControl(props: {
               variant="ghost-muted"
               size="normal"
               style={{ height: "28px" }}
-              class="min-w-0 max-w-[220px] justify-start ![font-weight: 400] group"
+              class="min-w-0 max-w-[220px] justify-start ![font-weight:400] group"
               classList={{ "animate-in fade-in": shouldAnimate() }}
               data-action="prompt-model"
               data-control-type="popover"

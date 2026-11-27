@@ -27,6 +27,7 @@ mod phone;
 mod ports;
 mod engine_share;
 mod engine_remote;
+mod servers;
 mod tray;
 mod old_origin;
 mod seed;
@@ -208,6 +209,9 @@ struct AppState {
     agent: Mutex<Option<String>>,
     /// A folder to open as a project that arrived before the agent was ready (`folder.rs`).
     folder: Mutex<Option<std::path::PathBuf>>,
+    /// The page of the interface the window showed when the app started again (path, query and fragment): the start
+    /// brings the window back to it, on the address of the new agent.
+    back_to: Mutex<Option<String>>,
     /// What the control server's routes remember (`control.rs`).
     control: control::Shared,
     /// The folders served to the browser panel as sites (`sites.rs`).
@@ -328,6 +332,9 @@ pub(crate) fn restart(app: &AppHandle) {
     if st.status.lock().unwrap().stage == "ready" {
         // The interface writes what it holds before the window leaves it.
         ui_state::flush_page(app);
+        let shown = st.main.get().filter(|window| on_agent_page(window)).and_then(|window| window.url().ok());
+        *st.back_to.lock().unwrap() =
+            shown.and_then(|url| url.as_str().strip_prefix(url.origin().ascii_serialization().as_str()).map(str::to_string));
         if let (Some(window), Some(page)) = (st.main.get(), st.app_page.get()) {
             set_status(app, "startup", tr!("Preparazione", "Preparing"));
             let _ = window.navigate(page.clone());
@@ -335,6 +342,7 @@ pub(crate) fn restart(app: &AppHandle) {
     }
     if let Some(s) = st.sup.get() {
         s.shutdown();
+        s.stop_team();
     }
     st.agent.lock().unwrap().take();
     if let Ok(f) = mango_common::service_file() {
@@ -412,7 +420,8 @@ fn startup(app: &AppHandle) -> Result<()> {
     // The PC's development tools are detected meanwhile; they are awaited right before the agent config.
     let tools = {
         let data = paths.data.clone();
-        std::thread::spawn(move || agent_cfg::tools::update(&data))
+        let path = agent_cfg::tools::agent_path(&paths.data, &paths.dist, std::env::var_os("PATH").as_deref());
+        std::thread::spawn(move || agent_cfg::tools::update(&data, &path))
     };
 
     let engine = control_server(app, &paths)?;
@@ -435,6 +444,9 @@ fn startup(app: &AppHandle) -> Result<()> {
         )
     });
 
+    if let Err(e) = engine_cfg::choices::settle_keys(&paths) {
+        startup_log(&paths, &format!("the choices not moved under the models' keys: {e:#}"));
+    }
     // --- the models the agent knows: those of another PC if the user chose its engine, otherwise this computer's catalog
     let used = match engine_remote::start(app, &paths)? {
         Some(used) => used,
@@ -445,9 +457,10 @@ fn startup(app: &AppHandle) -> Result<()> {
 
     // --- agent server
     set_status(app, "agent", tr!("Avvio dell'agente", "Starting the agent"));
+    let (servers, server_keys) = servers::for_the_agent(&paths);
     // The agent's browser is the Preview panel: its port changes at every start and lives only in
     // the process environment. If the panel was not created (0) the browser server falls back to
-    // the external browser, as it did before.
+    // the external browser.
     let browser = agent_cfg::BrowserInputs {
         preview_port: app.try_state::<preview::Panel>().map(|p| p.cdp_port).unwrap_or(0),
         choice: chrome::choice_file().with_context(|| tr!("Percorso della scelta del browser", "Browser choice path"))?,
@@ -469,7 +482,10 @@ fn startup(app: &AppHandle) -> Result<()> {
         browser,
         team: agent_cfg::team::team_inputs(&paths, team_key())
             .with_context(|| tr!("Configurazione del Team", "Team configuration"))?,
+        servers: servers.clone(),
+        server_keys,
     };
+    let server_urls: Vec<String> = servers.list.iter().map(|s| s.url.clone()).collect();
     // The agent's address is the preferred port while it is free; the interface keeps its state in the app, not in the
     // origin of that address, so another port is no loss. While the state of that origin is not copied yet the start waits
     // a moment for the port (an agent that is closing may still hold it); the copy is read (below) whichever port is taken.
@@ -488,7 +504,7 @@ fn startup(app: &AppHandle) -> Result<()> {
             let mut plan = agent_cfg::plan(&paths, &agent_cfg::AgentInputs { port, ..inputs.clone() })
                 .with_context(|| tr!("Configurazione dell'agente", "Agent configuration"))?;
             // Bun and the servers the agent starts do not read Windows' proxy: they get it as variables, with the engine left out of it.
-            plan.spec.env.extend(mango_common::internet::child_proxy_env(&used.url));
+            plan.spec.env.extend(mango_common::internet::child_proxy_env(&used.url, &server_urls));
             sup.spawn(&plan.spec)?;
             sup.wait_ready(&plan.spec, |_| {}).with_context(|| tr!("L'agente non è partito", "The agent did not start"))?;
             Ok(plan)
@@ -504,13 +520,14 @@ fn startup(app: &AppHandle) -> Result<()> {
     // From now on a change of this computer's models is told to the agent; another PC's are read at the start.
     match remote {
         true => st.declared.forget(),
-        false => st.declared.launched(&used.models, used.default_model.as_deref()),
+        false => st.declared.launched(&used.models, used.default_model.as_deref(), &servers),
     }
 
     // The model loads in the background, and the manager tells how it goes: the default one, or the one that was in use before
     // the engine was stopped (the engine of another PC, then back to this one). A model that is running or loading is left
     // alone: only the agent started again.
-    if !remote && !used.default_waits && engine.phase() == engine::Phase::Stopped {
+    // With the default on a server the local model starts only when it is chosen.
+    if !remote && !used.default_waits && servers.default.is_none() && engine.phase() == engine::Phase::Stopped {
         if let Some(key) = engine.state().model.or(used.default_model) {
             engine.choose(&key);
         }
@@ -534,9 +551,12 @@ fn startup(app: &AppHandle) -> Result<()> {
         .get()
         .cloned()
         .with_context(|| tr!("finestra principale sparita", "main window gone"))?;
-    let page = match requested {
-        Some(folder) => folder::page(&agent_plan.url, &folder)?,
-        None => agent_plan.url.parse().with_context(|| tr!("URL dell'agente", "Agent URL"))?,
+    let agent_url: tauri::Url = agent_plan.url.parse().with_context(|| tr!("URL dell'agente", "Agent URL"))?;
+    let back_to = st.back_to.lock().unwrap().take();
+    let page = match (requested, back_to) {
+        (Some(folder), _) => folder::page(&agent_plan.url, &folder)?,
+        (None, Some(path)) => agent_url.join(&path).unwrap_or(agent_url),
+        (None, None) => agent_url,
     };
     // At every attempt: a "Retry" after a startup that stopped before here takes them up, and they are taken up once.
     // What cannot be resumed or queued is not worth stopping an app that is already in use: it goes to the log.
@@ -560,7 +580,7 @@ fn startup(app: &AppHandle) -> Result<()> {
     // Then the engine the app came with, if models on the disk wait for it: it reads the hardware and the models (about
     // 150 ms measured, too long to keep the window waiting), while the interface loads; its first read of the state
     // comes later, and finds the engine coming.
-    if let Err(e) = engine_cfg::detect().and_then(|hw| model_choices::engine_update(&paths, &hw, &downloads)) {
+    if let Err(e) = engine_cfg::detect(&paths).and_then(|hw| model_choices::engine_update(&paths, &hw, &downloads)) {
         startup_log(&paths, &format!("the new engine not queued: {e:#}"));
     }
     phase("engine update");
@@ -600,18 +620,18 @@ fn control_server(app: &AppHandle, paths: &Paths) -> Result<EngineManager> {
     // choices or the models change, so a change applies from the next answer without loading the model again.
     let defaults = engine_cfg::choices::ModelDefaults::new(paths.clone());
     m.set_request_defaults(Box::new(move |key| defaults.get(key)));
-    // A model that goes on the cards does not start where other programs hold the memory it counts on: «Riprova» starts it
+    // A model that goes on the cards does not start where other programs hold the memory it counts on: «Retry» starts it
     // anyway. In development builds `MANGO_ROOM_CHECK_OFF` leaves the check out: the fake models of the integration tests
     // have a plan on this PC's real cards, which another program may be using.
     if !(cfg!(debug_assertions) && std::env::var_os("MANGO_ROOM_CHECK_OFF").is_some()) {
         let p = paths.clone();
-        m.set_room_check(Box::new(move |key, lent, used| engine_cfg::taken_before_start(&p, &engine_cfg::detect()?, used, key, lent)));
+        m.set_room_check(Box::new(move |key, lent, used| engine_cfg::taken_before_start(&p, &engine_cfg::detect(&p)?, used, engine_cfg::hardware::free_ram_mib()?, key, lent)));
     }
     // The pictures: the image engine draws on a card the engine manager lends it, and gives it back.
     let p = paths.clone();
     let pictures = images::ImageManager::new(Box::new(move |key, port| engine_cfg::image_plan(&p, key, port)), images::lender(m.clone()), &paths.logs());
     let p = paths.clone();
-    let _ = st.images.set(images::routes::Routes::new(pictures, Box::new(move || Ok(serde_json::to_value(engine_cfg::image_models(&p, &engine_cfg::detect()?)?)?))));
+    let _ = st.images.set(images::routes::Routes::new(pictures, Box::new(move || Ok(serde_json::to_value(engine_cfg::image_models(&p, &engine_cfg::detect(&p)?)?)?))));
     engine::http::serve(m.clone(), manager_port, Some(std::sync::Arc::new(control::Routes(app.clone())))).with_context(|| tr!("Porta del motore", "Engine port"))?;
     let _ = st.engine.set(m.clone());
     engine_share::install(app, &paths.data, m.clone()).with_context(|| tr!("Condivisione del motore", "Engine sharing"))?;
@@ -621,7 +641,7 @@ fn control_server(app: &AppHandle, paths: &Paths) -> Result<EngineManager> {
 /// The catalog as it is on this computer now, and the model to load when the app opens, if any is on disk. Whoever needs
 /// the names of the models and the default (the control server, the sharing of the engine) is told.
 fn read_catalog(app: &AppHandle, paths: &Paths) -> Result<(Vec<engine_cfg::ModelEntry>, Option<String>)> {
-    let hw = engine_cfg::detect().with_context(|| tr!("Non riesco a guardare l'hardware di questo computer", "Cannot look at the hardware of this computer"))?;
+    let hw = engine_cfg::detect(paths).with_context(|| tr!("Non riesco a guardare l'hardware di questo computer", "Cannot look at the hardware of this computer"))?;
     if let Some(e) = &hw.nvml_error {
         // The app starts anyway: the line says why an NVIDIA card runs without CUDA, or isn't used at all.
         startup_log(paths, &format!("NVML does not answer, the NVIDIA cards are read from DXGI without CUDA: {e}"));
@@ -639,9 +659,18 @@ fn read_catalog(app: &AppHandle, paths: &Paths) -> Result<(Vec<engine_cfg::Model
             .collect(),
     );
     let default_model = engine_cfg::startup_model(paths, &catalog)?;
+    // a list of servers that cannot be read is told by the page that shows it
+    let server_default = agent_cfg::servers::read(paths).ok().and_then(|s| {
+        let d = s.checked_default()?;
+        let label = s.list.iter().find(|x| x.id == d.server)?.models.iter().find(|m| m.id == d.model)?.label();
+        Some((format!("{}/{}", d.server, d.model), label))
+    });
+    let (server_model, server_label) = server_default.unzip();
     app.state::<AppState>().control.set_known(control::Known {
         labels: catalog.iter().map(|v| (v.key.clone(), v.label.clone())).collect(),
         default_model: default_model.clone(),
+        server_model,
+        server_label,
     });
     Ok((catalog, default_model))
 }
@@ -649,7 +678,7 @@ fn read_catalog(app: &AppHandle, paths: &Paths) -> Result<(Vec<engine_cfg::Model
 /// `model` has just arrived on this computer: the catalog is read again, the interface is told (`catalog_revision`),
 /// without a default saved it becomes it if it is the one to keep (`keep_default`: the first model downloaded that
 /// fits), and the model to load is loaded if none is in use (`load_default`): the first model downloaded starts by itself.
-fn models_arrived(app: &AppHandle, model: &str) {
+pub(crate) fn models_arrived(app: &AppHandle, model: &str) {
     let st = app.state::<AppState>();
     let (Some(paths), Some((catalog, default))) = (st.paths.get(), catalog_read_again(app)) else { return };
     keep_default(app, paths, &catalog, Keep::Arrived(model));
@@ -673,8 +702,12 @@ fn default_reconsidered(app: &AppHandle) {
 }
 
 /// The engine a download brings is on the disk while its files still come: a default that waited for that engine loads
-/// now, not when the whole download ends.
+/// now, not when the whole download ends; the model in use moves where its plan now puts it (the integrated graphics,
+/// whose engine this was).
 fn engine_arrived(app: &AppHandle) {
+    if let Some(engine) = app.state::<AppState>().engine.get() {
+        engine.reload_if_changed();
+    }
     if app.state::<AppState>().awaited.lock().unwrap().is_none() {
         return;
     }
@@ -686,10 +719,15 @@ fn engine_arrived(app: &AppHandle) {
 /// The only place that loads a model by itself when none is in use (`engine_cfg::model_to_load`): the default once it is
 /// ready, also after a start that failed while the app waited for its engine; nothing while a download brings that
 /// engine; a model that is ready when none does.
-fn load_default(app: &AppHandle, catalog: &[engine_cfg::ModelEntry], default: Option<&str>) {
+pub(crate) fn load_default(app: &AppHandle, catalog: &[engine_cfg::ModelEntry], default: Option<&str>) {
     let st = app.state::<AppState>();
     let (Some(paths), Some(engine), Some(downloads)) = (st.paths.get(), st.engine.get(), st.downloads.get()) else { return };
     if st.remote.lock().unwrap().is_some() {
+        return;
+    }
+    // With the default on a server the local model starts only when it is chosen; a list that cannot be read is told by
+    // whoever shows it.
+    if agent_cfg::servers::read(paths).is_ok_and(|s| s.checked_default().is_some()) {
         return;
     }
     let state = engine.state();
@@ -738,14 +776,14 @@ fn catalog_read_again(app: &AppHandle) -> Option<(Vec<engine_cfg::ModelEntry>, O
 
 /// The user changed a choice about the models or the computer, or took a model off it: the catalog is read again, the
 /// interface is told, and a running model whose plan is no longer the same is loaded again when it has no answer in
-/// progress. The answer is the catalog, if it was read.
-pub(crate) fn choices_changed(app: &AppHandle) -> Option<Vec<engine_cfg::ModelEntry>> {
+/// progress. The answer is the catalog and the default model, if it was read.
+pub(crate) fn choices_changed(app: &AppHandle) -> Option<(Vec<engine_cfg::ModelEntry>, Option<String>)> {
     let st = app.state::<AppState>();
     let (Some(paths), Some(engine)) = (st.paths.get(), st.engine.get()) else { return None };
     let catalog = match read_catalog(app, paths) {
         Ok((catalog, default_model)) => {
             agent_models::tell(app, paths, &catalog, default_model.as_deref());
-            Some(catalog)
+            Some((catalog, default_model))
         }
         Err(e) => {
             startup_log(paths, &format!("the catalog was not read again after a choice: {e:#}"));
@@ -871,11 +909,41 @@ fn write_reason(reason: &str) {
     }
 }
 
-fn spawn_startup(app: AppHandle) {
+/// An agent that ends by itself (a crash, the memory, an antivirus) after a start that went to its end is started again:
+/// the window would otherwise keep asking an address nobody answers. One the app stopped (a restart, the quit) is no
+/// longer the supervisor's child. One that ends again soon after it was started again is not started a third time: the
+/// error screen says so, with Retry.
+fn watch_the_agent(app: &AppHandle) {
+    const AGAIN_WITHIN: Duration = Duration::from_secs(120);
+    static RESTARTED: Mutex<Option<Instant>> = Mutex::new(None);
+    let st = app.state::<AppState>();
+    let (Some(pid), Some(paths)) = (st.sup.get().and_then(|s| s.pid(agent_cfg::PROCESS)), st.paths.get().cloned()) else { return };
+    let app = app.clone();
     std::thread::spawn(move || {
-        if let Err(e) = startup(&app) {
-            set_error(&app, &tr!("Mango Code non è riuscito ad avviarsi", "Mango Code could not start"), &e);
+        if !matches!(mango_common::stragglers::wait_for_exit(pid, None), mango_common::stragglers::Waited::Ended) {
+            return;
         }
+        if app.state::<AppState>().sup.get().and_then(|s| s.pid(agent_cfg::PROCESS)) != Some(pid) {
+            return;
+        }
+        let lines = mango_common::tail(&paths.logs().join(format!("{}.log", agent_cfg::PROCESS)), 12);
+        let mut restarted = RESTARTED.lock().unwrap();
+        if restarted.is_some_and(|at| at.elapsed() < AGAIN_WITHIN) {
+            drop(restarted);
+            let e = anyhow::anyhow!("{lines}");
+            return set_error(&app, &tr!("L'agente si è chiuso di nuovo da solo", "The agent closed by itself again"), &e);
+        }
+        *restarted = Some(Instant::now());
+        drop(restarted);
+        startup_log(&paths, &format!("the agent ended by itself, it starts again; its last lines:\n{lines}"));
+        restart(&app);
+    });
+}
+
+fn spawn_startup(app: AppHandle) {
+    std::thread::spawn(move || match startup(&app) {
+        Ok(()) => watch_the_agent(&app),
+        Err(e) => set_error(&app, &tr!("Mango Code non è riuscito ad avviarsi", "Mango Code could not start"), &e),
     });
 }
 

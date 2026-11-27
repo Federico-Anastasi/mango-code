@@ -339,6 +339,16 @@ pub fn free_port(preferred: u16) -> Result<u16> {
     Ok(random_port()?)
 }
 
+/// A new log for a process that starts: the one of the previous start becomes `<name>.1.log` (the one before is
+/// dropped), so the lines of a crash are still there after the restart that follows it.
+pub fn fresh_log(path: &Path) -> std::io::Result<std::fs::File> {
+    // A log another program holds open cannot move: it is written over, and the start goes on.
+    if path.is_file() {
+        let _ = std::fs::rename(path, path.with_extension("1.log"));
+    }
+    std::fs::File::create(path)
+}
+
 /// Last `n` non-empty lines of a log, for the error messages.
 pub fn tail(path: &Path, n: usize) -> String {
     let txt = std::fs::read(path).map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default();
@@ -376,6 +386,23 @@ pub fn sha256_hex(data: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A restart keeps the log of the start before it, and only that one.
+    #[test]
+    fn a_fresh_log_keeps_the_previous_one() {
+        let dir = std::env::temp_dir().join(format!("fresh-log-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let log = dir.join("engine.log");
+        for start in ["first", "second", "third"] {
+            use std::io::Write;
+            write!(fresh_log(&log).unwrap(), "{start}").unwrap();
+        }
+        assert_eq!(std::fs::read_to_string(&log).unwrap(), "third");
+        assert_eq!(std::fs::read_to_string(dir.join("engine.1.log")).unwrap(), "second");
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 2);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     /// What the interface shows of an error is its sentence: the technical detail stays in the whole error, for the log.
     #[test]

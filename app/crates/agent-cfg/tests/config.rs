@@ -2,8 +2,9 @@
 //! (`fixtures/opencode.reference.json`, a whole config written once and kept) except for the intended differences listed
 //! in `expected_from_reference`.
 
-use agent_cfg::tools::{instructions, Detection};
+use agent_cfg::tools::{programs, Detection};
 use agent_cfg::team::{self, Choices};
+use agent_cfg::servers::{ModelRef, Price, Server, ServerModel, Servers};
 use agent_cfg::{plan, set_models, AgentInputs, BrowserInputs, AgentModel};
 use mango_common::{tr, Paths};
 use serde_json::{json, Value};
@@ -65,6 +66,8 @@ fn inputs() -> AgentInputs {
         tools: pc(),
         browser: BrowserInputs { preview_port: 51789, choice: PathBuf::from(r"C:\data\browser.json") },
         team: None,
+        servers: Servers::default(),
+        server_keys: vec![],
     }
 }
 
@@ -138,17 +141,6 @@ fn expected_from_reference(dist: &Path, data: &Path, exe: &str) -> Value {
     // 5f. A picture the model makes by itself asks first: the template has the permission, the fixture was written
     //     without it.
     root["permission"]["image"] = json!("ask");
-    // 5e. The web instructions are added by the mango-discipline plugin according to the request's model.
-    let ins = root["instructions"].as_array_mut().unwrap();
-    assert!(ins.remove(1).as_str().unwrap().ends_with("MANGO-web-text.md"));
-    // 5c. At the end of `instructions` there is the «Tools on this PC» section, generated at every start from the
-    //     detection of Python, Node, Git, etc. (`tools.rs`): on the user's PC there may be nothing to program with,
-    //     and without the list the model would write scripts it can't run. The file is in the generated config's
-    //     folder, not in the distribution.
-    root["instructions"]
-        .as_array_mut()
-        .unwrap()
-        .push(json!(data.join("opencode-home").join("MANGO-pc.md").to_string_lossy()));
     v
 }
 
@@ -191,8 +183,8 @@ fn one_model_for_each_local_model() {
     let m = got["provider"]["mango"]["models"].as_object().unwrap();
     // The order in which the app lists them (the catalog's), not the alphabetical one: the web UI shows it that way.
     assert_eq!(m.keys().collect::<Vec<_>>(), ["toq", "3.8", "lfm"]);
-    assert_eq!(m["3.8"]["limit"], json!({"context": 81920, "output": 10240}));
-    assert_eq!(m["lfm"]["limit"], json!({"context": 131072, "output": 16384}));
+    assert_eq!(m["3.8"]["limit"], json!({"context": 81920, "output": 81920}));
+    assert_eq!(m["lfm"]["limit"], json!({"context": 131072, "output": 131072}));
     assert_eq!(m["3.8"]["modalities"]["input"], json!(["text", "image"]));
     assert_eq!(m["lfm"]["attachment"], json!(false));
     assert_eq!(m["3.8"]["name"], json!("Qwen3.8-27B"));
@@ -238,17 +230,17 @@ fn the_models_are_written_again_with_their_new_context() {
         AgentModel { key: "toq".into(), label: "TOQ-v1".into(), ctx: 65536, images: false },
         AgentModel { key: "mine".into(), label: "My model".into(), ctx: 32768, images: true },
     ];
-    set_models(&paths, &models, Some("toq")).unwrap();
+    set_models(&paths, &models, Some("toq"), &Servers::default()).unwrap();
 
     let mut after = read_json(&p.config_dir.join("opencode.json"));
     let m = after["provider"]["mango"]["models"].as_object().unwrap();
     assert_eq!(m.keys().collect::<Vec<_>>(), ["toq", "mine"]);
-    assert_eq!(m["toq"]["limit"], json!({"context": 65536, "output": 8192}));
+    assert_eq!(m["toq"]["limit"], json!({"context": 65536, "output": 65536}));
     assert_eq!(m["mine"]["name"], json!("My model"));
     assert_eq!(m["mine"]["modalities"]["input"], json!(["text", "image"]));
     // Each entry is the same as a model written at start, notes of the template left out.
     let mut first = before["provider"]["mango"]["models"]["toq"].clone();
-    first["limit"] = json!({"context": 65536, "output": 8192});
+    first["limit"] = json!({"context": 65536, "output": 65536});
     assert_eq!(m["toq"], first);
     // Nothing else changes.
     after["provider"]["mango"]["models"] = before["provider"]["mango"]["models"].clone();
@@ -263,7 +255,7 @@ fn the_models_are_written_again_with_their_new_context() {
     assert!(agents["model"].as_str().unwrap().starts_with("openrouter/"), "{}", agents["model"]);
 
     // The default changes with the list: the next one is the caller's (the first on the computer).
-    set_models(&paths, &models[1..], Some("mine")).unwrap();
+    set_models(&paths, &models[1..], Some("mine"), &Servers::default()).unwrap();
     let got = read_json(&p.config_dir.join("opencode.json"));
     assert_eq!((&got["model"], &got["small_model"]), (&json!("mango/mine"), &json!("mango/mine")));
     assert_eq!(got["provider"]["mango"]["models"].as_object().unwrap().keys().collect::<Vec<_>>(), ["mine"]);
@@ -271,10 +263,10 @@ fn the_models_are_written_again_with_their_new_context() {
     assert_eq!(dev["model"], json!("mango/mine"));
 
     // Nothing on the computer: no default; a default that is not offered is an error.
-    set_models(&paths, &models, None).unwrap();
+    set_models(&paths, &models, None, &Servers::default()).unwrap();
     let got = read_json(&p.config_dir.join("opencode.json"));
     assert_eq!((got.get("model"), got.get("small_model")), (None, None));
-    let e = set_models(&paths, &models[1..], Some("toq")).unwrap_err();
+    let e = set_models(&paths, &models[1..], Some("toq"), &Servers::default()).unwrap_err();
     assert!(format!("{e:#}").contains("toq"), "{e:#}");
 }
 
@@ -285,7 +277,7 @@ fn from_no_default_to_one() {
     let paths = sb.paths(dist());
     let p = plan(&paths, &AgentInputs { default_model: None, ..inputs() }).unwrap();
     assert_eq!(read_json(&p.config_dir.join("opencode.json")).get("model"), None);
-    set_models(&paths, &inputs().models, Some("toq")).unwrap();
+    set_models(&paths, &inputs().models, Some("toq"), &Servers::default()).unwrap();
     let got = read_json(&p.config_dir.join("opencode.json"));
     assert_eq!((&got["model"], &got["small_model"]), (&json!("mango/toq"), &json!("mango/toq")));
 }
@@ -294,7 +286,7 @@ fn from_no_default_to_one() {
 #[test]
 fn the_agents_config_must_be_there() {
     let sb = Sandbox::new("set-models-missing");
-    let e = set_models(&sb.paths(dist()), &inputs().models, Some("toq")).unwrap_err();
+    let e = set_models(&sb.paths(dist()), &inputs().models, Some("toq"), &Servers::default()).unwrap_err();
     assert!(format!("{e:#}").contains("opencode.json"), "{e:#}");
 }
 
@@ -340,6 +332,8 @@ fn process_port_environment_and_health() {
         "OPENCODE_DISABLE_CLAUDE_CODE",
         "OPENCODE_DISABLE_EXTERNAL_SKILLS",
         "OPENCODE_DISABLE_BUILTIN_COMMANDS",
+        // a project starts no code of its own in the agent (its opencode.json, its .opencode folder)
+        "OPENCODE_DISABLE_PROJECT_CONFIG",
     ] {
         assert_eq!(env(k), Some("1"), "{k}");
     }
@@ -397,25 +391,21 @@ fn clear_errors_instead_of_fallbacks() {
 }
 
 #[test]
-fn pc_tools_section_in_the_instructions() {
+fn pc_programs_go_to_the_agent_in_its_environment_and_in_no_file() {
     let sb = Sandbox::new("tools");
     let paths = sb.paths(dist());
     let p = plan(&paths, &inputs()).unwrap();
-    let got = read_json(&p.config_dir.join("opencode.json"));
-    let ins = got["instructions"].as_array().unwrap();
-    assert_eq!(ins.len(), 2);
-    let file = PathBuf::from(ins[1].as_str().unwrap());
-    assert_eq!(file, p.config_dir.join("MANGO-pc.md"));
-    let text = std::fs::read_to_string(&file).unwrap();
-    assert_eq!(text, instructions(&pc()));
+    let text = env_of(&p, "MANGO_PC_PROGRAMS").unwrap();
+    assert_eq!(text, programs(&pc()));
     assert!(text.contains("Python 3.12; Git 2.47."), "{text}");
     assert!(text.contains("Not installed: Node, .NET, Java, Rust, Go."), "{text}");
+    assert!(!p.config_dir.join("MANGO-pc.md").exists());
 
-    // A different PC gives a different text, and the file is updated at the next launch.
+    // A different PC gives a different text, at the next launch.
     let mut inp = inputs();
     inp.tools.node = Some("24.1.0".into());
-    plan(&paths, &inp).unwrap();
-    let new = std::fs::read_to_string(&file).unwrap();
+    let again = plan(&paths, &inp).unwrap();
+    let new = env_of(&again, "MANGO_PC_PROGRAMS").unwrap();
     assert!(new.contains("Python 3.12; Node 24; Git 2.47."), "{new}");
 }
 
@@ -480,6 +470,8 @@ fn team_on_manager_and_cloud_models() {
     assert_eq!(or["models"].as_object().unwrap().keys().collect::<Vec<_>>(), [id], "manager and agent are the same model");
     assert_eq!(or["models"][id]["modalities"]["input"], json!(["text", "image"]));
     assert_eq!(or["models"][id]["limit"]["context"], json!(1048576));
+    // an answer may take the whole context: no smaller limit is written
+    assert_eq!(or["models"][id]["limit"]["output"], json!(1048576));
     assert_eq!(or["models"][id]["cost"]["input"], json!(0.15));
     // the Team's model has the levels of OpenRouter's reasoning field; a local model has none: its levels are its template's
     assert_eq!(
@@ -512,8 +504,7 @@ fn team_dev_and_agents_have_their_own_config() {
     // the dev: the local model, its role, the plugin; no «team» agent
     let dev = read_json(&folder.join("dev-home/opencode.json"));
     assert_eq!(dev["model"], json!("mango/toq"));
-    let instructions: Vec<&str> = dev["instructions"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
-    assert!(instructions.iter().any(|i| i.ends_with("MANGO-dev.md")), "{instructions:?}");
+    assert!(dev.get("instructions").is_none());
     assert!(dev["agent"].get("team").is_none());
     assert_eq!(dev["plugin"].as_array().unwrap().len(), 1);
     assert!(folder.join("dev-home/plugin/mango-discipline.js").is_file());
@@ -522,8 +513,7 @@ fn team_dev_and_agents_have_their_own_config() {
     let agent = read_json(&folder.join("agent-home/opencode.json"));
     assert_eq!(agent["model"], json!("openrouter/qwen/qwen3.8-27b"));
     assert_eq!(agent["small_model"], json!("openrouter/qwen/qwen3.8-27b"));
-    let instructions: Vec<&str> = agent["instructions"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
-    assert!(instructions.iter().any(|i| i.ends_with("MANGO-agent.md")), "{instructions:?}");
+    assert!(agent.get("instructions").is_none());
     assert_eq!(agent["provider"]["openrouter"]["models"].as_object().unwrap().len(), 2, "manager and agents, two different models");
 
     // the app's server has the manager's model for the team agent
@@ -681,4 +671,73 @@ fn the_engine_of_another_pc_is_reached_with_its_key_from_the_environment_and_the
     files_with_the_key(&sb.root, &mut found);
     assert!(found.is_empty(), "the key is written in {found:?}");
     assert!(p.spec.args.iter().all(|a| !a.contains(ENGINE_KEY)));
+}
+
+const SERVER_KEY: &str = "sk-server-test-0123456789";
+
+/// A llama-server on the LAN without a key and a cloud service with one; the default is the cloud's model.
+fn servers() -> Servers {
+    Servers {
+        list: vec![
+            Server { id: "server-1".into(), url: "http://192.168.1.30:8080/v1".into(), key: false, models: vec![ServerModel { id: "qwen".into(), ctx: 65_536, images: true, price: None, name: None }, ServerModel { id: "D:\\models\\Qwen3.5-4B-Q4_K_M.gguf".into(), ctx: 65_536, images: false, price: None, name: None }], context: None },
+            Server { id: "server-2".into(), url: "https://api.example.com/v1".into(), key: true, models: vec![ServerModel { id: "big/model".into(), ctx: 131_072, images: false, price: Some(Price { input: 0.3, output: 1.2 }), name: Some("Big Model".into()) }], context: None },
+        ],
+        default: Some(ModelRef { server: "server-2".into(), model: "big/model".into() }),
+        last: 2,
+    }
+}
+
+fn with_servers() -> AgentInputs {
+    AgentInputs { servers: servers(), server_keys: vec![("MANGO_SERVER_KEY_SERVER_2".into(), SERVER_KEY.into())], ..inputs() }
+}
+
+/// Each server is a provider beside the local models, enabled, with its models and its key from the environment; the
+/// default on a server is the model of new conversations and of the small requests. The key is in no file.
+#[test]
+fn each_server_is_a_provider_beside_the_local_models() {
+    let sb = Sandbox::new("servers");
+    let p = plan(&sb.paths(dist()), &with_servers()).unwrap();
+    let got = read_json(&p.config_dir.join("opencode.json"));
+    let lan = &got["provider"]["server-1"];
+    assert_eq!((&lan["name"], &lan["options"]["baseURL"], &lan["options"]["apiKey"]), (&json!("192.168.1.30:8080"), &json!("http://192.168.1.30:8080/v1"), &json!("dummy")));
+    assert_eq!((&lan["models"]["qwen"]["limit"]["context"], &lan["models"]["qwen"]["modalities"]["input"]), (&json!(65_536), &json!(["text", "image"])));
+    assert_eq!(got["provider"]["server-2"]["options"]["apiKey"], json!("{env:MANGO_SERVER_KEY_SERVER_2}"));
+    assert_eq!(got["provider"]["server-2"]["models"]["big/model"]["limit"]["context"], json!(131_072));
+    // the user reads the name the server gives, or the file's name without folder and extension, never the path
+    assert_eq!(got["provider"]["server-2"]["models"]["big/model"]["name"], json!("Big Model"));
+    assert_eq!(lan["models"]["D:\\models\\Qwen3.5-4B-Q4_K_M.gguf"]["name"], json!("Qwen3.5-4B-Q4_K_M"));
+    // the price the service said, so that the cost under an answer is the real one; the local models' zero where it said none
+    assert_eq!(got["provider"]["server-2"]["models"]["big/model"]["cost"], json!({ "input": 0.3, "output": 1.2 }));
+    assert_eq!(got["provider"]["server-1"]["models"]["qwen"]["cost"]["input"], json!(0));
+    assert!(got["provider"]["mango"]["models"]["toq"].is_object(), "the local models stay");
+    assert_eq!((&got["model"], &got["small_model"]), (&json!("server-2/big/model"), &json!("server-2/big/model")));
+    assert!(got.to_string().find("\"_").is_none(), "no annotation left");
+    let content: Value = serde_json::from_str(env_of(&p, "OPENCODE_CONFIG_CONTENT").unwrap()).unwrap();
+    assert_eq!(content["enabled_providers"], json!(["mango", "server-1", "server-2"]));
+    assert_eq!(env_of(&p, "MANGO_SERVER_KEY_SERVER_2"), Some(SERVER_KEY));
+    let text = std::fs::read_to_string(p.config_dir.join("opencode.json")).unwrap();
+    assert!(!text.contains(SERVER_KEY));
+    // Without a server default the local one holds.
+    let p = plan(&sb.paths(dist()), &AgentInputs { servers: Servers { default: None, ..servers() }, ..with_servers() }).unwrap();
+    assert_eq!(read_json(&p.config_dir.join("opencode.json"))["model"], json!("mango/toq"));
+    // A default that is not among a server's models is an error, not a silent fallback.
+    let wrong = Servers { default: Some(ModelRef { server: "server-1".into(), model: "gone".into() }), ..servers() };
+    assert!(plan(&sb.paths(dist()), &AgentInputs { servers: wrong, ..with_servers() }).is_err());
+}
+
+/// The servers' models and the default are written again without a new start: a server's list read again, a server gone.
+#[test]
+fn the_servers_are_written_again_with_the_models() {
+    let sb = Sandbox::new("servers-again");
+    let paths = sb.paths(dist());
+    let p = plan(&paths, &inputs()).unwrap();
+    let file = p.config_dir.join("opencode.json");
+    set_models(&paths, &inputs().models, Some("toq"), &servers()).unwrap();
+    let got = read_json(&file);
+    assert!(got["provider"]["server-1"]["models"]["qwen"].is_object() && got["provider"]["server-2"].is_object());
+    assert_eq!(got["model"], json!("server-2/big/model"));
+    set_models(&paths, &inputs().models, Some("toq"), &Servers::default()).unwrap();
+    let got = read_json(&file);
+    assert!(got["provider"].get("server-1").is_none() && got["provider"].get("server-2").is_none(), "{}", got["provider"]);
+    assert_eq!(got["model"], json!("mango/toq"));
 }

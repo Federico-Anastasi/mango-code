@@ -63,8 +63,9 @@ test("extra folders give instructions, rules and skills, and declaring them agai
   expect(system).toContain("always cite the method keyword"); // the method's .claude/rules/tone.md
   expect(system).toContain("whiteboard"); // the method's skill is announced
   const from = [...system.matchAll(/^Instructions from: (.*)$/gm)].map((m) => m[1]);
-  expect(from.every((p) => p.startsWith(env.root))).toBe(true);
-  expect(from.some((p) => p.startsWith(env.method))).toBe(true);
+  expect(from).toContain("../method/CLAUDE.md");
+  expect(from).toContain("../method/.claude/rules/tone.md");
+  expect(from.some((p) => /^[a-z]:|\\/i.test(p))).toBe(false);
 }, 120_000);
 
 test("an empty list removes the extra folders; a path that is not a folder is refused", async () => {

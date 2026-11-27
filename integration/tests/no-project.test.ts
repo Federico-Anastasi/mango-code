@@ -109,7 +109,7 @@ const typeInDialog = (value: string) =>
 test("the home with no project invites to write, with one button", async () => {
   expect(await text()).toContain("Nuova conversazione");
   expect(await text()).not.toContain("crea un progetto");
-  await photo("home-comincia-a-scrivere");
+  await photo("home-start-writing");
 }, 60_000);
 
 test("one click from the home to the first question, in a Conversazioni folder that is a project like the others", async () => {
@@ -119,10 +119,10 @@ test("one click from the home to the first question, in a Conversazioni folder t
   const composer = await waitUntil(async () => !!(await p.evaluate("document.querySelector('[data-component=\"prompt-input\"], [contenteditable=\"true\"]')")));
   expect(composer).toBe(true);
   expect(await tabs()).toBe(1);
-  await photo("nuova-conversazione-senza-progetto");
+  await photo("new-conversation-without-project");
 
   // the first question
-  await p.evaluate(`(() => { const el = document.querySelector('[contenteditable="true"]'); el.focus(); document.execCommand('insertText', false, 'ciao'); })()`);
+  await p.evaluate(`(() => { const el = document.querySelector('[contenteditable="true"]'); el.focus(); document.execCommand('insertText', false, 'hello'); })()`);
   await Bun.sleep(300);
   await p.send("Input.dispatchKeyEvent", { type: "keyDown", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, text: "\r" });
   await p.send("Input.dispatchKeyEvent", { type: "keyUp", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 });
@@ -134,7 +134,7 @@ test("the conversations with no project are found in the home under one name", a
   await p.evaluate("document.querySelector('[data-action=\"home\"], [data-component=\"titlebar-home\"]')?.click()");
   await p.evaluate("history.pushState(null, '', '/'); window.dispatchEvent(new PopStateEvent('popstate'))");
   expect(await waitUntil(async () => (await text()).includes("Conversazioni"))).toBe(true);
-  await photo("home-conversazioni");
+  await photo("home-conversations");
 }, 60_000);
 
 test("a New conversation tab left empty closes by itself when the user goes elsewhere", async () => {
@@ -178,7 +178,7 @@ test("choosing the Desktop as a project is refused, with the way out; cancelling
   await click("Apri una cartella esistente");
   await picker("-Path", desktop);
   expect(await waitUntil(async () => (await text()).includes("troppo ampia per essere un progetto: scegli o crea una sottocartella"))).toBe(true);
-  await photo("cartella-troppo-ampia");
+  await photo("folder-too-broad");
   await click("Annulla");
   await Bun.sleep(1000);
   expect(await text()).not.toContain("Desktop");
@@ -189,10 +189,10 @@ test("a broad folder becomes a subfolder with the name given, and that is the pr
   await click("Apri una cartella esistente");
   await picker("-Path", oneDrive);
   expect(await waitUntil(async () => (await text()).includes("troppo ampia"))).toBe(true);
-  await typeInDialog("sito");
+  await typeInDialog("shop-site");
   await click("Crea e apri");
-  expect(await waitUntil(async () => fs.existsSync(path.join(oneDrive, "sito")))).toBe(true);
-  expect(await waitUntil(async () => (await text()).includes("sito"))).toBe(true);
+  expect(await waitUntil(async () => fs.existsSync(path.join(oneDrive, "shop-site")))).toBe(true);
+  expect(await waitUntil(async () => (await text()).includes("shop-site"))).toBe(true);
   expect(await text()).not.toContain("troppo ampia");
   expect(fs.existsSync(path.join(oneDrive, ".git"))).toBe(false);
 }, 120_000);
@@ -201,7 +201,7 @@ test("a name that already exists is refused in the dialog, with the reason", asy
   await click("Apri una cartella esistente");
   await picker("-Path", oneDrive);
   expect(await waitUntil(async () => (await text()).includes("troppo ampia"))).toBe(true);
-  await typeInDialog("sito");
+  await typeInDialog("shop-site");
   await click("Crea e apri");
   expect(await waitUntil(async () => (await text()).includes("esiste già"))).toBe(true);
   await click("Annulla");

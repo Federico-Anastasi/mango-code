@@ -393,13 +393,3 @@ describe("ProviderTransform.providerOptions", () => {
     expect(ProviderTransform.providerOptions(model("wafer.ai"), { a: 1 })).toEqual({ wafer: { a: 1 } })
   })
 })
-
-describe("ProviderTransform.maxOutputTokens", () => {
-  test("is the model's limit, capped", () => {
-    expect(ProviderTransform.maxOutputTokens({ limit: { output: 4096 } } as any)).toBe(4096)
-    expect(ProviderTransform.maxOutputTokens({ limit: { output: 100_000 } } as any)).toBe(
-      ProviderTransform.OUTPUT_TOKEN_MAX,
-    )
-    expect(ProviderTransform.maxOutputTokens({ limit: { output: 0 } } as any)).toBe(ProviderTransform.OUTPUT_TOKEN_MAX)
-  })
-})

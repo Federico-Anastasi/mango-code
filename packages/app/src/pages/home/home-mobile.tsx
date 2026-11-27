@@ -112,7 +112,7 @@ export function HomeMobile(props: { projects: HomeProjectsController; sessions: 
             <label class="flex h-12 min-w-0 flex-1 items-center gap-2 rounded-[7px] border border-v2-border-border-base bg-v2-background-bg-deep pl-3 pr-3 text-v2-icon-icon-muted focus-within:border-v2-border-border-strong">
               <IconV2 name="magnifying-glass" />
               <input
-                class="min-w-0 flex-1 border-0 bg-transparent text-[16px] text-v2-text-text-base outline-0 placeholder:text-v2-text-text-faint"
+                class="min-w-0 flex-1 text-ellipsis border-0 bg-transparent text-[16px] text-v2-text-text-base outline-0 placeholder:text-v2-text-text-faint"
                 type="search"
                 enterkeyhint="search"
                 value={query()}
@@ -149,7 +149,7 @@ export function HomeMobile(props: { projects: HomeProjectsController; sessions: 
             <For each={groups()}>
               {(group) => (
                 <section class="pb-2">
-                  <h2 class="px-3 pb-1 pt-3 text-[14px] text-v2-text-text-muted [font-weight: 400]">{group.title}</h2>
+                  <h2 class="px-3 pb-1 pt-3 text-[14px] text-v2-text-text-muted [font-weight:400]">{group.title}</h2>
                   <For each={group.sessions}>
                     {(record) => <HomeMobileRow record={record} sessions={props.sessions} />}
                   </For>
@@ -170,7 +170,9 @@ function HomeMobileRow(props: { record: HomeSessionRecord; sessions: HomeSession
     () => sessionTitle(props.record.session.title, language.t("session.untitled")) || props.record.session.id,
   )
   const when = createMemo(() => {
-    const time = DateTime.fromMillis(props.record.session.time.updated ?? props.record.session.time.created)
+    const time = DateTime.fromMillis(props.record.session.time.updated ?? props.record.session.time.created).setLocale(
+      language.intl(),
+    )
     return time.hasSame(DateTime.local(), "day")
       ? time.toLocaleString(DateTime.TIME_SIMPLE)
       : time.toLocaleString(DateTime.DATE_MED)
@@ -199,8 +201,8 @@ function HomeMobileRow(props: { record: HomeSessionRecord; sessions: HomeSession
           )}
         />
         <span class="min-w-0 flex-1">
-          <span class="block truncate text-[16px] leading-6 text-v2-text-text-base [font-weight: 500]">{title()}</span>
-          <span class="block truncate text-[14px] leading-5 text-v2-text-text-muted [font-weight: 400]">
+          <span class="block truncate text-[16px] leading-6 text-v2-text-text-base [font-weight:500]">{title()}</span>
+          <span class="block truncate text-[14px] leading-5 text-v2-text-text-muted [font-weight:400]">
             {props.record.projectName} · {when()}
           </span>
         </span>

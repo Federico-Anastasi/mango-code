@@ -1,0 +1,7 @@
+{
+  "name": "Mango Harness 1",
+  "hooks": {
+    "discipline-messages": { "every": 3 },
+    "discipline-calls": { "every": 12 }
+  }
+}

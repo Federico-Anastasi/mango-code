@@ -29,7 +29,7 @@ fn open(paths: &Paths, text: &str) -> anyhow::Result<Found> {
         return Ok(Found::Tested(tested));
     }
     let repo = hugging_face::repo(&reference.repo, reference.revision.as_deref())?;
-    let mut analysis = other_models::analyze_hugging_face(paths, &engine_cfg::detect()?, &repo)?;
+    let mut analysis = other_models::analyze_hugging_face(paths, &engine_cfg::detect(paths)?, &repo)?;
     analysis.prefer(reference.quant.as_deref(), reference.path.as_deref());
     Ok(Found::Analysis { repo: repo.id, analysis: Box::new(analysis) })
 }
@@ -73,7 +73,11 @@ pub mod bridge {
     /// The analysis of a GGUF on the computer.
     #[tauri::command]
     pub async fn other_models_analyze(app: AppHandle, file: String) -> Result<Analysis, BridgeError> {
-        blocking(app, move |app| other_models::analyze_local(&paths(app)?, &engine_cfg::detect()?, &PathBuf::from(file))).await
+        blocking(app, move |app| {
+            let paths = paths(app)?;
+            other_models::analyze_local(&paths, &engine_cfg::detect(&paths)?, &PathBuf::from(file))
+        })
+        .await
     }
 
     /// The Windows file picker for a GGUF; `None` if the user cancels.
@@ -86,8 +90,9 @@ pub mod bridge {
     }
 
     /// Puts a quantization of the analysis (`key`, its `entry`) in the user's list. A file on the computer is there at
-    /// once: it arrived, and without a default saved it can become it (`keep_default`). Files that are those of a model of
-    /// Mango Code's are not added: that model runs from them, and the answer is its key (otherwise `null`).
+    /// once, as a download that ended is (`models_arrived`): without a default saved it becomes it, and if no model is in
+    /// use it is loaded. Files that are those of a model of Mango Code's are not added: that model runs from them, and the
+    /// answer is its key (otherwise `null`).
     #[tauri::command]
     pub async fn user_models_add(app: AppHandle, key: String, entry: Value) -> Result<Option<String>, BridgeError> {
         blocking(app, move |app| {
@@ -96,9 +101,7 @@ pub mod bridge {
                 other_models::Added::User => (key, None),
                 other_models::Added::Catalog { model } => (model.clone(), Some(model)),
             };
-            if let Some(catalog) = crate::choices_changed(app) {
-                crate::keep_default(app, &paths, &catalog, crate::Keep::Arrived(&model));
-            }
+            crate::models_arrived(app, &model);
             Ok(recognized)
         })
         .await

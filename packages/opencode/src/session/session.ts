@@ -35,6 +35,8 @@ import { Snapshot } from "@/snapshot"
 import { ProjectV2 } from "@opencode-ai/core/project"
 import { WorkspaceV2 } from "@opencode-ai/core/workspace"
 import { SessionID, MessageID, PartID } from "./schema"
+import { CommandsHarness } from "./commands-harness"
+import { Harness } from "./harness"
 
 import type { Provider } from "@/provider/provider"
 import { Global } from "@opencode-ai/core/global"
@@ -611,6 +613,9 @@ const layer: Layer.Layer<
 
         yield* events.publish(SessionV1.Event.Deleted, { sessionID, info: session })
         yield* events.remove(sessionID)
+        // mango-code: the harness of the conversation is forgotten with it
+        CommandsHarness.forget(sessionID)
+        Harness.unbind(sessionID)
       } catch (error) {
         yield* Effect.logError("failed to remove session", { sessionID, error })
       }
@@ -778,9 +783,8 @@ const layer: Layer.Layer<
             messageID: cloned.id,
             sessionID: session.id,
           }
-          if (p.type === "compaction" && p.tail_start_id) {
-            p.tail_start_id = idMap.get(p.tail_start_id)
-          }
+          if (p.type === "compaction" && p.tail_start_id) p.tail_start_id = idMap.get(p.tail_start_id)
+          if (p.type === "compaction" && p.users_from_id) p.users_from_id = idMap.get(p.users_from_id)
           yield* updatePart(p)
         }
       }

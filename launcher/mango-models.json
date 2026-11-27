@@ -85,7 +85,7 @@
       "_image": "The model accepts images as input. Without this line mango-code generates modalities.input=[text] and opencode rejects images (see opencode.template.json, _modalities).",
       "_cloud": "Not a local model: no gguf, no llama-server, no VRAM. The key is in the Windows Credential Manager (the app saves it from the Team settings), never here: this file is versioned. It is spoken by opencode (@ai-sdk/openai-compatible provider on OpenRouter).",
       "ctx": 1048576,
-      "_ctx": "1M, as declared by OpenRouter. The generation cap is computed as for the others (ctx/8, between 4k and 16k)."
+      "_ctx": "1M, as declared by OpenRouter."
     },
     "qwen": {
       "label": "Qwen3.8-27B",

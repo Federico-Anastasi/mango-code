@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test"
+import fs from "node:fs"
+import path from "node:path"
 import { dict as en } from "../../../ui/src/i18n/en"
 import { dict as it } from "../../../ui/src/i18n/it"
 import {
@@ -153,6 +155,15 @@ describe("toolLabel", () => {
     )
   })
 
+  test("the tools of Mango Harness 2 say on what they work, from their own arguments", () => {
+    const label = (tool: string, input: Record<string, unknown>) => toolLabel({ tool, input, active: false }, tIt)
+    expect(label("write", { path: "C:/shop/prices.csv", content: "a" })).toEqual({ title: "Ho scritto", subtitle: "prices.csv" })
+    expect(label("read", { path: "notes/today.md" }).subtitle).toBe("today.md")
+    expect(label("terminal", { command: "python report.py" }).subtitle).toBe("python report.py")
+    expect(label("powershell", { script: "Get-Date" }).subtitle).toBe("Get-Date")
+    expect(label("page_view", { page: "https://www.example.com/menu" }).subtitle).toBe("example.com/menu")
+  })
+
   test("every agent tool has its own label, not the generic one", () => {
     const tools = [
       "read",
@@ -176,9 +187,89 @@ describe("toolLabel", () => {
       "web-search_read_url",
       "chrome-devtools_click",
       "chrome-devtools_lighthouse_audit",
+      // Mango Harness 2
+      "terminal",
+      "powershell",
+      "search",
+      "web_search",
+      "web_open",
+      "page_view",
+      "page_look",
+      "page_act",
+      "ask",
+      "plan",
     ]
     const generic = toolLabel({ tool: "unknown", active: true }, tIt).title
     tools.forEach((tool) => expect(toolLabel({ tool, active: true }, tIt).title).not.toBe(generic))
+  })
+})
+
+describe("the Team's tools", () => {
+  const label = (tool: string, input: Record<string, unknown>, t = tIt) => toolLabel({ tool, input, active: false }, t)
+
+  test("each card says what was done, to whom and what was asked", () => {
+    expect(label("ask_dev", { instruction: "Create hello.txt with the word hello.\nThen read it back." })).toEqual({
+      title: "Ho chiesto al dev",
+      subtitle: "Create hello.txt with the word hello.",
+    })
+    expect(label("launch_agent", { agent: "1" })).toEqual({ title: "Ho avviato un agente", subtitle: "Agente 1" })
+    expect(label("ask_agent", { agent: "2", instruction: "Check the prices" })).toEqual({
+      title: "Ho chiesto a un agente",
+      subtitle: "Agente 2: Check the prices",
+    })
+    expect(label("close_agent", { agent: "2" }, tEn)).toEqual({ title: "Closed an agent", subtitle: "Agent 2" })
+    expect(label("list_agents", {})).toEqual({ title: "Ho guardato gli agenti" })
+    expect(label("read_todos", {}, tEn)).toEqual({ title: "Checked progress" })
+    expect(label("ask_manager", { message: "Done: hello.txt exists" }, tEn)).toEqual({
+      title: "Wrote to the manager",
+      subtitle: "Done: hello.txt exists",
+    })
+    expect(label("ask_manager", { message: "Done: hello.txt exists" })).toEqual({
+      title: "Ho scritto al manager",
+      subtitle: "Done: hello.txt exists",
+    })
+    expect(toolLabel({ tool: "ask_manager", input: { message: "x" }, active: true }, tIt).title).toBe("Scrivo al manager")
+    expect(toolLabel({ tool: "ask_dev", input: { instruction: "x" }, active: true }, tEn).title).toBe("Asking the dev")
+  })
+
+  test("what was asked is one short line, and a card without arguments still reads well", () => {
+    expect(label("ask_dev", { instruction: "word ".repeat(40) }).subtitle).toBe(`${"word ".repeat(11)}word…`)
+    expect(label("ask_dev", {}).subtitle).toBeUndefined()
+    expect(label("ask_agent", { instruction: "Check" }).subtitle).toBe("Check")
+    expect(label("ask_agent", { agent: "3" }).subtitle).toBe("Agente 3")
+  })
+
+  // The tools the app gives the model: the agent's own, the harnesses', the plugins' and the MCP servers'. The ones the app
+  // keeps off (experimental flags of the agent) are not given.
+  test("no tool the app gives the model falls back to the generic label", () => {
+    const root = path.resolve(import.meta.dir, "..", "..", "..", "..")
+    const read = (...parts: string[]) => fs.readFileSync(path.join(root, ...parts), "utf8")
+    const names = (text: string, pattern: RegExp) => [...text.matchAll(pattern)].map((m) => m[1]!)
+    const files = (dir: string, ext: string) => fs.readdirSync(path.join(root, dir)).filter((f) => f.endsWith(ext)).map((f) => path.join(dir, f))
+    const off = new Set(["lsp", "plan_exit", "execute"])
+
+    const builtin = [
+      "bash",
+      "task",
+      ...files("packages/opencode/src/tool", ".ts").flatMap((f) => names(read(f), /Tool\.define(?:<[^(]*>)?\(\s*"([a-z_]+)"/g)),
+    ]
+    const harnesses = fs
+      .readdirSync(path.join(root, "launcher", "harness"))
+      .filter((h) => fs.existsSync(path.join(root, "launcher", "harness", h, "tools.json")))
+      .flatMap((h) => Object.keys(JSON.parse(read("launcher", "harness", h, "tools.json"))))
+    const plugins = files("launcher/opencode-home/plugin", ".js").flatMap((f) => names(read(f), /^\s*([a-z_]+): tool\(\{/gm))
+    const servers = [
+      ...names(read("launcher", "mango-websearch-mcp.js"), /\{ name: "([a-z_]+)"/g).map((n) => `web-search_${n}`),
+      ...names(read("launcher", "mango-documents", "mcp.mjs"), /^\s+name: "([a-z]+)",/gm).map((n) => `documents_${n}`),
+    ]
+    const all = [...new Set([...builtin, ...harnesses, ...plugins, ...servers])].filter((n) => !off.has(n))
+    expect(all).toContain("ask_dev")
+    expect(all).toContain("documents_edit")
+    expect(all).toContain("page_act")
+    expect(all).toContain("web-search_read_url")
+
+    const generic = toolLabel({ tool: "unknown", active: false }, tIt).title
+    expect(all.filter((tool) => toolLabel({ tool, active: false }, tIt).title === generic)).toEqual([])
   })
 })
 

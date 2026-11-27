@@ -1,6 +1,6 @@
-// mango-code: moving the models. In Settings › Computer the row «Cartella dei modelli» changes the folder (the app starts
+// mango-code: moving the models. In Settings › Computer the row «Models folder» changes the folder (the app starts
 // again at the end); in Settings › Models a model's detail puts its files in another folder, or back, and the app goes on.
-// Both ask first (what it would do, from the app's preview), then show how far it is, with «Annulla», in their own row.
+// Both ask first (what it would do, from the app's preview), then show how far it is, with «Cancel», in their own row.
 import { Tag } from "@opencode-ai/ui/v2/badge-v2"
 import { ButtonV2 } from "@opencode-ai/ui/v2/button-v2"
 import { ProgressBarV2 } from "@opencode-ai/ui/v2/progress-bar-v2"
@@ -28,7 +28,7 @@ export const WithPaths: Component<{ text: string; paths: string[] }> = (props) =
   </For>
 )
 
-/** The question before a move. `go` is the main button; for a folder that can only be used as it is, «Usa questa cartella». */
+/** The question before a move. `go` is the main button; for a folder that can only be used as it is, «Use this folder». */
 const Ask: Component<{
   ask: MoveAsk
   go: string
@@ -82,7 +82,7 @@ const Progress: Component<{ progress: ReturnType<typeof moveProgress> }> = (prop
   )
 }
 
-/** The row «Cartella dei modelli» of Settings › Computer, with the question and the progress of a change. */
+/** The row «Models folder» of Settings › Computer, with the question and the progress of a change. */
 export const ModelsFolder: Component<{ disk: Computer["disk"] }> = (props) => {
   const language = useLanguage()
   const control = useControl()
@@ -313,7 +313,7 @@ export function createModelMove(model: () => CatalogEntry, run: <T>(command: () 
 
 export type ModelMove = ReturnType<typeof createModelMove>
 
-/** «Sposta questo modello…» and, for a model that is elsewhere, «Riporta nella cartella dei modelli». */
+/** «Move this model…» and, for a model that is elsewhere, «Put back in the models folder». */
 export const ModelMoveActions: Component<{ move: ModelMove; busy: boolean }> = (props) => {
   const language = useLanguage()
   const disabled = () => !props.move.available() || props.busy || props.move.busy()
@@ -349,7 +349,7 @@ export const ModelMoveBack: Component<{ move: ModelMove; busy: boolean; placed: 
   )
 }
 
-/** What goes under a model's name while it moves: the question, the progress with «Annulla», or how it ended. */
+/** What goes under a model's name while it moves: the question, the progress with «Cancel», or how it ended. */
 export const ModelMoveStatus: Component<{ move: ModelMove; busy: boolean }> = (props) => {
   const language = useLanguage()
   return (

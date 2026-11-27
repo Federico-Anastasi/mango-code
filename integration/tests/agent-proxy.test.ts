@@ -26,7 +26,7 @@ beforeAll(async () => {
     });
   });
   await new Promise<void>((ok) => proxy.listen(PROXY, "127.0.0.1", ok));
-  env = await start([{ tool: "webfetch", arguments: { url: "http://fetch.example.test/page", format: "text" } }, { text: "Fatto." }], {
+  env = await start([{ tool: "webfetch", arguments: { url: "http://fetch.example.test/page", format: "text" } }, { text: "Done." }], {
     env: { MANGO_AGENT_PORT: String(AGENT), MANGO_ENGINE_PORT: String(ENGINE), MANGO_WINDOWS_PROXY: `http://127.0.0.1:${PROXY}` },
   });
 }, 200_000);
@@ -41,7 +41,7 @@ test("the agent reaches the engine directly and the web through the proxy", asyn
   const mc = new MangoCode((await find(env.data))!);
   const id = await mc.createSession(env.project, { title: "proxy" });
   const steps: any[] = [];
-  const turn = (async () => { for await (const step of mc.turn(id, env.project, "Leggi la pagina", { model: "fake" })) steps.push(step); })();
+  const turn = (async () => { for await (const step of mc.turn(id, env.project, "Read the page", { model: "fake" })) steps.push(step); })();
   // a turn that does not end says what it did and what the proxy saw, instead of timing out without a word
   const late = new Promise<never>((_, no) => setTimeout(() => no(new Error(`the turn did not end; steps ${JSON.stringify(steps)}; the proxy saw ${JSON.stringify(seen)}`)), 60_000));
   await Promise.race([turn, late]);

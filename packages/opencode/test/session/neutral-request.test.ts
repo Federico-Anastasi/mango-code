@@ -67,7 +67,7 @@ const prepare = (id: string) =>
       provider: { id: "mango", options: {} },
       auth: undefined,
       plugin: quiet,
-      flags: { outputTokenMax: 32_000, client: "test" },
+      flags: { client: "test" },
     } as unknown as Parameters<typeof LLMRequestPrep.prepare>[0]),
   )
 

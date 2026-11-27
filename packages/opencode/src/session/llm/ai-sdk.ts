@@ -3,6 +3,7 @@ import { Effect, Schema } from "effect"
 import { type streamText } from "ai"
 import { errorMessage } from "@/util/error"
 import { ProviderError } from "@/provider/error"
+import { savedTimings, withPrefixRead } from "@/provider/engine-timings"
 
 type Result = Awaited<ReturnType<typeof streamText>>
 type AISDKEvent = Result["fullStream"] extends AsyncIterable<infer T> ? T : never
@@ -74,7 +75,16 @@ export function toLLMEvents(
       if (event.rawFinishReason === "network_error")
         return Effect.fail(new ProviderError.ResponseStreamError("Provider finish_reason: network_error"))
       return Effect.sync(() => {
-        const metadata = providerMetadata(event.providerMetadata)
+        const given = providerMetadata(event.providerMetadata)
+        // mango-code: the system prompt the app's engine read before the request counts in the step's reading
+        const metadata =
+          given &&
+          Object.fromEntries(
+            Object.entries(given).map(([id, value]) => {
+              const timings = withPrefixRead(savedTimings(value?.timings), event.response?.headers)
+              return [id, timings ? { ...value, timings } : value]
+            }),
+          )
         return [
           LLMEvent.stepFinish({
             index: state.step++,

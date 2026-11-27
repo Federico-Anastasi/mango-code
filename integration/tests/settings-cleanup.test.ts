@@ -17,7 +17,7 @@ let mc: MangoCode;
 let p: Page;
 
 beforeAll(async () => {
-  env = await start([{ text: "Fatto." }], {
+  env = await start([{ text: "Done." }], {
     window: true,
     env: {
       MANGO_AGENT_PORT: "47653",
@@ -54,8 +54,9 @@ async function waitFor(condition: string, ms = 20_000) {
   throw new Error(`did not happen: ${condition}`);
 }
 
-/** A real mouse click, where the element has stopped. */
+/** A real mouse click, where the element has stopped, scrolled into the window first as a user would. */
 async function mouseClick(selector: string) {
+  await p.evaluate(`document.querySelector(${JSON.stringify(selector)})?.scrollIntoView({ block: "nearest" })`);
   const center = () =>
     p.evaluate(`(() => {
       const q = document.querySelector(${JSON.stringify(selector)})?.getBoundingClientRect();
@@ -75,8 +76,8 @@ async function mouseClick(selector: string) {
 }
 
 test("the settings list their six sections and nothing internal, and the general section is short", async () => {
-  const id = await mc.createSession(env.project, { title: "prova" });
-  for await (const _ of mc.turn(id, env.project, "Ciao", { model: "fake" }));
+  const id = await mc.createSession(env.project, { title: "test" });
+  for await (const _ of mc.turn(id, env.project, "Hello", { model: "fake" }));
   await p.send("Page.navigate", { url: `${env.agent}/${b64(env.project)}/session/${id}` });
   await Bun.sleep(4000);
 
@@ -99,7 +100,7 @@ test("the settings list their six sections and nothing internal, and the general
   const general = await p.evaluate(`document.querySelector('[data-pane="general"]').innerText`);
   for (const gone of ["Albero dei file", "Palette dei comandi", "Stato del server", "Mostra agente", "Carattere del terminale", "Shell del terminale"])
     expect(general, gone).not.toContain(gone);
-  await photo("impostazioni-generale");
+  await photo("settings-general");
 }, 120_000);
 
 test("the agent section does not list the plugins that weigh nothing", async () => {
@@ -110,7 +111,7 @@ test("the agent section does not list the plugins that weigh nothing", async () 
   await waitFor(`document.querySelector('[data-component="settings-prompt"] [data-kind="instructions"][data-open]') !== null`);
   const page = await p.evaluate(`document.querySelector('[data-component="settings-prompt"]').innerText`);
   for (const gone of ["mango-documents", "mango-project", "mango-web-diet"]) expect(page, gone).not.toContain(gone);
-  await photo("impostazioni-agente");
+  await photo("settings-agent");
 }, 60_000);
 
 test("the model menu has no title above the models, and the speed bar is gone once the model has finished", async () => {
@@ -125,5 +126,5 @@ test("the model menu has no title above the models, and the speed bar is gone on
   const menu = await p.evaluate(`document.querySelector('[data-slot="model-selector-scroll"]').innerText`);
   expect(menu).toContain("Fake model");
   expect(menu).not.toContain("mango-code");
-  await photo("menu-modelli");
+  await photo("menu-models");
 }, 60_000);

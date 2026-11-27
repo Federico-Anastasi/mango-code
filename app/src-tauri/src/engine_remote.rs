@@ -9,7 +9,7 @@ use agent_cfg::AgentModel;
 use anyhow::Result;
 use engine::remote::{self, Code, Failure};
 use mango_common::{tr, Paths};
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tauri::{AppHandle, Manager};
@@ -73,14 +73,34 @@ fn paths(app: &AppHandle) -> Result<Paths, BridgeError> {
 /// How long the command's answer has to reach the page before the restart takes the window to the app's own page.
 const ANSWER_FIRST: std::time::Duration = std::time::Duration::from_millis(300);
 
-/// The engine changed: the command answers that it is done, then the app starts again on the saved choice. The restart
+/// The engine (or the servers) changed: the command answers that it is done, then the app starts again on the saved choice. The restart
 /// takes the window away from the page that asked, which would otherwise lose the answer.
-fn restart_after_the_answer(app: AppHandle) {
+/// The restart waits for the agent to say that no conversation is answering (`POST /mango/quiet`), up to `QUIET_MAX`:
+/// after that it restarts anyway. Several changes in a row make one restart, which reads them all.
+pub(crate) fn restart_after_the_answer(app: AppHandle) {
+    static WAITING: AtomicBool = AtomicBool::new(false);
+    if WAITING.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let agent = app.state::<AppState>().agent.lock().unwrap().clone();
     std::thread::spawn(move || {
         std::thread::sleep(ANSWER_FIRST);
+        if let Some(agent) = agent {
+            let url = format!("{agent}/mango/quiet");
+            let quiet = mango_common::internet::agent(&url, QUIET_MAX).post(&url).header("Content-Type", "application/json").send("{}");
+            if let (Err(e), Some(paths)) = (quiet, app.state::<AppState>().paths.get()) {
+                crate::startup_log(paths, &format!("the agent did not say it was quiet, restarted as it is: {e:#}"));
+            }
+        }
+        // The Team's dev and agents do not go on after the restart: they stop, and the conversation says so if they were working.
+        crate::team::stop_in_agent(&app);
         crate::restart(&app);
+        WAITING.store(false, Ordering::SeqCst);
     });
 }
+
+/// The longest wait for the answers in progress before a restart.
+const QUIET_MAX: Duration = Duration::from_secs(3600);
 
 /// Checks the pasted code with the other PC and, if it is right, uses its engine from now on.
 #[tauri::command]

@@ -32,6 +32,8 @@ const modelKey = (model: ModelItem) => `${model.provider.id}:${model.id}`
 const manageKey = "action:manage"
 
 const sortModelGroups = (a: { category: string; items: ModelItem[] }, b: { category: string; items: ModelItem[] }) => {
+  // mango-code: this PC's models first, then the servers by name
+  if ((a.category === MANGO_PROVIDER) !== (b.category === MANGO_PROVIDER)) return a.category === MANGO_PROVIDER ? -1 : 1
   const aIndex = popularProviders.indexOf(a.category)
   const bIndex = popularProviders.indexOf(b.category)
   const aPopular = aIndex >= 0
@@ -220,6 +222,8 @@ export function ModelSelectorPopover(props: {
 
 export function ModelSelectorPopoverV2(props: {
   provider?: string
+  /** mango-code: the providers whose models are listed, when not one alone (`provider`). */
+  providers?: (id: string) => boolean
   model?: ModelState
   trigger: ModelSelectorTrigger
   onClose?: () => void
@@ -237,10 +241,11 @@ export function ModelSelectorPopoverV2(props: {
   const controller = createModelSelectorController({
     model: props.model,
     provider: () => props.provider,
+    providers: props.providers,
     onSelect: () => props.onClose?.(),
     onPick: (item, before) => props.onPick?.(item, before),
   })
-  // What the app says about its models: only those on the disk are listed, each with where it runs, «2 schede · 128k»,
+  // What the app says about its models: only those on the disk are listed, each with where it runs, «2 cards · 128k»,
   // like the menu in the top bar. It is read again at every opening: a download or a choice changes it.
   const refresh = () => void mango.refresh()
   const local = (item: ModelItem) => item.provider.id === MANGO_PROVIDER
@@ -277,6 +282,7 @@ export function ModelSelectorPopoverV2(props: {
 
 function createModelSelectorController(input: {
   provider: () => string | undefined
+  providers?: (id: string) => boolean
   model?: ModelState
   onSelect: () => void
   onPick?: (item: ModelItem, before?: { modelID: string; providerID: string }) => void
@@ -286,7 +292,7 @@ function createModelSelectorController(input: {
     model
       .list()
       .filter((item) => model.visible({ modelID: item.id, providerID: item.provider.id }))
-      .filter((item) => (input.provider() ? item.provider.id === input.provider() : true)),
+      .filter((item) => (input.provider() ? item.provider.id === input.provider() : (input.providers?.(item.provider.id) ?? true))),
   )
 
   return {
@@ -483,7 +489,11 @@ function ModelSelectorPopoverV2View(props: {
                     <MenuV2.Group>
                       <Show when={groups().length > 1}>
                         <MenuV2.GroupLabel class="sticky top-0 z-10 gap-2 bg-v2-background-bg-layer-01 px-3">
-                          <span class="min-w-0 truncate">{group.items[0].provider.name}</span>
+                          <span class="min-w-0 truncate">
+                            {group.category === MANGO_PROVIDER
+                              ? language.t("mango.menu.thisPc")
+                              : group.items[0].provider.name}
+                          </span>
                         </MenuV2.GroupLabel>
                       </Show>
                       <MenuV2.RadioGroup value={props.current()}>

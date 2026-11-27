@@ -103,7 +103,7 @@ fn state(data: &Path) -> State {
     }
 }
 
-/// The app this program belongs to: `mango-code.exe` in its folder (a build: both are in `targetdebug`) or in the one above it (installed:
+/// The app this program belongs to: `mango-code.exe` in its folder (a build: both are in `target\debug`) or in the one above it (installed:
 /// this program is in `resources`, the app one level up).
 fn app_beside(exe: &Path) -> Option<PathBuf> {
     exe.ancestors().skip(1).take(2).map(|a| a.join("mango-code.exe")).find(|f| f.is_file())
@@ -162,7 +162,7 @@ mod tests {
             std::fs::create_dir_all(p.parent().unwrap()).unwrap();
             std::fs::write(p, "x").unwrap();
         };
-        // installed: <install>mango-code.exe and <install>esourcesmango-launch.exe
+        // installed: <install>\mango-code.exe and <install>\resources\mango-launch.exe
         let installed = dir.path().join("installed");
         touch(&installed.join("mango-code.exe"));
         touch(&installed.join("resources").join("mango-launch.exe"));

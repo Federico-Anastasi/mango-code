@@ -255,6 +255,7 @@ describe("session.image: a picture as a turn", () => {
           file: sent.file,
           width: 576,
           height: 1024,
+          began: expect.any(Number),
           seed: 42,
           model: "z-image-turbo",
           request: "un gatto rosso sul divano",

@@ -34,7 +34,12 @@
 //   - dev and agents are HIDDEN `opencode serve` processes that the plugin starts when needed, described by
 //     `MANGO_TEAM_LAUNCH` (launch.json), in the manager's project folder; each one gets its role from
 //     `MANGO_TEAM_ROLE` (and `MANGO_AGENT_ID` for the agents);
-//   - links and pids live in `MANGO_TEAM_DIR`, in the app's data (the distribution is read-only).
+//   - links and pids live in `MANGO_TEAM_DIR`, in the app's data (the distribution is read-only);
+//   - the Team ends when the user turns it off in the conversation or removes the key (the agent's route
+//     `/mango/team/stop` calls `stopTeam` through the registry below), when the conversation is deleted or archived,
+//     and when the app restarts the agent (the app stops the hidden processes by `MANGO_TEAM_HIDDEN`). The manager's
+//     answer in progress is cut, the hidden processes are killed and, if something was working, the conversation
+//     says so in one line.
 import { tool } from "@opencode-ai/plugin";
 import { createOpencodeClient } from "@opencode-ai/sdk";
 import { spawn, spawnSync } from "node:child_process";
@@ -61,6 +66,13 @@ const AGENT_LABEL = process.env.MANGO_AGENT_LABEL || "cloud model on OpenRouter"
 const LAUNCH = process.env.MANGO_TEAM_LAUNCH ? JSON.parse(fs.readFileSync(process.env.MANGO_TEAM_LAUNCH, "utf8")) : null;
 
 const agentLink = (id) => path.join(TEAM_DIR, `team-link-agent-${id}.json`);
+
+// The Team's conversations of this server (all folders) and the ones answering now: what a stop has to cut. The
+// registry key is the one the agent's route reads (packages/opencode/src/server/shared/mango-team.ts, same process).
+const TEAM_REGISTRY = Symbol.for("mango.team");
+const conversations = new Map();
+const answering = new Set();
+const launched = new Set();
 
 // --- AN AGENT'S LIFE -----------------------------------------------------------------------
 // Each hidden process has a file with its pid (startHidden writes it as soon as it starts). Killing the pid ends
@@ -100,14 +112,15 @@ function readLink(file) {
 }
 
 // Delivers a message to the other session. Returns null if it went through, otherwise the error
-// text to show to whoever called the tool.
-async function deliver(linkFile, text, who) {
+// text to show to whoever called the tool. `team` marks a message the user did not write (what the dev and the agents
+// send the manager): the app shows it as a line of the Team, not as a message of the user.
+async function deliver(linkFile, text, who, team) {
   const link = readLink(linkFile);
   if (!link) return `The ${who} is not connected yet: retry in a few seconds.`;
   const client = createOpencodeClient({ baseUrl: link.serverUrl, directory: link.directory });
   const res = await client.session.promptAsync({
     path: { id: link.sessionID },
-    body: { parts: [{ type: "text", text }], ...(link.agent && { agent: link.agent }), ...(link.model && { model: link.model }) },
+    body: { parts: [{ type: "text", text, ...(team && { metadata: { team } }) }], ...(link.agent && { agent: link.agent }), ...(link.model && { model: link.model }) },
   });
   if (res.error) return `Could not send the message to the ${who}: ` + JSON.stringify(res.error);
   return null;
@@ -166,9 +179,9 @@ async function waitForHealth(port, ms) {
   const end = Date.now() + ms;
   while (Date.now() < end) {
     try {
-      const r = await fetch(`http://127.0.0.1:${port}/global/health`);
+      const r = await fetch(`http://127.0.0.1:${port}/global/health`, { signal: AbortSignal.timeout(2000) });
       if (r.ok) return true;
-    } catch { /* not listening yet */ }
+    } catch { /* not listening yet, or a start-up connection that was accepted and never answered: ask again */ }
     await new Promise((r) => setTimeout(r, 300));
   }
   return false;
@@ -185,6 +198,8 @@ async function startHidden({ name, role, id, spec, pidFile, boot, directory }) {
     XDG_CONFIG_HOME: path.join(spec.xdg, "config"),
     XDG_CACHE_HOME: path.join(spec.xdg, "cache"),
     XDG_STATE_HOME: path.join(spec.xdg, "state"),
+    // What the app stops when it restarts the agent: the hidden processes and what they started carry the run's name.
+    ...(process.env.MANGO_APP_RUN && { MANGO_TEAM_HIDDEN: process.env.MANGO_APP_RUN }),
   };
   // The manager is the `team` agent of the app's server: dev and agents are whole processes in their role.
   delete env.MANGO_TEAM_AGENT;
@@ -242,6 +257,94 @@ async function ensureDev(directory) {
   return (await waitForLink(DEV_LINK, 30_000)) ? null : "The dev started but is not connected yet: retry in a few seconds.";
 }
 
+// --- THE END OF THE TEAM ---------------------------------------------------------------------
+// The hidden processes belong to the conversation that wrote the manager's link last. Turning the Team off in a
+// conversation, removing the key, deleting or archiving the conversation stops them at once: nothing the user
+// stopped keeps working, or keeps being billed.
+const STOPPED =
+  "[TEAM] The user stopped the team: the dev and the agents were stopped and the work in progress was interrupted. " +
+  "Do not resume it unless the user asks.";
+
+const hiddenSpecs = () => [
+  { pid: () => readPidFile(devPidFile()), link: DEV_LINK },
+  ...LAUNCH.agents.map((a) => ({ pid: () => readAgentPid(a.id), link: agentLink(a.id) })),
+];
+
+// Whether a hidden process is working: one that cannot be asked counts as working, so that the line is not left out.
+async function hiddenWorking() {
+  const answers = await Promise.all(
+    hiddenSpecs()
+      .filter((h) => pidAlive(h.pid()))
+      .map(async (h) => {
+        const link = readLink(h.link);
+        if (!link) return true;
+        try {
+          const client = createOpencodeClient({ baseUrl: String(link.serverUrl), directory: link.directory });
+          const res = await client.session.status();
+          return !!res.error || Object.values(res.data ?? {}).some((s) => s.type !== "idle");
+        } catch {
+          return true;
+        }
+      }),
+  );
+  return answers.some(Boolean);
+}
+
+// Kills the dev and the agents and forgets their links and pids. Returns the pids that are still alive.
+function killHidden() {
+  const failed = [];
+  for (const pid of hiddenSpecs().map((h) => h.pid())) {
+    if (!pidAlive(pid)) continue;
+    if (killTree(pid) && pidAlive(pid)) failed.push(pid);
+  }
+  for (const f of [DEV_LINK, devPidFile()]) fs.rmSync(f, { force: true });
+  LAUNCH.agents.forEach((a) => forgetAgent(a.id));
+  launched.clear();
+  return failed;
+}
+
+// Ends the Team of `only` (a conversation) or of every conversation (without it). The manager's answers in progress
+// are cut; the hidden processes are killed when `only` is the conversation they work for. `working`: something was
+// working, and then each conversation concerned gets a line (unless `notice` is false: it is going away).
+async function stopTeam(only, { notice = true } = {}) {
+  const owner = readLink(MGR_LINK);
+  const hidden = !only || only === owner?.sessionID;
+  const turns = [...answering].filter((id) => conversations.has(id) && (!only || id === only));
+  const hiddenBusy = hidden && (await hiddenWorking());
+  const working = turns.length > 0 || hiddenBusy;
+  const client = (c) => createOpencodeClient({ baseUrl: String(c.serverUrl), directory: c.directory });
+  await Promise.all(turns.map((id) => client(conversations.get(id)).session.abort({ path: { id } }).catch(() => {})));
+  const failed = hidden ? killHidden() : [];
+  if (notice && working) {
+    const lines = new Map(turns.map((id) => [id, conversations.get(id)]));
+    if (hiddenBusy && owner) lines.set(owner.sessionID, conversations.get(owner.sessionID) ?? owner);
+    await Promise.all(
+      [...lines].map(([id, c]) =>
+        client(c).session
+          .prompt({ path: { id }, body: { noReply: true, parts: [{ type: "text", text: STOPPED, metadata: { team: { kind: "stopped" } } }] } })
+          .catch(() => {}),
+      ),
+    );
+  }
+  return { working, failed };
+}
+
+// A Team conversation that is deleted or archived ends its Team.
+function conversationEvent({ event }) {
+  const id = event?.properties?.sessionID ?? event?.properties?.info?.id;
+  if (!conversations.has(id)) return;
+  if (event.type === "session.status") {
+    if (event.properties.status?.type === "idle") answering.delete(id);
+    else answering.add(id);
+    return;
+  }
+  const gone = event.type === "session.deleted" || (event.type === "session.updated" && event.properties.info?.time?.archived);
+  if (!gone) return;
+  conversations.delete(id);
+  answering.delete(id);
+  return stopTeam(id, { notice: false });
+}
+
 // --- THE END-OF-TURN REMINDER ----------------------------------------------------------------
 // The real problem, seen in the field: the dev finishes and does NOT call ask_manager, and the
 // manager keeps waiting for a message that never comes. opencode emits `session.idle` when the
@@ -288,8 +391,9 @@ async function lastAssistantText(serverUrl, sessionID) {
 }
 
 // Watches the end of the turn of ONE session (dev or agent). `managerLink` is the manager's link where
-// the automatic notice arrives; `prefix` is the sender's label.
-function watchTurnEnd(serverUrl, managerLink, prefix) {
+// the automatic notice arrives; `prefix` is the sender's label and `sender` says who it is for the app (`{ agent }`
+// for an agent).
+function watchTurnEnd(serverUrl, managerLink, prefix, sender) {
   let session = "";
   let reported = false;
   let reminderSent = false;
@@ -320,7 +424,7 @@ function watchTurnEnd(serverUrl, managerLink, prefix) {
       }
       reported = true;
       const text = await lastAssistantText(serverUrl, session);
-      await deliver(managerLink, `${prefix} (automatic: turn ended without ask_manager)\n${text}`, "manager");
+      await deliver(managerLink, `${prefix} (automatic: turn ended without ask_manager)\n${text}`, "manager", { kind: "automatic", ...sender });
     },
   };
 }
@@ -335,7 +439,7 @@ export const MangoTeam = async ({ serverUrl, directory }) => {
   // Every message rewrites the file with the session that is ACTIVE now: the link corrects itself on the next
   // turn instead of staying attached to a dead session.
   if (ROLE === "dev") {
-    const end = watchTurnEnd(serverUrl, MGR_LINK, "[DEV]");
+    const end = watchTurnEnd(serverUrl, MGR_LINK, "[DEV]", {});
     return {
       "chat.message": async (input, output) => {
         writeLink(DEV_LINK, serverUrl, input.sessionID, { directory });
@@ -355,7 +459,7 @@ export const MangoTeam = async ({ serverUrl, directory }) => {
             message: tool.schema.string().describe("Complete, self-contained summary/request for the manager."),
           },
           async execute({ message }) {
-            const err = await deliver(MGR_LINK, "[DEV]\n" + message, "manager");
+            const err = await deliver(MGR_LINK, "[DEV]\n" + message, "manager", { kind: "report" });
             if (err) return err;
             end.hasReported();
             return "Message sent to the manager. Continue with the next task, or stop and wait for theirs.";
@@ -368,7 +472,7 @@ export const MangoTeam = async ({ serverUrl, directory }) => {
   // --- AGENT: like the dev, but with its own identity (1-4) and its own link ------------------
   if (ROLE === "agent") {
     const link = agentLink(AGENT_ID);
-    const end = watchTurnEnd(serverUrl, MGR_LINK, `[AGENT ${AGENT_ID}]`);
+    const end = watchTurnEnd(serverUrl, MGR_LINK, `[AGENT ${AGENT_ID}]`, { agent: AGENT_ID });
     return {
       "chat.message": async (input, output) => {
         writeLink(link, serverUrl, input.sessionID, { directory });
@@ -387,7 +491,7 @@ export const MangoTeam = async ({ serverUrl, directory }) => {
             message: tool.schema.string().describe("Complete, self-contained summary/request for the manager."),
           },
           async execute({ message }) {
-            const err = await deliver(MGR_LINK, `[AGENT ${AGENT_ID}]\n` + message, "manager");
+            const err = await deliver(MGR_LINK, `[AGENT ${AGENT_ID}]\n` + message, "manager", { kind: "report", agent: AGENT_ID });
             if (err) return err;
             end.hasReported();
             return "Message sent to the manager. Continue with the next task, or stop and wait for theirs.";
@@ -401,11 +505,10 @@ export const MangoTeam = async ({ serverUrl, directory }) => {
   if (ROLE === "manager") {
     if (!TEAM_AGENT) throw new Error("mango-team: MANGO_TEAM_AGENT is missing");
     if (!LAUNCH) throw new Error("mango-team: MANGO_TEAM_LAUNCH is missing");
-    const launched = new Set();
     // The server also holds the normal conversations: only those of the `team` agent belong to the team.
     const inTeam = (agent) => agent === TEAM_AGENT;
     const teamSessions = new Set();
-    const managerInstructions = fs.readFileSync(path.join(HOME, "opencode-home", "MANGO-manager.md"), "utf8");
+    const managerInstructions = fs.readFileSync(path.join(HOME, "harness", "shared", "team-manager.md"), "utf8");
     const managerTools = {
         ask_dev: tool({
           description:
@@ -562,10 +665,13 @@ export const MangoTeam = async ({ serverUrl, directory }) => {
     };
     // Without agents (the app may have 0) their tools are useless, and each one weighs on the prompt at every turn.
     if (AGENT_MAX === 0) for (const name of ["launch_agent", "ask_agent", "list_agents", "close_agent"]) delete managerTools[name];
+    globalThis[TEAM_REGISTRY] = { stop: stopTeam };
     return {
+      event: conversationEvent,
       "chat.message": async (input) => {
         if (!inTeam(input.agent)) return;
         teamSessions.add(input.sessionID);
+        conversations.set(input.sessionID, { serverUrl: String(serverUrl), directory });
         writeLink(MGR_LINK, serverUrl, input.sessionID, { directory, agent: input.agent, model: input.model });
       },
       "experimental.chat.system.transform": async (input, output) => {

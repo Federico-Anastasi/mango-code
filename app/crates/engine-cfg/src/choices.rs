@@ -7,6 +7,7 @@
 //! sentence for the user, never the standard values in its place; and it is not overwritten.
 
 use crate::catalog::{load_models, model_cfg};
+use crate::hardware::Hardware;
 use crate::reasoning;
 use crate::split::{context_label, MIN_CTX};
 use anyhow::Result;
@@ -62,7 +63,7 @@ pub enum SmallModels {
 pub struct Choices {
     #[serde(rename = "where")]
     pub place: WhereChoice,
-    /// The cards by name; only with `WhereChoice::Pick`.
+    /// The cards by id (`Hardware::card_id`); only with `WhereChoice::Pick`.
     pub gpus: Vec<String>,
     /// `None` = the largest that fits; a number is any number of tokens from the minimum to what the model holds, and
     /// the plan goes lower if the memory can't carry it.
@@ -74,6 +75,10 @@ pub struct Choices {
     /// `None` = as the model wants. A file written before the levels has `true` or `false`: they are read as "on" and "off".
     #[serde(deserialize_with = "saved_reasoning")]
     pub reasoning: Option<String>,
+    /// The harness the agent uses with this model: one built into the agent (`FIXED_HARNESSES`) or a folder of the user's
+    /// in `<data>\harness`, by name. `None` = the default one. The agent reads it from this file.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub harness: Option<String>,
 }
 
 fn saved_reasoning<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<String>, D::Error> {
@@ -89,15 +94,20 @@ fn saved_reasoning<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<Stri
     }))
 }
 
+/// The harnesses built into the agent (`packages/opencode/src/session/harness-fixed.ts`).
+pub const FIXED_HARNESSES: [&str; 2] = ["mango-harness-1", "mango-harness-2"];
+
 /// The names a choice of reasoning can have; which of them a model has depends on its chat template.
 const REASONING: [&str; 5] = ["off", "on", "low", "medium", "high"];
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ComputerChoices {
-    /// The cards, by name, that no model uses.
+    /// The cards that no model uses, by id (`Hardware::card_id`); a name names every card that has it.
     pub unused_gpus: Vec<String>,
     pub small_models: SmallModels,
+    /// The models may run on the integrated graphics, on the PC's memory (`Hardware::borrows_ram`).
+    pub integrated: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -129,7 +139,7 @@ pub struct ChoicesFile {
 #[derive(Debug, Clone, Default)]
 pub(crate) struct Scope {
     pub choices: Choices,
-    /// The cards, by name, that no model uses.
+    /// The cards that no model uses, by id (`Hardware::card_id`).
     pub unused: Vec<String>,
     pub small_all: bool,
 }
@@ -176,17 +186,50 @@ fn under_the_models_key(mut file: ChoicesFile, same: &BTreeMap<String, String>) 
     file
 }
 
-/// Saves the choices of a model. A model that must run with its own engine only accepts `Auto`.
+/// Writes under the model's key what the file keeps under an entry of the user's that is now a Mango Code model's own
+/// file (`under_the_models_key`): the agent reads the file by the keys it is given. Called at start, before the agent:
+/// an entry becomes a model's own when a new catalog comes with the app.
+pub fn settle_keys(paths: &Paths) -> Result<()> {
+    let same = mango_common::catalog::read(paths).map(|c| c.same).unwrap_or_else(|e| {
+        mango_common::startup_log(paths, &format!("the models that share a file were not read, their choices stay under their own keys: {e:#}"));
+        Default::default()
+    });
+    let txt = match std::fs::read_to_string(paths.data.join(FILE)) {
+        Ok(t) => t,
+        Err(_) => return Ok(()),
+    };
+    let raw: serde_json::Value = serde_json::from_str(txt.trim_start_matches('\u{feff}')).unwrap_or_else(|e| {
+        mango_common::startup_log(paths, &format!("the choices were not read to settle their keys: {e}"));
+        Default::default()
+    });
+    if same.keys().any(|own| raw["models"].get(own).is_some() || raw["default"] == own.as_str()) {
+        return change(paths, |_| {});
+    }
+    Ok(())
+}
+
+/// Saves the choices of a model. A model that must run with its own engine only accepts `Auto`. What the model, the
+/// catalog or the harnesses allow is checked on the fields that change: one saved before that no longer holds (a harness
+/// folder deleted, a catalog that lowered the context) stays as the user chose it, and the view says why it does not run.
 pub fn set_model(paths: &Paths, key: &str, mut choices: Choices) -> Result<()> {
     let file = load_models(paths)?;
     let cfg = model_cfg(&file, key)?;
+    let saved = read(paths)?.models.remove(key).unwrap_or_default();
     choices.check(&cfg.label)?;
-    choices.check_context(&cfg.label, cfg.max_context(&file))?;
-    if cfg.requires_engine.is_some() && choices.place != WhereChoice::Auto {
+    if choices.context != saved.context {
+        choices.check_context(&cfg.label, cfg.max_context(&file))?;
+    }
+    if cfg.requires_engine.is_some() && choices.place != WhereChoice::Auto && choices.place != saved.place {
         anyhow::bail!("{}", only_automatic(&cfg.label));
     }
     if choices.place != WhereChoice::Pick {
         choices.gpus.clear();
+    }
+    if let Some(harness) = choices.harness.as_ref().filter(|h| saved.harness.as_ref() != Some(h)) {
+        let own = || !harness.contains(['/', '\\']) && paths.data.join("harness").join(harness).join("harness.json").is_file();
+        if !FIXED_HARNESSES.contains(&harness.as_str()) && !own() {
+            anyhow::bail!("{}", tr!("L'harness «{harness}» non c'è.", "The harness «{harness}» is not there."));
+        }
     }
     change(paths, |c| {
         c.models.insert(key.to_string(), choices);
@@ -230,13 +273,29 @@ pub fn forget_model(paths: &Paths, key: &str) -> Result<()> {
     })
 }
 
-/// A card, by name, is used or not by the models.
-pub fn set_gpu_used(paths: &Paths, name: &str, used: bool) -> Result<()> {
+/// A card of `hw`, by its id (`Hardware::card_id`), is used by the models or left to the rest of the computer. The
+/// integrated graphics without the memory of a card is off until the user turns it on: its switch is the choice
+/// `integrated`.
+pub fn set_gpu_used(paths: &Paths, hw: &Hardware, id: &str, used: bool) -> Result<()> {
+    if hw.gpus.iter().any(|g| hw.names(id, g) && g.needs_ram()) {
+        return change(paths, |c| c.computer.integrated = used);
+    }
     change(paths, |c| {
-        c.computer.unused_gpus.retain(|n| n != name);
-        if !used {
-            c.computer.unused_gpus.push(name.to_string());
+        // each entry as the ids of the cards it names, so that a name of identical cards keeps out the ones not changed;
+        // an entry that names no card of this PC stays as it is
+        let mut unused: Vec<String> = Vec::new();
+        for entry in &c.computer.unused_gpus {
+            let named: Vec<String> = hw.gpus.iter().filter(|g| hw.names(entry, g)).map(|g| hw.card_id(g)).collect();
+            for one in if named.is_empty() { vec![entry.clone()] } else { named } {
+                if one != id && !unused.contains(&one) {
+                    unused.push(one);
+                }
+            }
         }
+        if !used {
+            unused.push(id.to_string());
+        }
+        c.computer.unused_gpus = unused;
     })
 }
 

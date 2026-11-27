@@ -80,7 +80,9 @@ test("a request that needs a skill and a tool: the skill is read, the tool is ca
   expect(system).toContain("greeting"); // the project's skill is announced
   // Nothing from the PC: only the context of the product and of the project.
   const from = [...system.matchAll(/^Instructions from: (.*)$/gm)].map((m) => m[1]);
-  expect(from.every((p) => p.startsWith(env.root))).toBe(true);
+  expect(from).toContain("CLAUDE.md");
+  expect(from).toContain(".claude/rules/style.md");
+  expect(from.some((p) => p.includes(env.root))).toBe(false);
   expect(system).not.toContain(`${os.homedir()}\\.claude`);
   expect(first.tools.map((t: any) => t.function.name)).toContain("echo_repeat");
 }, 120_000);

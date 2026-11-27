@@ -3,20 +3,24 @@
 //! Arguments like the real ones (only `-m` and `--port` are used; `--version` says a version and exits, as the check of
 //! a downloaded engine wants). Routes:
 //! * `GET /health` → 200 `{"status":"ok"}` (503 for `FAKE_ENGINE_START_MS` after start);
-//! * `GET /props` → `{"model_path": <-m>}`;
+//! * `GET /props` → `{"model_path": <-m>}`, with `default_generation_settings.n_ctx` when `FAKE_ENGINE_CTX` says it;
+//! * `GET /v1/models` → the one model, named after the `-m` file, as an OpenAI-compatible server lists it;
+//! * with `FAKE_ENGINE_KEY`, every route but `/health` answers 401 to a request without `Authorization: Bearer <key>`, like a
+//!   server that asks for a key;
 //! * `POST /v1/chat/completions` → without a script it answers «I am the engine <name of the -m file>»;
 //!   with `FAKE_ENGINE_SCRIPT` (JSON file: a list of steps) it answers step number N, where N is the number of tool
 //!   results already in the conversation. A step is `{"text": "..."}` (said in pieces, one word per piece) or
-//!   `{"tool": "<name>", "arguments": {...}}` (a tool call); a text step may end with `"finish": "length"` (an answer
+//!   `{"tool": "<name>", "arguments": {...}}` (a tool call; `"also": [{"tool": ..., "arguments": ...}]` adds calls made in the
+//!   same answer, and the step counts as that many tool results); a text step may end with `"finish": "length"` (an answer
 //!   cut by the length limit) instead of `stop`. When streaming (`"stream": true`) one piece every
 //!   `FAKE_ENGINE_CHUNK_MS` (default 30). Like the real engine, every reply carries `usage`: the tokens read
 //!   (`prompt_tokens`, of which `prompt_tokens_details.cached_tokens` already cached) and written
 //!   (`completion_tokens`, of which `reasoning_tokens` of reasoning); a step sets them with `"token": {"prompt": N,
 //!   "completion": M, "cache": K, "reasoning": R}`, without it they are all zero;
 //!   any step may carry `"reasoning": "..."`, said before the text or the call as `reasoning_content`, like a model that thinks;
-//!   two forms of step are outside the numbering: `{"summary": "..."}` answers the requests that offer no tools
-//!   (the conversation summary, the title), `{"if": "...", "text": "..."}` those in which that text appears (usually
-//!   the summary, after it has entered the conversation);
+//!   two forms of step are outside the numbering: `{"summary": "..."}` answers the requests that offer no tools (a title,
+//!   the prompt of a picture), `{"if": "...", "text": "..."}` those in which that text appears (the request for the
+//!   summary of a conversation carries its instruction; the requests after it carry the summary);
 //! * with `FAKE_ENGINE_STRICT=1`, `POST /v1/chat/completions` and `POST /apply-template` answer 500 with a `Jinja Exception`, like
 //!   llama-server with the strictest chat template of real models (see `strict_rejection`), to every request such a template would
 //!   refuse; without it the engine accepts any conversation;
@@ -81,6 +85,8 @@ fn main() {
     let strict = std::env::var("FAKE_ENGINE_STRICT").is_ok_and(|v| v == "1");
     let hybrid = std::env::var("FAKE_ENGINE_HYBRID").is_ok_and(|v| v == "1");
     let read_ms: f64 = std::env::var("FAKE_ENGINE_READ_MS").ok().and_then(|v| v.parse().ok()).unwrap_or(0.0);
+    let key = std::env::var("FAKE_ENGINE_KEY").ok().filter(|k| !k.is_empty());
+    let ctx: Option<u64> = std::env::var("FAKE_ENGINE_CTX").ok().and_then(|v| v.parse().ok());
     let memory_file = value("--cache-disk").map(|d| std::path::Path::new(&d).join("fake.json"));
     let slot_save_path = value("--slot-save-path").map(std::path::PathBuf::from);
     let on_disk: u64 = memory_file
@@ -96,6 +102,7 @@ fn main() {
     for mut req in server.incoming_requests() {
         let (model, name, log, script) = (model.clone(), name.clone(), log.clone(), script.clone());
         let (memory, memory_file, slot_save_path) = (memory.clone(), memory_file.clone(), slot_save_path.clone());
+        let key = key.clone();
         std::thread::spawn(move || {
             let path = req.url().split('?').next().unwrap_or("").to_string();
             let mut body = Vec::new();
@@ -108,6 +115,13 @@ fn main() {
                 write_line(f, &line);
             }
             let json_h = Header::from_bytes("Content-Type", "application/json").unwrap();
+            let authorized = key.as_ref().is_none_or(|k| {
+                req.headers().iter().any(|h| h.field.equiv("Authorization") && h.value.as_str() == format!("Bearer {k}"))
+            });
+            if !authorized && path != "/health" {
+                let _ = req.respond(Response::from_string(r#"{"error":{"message":"Invalid API key"}}"#).with_status_code(401).with_header(json_h));
+                return;
+            }
             match (req.method(), path.as_str()) {
                 (Method::Get, "/health") => {
                     let ready = t0.elapsed() >= start;
@@ -117,7 +131,15 @@ fn main() {
                     let _ = req.respond(r);
                 }
                 (Method::Get, "/props") => {
-                    let _ = req.respond(Response::from_string(json!({ "model_path": model }).to_string()).with_header(json_h));
+                    let mut props = json!({ "model_path": model });
+                    if let Some(n) = ctx {
+                        props["default_generation_settings"] = json!({ "n_ctx": n });
+                    }
+                    let _ = req.respond(Response::from_string(props.to_string()).with_header(json_h));
+                }
+                (Method::Get, "/v1/models") => {
+                    let list = json!({ "object": "list", "data": [{ "id": name, "object": "model", "owned_by": "fake" }] });
+                    let _ = req.respond(Response::from_string(list.to_string()).with_header(json_h));
                 }
                 (Method::Post, "/test/crash") => std::process::exit(3),
                 (Method::Post, "/tokenize") => {
@@ -141,7 +163,7 @@ fn main() {
                     let reread = read_prompt(&mut memory.lock().unwrap(), &tokens, hybrid);
                     std::thread::sleep(Duration::from_secs_f64(reread as f64 * read_ms / 1000.0));
                     note_read(&log, "/completion", reread, tokens.len());
-                    let r = json!({ "content": "", "tokens_evaluated": tokens.len(), "timings": { "prompt_n": reread, "cache_n": tokens.len() - reread.min(tokens.len()) } });
+                    let r = json!({ "content": "", "tokens_evaluated": tokens.len(), "timings": { "prompt_n": reread, "prompt_ms": reread as f64 * read_ms, "cache_n": tokens.len() - reread.min(tokens.len()) } });
                     let _ = req.respond(Response::from_string(r.to_string()).with_header(json_h));
                 }
                 (Method::Post, "/detokenize") => {
@@ -209,9 +231,9 @@ fn main() {
                         None => json!({ "text": format!("I am the engine {name}") }),
                         Some(c) => {
                             // Two forms of step are outside the numbering: `{"summary": "...", "token": {...}}` answers
-                            // the requests that offer no tools (the conversation summary, the title);
+                            // the requests that offer no tools (a title, the prompt of a picture);
                             // `{"if": "...", "text": "...", "token": {...}}` answers the requests in which that text appears
-                            // (usually the summary, after it has entered the conversation).
+                            // (the request for the summary of a conversation, or the ones after it).
                             let (special, steps): (Vec<&Value>, Vec<&Value>) = c.iter().partition(|p| p["summary"].is_string() || p["if"].is_string());
                             let no_tools = v["tools"].as_array().is_none_or(|t| t.is_empty());
                             let messages = v["messages"].to_string();
@@ -225,7 +247,7 @@ fn main() {
                                 Some(p) => p.clone(),
                                 None => {
                                     let done = v["messages"].as_array().map(|m| m.iter().filter(|x| x["role"] == "tool").count()).unwrap_or(0);
-                                    steps.get(done).map(|p| (*p).clone()).unwrap_or_else(|| json!({ "text": "End of the script." }))
+                                    step_after(&steps, done).cloned().unwrap_or_else(|| json!({ "text": "End of the script." }))
                                 }
                             }
                         }
@@ -388,9 +410,9 @@ fn write_line(file: &str, line: &Value) {
 fn events(step: &Value) -> Vec<Value> {
     let delta = |d: Value, finish: Option<&str>| json!({ "choices": [{ "index": 0, "delta": d, "finish_reason": finish }] });
     let mut v: Vec<Value> = step["reasoning"].as_str().into_iter().flat_map(|r| r.split_inclusive(' ')).map(|p| delta(json!({ "reasoning_content": p }), None)).collect();
-    if let Some(name) = step["tool"].as_str() {
-        let arguments = step["arguments"].to_string();
-        v.push(delta(json!({ "tool_calls": [{ "index": 0, "id": "call_fake", "type": "function", "function": { "name": name, "arguments": arguments } }] }), None));
+    let calls = calls(step);
+    if !calls.is_empty() {
+        v.extend(calls.iter().enumerate().map(|(i, call)| delta(json!({ "tool_calls": [{ "index": i, "id": call["id"], "type": "function", "function": call["function"] }] }), None)));
         v.push(delta(json!({}), Some("tool_calls")));
         return v;
     }
@@ -398,6 +420,24 @@ fn events(step: &Value) -> Vec<Value> {
     v.extend(text.split_inclusive(' ').map(|p| delta(json!({ "content": p }), None)));
     v.push(delta(json!({}), Some(step["finish"].as_str().unwrap_or("stop"))));
     v
+}
+
+/// The tool calls of a step, in the shape of a reply: the step's own and the ones it adds with `also`.
+fn calls(step: &Value) -> Vec<Value> {
+    let also = step["also"].as_array().into_iter().flatten();
+    std::iter::once(step).chain(also).filter_map(|c| c["tool"].as_str().map(|name| (name, &c["arguments"]))).enumerate()
+        .map(|(i, (name, arguments))| json!({ "id": if i == 0 { "call_fake".to_string() } else { format!("call_fake_{}", i + 1) }, "type": "function", "function": { "name": name, "arguments": arguments.to_string() } }))
+        .collect()
+}
+
+/// The step that answers when `done` tool results are in the conversation: a step is answered by as many results as it has calls.
+fn step_after<'a>(steps: &[&'a Value], done: usize) -> Option<&'a Value> {
+    let mut first = 0;
+    steps.iter().copied().find(|step| {
+        let found = first == done;
+        first += calls(step).len().max(1);
+        found
+    })
 }
 
 /// The tokens of a request, as the step declares them (zero if it says nothing: a context that never fills up).
@@ -416,14 +456,15 @@ fn timings(request: &Value, decode_tok_s: f64) -> Value {
 }
 
 fn whole_reply(step: &Value, usage: Value) -> Value {
-    let mut message = match step["tool"].as_str() {
-        Some(name) => json!({ "role": "assistant", "content": null, "tool_calls": [{ "id": "call_fake", "type": "function", "function": { "name": name, "arguments": step["arguments"].to_string() } }] }),
-        None => json!({ "role": "assistant", "content": step["text"] }),
+    let calls = calls(step);
+    let mut message = match calls.is_empty() {
+        false => json!({ "role": "assistant", "content": null, "tool_calls": calls }),
+        true => json!({ "role": "assistant", "content": step["text"] }),
     };
     if step["reasoning"].is_string() {
         message["reasoning_content"] = step["reasoning"].clone();
     }
-    let finish = if step["tool"].is_string() { "tool_calls" } else { step["finish"].as_str().unwrap_or("stop") };
+    let finish = if message["tool_calls"].is_array() { "tool_calls" } else { step["finish"].as_str().unwrap_or("stop") };
     json!({ "choices": [{ "index": 0, "message": message, "finish_reason": finish }], "usage": usage })
 }
 
@@ -433,6 +474,21 @@ mod tests {
 
     fn calls() -> Value {
         json!([{ "id": "call_1", "type": "function", "function": { "name": "read", "arguments": "{}" } }])
+    }
+
+    #[test]
+    fn a_step_with_several_calls_is_answered_by_all_their_results() {
+        let steps = [
+            json!({ "tool": "image_generate", "arguments": { "name": "a" }, "also": [{ "tool": "image_generate", "arguments": { "name": "b" } }, { "tool": "image_generate", "arguments": { "name": "c" } }] }),
+            json!({ "text": "Done." }),
+        ];
+        let refs: Vec<&Value> = steps.iter().collect();
+        assert_eq!(step_after(&refs, 0), Some(&steps[0]));
+        assert_eq!(step_after(&refs, 3), Some(&steps[1]));
+        let sent = events(&steps[0]);
+        let ids: Vec<&str> = sent.iter().filter_map(|e| e["choices"][0]["delta"]["tool_calls"][0]["id"].as_str()).collect();
+        assert_eq!(ids, ["call_fake", "call_fake_2", "call_fake_3"]);
+        assert_eq!(whole_reply(&steps[0], json!({}))["choices"][0]["message"]["tool_calls"].as_array().map(Vec::len), Some(3));
     }
 
     #[test]

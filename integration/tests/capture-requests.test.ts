@@ -7,11 +7,13 @@
 // Run it, after `cargo build -p mango-code -p engine`, with `off-screen bun test --cwd integration capture-requests`.
 
 import { expect, test } from "bun:test";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
+import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { MangoCode, find, type Step } from "../client/mango-code";
-import { REPO, start } from "./environment";
+import { FAKE_ENGINE_EXE, REPO, start } from "./environment";
 import { chatRequests, type ChatBody } from "./requests";
 
 const FIXTURES = path.join(REPO, "app", "crates", "engine-cfg", "tests", "requests");
@@ -37,7 +39,7 @@ const PC_TOOLS = [
 type Script = Record<string, unknown>[];
 type Drive = (turn: (text: string, attachments?: { mime: string; data: string; name: string }[]) => Promise<void>) => Promise<void>;
 
-/** What the engine received that was meant for the model: a request with tools (the title and the summary have none). */
+/** What the engine received that was meant for the model: a request with tools (the title has none). */
 const forTheModel = (all: ChatBody[]) => all.filter((b) => (b.tools?.length ?? 0) > 0);
 
 /** The places whose spelling gives away this PC or this run, longest first, each in the spellings a path can have. */
@@ -62,18 +64,19 @@ function normalize(value: unknown, places: [string, string][]): unknown {
   return value;
 }
 
-/** Runs one scenario in its own environment and returns the request `pick` chooses, normalized. */
-async function capture(script: Script, options: Parameters<typeof start>[1], drive: Drive, pick: (requests: ChatBody[]) => ChatBody) {
+/** Runs one scenario in its own environment and returns the request `pick` chooses, normalized. `to`: the model the turns
+ *  use and the log of the engine that receives them, when it is not this PC's fake model. */
+async function capture(script: Script, options: Parameters<typeof start>[1], drive: Drive, pick: (requests: ChatBody[]) => ChatBody, to?: { model: string; log: string }) {
   const env = await start(script, options);
   try {
     const mc = new MangoCode((await find(env.data))!);
     const id = await mc.createSession(env.project);
     await drive(async (text, attachments) => {
       const steps: Step[] = [];
-      for await (const step of mc.turn(id, env.project, text, { model: "fake", attachments })) steps.push(step);
+      for await (const step of mc.turn(id, env.project, text, { model: to?.model ?? "fake", attachments })) steps.push(step);
       expect(steps.at(-1)?.type).toBe("end");
     });
-    const body = pick(forTheModel(chatRequests(env.engineLog).map((r) => r.body)));
+    const body = pick(forTheModel(chatRequests(to?.log ?? env.engineLog).map((r) => r.body)));
     const places = localPlaces([[env.project, "<WORKDIR>"], [env.method, "<WORKDIR>/method"], [env.root, "<TEMP>"], [os.tmpdir(), "<TEMP>"], [os.homedir(), "<HOME>"]]);
     const clean = normalize(body, places) as ChatBody;
     // Nothing of this PC may reach a file that is committed.
@@ -122,11 +125,23 @@ test("after-summary: the request that follows the summary of a conversation that
     { tool: "skill", arguments: { name: "greeting" }, token: { prompt: 1000, completion: 20 } },
     { ...echo("hello"), token: { prompt: 12500, completion: 100 } },
     { text: "End of the turn.", token: { prompt: 1500, completion: 40 } },
-    { summary: "FAKE SUMMARY of the conversation.", token: { prompt: 4000, completion: 50 } },
+    { if: "Create a new anchored summary", text: "FAKE SUMMARY of the conversation.", token: { prompt: 4000, completion: 50 } },
     { if: "FAKE SUMMARY", text: "Resumed after the summary.", token: { prompt: 900, completion: 30 } },
   ];
   const body = await capture(script, { context: 16384 }, async (turn) => turn("How do we greet?"), (all) => all.filter((b) => JSON.stringify(b.messages).includes("FAKE SUMMARY")).at(-1)!);
   check("after-summary", body);
+}, 300_000);
+
+test("summary-request: the request that asks for the summary, the conversation as it is with the instruction at its end", async () => {
+  const script = [
+    { tool: "skill", arguments: { name: "greeting" }, token: { prompt: 1000, completion: 20 } },
+    { ...echo("hello"), token: { prompt: 12500, completion: 100 } },
+    { text: "End of the turn.", token: { prompt: 1500, completion: 40 } },
+    { if: "Create a new anchored summary", text: "FAKE SUMMARY of the conversation.", token: { prompt: 4000, completion: 50 } },
+    { if: "FAKE SUMMARY", text: "Resumed after the summary.", token: { prompt: 900, completion: 30 } },
+  ];
+  const body = await capture(script, { context: 16384 }, async (turn) => turn("How do we greet?"), (all) => all.find((b) => JSON.stringify(b.messages.at(-1)).includes("Create a new anchored summary"))!);
+  check("summary-request", body);
 }, 300_000);
 
 test("images: a picture attached to a message for a model that sees", async () => {
@@ -151,4 +166,34 @@ test("reasoning: the thinking of earlier turns", async () => {
     (all) => all.at(-1)!,
   );
   check("reasoning", body);
+}, 300_000);
+
+test("server: the first request of a conversation on an external server's model, as the server receives it", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mango-server-"));
+  const port = await new Promise<number>((ok) => {
+    const s = net.createServer().listen(0, "127.0.0.1", () => {
+      const n = (s.address() as net.AddressInfo).port;
+      s.close(() => ok(n));
+    });
+  });
+  const log = path.join(dir, "requests.jsonl");
+  const script = [{ text: "The project keyword is TANGERINE. — end" }];
+  fs.writeFileSync(path.join(dir, "script.json"), JSON.stringify(script));
+  const server = spawn(FAKE_ENGINE_EXE, ["-m", path.join(dir, "server-model.gguf"), "--port", String(port)], {
+    cwd: dir,
+    env: { ...process.env, FAKE_ENGINE_LOG: log, FAKE_ENGINE_SCRIPT: path.join(dir, "script.json"), FAKE_ENGINE_CHUNK_MS: "5" },
+    stdio: "ignore",
+    windowsHide: true,
+  });
+  try {
+    const servers = [{ url: `http://127.0.0.1:${port}/v1`, model: "server-model", ctx: 16384 }];
+    const body = await capture(script, { servers }, async (turn) => turn("How do we greet in this project?"), (all) => all[0], { model: "server-1/server-model", log });
+    // the server's own sampling holds: nothing of the catalog's is added on the way
+    for (const field of ["temperature", "top_p", "top_k", "min_p", "chat_template_kwargs"]) expect(body).not.toHaveProperty(field);
+    check("server", body);
+  } finally {
+    if (server.pid) spawnSync("taskkill", ["/PID", String(server.pid), "/T", "/F"]);
+    Bun.sleepSync(500);
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 }, 300_000);

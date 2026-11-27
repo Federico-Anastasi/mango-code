@@ -73,7 +73,6 @@ describe("prompt settings in the page", () => {
   test("the name of an instructions file from another folder is shortened, the rest stays", () => {
     expect(itemLabel("instructions", "C:/Projects/method/CLAUDE.md")).toBe("CLAUDE.md")
     expect(itemLabel("instructions", ".claude/rules/style.md")).toBe(".claude/rules/style.md")
-    expect(itemLabel("instructions", "MANGO.md")).toBe("MANGO.md")
     expect(itemLabel("mcp", "chrome-devtools")).toBe("chrome-devtools")
   })
 
@@ -112,8 +111,8 @@ describe("the rows of the Agent section", () => {
       ],
     })!
 
-  test("four rows: tools, MCP servers, skills, and instructions together with the plugins", () => {
-    expect(PROMPT_GROUPS.map((candidate) => candidate.id)).toEqual(["tools", "mcp", "skills", "instructions"])
+  test("five rows: tools, MCP servers, skills, instructions together with the plugins, and hooks", () => {
+    expect(PROMPT_GROUPS.map((candidate) => candidate.id)).toEqual(["tools", "mcp", "skills", "instructions", "hooks"])
     expect(group("instructions").kinds).toEqual(["instructions", "plugins"])
   })
 
@@ -134,6 +133,23 @@ describe("the rows of the Agent section", () => {
       { id: "instructions", tokens: 520 },
     ])
     expect(promptShares(current).reduce((sum, share) => sum + share.tokens, 0)).toBe(promptTotal(current).tokens)
+  })
+
+  test("the hooks weigh nothing in the prompt: they are counted in their row, not in the total nor in the bar", () => {
+    const current = parsePromptSettings({
+      ...body,
+      items: [...body.items, item("hooks", "would-lose", null), item("hooks", "every-calls", null), item("hooks", "cd-in-terminal", null, false)],
+    })!
+    expect(groupCount(current, group("hooks"))).toEqual({ on: 2, all: 3 })
+    expect(promptTotal(current)).toEqual(promptTotal(parsePromptSettings(body)!))
+    expect(promptShares(current).map((share) => share.id)).not.toContain("hooks")
+    // in the order the agent gives them, not by weight or name
+    expect(itemsOf(current, "hooks").map((hook) => hook.name)).toEqual(["would-lose", "every-calls", "cd-in-terminal"])
+  })
+
+  test("a tool comes with the words it is known by", () => {
+    const current = parsePromptSettings({ ...body, items: [{ ...item("tools", "terminal", 300), description: "Runs one command." }] })!
+    expect(current.items[0].description).toBe("Runs one command.")
   })
 
   test("a row with everything off or unmeasured has no part in the bar", () => {

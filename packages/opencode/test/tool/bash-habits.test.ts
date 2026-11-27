@@ -154,6 +154,11 @@ describe("BashHabits.adapt", () => {
     expect(run("cd site && ls -la a b; echo done")).toBe("cd site && Get-ChildItem -Force a,b; echo done")
   })
 
+  test("keeps a quoted name with spaces whole", () => {
+    expect(run(`ls -la "old photos"`)).toBe(`Get-ChildItem -Force "old photos"`)
+    expect(run(`ls -la "old photos" 'new photos' css`)).toBe(`Get-ChildItem -Force "old photos",'new photos',css`)
+  })
+
   test("ends a pipeline with PowerShell's own filter", () => {
     expect(run(`pip list 2>/dev/null | grep -iE "diffusers|torch"`)).toBe(`pip list 2>$null | Select-String -Pattern "diffusers|torch"`)
     expect(run("git log --oneline | head -5")).toBe("git log --oneline | Select-Object -First 5")

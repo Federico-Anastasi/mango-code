@@ -6,6 +6,7 @@
 // `web\mango-code.exe`) replaces it, to try a separate build.
 // The data folder starts with `settings.json` set to Italian, so the Italian texts the tests check hold on any PC.
 
+import { createHash } from "node:crypto";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import net from "node:net";
@@ -146,12 +147,17 @@ export function writeLanguage(data: string, language = "it") {
  * `bytes` or `files` say otherwise) and `imagePresent` says which of them are already on disk. The image engine is the
  * fake one of app/crates/images (`fake-sd.exe`), installed for every build. `vision`: the fake model sees images (it has a
  * multimodal projector, an empty file). `strict`: the fake engine refuses what the strictest chat templates of real models
- * refuse (see fake-engine.rs), as an engine with such a model does.
+ * refuse (see fake-engine.rs), as an engine with such a model does. `harness`: the harness the fake model was given
+ * (saved in the choices, as the model's detail saves it). `servers`: external servers already added (`servers.json`, no key),
+ * each with one model, numbered `server-1`, `server-2`… in order.
  *
  * `start` returns when the app is in use: the agent answers (`service.json`) and, if a model is on disk, it is loaded,
  * so a test talks to it at once. `modelLoading`: it returns as soon as the agent answers, while the model still loads.
  */
-type Options = { freeModelsFolder?: boolean; onRequest?: string[]; window?: boolean; args?: string[]; otherModels?: string[]; bytes?: Record<string, number>; chunkMs?: number; noDebug?: boolean; env?: Record<string, string>; context?: number; noModels?: boolean; modelLoading?: boolean; files?: Record<string, { size: number; sha256: string }>; imageModels?: string[]; imagePresent?: string[]; vision?: boolean; strict?: boolean; reasoning?: string[] };
+type Options = { freeModelsFolder?: boolean; onRequest?: string[]; window?: boolean; args?: string[]; otherModels?: string[]; bytes?: Record<string, number>; chunkMs?: number; noDebug?: boolean; env?: Record<string, string>; context?: number; noModels?: boolean; modelLoading?: boolean; files?: Record<string, { size: number; sha256: string }>; imageModels?: string[]; imagePresent?: string[]; vision?: boolean; strict?: boolean; reasoning?: string[]; harness?: string; servers?: { url: string; model: string; ctx: number }[]; projectServersAsked?: boolean;
+  /** The real catalog and the real profiles, with every model's files on the disk (empty) and the fake engine in the
+   *  place of each one: a model is placed with its real memory on the hardware the test gives (`MANGO_HARDWARE`). */
+  realCatalog?: boolean };
 
 /**
  * Removes the environment's folder (hundreds of MB). Its files (WebView2's above all) stay locked for a few seconds after
@@ -168,6 +174,16 @@ export function removeRoot(root: string, attempts = 60) {
   }
 }
 
+/** Removes the keys the app saved in the Credential Manager for a data folder: their service is derived from its path. */
+function removeCredentials(data: string) {
+  const service = `.MangoCode-test-${createHash("sha256").update(data).digest("hex").slice(0, 12)}`;
+  (spawnSync("cmdkey", ["/list"], { encoding: "utf8", windowsHide: true }).stdout ?? "")
+    .split(/\r?\n/)
+    .map((line) => line.replace(/^.*target=/, "").trim())
+    .filter((target) => target.endsWith(service))
+    .forEach((target) => spawnSync("cmdkey", [`/delete:${target}`], { windowsHide: true }));
+}
+
 export async function start(script: unknown[] | ((folders: { project: string; method: string }) => unknown[]), options: Options = {}): Promise<Environment> {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "mango-integration-"));
   const launched: ChildProcess[] = [];
@@ -175,6 +191,7 @@ export async function start(script: unknown[] | ((folders: { project: string; me
     return await startIn(root, launched, script, options);
   } catch (error) {
     stopAll(launched);
+    removeCredentials(path.join(root, "data"));
     try {
       removeRoot(root);
     } catch (removal) {
@@ -276,7 +293,22 @@ async function startIn(
     };
   };
   for (const id of options.imagePresent ?? []) for (const name of ["d.gguf", "e.gguf", "v.safetensors"]) fs.writeFileSync(path.join(models, `${id}-${name}`), "");
-  fs.writeFileSync(
+  if (options.realCatalog) {
+    const catalog = JSON.parse(fs.readFileSync(path.join(dist, "mango-models.json"), "utf8"));
+    for (const model of Object.values(catalog.models) as { cloud?: unknown; gguf?: string; mmproj?: string; files?: { path: string }[] }[]) {
+      if (model.cloud) continue;
+      for (const rel of [model.gguf, model.mmproj, ...(model.files ?? []).map((f) => f.path)]) {
+        if (!rel) continue;
+        fs.mkdirSync(path.dirname(path.join(models, rel)), { recursive: true });
+        fs.writeFileSync(path.join(models, rel), "");
+      }
+    }
+    // the engines of the profiles, in the layout that serves the CUDA 12 build
+    for (const engine of ["prism", "toq"]) {
+      fs.mkdirSync(path.join(engines, engine), { recursive: true });
+      fs.copyFileSync(FAKE_ENGINE_EXE, path.join(engines, engine, "llama-server.exe"));
+    }
+  } else fs.writeFileSync(
     path.join(dist, "mango-models.json"),
     JSON.stringify({
       ctx: options.context ?? 16384,
@@ -294,8 +326,23 @@ async function startIn(
 
   const data = path.join(root, "data");
   writeLanguage(data);
+  if (options.harness) fs.writeFileSync(path.join(data, "choices.json"), JSON.stringify({ models: { fake: { harness: options.harness } } }));
+  if (options.servers) {
+    const list = options.servers.map((s, i) => ({ id: `server-${i + 1}`, url: s.url, key: false, models: [{ id: s.model, ctx: s.ctx, images: false }], context: null }));
+    fs.writeFileSync(path.join(data, "servers.json"), JSON.stringify({ list, default: null }));
+  }
   const project = path.join(root, "project");
   fs.cpSync(path.join(REPO, "integration", "example"), project, { recursive: true });
+  // The example project's MCP server is allowed, as the user does once in the window; `projectServersAsked` leaves it
+  // to be asked. The approval is the file's servers as the mango-project plugin hashes them.
+  if (!options.projectServersAsked) {
+    const file = path.join(project, ".mcp.json");
+    const servers = JSON.parse(fs.readFileSync(file, "utf8")).mcpServers;
+    const hash = createHash("sha256").update(JSON.stringify(servers)).digest("hex");
+    const settings = path.join(data, "settings.json");
+    const json = JSON.parse(fs.readFileSync(settings, "utf8"));
+    fs.writeFileSync(settings, JSON.stringify({ ...json, mcpApproved: { [path.resolve(file).toLowerCase()]: hash } }));
+  }
   const method = path.join(root, "method");
   fs.cpSync(path.join(REPO, "integration", "example-method"), method, { recursive: true });
   const scriptFile = path.join(root, "script.json");
@@ -341,6 +388,7 @@ async function startIn(
     },
     close: () => {
       stopAll(launched);
+      removeCredentials(data);
       removeRoot(root);
     },
   };

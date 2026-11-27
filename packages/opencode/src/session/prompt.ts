@@ -10,9 +10,10 @@ import { Session } from "./session"
 import { Agent } from "../agent/agent"
 import { Provider } from "@/provider/provider"
 
-import { type Tool as AITool, tool, jsonSchema, asSchema } from "ai"
+import { type ModelMessage, type Tool as AITool, tool, jsonSchema, asSchema } from "ai"
 import type { JSONSchema7 } from "@ai-sdk/provider"
 import { SessionCompaction } from "./compaction"
+import { isSummary } from "./compacted"
 import { SystemPrompt } from "./system"
 import { Instruction } from "./instruction"
 import { Plugin, pluginNameOf } from "../plugin"
@@ -64,6 +65,12 @@ import { SessionReminders } from "./reminders"
 import { SessionTools } from "./tools"
 import { Skill } from "@/skill"
 import { PromptSettings } from "./settings"
+import { Harness } from "./harness"
+import { CommandsHarness } from "./commands-harness"
+import { versionOf } from "@/mango-harness/version"
+import { openHarness } from "@/mango-harness/harness"
+import { EffectBridge } from "@/effect/bridge"
+import { tr } from "@/util/mango-language"
 import { PromptMeasurement } from "./prompt-measurement"
 
 // @ts-ignore
@@ -80,10 +87,15 @@ const SUPPORTED_MCP_RESOURCE_ATTACHMENT_MIMES = new Set([
   "image/webp",
 ])
 
-// How many times in one turn the model is asked again after an answer cut for going on with blank lines only.
-const BLANK_RESTARTS = 2
-const BLANK_WAKE =
-  "Your answer stopped: after its last sentence it went on with blank lines only, and it was cut there. Go on from where you were: make the tool call you were about to make, or tell the user what is done and what is left."
+// An answer cut because it went on with blank lines only, or because it wrote the same text again and again, is asked
+// again: the model is told what happened. How many times in one turn it is asked, for each kind of cut.
+const CUT_RESTARTS = 2
+const CUT_WAKES = {
+  blank:
+    "Your answer stopped: after its last sentence it went on with blank lines only, and it was cut there. Go on from where you were: make the tool call you were about to make, or tell the user what is done and what is left.",
+  repeat:
+    "Your answer stopped: it kept repeating the same text, and it was cut there; the text is kept once, and a call that was being written was not made. Go on from where you were, without repeating yourself: make the tool call you were about to make, or tell the user what is done and what is left.",
+} as const
 
 // An answer cut at the output limit is taken up once in a turn: the model goes on shorter. The interface folds what
 // follows into the turn it belongs to by the `resume` mark of the message's text.
@@ -113,6 +125,10 @@ function formatMcpResourceBytes(value: number) {
   return `${Math.ceil(value / (1024 * 1024))} MB`
 }
 
+// mango-code: the MCP servers that come with the app: the `commands` harness has its own web, browser and files
+const WEB_SEARCH_SERVER = "web-search"
+const APP_MCP_SERVERS = new Set([WEB_SEARCH_SERVER, "chrome-devtools", "documents"])
+
 function isOrphanedInterruptedTool(part: SessionV1.ToolPart) {
   // cleanup() marks abandoned tool_use blocks this way after retries/aborts.
   // They are not pending work and must not trigger an assistant-prefill request.
@@ -128,7 +144,8 @@ export interface Interface {
   readonly image: (input: ImageInput) => Effect.Effect<SessionV1.WithParts, Session.BusyError>
   readonly command: (input: CommandInput) => Effect.Effect<SessionV1.WithParts, Image.Error>
   readonly resolvePromptParts: (template: string) => Effect.Effect<PromptInput["parts"]>
-  readonly items: (modelID?: string) => Effect.Effect<PromptItems>
+  /** mango-code: the prompt items of a harness (the default one if not given), for the settings page. */
+  readonly items: (modelID?: string, harness?: string) => Effect.Effect<PromptItems>
 }
 
 /**
@@ -817,6 +834,7 @@ const layer = Layer.effect(
           : undefined
       const variant = input.variant ?? (ag.variant && full?.variants?.[ag.variant] ? ag.variant : undefined)
 
+      Harness.bind(input.sessionID, model.modelID, model.providerID)
       const info: SessionV1.User = {
         id: input.messageID ?? MessageID.ascending(),
         role: "user",
@@ -909,7 +927,8 @@ const layer = Layer.effect(
             if (bytes.length > MAX_ATTACHMENT_CONVERT_BYTES) {
               return [note(`Attachment «${name}» (${where}): too big to be read here.`), keep]
             }
-            const text = yield* Effect.tryPromise(() => documentToText(kind, bytes)).pipe(Effect.exit)
+            // the reader's own error, whose sentence (a scan, a damaged file) the model passes on
+            const text = yield* Effect.tryPromise({ try: () => documentToText(kind, bytes), catch: (error) => error }).pipe(Effect.exit)
             if (Exit.isFailure(text)) {
               const reason = Cause.squash(text.cause)
               yield* Effect.logWarning("attachment not converted", { error: reason, filename: part.filename })
@@ -1351,7 +1370,7 @@ const layer = Layer.effect(
           serverOfTools(),
           InstanceState.directory,
         ])
-        const valid = PromptSettings.load(directory)
+        const valid = PromptSettings.load(directory, Harness.forModel(input.model.id, input.model.providerID).id)
         return Object.fromEntries(
           Object.entries(all).filter(([key]) => {
             const mcpServer = server.get(key)
@@ -1360,13 +1379,125 @@ const layer = Layer.effect(
         )
       })
 
+    // mango-code: whether a skill is the user's own. The ones built into the agent belong to the default harness: a
+    // `commands` harness lists only the user's.
+    const usersSkill = (location: string) => location !== Skill.BUILT_IN
+
+    // mango-code: the harness of a conversation whose model uses a `commands` harness, opened when its first request needs it
+    const commandsEntry = Effect.fn("SessionPrompt.commandsEntry")(function* (input: {
+      sessionID: SessionID
+      agent: Agent.Info
+      tools: Record<string, AITool>
+      /** The model sees pictures. */
+      vision: boolean
+    }) {
+      const directory = yield* InstanceState.directory
+      const run = yield* EffectBridge.make()
+      const own = Object.entries(yield* mcpToolsOf(input.tools)).map(([name, item]) => ({
+        name,
+        description: item.description ?? "",
+        answers: "",
+      }))
+      // the switches of the settings page are read when the conversation starts: its harness keeps them to its end
+      const defined = Harness.ofSession(input.sessionID)
+      const settings = PromptSettings.load(directory, defined.id)
+      const switched = Harness.withSwitches(defined, (hook) => PromptSettings.chosen(settings, "hooks", hook))
+      return yield* Effect.promise(() =>
+        CommandsHarness.entryFor(input.sessionID, switched, async (running) => ({
+          project: directory,
+          tools: own,
+          callTool: (name, args) =>
+            run.promise(
+              Effect.gen(function* () {
+                const client = (yield* mcp.clients())[WEB_SEARCH_SERVER]
+                if (!client) return yield* Effect.fail(new Error("The web search is not connected."))
+                return yield* Effect.promise(() => client.callTool({ name, arguments: args }))
+              }),
+            ),
+          // the user's own skills, as the agent lists them today
+          skills: await run.promise(
+            Effect.gen(function* () {
+              const valid = PromptSettings.load(directory, Harness.ofSession(input.sessionID).id)
+              const listed = (yield* skill.listing(input.sessionID, input.agent)).filter(
+                (item) =>
+                  item.description !== undefined &&
+                  usersSkill(item.location) &&
+                  PromptSettings.enabled(valid, "skills", item.name),
+              )
+              return yield* Effect.forEach(listed, (item) =>
+                skill.get(item.name).pipe(
+                  Effect.map((info) => ({
+                    name: item.name,
+                    description: item.description ?? "",
+                    body: info?.content.trim() ?? "",
+                  })),
+                ),
+              )
+            }),
+          ),
+          user: (text, options) =>
+            run.promise(
+              question
+                .ask({
+                  sessionID: input.sessionID,
+                  questions: [
+                    {
+                      question: text,
+                      header: tr("Domanda", "Question"),
+                      options: options.map((label) => ({ label, description: "" })),
+                    },
+                  ],
+                  tool: running.current,
+                })
+                .pipe(
+                  Effect.map((answers) => (answers[0]?.length ? answers[0].join(", ") : "Unanswered")),
+                  Effect.catch(() => Effect.succeed("Unanswered")),
+                ),
+            ),
+        }), {
+          skills: Object.keys(switched.skills ?? {}).filter((name) => !PromptSettings.enabled(settings, "skills", name)),
+          instructions: !PromptSettings.enabled(settings, "instructions", "CLAUDE.md"),
+        }, input.vision),
+      )
+    })
+
+    // mango-code: the tools of the `commands` harness, then the user's own; they run in the processor's message
+    const commandsTools = Effect.fn("SessionPrompt.commandsTools")(function* (input: {
+      entry: CommandsHarness.Entry
+      processor: SessionProcessor.Handle
+      resolved: Record<string, AITool>
+    }) {
+      const run = yield* EffectBridge.make()
+      // a tool switched off on the settings page is not sent, from the next request
+      const settings = PromptSettings.load(yield* InstanceState.directory, input.entry.id)
+      return CommandsHarness.tools(input.entry, {
+        enabled: (name) => PromptSettings.enabled(settings, "tools", name),
+        sessionID: input.processor.message.sessionID,
+        messageID: input.processor.message.id,
+        own: yield* mcpToolsOf(input.resolved),
+        settle: (callID, name, output) =>
+          run.promise(input.processor.completeToolCall(callID, { title: name, metadata: {}, output })),
+      })
+    })
+
+    // mango-code: of the tools of a request, the ones of the user's own MCP servers: not those the app brings
+    const mcpToolsOf = Effect.fn("SessionPrompt.mcpToolsOf")(function* (all: Record<string, AITool>) {
+      const server = yield* serverOfTools()
+      return Object.fromEntries(
+        Object.entries(all).filter(([name]) => {
+          const of = server.get(name)
+          return of !== undefined && !APP_MCP_SERVERS.has(of)
+        }),
+      )
+    })
+
     const systemPrompt = Effect.fn("SessionPrompt.systemPrompt")(function* (
       agent: Agent.Info,
       session: Pick<Session.Info, "id" | "permission">,
       model: Provider.Model,
     ) {
       const directory = yield* InstanceState.directory
-      const valid = PromptSettings.load(directory)
+      const valid = PromptSettings.load(directory, Harness.forModel(model.id, model.providerID).id)
       const enabled = (kind: PromptSettings.Kind) => (name: string) => PromptSettings.enabled(valid, kind, name)
       const [skills, env, instructions, mcpInstructions] = yield* Effect.all([
         sys.skills(agent, session.id, enabled("skills")),
@@ -1379,7 +1510,7 @@ const layer = Layer.effect(
         system: [
           ...instructions.filter((text) => {
             const file = PromptSettings.instructionsFile(text)
-            return !file || enabled("instructions")(PromptSettings.instructionName(file, directory))
+            return !file || enabled("instructions")(file)
           }),
           ...(mcpInstructions ? [mcpInstructions] : []),
           ...(skills ? [skills] : []),
@@ -1388,18 +1519,59 @@ const layer = Layer.effect(
       }
     })
 
+    // mango-code: the request for a summary: the messages of the next request with the instruction as one more message
+    // at their end, and the tools only declared, so that a call of the model is not run.
+    const summaryRequest = Effect.fn("SessionPrompt.summaryRequest")(function* (input: {
+      sessionID: SessionID
+      model: Provider.Model
+      messages: ModelMessage[]
+      tools: Record<string, AITool>
+      prior: boolean
+    }) {
+      const hooked = yield* plugin.trigger(
+        "experimental.session.compacting",
+        { sessionID: input.sessionID },
+        { context: [] as string[], prompt: undefined as string | undefined },
+      )
+      const texts = Harness.forModel(input.model.id, input.model.providerID).compaction
+      const part = {
+        type: "text" as const,
+        text: [hooked.prompt ?? SessionCompaction.instruction(texts, input.prior), ...hooked.context].join("\n\n"),
+      }
+      const last = input.messages.at(-1)
+      // The instruction is a message of the user, also after the result of a tool: at the end of a result the model reads
+      // it as part of the work and calls the next tool. Some chat templates refuse a message of the user after another:
+      // there it joins the last one. A template that refuses one after a result fails the request, and the summary is
+      // written without the model (`SessionCompaction.complete`).
+      const messages = (): ModelMessage[] =>
+        last?.role === "user"
+          ? [
+              ...input.messages.slice(0, -1),
+              { ...last, content: [...(typeof last.content === "string" ? [{ type: "text" as const, text: last.content }] : last.content), part] },
+            ]
+          : [...input.messages, { role: "user" as const, content: [part] }]
+      return {
+        messages: messages(),
+        tools: Object.fromEntries(Object.entries(input.tools).map(([name, item]) => [name, { ...item, execute: undefined }])),
+      }
+    })
+
     const runLoop: (sessionID: SessionID) => Effect.Effect<SessionV1.WithParts> = Effect.fn("SessionPrompt.run")(
       function* (sessionID: SessionID) {
         const ctx = yield* InstanceState.context
         let structured: unknown
         let step = 0
-        let blanks = 0
+        const cuts = { blank: 0, repeat: 0 }
         let resumes = 0
         const session = yield* sessions.get(sessionID).pipe(Effect.orDie)
 
         // A message of the user's turn that the loop writes itself, to tell the model what happened and ask it to go on
         // with what the user asked for the turn (format, tools, system text).
-        const wake = Effect.fn("SessionPrompt.wake")(function* (lastUser: SessionV1.User, text: string, resume?: "length") {
+        const wake = Effect.fn("SessionPrompt.wake")(function* (
+          lastUser: SessionV1.User,
+          text: string,
+          metadata?: Record<string, unknown>,
+        ) {
           const message = yield* sessions.updateMessage({
             id: MessageID.ascending(),
             role: "user",
@@ -1418,9 +1590,23 @@ const layer = Layer.effect(
             type: "text",
             synthetic: true,
             text,
-            ...(resume ? { metadata: { resume } } : {}),
+            ...(metadata ? { metadata } : {}),
             time: { start: Date.now(), end: Date.now() },
           })
+        })
+
+        // The answers of the model since the latest summary, none without one. When the first request after a summary
+        // fills the context again, another summary would not make room: the conversation would go from summary to summary.
+        const stepsSinceSummary = (messages: SessionV1.WithParts[]) => {
+          const at = messages.findLastIndex(isSummary)
+          return at < 0 ? undefined : messages.slice(at + 1).filter((item) => item.info.role === "assistant").length
+        }
+        const tooSmall = Effect.fn("SessionPrompt.tooSmall")(function* (message: SessionV1.Assistant) {
+          message.error = new SessionV1.ContextOverflowError({
+            message: "The context is too small for this conversation: even after a summary the next step fills it",
+          }).toObject()
+          yield* sessions.updateMessage(message)
+          yield* events.publish(Session.Event.Error, { sessionID, error: message.error })
         })
 
         while (true) {
@@ -1465,7 +1651,7 @@ const layer = Layer.effect(
             }
             if (lastAssistant.finish === "length" && !lastAssistant.error && resumes < LENGTH_RESUMES) {
               resumes++
-              yield* wake(lastUser, LENGTH_WAKE, "length")
+              yield* wake(lastUser, LENGTH_WAKE, { resume: "length" })
               continue
             }
             yield* Effect.logInfo("exiting loop", { "session.id": sessionID })
@@ -1482,6 +1668,10 @@ const layer = Layer.effect(
             }).pipe(Effect.ignore, Effect.forkIn(scope))
 
           const model = yield* getModel(lastUser.model.providerID, lastUser.model.modelID, sessionID)
+          // mango-code: the model's harness brings its own prompt, tools and messages
+          const harness = Harness.forModel(model.id, model.providerID)
+          const commandsKind = harness.kind === "commands"
+          const summaryInstruction = SessionCompaction.instruction(harness.compaction, msgs.some(isSummary))
           const task = tasks.pop()
 
           if (task?.type === "subtask") {
@@ -1489,23 +1679,48 @@ const layer = Layer.effect(
             continue
           }
 
-          if (task?.type === "compaction") {
-            const result = yield* compaction.process({
-              messages: msgs,
-              parentID: lastUser.id,
-              sessionID,
-              auto: task.auto,
-              overflow: task.overflow,
-            })
-            if (result === "stop") break
-            continue
-          }
+          // The request for a summary is the next request of the conversation, with one message more at its end: it is
+          // made in the turn below, with the same system prompt, tools and messages, so the engine reads only that message.
+          const compacting = task?.type === "compaction"
 
+          // Results of one step larger than what is left of the context: no summary makes room for them, so they are
+          // cut to fit first (and the step is read again from the database).
           if (
+            !compacting &&
             lastFinished &&
             lastFinished.summary !== true &&
-            (yield* compaction.isOverflow({ tokens: lastFinished.tokens, model }))
+            (yield* compaction.fitResults({
+              messages: msgs,
+              last: lastFinished,
+              model,
+              instruction: summaryInstruction,
+              texts: harness.compaction,
+            }))
+          )
+            continue
+
+          // The request of the last step filled the context, or the results that came after it leave no room: a summary.
+          // When the first request after a summary is full already, another one would not make room.
+          const full =
+            !compacting && lastFinished && lastFinished.summary !== true
+              ? yield* compaction.isOverflow({ tokens: lastFinished.tokens, model })
+              : false
+          if (
+            !compacting &&
+            lastFinished &&
+            lastFinished.summary !== true &&
+            (full ||
+              (yield* compaction.noRoom({
+                messages: msgs,
+                last: lastFinished,
+                model,
+                instruction: summaryInstruction,
+              })))
           ) {
+            if (full && (stepsSinceSummary(msgs) ?? Infinity) <= 1) {
+              yield* tooSmall(lastFinished)
+              break
+            }
             yield* compaction.create({ sessionID, agent: lastUser.agent, model: lastUser.model, auto: true })
             continue
           }
@@ -1518,10 +1733,12 @@ const layer = Layer.effect(
             yield* events.publish(Session.Event.Error, { sessionID, error: error.toObject() })
             throw error
           }
+          // the request that asks for a summary is not one of the messages the model reads
+          if (compacting) msgs = msgs.filter((item) => item.info.id !== lastUser.id)
           // mango-code: the skills put on disk since the conversation began are announced once, in the user's message:
           // the list in the system prompt stays as it was, so the engine keeps its cache of it.
-          if (step === 1 && !Permission.disabled(["skill"], agent.permission).has("skill")) {
-            const valid = PromptSettings.load(ctx.directory)
+          if (step === 1 && !compacting && !commandsKind && !Permission.disabled(["skill"], agent.permission).has("skill")) {
+            const valid = PromptSettings.load(ctx.directory, harness.id)
             const fresh = (yield* skill.added(sessionID, agent)).filter(
               (item) => item.description !== undefined && PromptSettings.enabled(valid, "skills", item.name),
             )
@@ -1541,19 +1758,21 @@ const layer = Layer.effect(
               msgs.findLast((item) => item.info.id === lastUser.id)?.parts.push(part)
             }
           }
-          msgs = yield* SessionReminders.apply({ messages: msgs, agent, session }).pipe(
-            Effect.provideService(RuntimeFlags.Service, flags),
-            Effect.provideService(FSUtil.Service, fsys),
-            Effect.provideService(Session.Service, sessions),
-          )
+          if (!commandsKind)
+            msgs = yield* SessionReminders.apply({ messages: msgs, agent, session }).pipe(
+              Effect.provideService(RuntimeFlags.Service, flags),
+              Effect.provideService(FSUtil.Service, fsys),
+              Effect.provideService(Session.Service, sessions),
+            )
 
           const msg: SessionV1.Assistant = {
             id: MessageID.ascending(),
             parentID: lastUser.id,
             role: "assistant",
-            mode: agent.name,
+            mode: compacting ? "compaction" : agent.name,
             agent: agent.name,
             variant: lastUser.model.variant,
+            ...(compacting ? { summary: true } : {}),
             path: { cwd: ctx.directory, root: ctx.worktree },
             cost: 0,
             tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
@@ -1584,7 +1803,8 @@ const layer = Layer.effect(
             const bypassAgentCheck = lastUserMsg?.parts.some((p) => p.type === "agent") ?? false
             const promptOps = yield* ops()
 
-            const tools = yield* resolveTools({
+            Harness.bind(sessionID, model.id, model.providerID)
+            const resolved = yield* resolveTools({
               agent,
               session,
               model,
@@ -1593,6 +1813,9 @@ const layer = Layer.effect(
               messages: msgs,
               promptOps,
             })
+            // mango-code: with a `commands` harness the tools are its own, then the user's own MCP tools
+            const entry = commandsKind ? yield* commandsEntry({ sessionID, agent, tools: resolved, vision: model.capabilities.input.image }) : undefined
+            const tools = entry ? yield* commandsTools({ entry, processor: handle, resolved }) : resolved
 
             if (lastUser.format?.type === "json_schema") {
               tools["StructuredOutput"] = createStructuredOutputTool({
@@ -1606,37 +1829,111 @@ const layer = Layer.effect(
             if (step === 1)
               yield* summary.summarize({ sessionID, messageID: lastUser.id }).pipe(Effect.ignore, Effect.forkIn(scope))
 
-            yield* plugin.trigger("experimental.chat.messages.transform", {}, { messages: msgs })
+            if (!entry) yield* plugin.trigger("experimental.chat.messages.transform", {}, { messages: msgs })
 
             const [{ system, env }, modelMsgs] = yield* Effect.all([
-              systemPrompt(agent, session, model),
-              MessageV2.toModelMessagesEffect(msgs, model),
+              entry ? Effect.succeed({ system: [] as string[], env: undefined }) : systemPrompt(agent, session, model),
+              MessageV2.toModelMessagesEffect(
+                entry ? CommandsHarness.messages(entry, msgs) : msgs,
+                model,
+                entry ? { mediaInToolResult: true } : undefined,
+              ),
             ])
             const format = lastUser.format ?? { type: "text" as const }
             if (format.type === "json_schema") system.push(STRUCTURED_OUTPUT_SYSTEM_PROMPT)
-            const result = yield* handle.process({
-              user: lastUser,
-              agent,
-              permission: session.permission,
-              sessionID,
-              parentSessionID: session.parentID,
-              system,
-              env,
-              messages: modelMsgs,
-              tools,
-              model,
-              toolChoice: format.type === "json_schema" ? "required" : undefined,
-            })
+            // mango-code: the instruction goes after the last message, and the tools are only declared: a call is not run
+            // the newest results are shortened in this request when they would take the room to reason and write the summary
+            const roomy =
+              compacting && lastFinished
+                ? yield* compaction.forSummary({
+                    messages: msgs,
+                    last: lastFinished,
+                    model,
+                    instruction: summaryInstruction,
+                  })
+                : msgs
+            const asked = compacting
+              ? yield* summaryRequest({
+                  sessionID,
+                  model,
+                  messages:
+                    roomy === msgs
+                      ? modelMsgs
+                      : yield* MessageV2.toModelMessagesEffect(
+                          entry ? CommandsHarness.messages(entry, roomy) : roomy,
+                          model,
+                          entry ? { mediaInToolResult: true } : undefined,
+                        ),
+                  tools,
+                  prior: msgs.some(isSummary),
+                })
+              : undefined
+            const send = (messages: ModelMessage[], toolset: Record<string, AITool>) =>
+              handle.process({
+                user: lastUser,
+                agent,
+                permission: session.permission,
+                sessionID,
+                parentSessionID: session.parentID,
+                system,
+                env,
+                messages,
+                tools: toolset,
+                model,
+                toolChoice: format.type === "json_schema" && !compacting ? "required" : undefined,
+                commands: entry && { system: entry.system, stable: entry.stable, retries: entry.retries },
+              })
+            let result = yield* send(asked?.messages ?? modelMsgs, asked?.tools ?? tools)
+
+            // The engine found the request for a summary too large: once more, with every result cut short and without
+            // pictures, the newest ones not longer than in the request refused. The engine reads it again from the start,
+            // but a summary that does not come is worse.
+            if (compacting && result === "compact") {
+              const shorter = yield* MessageV2.toModelMessagesEffect(entry ? CommandsHarness.messages(entry, roomy) : roomy, model, {
+                ...(entry ? { mediaInToolResult: true } : {}),
+                stripMedia: true,
+                toolOutputMaxChars: SessionCompaction.SHORT_RESULT_CHARS,
+              })
+              const again = yield* summaryRequest({ sessionID, model, messages: shorter, tools, prior: msgs.some(isSummary) })
+              result = yield* send(again.messages, again.tools)
+            }
+
+            if (compacting) {
+              const done = yield* compaction.complete({
+                sessionID,
+                parentID: lastUser.id,
+                message: handle.message,
+                result,
+                model,
+                texts: harness.compaction,
+                project: ctx.directory,
+              })
+              return done === "stop" ? ("break" as const) : ("continue" as const)
+            }
 
             // mango-code: the first request of a conversation measures the token weight of every prompt item, and so
             // does the first request of one taken up again when this folder has no weights for this model. Not in a
             // sub-agent's conversation: its base prompt and tools are its own, not the ones the settings page shows.
-            if (step === 1 && model.providerID === "mango" && !session.parentID) {
+            if (step === 1 && model.providerID === "mango" && !session.parentID && !entry) {
               const first = msgs.filter((m) => m.info.role === "user").length === 1
-              if (first || PromptMeasurement.measuredModel(yield* InstanceState.directory) !== model.id)
+              if (first || PromptMeasurement.measuredModel(yield* InstanceState.directory, harness.id) !== model.id)
                 yield* measurePrompt(agent, session, model).pipe(Effect.forkIn(scope))
               // nothing to measure: what the plugins added to this conversation's messages is not kept
               else PromptMeasurement.takePlugins(session.id)
+            }
+            // mango-code: a `commands` harness measures its own items, kept apart from the default harness's
+            if (step === 1 && model.providerID === "mango" && !session.parentID && entry) {
+              const directory = yield* InstanceState.directory
+              const first = msgs.filter((m) => m.info.role === "user").length === 1
+              if (first || PromptMeasurement.measuredModel(directory, entry.id) !== model.id)
+                yield* commandsItems(entry.definition, agent, session, model).pipe(
+                  Effect.flatMap((items) => Effect.promise(() => PromptMeasurement.measure(directory, model.id, items, entry.id))),
+                  Effect.flatMap(({ errors, unsaved }) =>
+                    errors.length || unsaved ? Effect.logWarning("prompt: harness items not all measured", { errors, unsaved }) : Effect.void,
+                  ),
+                  Effect.catchCause((cause) => Effect.logWarning("prompt: measurement failed", { cause: Cause.pretty(cause) })),
+                  Effect.forkIn(scope),
+                )
             }
 
             if (structured !== undefined) {
@@ -1670,24 +1967,36 @@ const layer = Layer.effect(
               }
             }
 
+            // mango-code: a final answer the harness holds back is not the user's: its text goes to the model as the
+            // next user message, and the answer stays marked as held
+            if (entry && result === "continue" && !handle.message.error && handle.message.finish === "stop") {
+              const parts = yield* MessageV2.parts(handle.message.id).pipe(Effect.provideService(Database.Service, database))
+              const held = parts.some((part) => part.type === "tool") ? undefined : entry.harness.answer()
+              if (held !== undefined) {
+                yield* Effect.forEach(
+                  parts.filter((part): part is SessionV1.TextPart => part.type === "text"),
+                  (part) => sessions.updatePart({ ...part, metadata: { ...part.metadata, harness: { held: true } } }),
+                )
+                yield* wake(lastUser, held, { harness: { held: true } })
+              }
+            }
+
             if (result === "stop") return "break" as const
-            if (result === "blank") {
-              if (++blanks > BLANK_RESTARTS) {
+            if (result === "blank" || result === "repeat") {
+              if (++cuts[result] > CUT_RESTARTS) {
                 handle.message.finish = "stop"
                 yield* sessions.updateMessage(handle.message)
                 return "break" as const
               }
               // The model is told what happened and asked to go on: it had a call to make.
-              yield* wake(lastUser, BLANK_WAKE)
+              yield* wake(lastUser, CUT_WAKES[result], { resume: result })
             }
             if (result === "compact") {
-              yield* compaction.create({
-                sessionID,
-                agent: lastUser.agent,
-                model: lastUser.model,
-                auto: true,
-                overflow: !handle.message.finish,
-              })
+              if (stepsSinceSummary(msgs) === 0) {
+                yield* tooSmall(handle.message)
+                return "break" as const
+              }
+              yield* compaction.create({ sessionID, agent: lastUser.agent, model: lastUser.model, auto: true })
             }
             return "continue" as const
           }).pipe(
@@ -1894,6 +2203,7 @@ const layer = Layer.effect(
     // carries (see settings.ts and prompt-measurement.ts). `perMessage`: what the plugins added to the user message of
     // the conversation being measured (the reminder); without it, the weight of those plugins is unknown.
     const itemsOf = Effect.fn("SessionPrompt.itemsOf")(function* (
+      definition: Harness.Definition,
       agent: Agent.Info,
       session: Pick<Session.Info, "id" | "permission">,
       model: Provider.Model,
@@ -1929,11 +2239,11 @@ const layer = Layer.effect(
       items.push({
         kind: "base",
         name: "base",
-        text: [...(agent.prompt ? [agent.prompt] : [SystemPrompt.base]), ...env].join("\n"),
+        text: [...(agent.prompt ? [agent.prompt] : [Harness.basePrompt(definition)]), ...env].join("\n"),
       })
 
       const byServer = new Map<string, string[]>()
-      for (const [key, tool] of Object.entries(requestTools)) {
+      for (const [key, tool] of Object.entries(Harness.describe(definition, requestTools))) {
         // "invalid" is the placeholder that the engine never receives (see llm.ts, activeTools).
         if (key === "invalid") continue
         const parameters = yield* Effect.promise(() => Promise.resolve(asSchema(tool.inputSchema).jsonSchema))
@@ -1979,8 +2289,7 @@ const layer = Layer.effect(
       }
 
       for (const text of instructionTexts) {
-        const name = PromptSettings.instructionName(PromptSettings.instructionsFile(text) ?? "", ctx.directory)
-        items.push({ kind: "instructions", name, text })
+        items.push({ kind: "instructions", name: PromptSettings.instructionsFile(text) ?? "", text })
       }
       for (const [name, weight] of pluginWeights) {
         const message = weight.message ? perMessage?.get(name) : ""
@@ -1999,11 +2308,12 @@ const layer = Layer.effect(
     const measurePrompt = (agent: Agent.Info, session: Pick<Session.Info, "id" | "permission">, model: Provider.Model) =>
       Effect.gen(function* () {
         const directory = yield* InstanceState.directory
-        const items = yield* itemsOf(agent, session, model, PromptMeasurement.takePlugins(session.id))
-        const { errors, unsaved } = yield* Effect.promise(() => PromptMeasurement.measure(directory, model.id, items))
-        const valid = PromptSettings.load(directory)
+        const definition = Harness.forModel(model.id, model.providerID)
+        const items = yield* itemsOf(definition, agent, session, model, PromptMeasurement.takePlugins(session.id))
+        const { errors, unsaved } = yield* Effect.promise(() => PromptMeasurement.measure(directory, model.id, items, definition.id))
+        const valid = PromptSettings.load(directory, definition.id)
         const rows = items.map((item) => {
-          const n = PromptMeasurement.tokens(directory, model.id, item)
+          const n = PromptMeasurement.tokens(directory, model.id, item, definition.id)
           const on = item.kind === "base" || PromptSettings.enabled(valid, item.kind as PromptSettings.Kind, item.name)
           return { item: `${item.kind}:${item.name}`, n, on }
         })
@@ -2023,8 +2333,72 @@ const layer = Layer.effect(
         Effect.catchCause((cause) => Effect.logWarning("prompt: measurement failed", { cause: Cause.pretty(cause) })),
       )
 
-    // mango-code: the prompt items for the settings page (see shared/mango-settings.ts).
-    const pageItems = Effect.fn("SessionPrompt.items")(function* (modelID?: string) {
+    // mango-code: the items of a `commands` harness, as the settings page lists them and the first request of a
+    // conversation measures them: its prompt without the skills and the instructions, each of its tools, the user's own
+    // MCP servers, each line of the list of skills, the project's instructions.
+    const commandsItems = Effect.fn("SessionPrompt.commandsItems")(function* (
+      definition: Harness.Definition,
+      agent: Agent.Info,
+      session: Pick<Session.Info, "id" | "permission">,
+      model: Provider.Model,
+    ) {
+      const ctx = yield* InstanceState.context
+      const probe = probeContext(agent, model, ctx)
+      const requestTools = toolsForRequest({
+        tools: yield* resolveToolsAll({
+          agent,
+          session,
+          model,
+          processor: probe.processor,
+          bypassAgentCheck: false,
+          messages: probe.msgs,
+          promptOps: yield* ops(),
+        }),
+        agent,
+        permission: session.permission,
+        user: probe.user,
+      })
+      const [server, status, listed] = yield* Effect.all([serverOfTools(), mcp.status(), skill.listing(session.id, agent)])
+      const whole = versionOf(definition)
+      const bare = versionOf(definition, { off: { skills: Object.keys(definition.skills ?? {}), instructions: true } })
+      const offline = async () => new Error("not used to list the items")
+      // the system prompt as a conversation gets it, with the user's own skills in the list
+      const full = openHarness({
+        project: ctx.directory,
+        version: whole,
+        web: { search: offline, open: offline },
+        browser: { view: offline, act: offline, back: offline, close: async () => {} },
+        user: async () => "",
+        skills: listed
+          .filter((item) => item.description !== undefined && usersSkill(item.location))
+          .map((item) => ({ name: item.name, description: item.description ?? "", body: "" })),
+      }).system()[0]
+
+      const items: PromptMeasurement.Item[] = [{ kind: "base", name: "base", text: bare.system(ctx.directory) }]
+      for (const { function: tool } of whole.declarations(whole.startingTools()))
+        items.push({ kind: "tools", name: tool.name, text: JSON.stringify(tool) })
+      const byServer = new Map<string, string[]>()
+      for (const [key, tool] of Object.entries(requestTools)) {
+        const of = server.get(key)
+        if (!of || APP_MCP_SERVERS.has(of)) continue
+        const parameters = yield* Effect.promise(() => Promise.resolve(asSchema(tool.inputSchema).jsonSchema))
+        byServer.set(of, [...(byServer.get(of) ?? []), JSON.stringify({ name: key, description: tool.description, parameters })])
+      }
+      for (const name of Object.keys(status).filter((name) => !APP_MCP_SERVERS.has(name)))
+        items.push({ kind: "mcp", name, text: byServer.get(name)?.join("\n") })
+      const marker = `- \`${definition.command} `
+      for (const line of full.split("\n").filter((line) => line.startsWith(marker)))
+        items.push({ kind: "skills", name: line.slice(marker.length).split("`")[0], text: line })
+      const instructions = full.indexOf("\n\nInstructions from: CLAUDE.md\n")
+      if (instructions >= 0) items.push({ kind: "instructions", name: "CLAUDE.md", text: full.slice(instructions + 2) })
+      return items
+    })
+
+    // mango-code: the prompt items for the settings page (see shared/mango-settings.ts), of the harness it shows.
+    const pageItems = Effect.fn("SessionPrompt.items")(function* (modelID?: string, harness: string = Harness.DEFAULT) {
+      const definition = Harness.definition(harness)
+      const of = (agent: Agent.Info, session: Pick<Session.Info, "id" | "permission">, model: Provider.Model) =>
+        definition.kind === "commands" ? commandsItems(definition, agent, session, model) : itemsOf(definition, agent, session, model)
       const ctx = yield* InstanceState.context
       const agent = yield* agents.defaultInfo()
       // the page lists the skills on disk now, also those added while the agent runs
@@ -2034,7 +2408,7 @@ const layer = Layer.effect(
         : Option.none()
       if (Option.isSome(measured)) {
         const { session } = probeContext(agent, measured.value, ctx)
-        return { model: measured.value.id, items: yield* itemsOf(agent, session, measured.value) }
+        return { model: measured.value.id, items: yield* of(agent, session, measured.value) }
       }
       const ref = yield* provider.defaultModel().pipe(
         Effect.map(Option.some),
@@ -2047,7 +2421,7 @@ const layer = Layer.effect(
       if (Option.isNone(ref)) return { model: null, items: [] }
       const model = yield* provider.getModel(ref.value.providerID, ref.value.modelID).pipe(Effect.orDie)
       const { session } = probeContext(agent, model, ctx)
-      return { model: model.id, items: yield* itemsOf(agent, session, model) }
+      return { model: model.id, items: yield* of(agent, session, model) }
     })
 
     return Service.of({

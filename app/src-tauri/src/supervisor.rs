@@ -11,7 +11,6 @@
 
 use anyhow::{bail, Context, Result};
 use mango_common::{tail, tr, ProcSpec, CREATE_NO_WINDOW};
-use std::fs::File;
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -71,7 +70,7 @@ impl Supervisor {
     /// Starts the process hidden, with stdout and stderr on `<logs>/<name>.log`.
     pub fn spawn(&self, spec: &ProcSpec) -> Result<PathBuf> {
         let log = self.logs.join(format!("{}.log", spec.name));
-        let out = File::create(&log).with_context(|| format!("log {}", log.display()))?;
+        let out = mango_common::fresh_log(&log).with_context(|| format!("log {}", log.display()))?;
         let err = out.try_clone()?;
         let mut cmd = Command::new(&spec.exe);
         cmd.args(&spec.args)
@@ -158,6 +157,11 @@ impl Supervisor {
         }
     }
 
+    /// The process id of the child `name`, while the supervisor holds it.
+    pub fn pid(&self, name: &str) -> Option<u32> {
+        self.children.lock().unwrap().iter().find(|r| r.name == name).map(|r| r.child.id())
+    }
+
     fn exited(&self, name: &str) -> Option<(String, PathBuf)> {
         let mut ch = self.children.lock().unwrap();
         let r = ch.iter_mut().find(|r| r.name == name)?;
@@ -185,6 +189,11 @@ impl Supervisor {
     /// At quit: stops what the agent started and the Job did not hold.
     pub fn stop_stragglers(&self) -> usize {
         mango_common::stragglers::kill_where_env(RUN_VAR, |value| value == self.run)
+    }
+
+    /// At a restart of the agent: stops the Team's dev and agents it left (the job holds them until the app ends).
+    pub fn stop_team(&self) -> usize {
+        mango_common::stragglers::kill_where_env(agent_cfg::team::HIDDEN_VAR, |value| value == self.run)
     }
 
     /// At the start: stops what the agent of an app closed by force started and the Job did not hold.

@@ -122,6 +122,8 @@ test("Computer: the cards, the processor and the engine, and a choice saved for 
     await waitFor(`${toggle}.checked === false`);
     await p.evaluate(`${toggle}.click()`);
     await until("the card back", () => !(choices().computer?.unused_gpus ?? []).includes(card));
+    // The choice is saved before the command ends, and the page keeps its controls off until it does.
+    await waitFor(`${toggle}.disabled === false`);
   }
 
   expect(await click('[data-action="settings-small-models"] button', "Tutte le schede")).toBe(true);
@@ -131,21 +133,33 @@ test("Computer: the cards, the processor and the engine, and a choice saved for 
   await until("small models on one card", () => (choices().computer?.small_models ?? "one") === "one");
 }, 120_000);
 
-test("Connections: five cards, off by default", async () => {
+test("Connections: six cards, off by default", async () => {
   await open("links");
   const cards: string[] = await p.evaluate(`[...document.querySelectorAll('[data-link-card]')].map((c) => c.dataset.linkCard)`);
-  expect(cards).toEqual(["phone", "share", "remote", "cloud", "token"]);
+  expect(cards).toEqual(["phone", "share", "remote", "servers", "cloud", "token"]);
   const text: string = await p.evaluate(`document.querySelector('[data-component="settings-links"]').innerText`);
-  for (const said of ["Telefono", "Usa Mango Code dal telefono", "Presta il motore ai miei PC", "Usa il motore di un altro PC", "Cloud, a pagamento", "Hugging Face", "Non collegato"])
+  for (const said of ["Telefono", "usare Mango Code dal telefono", "Presta il motore ai miei PC", "Usa il motore di un altro PC", "Cloud, a pagamento", "Hugging Face", "Non collegato"])
     expect(text, said).toContain(said);
   expect(await p.evaluate(`document.querySelector('[data-action="settings-share-switch"] input').checked`)).toBe(false);
   expect(await p.evaluate(`document.querySelector('[data-action="settings-phone-switch"] input').checked`)).toBe(false);
-  await shot("links");
+  await shot("links-off");
+}, 60_000);
+
+test("Connections: a card that is off shows no dead button, and says in its line what turning it on does", async () => {
+  for (const [card, said] of [
+    ["phone", "compare il QR da inquadrare"],
+    ["share", "compare il codice da copiare"],
+  ] as const) {
+    expect(await p.evaluate(`!!document.querySelector('[data-action="settings-${card}-open"]')`), `${card}: a button that needs the switch`).toBe(false);
+    expect(await p.evaluate(`document.querySelector('[data-link-card="${card}"] .settings-page-row-line').textContent`)).toContain(said);
+  }
+  // every button of the cards that is disabled, with the switches off, is a button without a reason
+  expect(await p.evaluate(`[...document.querySelectorAll('[data-component="settings-links"] button:disabled')].map((b) => b.textContent.trim())`)).toEqual([]);
 }, 60_000);
 
 test("Connections: the lending of the engine turned on from its card copies the code, never showing the address or the key", async () => {
   await p.evaluate(`document.querySelector('[data-action="settings-share-switch"] input').click()`);
-  await waitFor(`!document.querySelector('[data-action="settings-share-open"]').disabled`);
+  await waitFor(`!!document.querySelector('[data-action="settings-share-open"]')`);
   expect((await p.evaluate(`window.__MANGO_DESKTOP__.engineShare.state()`)).enabled).toBe(true);
   expect(await click('[data-action="settings-share-open"]')).toBe(true);
   await waitFor(`!!document.querySelector('[data-slot="settings-share-access"]')`);
@@ -162,7 +176,7 @@ test("Connections: the lending of the engine turned on from its card copies the 
 
 test("Connections: the phone turned on from its card shows its QR", async () => {
   await p.evaluate(`document.querySelector('[data-action="settings-phone-switch"] input').click()`);
-  await waitFor(`!document.querySelector('[data-action="settings-phone-open"]').disabled`);
+  await waitFor(`!!document.querySelector('[data-action="settings-phone-open"]')`);
   expect(await click('[data-action="settings-phone-open"]')).toBe(true);
   await waitFor(`!!document.querySelector('[data-slot="settings-phone-access"] img')`);
   await shot("links-phone");

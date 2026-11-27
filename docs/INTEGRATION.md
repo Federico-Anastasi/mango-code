@@ -101,6 +101,22 @@ The key is checked before the body is read, is not passed on to `llama-server`, 
 head in 10 s or that is the 33rd open connection is closed. If two PCs ask for different models, the engine reloads at each
 change.
 
+### External servers
+
+The user can add OpenAI-compatible servers (llama-server, LM Studio, a cloud service) in the settings under Connections ("Use a
+server"); their models sit beside the local ones. Each server is a provider of the agent, `server-<n>`, named after its host;
+the agent talks to it directly, so the manager's additions above (sampling, `chat_template_kwargs`, the queue, the memory on
+disk) do not apply there: the server's own hold. A message chooses one with the model `{"providerID": "server-<n>", "modelID":
+"<the server's model id>"}`; the client's `model` takes it as `server-<n>/<model>` and `servers()` lists them (the model's `name` is what the server calls it, or the name of its file without folder and extension). The list lives in
+`<data>\servers.json` (addresses, models and their context, the default when it is a server's model: then the app does not
+load a local model at start). A server's key is in the Windows Credential Manager and reaches the agent in an environment
+variable. The commands the model runs (the shell, the terminals) and the local MCP servers get the environment without
+it, and `GET /config` shows the providers without keys. A server gets the agent's own headers (the conversation's
+id, the agent's user agent), none of the manager's. Only models that write text and call tools are listed: embeddings,
+speech and picture models are left out, and so are the models of a cloud list that do not take tools or whose price is
+not fixed (a router that picks the model). A model whose service says its price carries it (dollars per million tokens),
+and the cost of an answer is counted with it. `mango-launch --model` starts local models only.
+
 ## 2. Sessions
 
 Every call to the agent carries the working folder: `?directory=<folder>` (Windows path, encoded).
@@ -128,7 +144,8 @@ The message body:
 }
 ```
 
-- `model`: the key in `launcher/mango-models.json`; without it, the session's model or the default. The offered models
+- `model`: the key in `launcher/mango-models.json`, or `server-<n>/<model>` for an external server's model (see
+  "External servers"); without it, the session's model or the default. The offered models
   (those with weights and engine on disk) are in `GET /config/providers`, provider `mango`, with context and images
   (`models()`).
 - An image sent to a model without vision arrives as a file name, not as an image. Of the recommended models,
@@ -141,7 +158,7 @@ folder; each event has `type` and `properties.sessionID`. Open it **before** sen
 
 | `type` | what it carries |
 |---|---|
-| `message.updated` | a message was born or changed: `info` with `id`, `role` (`user` or `assistant`) and, for the assistant, `finish` (`tool-calls` when the turn continues with the tool, `stop` at the end, `length` when the answer was cut at the output limit: the agent then takes it up once, with a user message of its own whose only part is a `text` with `synthetic: true` and `metadata.resume: "length"`, and the answers to it belong to the turn of the user's message before it) and `time.completed`, `tokens` (see "Context used"). It tells **whose** a part is: parts carry `messageID`, and the text of the user's message also arrives as a `message.part.updated` of type `text`: without looking at `role` it is mistaken for the model's answer. The same message arrives several times |
+| `message.updated` | a message was born or changed: `info` with `id`, `role` (`user` or `assistant`) and, for the assistant, `finish` (`tool-calls` when the turn continues with the tool, `stop` at the end, `length` when the answer was cut at the limit of the server (an answer has none of its own: it may use all that is left of the context): the agent then takes it up once, with a user message of its own whose only part is a `text` with `synthetic: true` and `metadata.resume: "length"`, and the answers to it belong to the turn of the user's message before it; `context` when the answer was cut because the context was full: the conversation is summarized and the work goes on; an answer cut because it went on with blank lines only, or because it kept writing the same text, is also taken up by the agent with such a message, `metadata.resume: "blank"` or `"repeat"`, and the text kept once carries `metadata.harness.repeated: true`) and `time.completed`, `tokens` (see "Context used"). It tells **whose** a part is: parts carry `messageID`, and the text of the user's message also arrives as a `message.part.updated` of type `text`: without looking at `role` it is mistaken for the model's answer. The same message arrives several times |
 | `message.part.delta` | a piece of text: `messageID`, `partID`, `field: "text"`, `delta`. The part is text or reasoning: the `message.part.updated` with the same id says which (`type: "text"` / `"reasoning"`) |
 | `message.part.updated` | a whole part, also several times (`step-start`, `step-finish`, text, reasoning). For tools `part.type: "tool"`, `part.tool` (name), `part.state.status` = `pending` → `running` → `completed` (or `error`): the first `pending` arrives as soon as the model starts naming the tool, with an **empty** `input` (`{}`, sometimes twice); `running` carries the full `input`; `completed` adds `output` (`error` if it fails) |
 | `permission.asked` | the agent asks for a permission: `id`, `permission` (e.g. `bash`, `edit`, `skill`, the name of an MCP tool), `patterns` |
@@ -170,15 +187,29 @@ step is `total`, that is `input + cache.read + cache.write + output + reasoning`
   arrives from the assistant. A turn stopped (`abort`) mid-step leaves that message at zero, with `error`.
 - **Which value to read.** The last assistant message with `finish` and without `summary`: a message at zero is not an
   empty context (it is a step in progress or stopped). `GET /session/<id>/message` gives the same numbers.
-- **The measure.** `GET /config/providers`, model `limit.context` and `limit.output`: Mango Code summarizes when a step ends
-  with `total >= limit.context - limit.output`.
+- **The measure.** `GET /config/providers`, model `limit.context` (`limit.output` is the same number: an answer may use all the
+  context that is left, and the request carries no limit on its length): Mango Code summarizes when a step ends with
+  `total` at 90% of `limit.context` or more (on a context under about 80,000 tokens, when less than 8,192 tokens are
+  left), when an answer is cut because the context is full, or earlier when the next request (that `total`, plus the
+  results that came after it, plus the instruction) would go past that point.
 - **The summary** (`compaction.auto`, on). In order: `message.part.updated` with `part.type: "compaction"` (`auto: true`); an
   assistant message with `mode: "compaction"` and `summary: true`, at zero, which when the summary is done carries the
-  tokens of the **request that produces it** (the whole session to summarize: it is not the context afterwards, ignore it for
-  the context used); then **`session.compacted`** (`properties: { sessionID }`, just one); then the step that resumes, whose
-  `total` is the new context. Between `session.compacted` and the end of that step the new context is not yet known.
+  tokens of the **request that produces it** (the whole session plus the instruction, most of it read from the engine's
+  cache: it is not the context afterwards, ignore it for the context used); a user message written by the agent (a text
+  part with `synthetic: true` and `metadata.resume: "compaction"`): it is not a turn of the user, and is what the model
+  reads where the summary is; then **`session.compacted`** (`properties: { sessionID }`, just one). If the work was half way,
+  the step that resumes follows, whose `total` is the new context; between `session.compacted` and the end of that step
+  the new context is not yet known. If the turn had ended, nothing follows: the next message of the user starts from the
+  summary. When the model writes no summary (it answers with a call, nothing, too much, or keeps repeating itself, or the
+  engine refuses the request) the agent writes one itself: the summary before it, if any, and the latest calls with the
+  start of their results; the summary message then has no `error` and the events are the same. Only a summary the user
+  stops ends with an `error` (`MessageAbortedError`) and leaves the session as it was.
 - **Old tool outputs are not removed** (`compaction.prune`, off): removing them would change the old part of the
   conversation and make the engine re-read everything after it. The context drops only with the summary above.
+- **Results of one step larger than the context.** When the results of a step fit neither in what is left of the
+  context nor in what a summary would leave, the agent cuts them short before the next request, the longest first, and
+  ends each with a line that tells the model how much it holds and to read the rest in parts. The tool part keeps the
+  cut output, and its `state.metadata.cut` says `{ whole, kept }` in tokens.
 
 Test: `integration/tests/token.test.ts`; the fake engine declares the tokens of every step (`fake-engine.rs`).
 
@@ -196,9 +227,15 @@ The app's sessions work on their own. An app that wants to approve actions says 
 Like Claude Code, Mango Code reads the context of the open folder (and of the folders above it, up to the root of the git
 repository if there is one): `CLAUDE.md`, `CLAUDE.local.md`, `AGENTS.md`, `.claude/rules/*.md`, the skills in
 `.claude/skills/<name>/SKILL.md`, the MCP servers in `.mcp.json` (`mcpServers`, over stdio or http), which start in the
-file's folder. When the agent is started by Mango Code (the app) it reads nothing of what is on the
+file's folder. Those servers start programs, so they start only once the user has allowed them in the window, for the file as
+it is: a line above the box lists them with "Allow", and a change to the file asks again. The approval is kept in Mango
+Code's data (`mcpApproved` in `<data>\settings.json`), never in the project. `GET /mango/project-servers?directory=<folder>`
+→ `{ file, servers: [{ name, run }], approved }` (`file` null: there is none); `POST` allows them and they start at once:
+it answers 403 to a request without `Origin`, which is every client of an app. When the agent is started by Mango Code (the app) it reads nothing of what is on the
 PC (`~/.claude`, global skills): the app sets `OPENCODE_DISABLE_CLAUDE_CODE`, `OPENCODE_DISABLE_EXTERNAL_SKILLS` and
-`OPENCODE_DISABLE_BUILTIN_COMMANDS`. An agent started by hand without them reads them like opencode does. The hooks of
+`OPENCODE_DISABLE_BUILTIN_COMMANDS`. Nor does it read a project's own `opencode.json` and `.opencode` folder
+(`OPENCODE_DISABLE_PROJECT_CONFIG`), which could start plugins, servers and providers with nothing asked; the nearest
+`AGENTS.md` is still read. An agent started by hand without them reads them like opencode does. The hooks of
 `.claude/settings.json` are not read, and the `task` tool (subagents) is off: a local model with one slot gains nothing
 by splitting itself.
 
@@ -243,7 +280,7 @@ An app that has its method (`CLAUDE.md`, `.claude/rules/*.md`, `.claude/skills`)
 declares it once: `PUT /mango/extra-folders?directory=<working folder>` `{ "folders": ["C:\\Projects\\app"] }` →
 `{ "folders": [...], "changed": true | false }`. `GET` with the same `directory` gives the list. For each extra folder,
 as for the working folder, `CLAUDE.md`, `CLAUDE.local.md`, `.claude/rules/*.md` apply (added to the system prompt at every
-request, absolute path at the head) and so do the skills in `.claude/skills/<name>/SKILL.md` (read at every use).
+request, with its path from the working folder at the head, for example `../method/CLAUDE.md`) and so do the skills in `.claude/skills/<name>/SKILL.md` (read at every use).
 Differences from the working folder: the folders above are not climbed and their `.mcp.json` is not read (servers are added
 with `POST /mcp`). A skill of the working folder wins over a namesake in the extra folders.
 
@@ -255,8 +292,9 @@ with `POST /mcp`). A skill of the working folder wins over a namesake in the ext
 ### What goes into the prompt
 
 Every entry of the fixed prompt is on or off: the base tools, the MCP servers, the skills, the instruction files
-(`MANGO.md`, `CLAUDE.md`, the rules, those of the extra folders) and the plugins. By default everything is on. An entry
-that is off does not reach the model and weighs no tokens, from the next message.
+(`CLAUDE.md`, the rules, those of the extra folders), the plugins and the hooks of the harness. By default
+everything is on, a hook as its harness has it. An entry that is off does not reach the model and weighs no tokens, from
+the next message.
 
 - The default lives in Mango Code's data (`<data>\settings.json`; with `MANGO_DATA`, in that folder) and applies to every
   folder. An optional `.mango/settings.json` in the working folder changes only the entries it contains and wins over the
@@ -265,22 +303,32 @@ that is off does not reach the model and weighs no tokens, from the next message
   request with its name, it is not ignored.
 
   ```json
-  { "prompt": { "tools": {"webfetch": false}, "mcp": {"web-search": false}, "skills": {}, "instructions": {}, "plugins": {} } }
+  { "prompt": { "tools": {"webfetch": false}, "mcp": {"web-search": false}, "skills": {}, "instructions": {}, "plugins": {}, "hooks": {} },
+    "harnesses": { "<name>": { "prompt": { "tools": {} } } } }
   ```
 
+  `prompt` holds the entries of the default harness (Mango Harness 1); `harnesses.<name>.prompt`, with the same sections,
+  those of each other harness.
+
 - The name of an entry: the tool (`bash`, `webfetch`); the MCP server; the skill; the plugin, as its file
-  (`mango-discipline`); the instruction file, with the path inside the working folder (`CLAUDE.md`,
-  `.claude/rules/style.md`), with the name alone if it is Mango Code's (`MANGO.md`), with the full path if it is from an
-  extra folder.
+  (`mango-discipline`); the instruction file, with its path from the working folder (`CLAUDE.md`,
+  `.claude/rules/style.md`; `../method/CLAUDE.md` for a file of an extra folder). The same name follows `Instructions from:`
+  in the prompt. What Mango Code itself tells the model (how it answers, what Mango Code is, the programs of this PC) is
+  part of the harness's prompt, the base item, and is not an instruction file: the model is never shown where the app's
+  own files are, because a place it is shown is a place it opens and writes.
 - **Apps only add.** The server of `POST /mcp` and the folders of `PUT /mango/extra-folders` become entries like the
   others, on: the app switches nothing off. Settings are changed from the page: `PUT /mango/settings` answers 403 to
   a request without `Origin`, which is every client of an app. This is a rule between apps, not a barrier: a process on
   the PC could send an `Origin` of its own, and it already has the agent's shell.
-- `GET /mango/settings?directory=<working folder>` → `{ directory, model, file: { default, folder }, items: [{ type, name,
-  tokens, enabled, source }] }`. `type`: `tools`, `mcp`, `skills`, `instructions`, `plugins`, and `base` (the base prompt,
-  which cannot be switched off). `source`: `default` or `folder`, from which file the value comes. `PUT` with `{ type, name,
-  enabled, scope }` (`scope`: `all` or `folder`) → the changed entry (`{ type, name, enabled, source }`). An agent without
-  any model has no request to list: `model` is `null` and `items` empty.
+- `GET /mango/settings?directory=<working folder>&harness=<name>` → `{ directory, harness, model, file: { default, folder },
+  items: [{ type, name, tokens, enabled, source }] }`. Without `harness` it is the default one (`mango-harness-1`); an
+  unknown name answers 404, and `harness` in the answer is the one the list is of. `type`: `tools`, `mcp`, `skills`,
+  `instructions`, `plugins`, `hooks`, and `base` (the base prompt, which cannot be switched off). A `hooks` item is a
+  reminder or check the harness adds while the model works: it weighs nothing in the prompt (`tokens` is `null`), and only
+  the hooks the harness can run are listed. `source`: `default` or `folder`, from which file the value comes. `PUT` with
+  the same `harness` parameter and `{ type, name, enabled, scope }` (`scope`: `all` or `folder`) → the changed entry
+  (`{ type, name, enabled, source }`). An agent without any model has no request to list: `model` is `null` and `items`
+  empty.
 - `tokens` is the weight of the entry, counted by the engine with the model's tokenizer (`POST /tokenize`, which the manager
   forwards to the running engine) with the first request of every session, and written in the agent's log (`opencode.log`,
   line "prompt measured": `total` and every entry, as `type:name=tokens`). An entry that is off also has its weight, if it
@@ -422,7 +470,9 @@ own; the conversation that was open when the engine stopped is saved as `<model>
 started) and reloaded at the next start. A client that sends the header `X-Mango-Stable-Prompt: <n>` with its chat request, `n`
 being the number of bytes of its system message (the request has one, first) that come before what changes from one
 conversation to the next (the working folder, the date), gets the same for its prompt; without the header the request
-goes through as it is. One conversation at a time uses the engine's slot: the requests wait their turn in the manager.
+goes through as it is. When the system prompt is read for that request (the first time, not when it comes back from the
+disk), the reply carries `X-Mango-Prefix-Read: {"prompt_n": <tokens>, "prompt_ms": <ms>}`, the engine's timings of that
+reading: the `timings` in the reply count only what the request read after it. One conversation at a time uses the engine's slot: the requests wait their turn in the manager.
 
 **Log**: every `POST /engine/…` leaves a JSON line in `<data>\logs\manager.log` (`time` local, `route`, `body`, `status`,
 `duration_ms`, `error` if not 200, `address` and `user_agent` of the caller): to know who released or resumed and when, a
@@ -484,7 +534,7 @@ the engine is started for the picture and stopped after it, and all the memory g
 **The card.** With CUDA a picture is drawn on one NVIDIA card: one with tensor cores if there is one, then the one with
 the most memory. While it is drawn the card is on loan from the engine manager (section 6): a model that writes there is
 put aside, its conversation saved, and comes back by itself when the picture is done; `GET /engine` shows the loan with
-`who: "Mango Code: image"`. The loans of other programs are not touched.
+`who: "Mango Code's pictures"` (in the language of the app). The loans of other programs are not touched.
 
 `cancel` stops a picture within a second, also in the middle of a step; a job that waits never begins. The last eight
 jobs that ended are remembered, with their pictures; an older `id` gives `404`. Errors have the shape
@@ -617,5 +667,5 @@ From the command line: `bun integration/example-cli.ts <folder> "<message>" [mod
 | `notReady(dataDir?)` | the `reason` of a running but not ready Mango Code, or `null` |
 | `launch({ exe?, dataDir?, timeoutMs? })` | `find()`, or start with `--service` and wait until ready |
 | `dataDir()`, `executable()` | the data folder and the installed executable |
-| `new MangoCode(service)` | the session: `createSession`, `sessions`, `messages`, `send`, `abort`, `listen`, `turn`, `replyPermission`, `replyQuestion`, `rejectQuestion`, `addMcp`, `mcpStatus`, `setExtraFolders`, `models`, `engine`, `release`, `resume`, `startModel`, and for the pictures `images`, `picture`, `pictureBytes`, `cancelPicture`, `unloadImages`, `pictureTurn` |
+| `new MangoCode(service)` | the session: `createSession`, `sessions`, `messages`, `send`, `abort`, `listen`, `turn`, `replyPermission`, `replyQuestion`, `rejectQuestion`, `addMcp`, `mcpStatus`, `setExtraFolders`, `models`, `servers`, `engine`, `release`, `resume`, `startModel`, and for the pictures `images`, `picture`, `pictureBytes`, `cancelPicture`, `unloadImages`, `pictureTurn` |
 | types | `Service`, `AgentEvent`, `Step`, `Rule`, `McpServer`, `MessageOptions`, `PictureRequest`, `PictureJob`, `PictureState`, `PictureTurn` |

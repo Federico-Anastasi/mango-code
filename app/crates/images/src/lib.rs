@@ -28,7 +28,6 @@ use engine_cfg::ImagePlan;
 use mango_common::{tail, tr, user_error};
 use serde::Serialize;
 use serde_json::{json, Value};
-use std::fs::File;
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -426,6 +425,11 @@ fn random_seed() -> u32 {
     (std::collections::hash_map::RandomState::new().build_hasher().finish() & 0x7fff_ffff) as u32
 }
 
+/// Who has the cards while a picture is made, as a conversation waiting for them names it.
+pub fn borrower() -> String {
+    tr!("immagini di Mango Code", "Mango Code's pictures")
+}
+
 /// The cards for a picture come from the manager of the models that write: a model on one of them is put aside (its
 /// conversation saved where the engine can), and comes back by itself when the picture is done.
 pub fn lender(engine: EngineManager) -> Box<Lender> {
@@ -433,7 +437,7 @@ pub fn lender(engine: EngineManager) -> Box<Lender> {
         if gpus.is_empty() {
             return Ok(Box::new(()));
         }
-        let loan = engine.lend(Some(gpus), Requester { pid: None, who: "Mango Code: image".to_string() })?;
+        let loan = engine.lend(Some(gpus), Requester { pid: None, who: borrower() })?;
         Ok(Box::new(Lent { engine: engine.clone(), loan }))
     })
 }
@@ -482,7 +486,7 @@ impl Drop for Server {
 impl Server {
     fn start(plan: &ImagePlan, logs: &Path, ports: &Arc<Mutex<Vec<u16>>>) -> Result<Server> {
         let log = logs.join(format!("{}.log", plan.spec.name));
-        let out = File::create(&log).with_context(|| format!("log {}", log.display()))?;
+        let out = mango_common::fresh_log(&log).with_context(|| format!("log {}", log.display()))?;
         let mut cmd = Command::new(&plan.spec.exe);
         cmd.args(&plan.spec.args).stdin(Stdio::null()).stdout(out.try_clone()?).stderr(out).creation_flags(mango_common::CREATE_NO_WINDOW);
         for k in &plan.spec.env_remove {

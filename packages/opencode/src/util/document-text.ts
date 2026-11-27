@@ -13,7 +13,7 @@ const MIME: Record<DocumentKind, string> = {
   pdf: "application/pdf",
 }
 
-/** Cap on the text of a document put in a message: ~10k tokens on an 80-128k context. */
+/** Cap on the text of a document put in a message: ~10k tokens, on a context of 32k or more. */
 export const MAX_DOCUMENT_CHARS = 40_000
 
 /** What the entries of a .docx/.xlsx/.pptx may declare once unpacked, all together: a zip of a few MB can unpack to gigabytes. */

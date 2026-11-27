@@ -119,7 +119,8 @@ export type McpServer =
   | { type: "remote"; url: string; headers?: Record<string, string>; enabled?: boolean };
 
 export interface MessageOptions {
-  /** Model key (mango-models.json, e.g. "toq"); without it, the session's model or the default. */
+  /** Model key (mango-models.json, e.g. "toq"), or `<server>/<model>` for a model of an external server (`servers()`); without it,
+   *  the session's model or the default. */
   model?: string;
   /** Instructions added to the system prompt for this message. */
   system?: string;
@@ -128,6 +129,21 @@ export interface MessageOptions {
 }
 
 const CONNECT_TIMEOUT_MS = 10_000;
+
+/** A model's key as the agent names it: a catalog key is this PC's (`mango`), `<server>/<model>` an external server's. */
+function modelRef(key: string): { providerID: string; modelID: string } {
+  const slash = key.indexOf("/");
+  return key.startsWith("server-") && slash > 0 ? { providerID: key.slice(0, slash), modelID: key.slice(slash + 1) } : { providerID: "mango", modelID: key };
+}
+
+function modelsOf(provider: any): { key: string; name: string; context: number; images: boolean }[] {
+  return Object.values(provider?.models ?? {}).map((m: any) => ({
+    key: m.id,
+    name: m.name,
+    context: m.limit?.context,
+    images: Boolean(m.capabilities?.input?.image),
+  }));
+}
 
 export class MangoCode {
   constructor(readonly service: Service) {}
@@ -177,7 +193,7 @@ export class MangoCode {
     await this.call("POST", `${this.service.agent}/session/${id}/prompt_async?${this.q(directory)}`, {
       parts,
       system: opts.system,
-      model: opts.model ? { providerID: "mango", modelID: opts.model } : undefined,
+      model: opts.model ? modelRef(opts.model) : undefined,
     });
   }
 
@@ -354,13 +370,16 @@ export class MangoCode {
   /** The offered models: key, name, context, images. */
   async models(directory: string): Promise<{ key: string; name: string; context: number; images: boolean }[]> {
     const v = await this.call("GET", `${this.service.agent}/config/providers?${this.q(directory)}`);
-    const mango = (v.providers ?? []).find((p: any) => p.id === "mango");
-    return Object.values(mango?.models ?? {}).map((m: any) => ({
-      key: m.id,
-      name: m.name,
-      context: m.limit?.context,
-      images: Boolean(m.capabilities?.input?.image),
-    }));
+    return modelsOf((v.providers ?? []).find((p: any) => p.id === "mango"));
+  }
+
+  /** The external servers the user added in the app (Settings › Connections, «Use a server»), each with its models: a
+   *  model's `key` is what `model` takes, `<server>/<model>`. */
+  async servers(directory: string): Promise<{ id: string; name: string; models: { key: string; name: string; context: number; images: boolean }[] }[]> {
+    const v = await this.call("GET", `${this.service.agent}/config/providers?${this.q(directory)}`);
+    return (v.providers ?? [])
+      .filter((p: any) => typeof p.id === "string" && p.id.startsWith("server-"))
+      .map((p: any) => ({ id: p.id, name: p.name, models: modelsOf(p).map((m) => ({ ...m, key: `${p.id}/${m.key}` })) }));
   }
 
   // --- engine and GPUs ---------------------------------------------------------------------------

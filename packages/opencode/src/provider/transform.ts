@@ -12,8 +12,6 @@ function mimeToModality(mime: string): Modality | undefined {
   return undefined
 }
 
-export const OUTPUT_TOKEN_MAX = 32_000
-
 export function sanitizeSurrogates(content: string) {
   return content.replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, "�")
 }
@@ -161,10 +159,6 @@ export function smallOptions(model: Provider.Model) {
 
 export function providerOptions(model: Provider.Model, options: { [x: string]: any }) {
   return { [model.providerID.split(".")[0]]: options }
-}
-
-export function maxOutputTokens(model: Provider.Model, outputTokenMax = OUTPUT_TOKEN_MAX): number {
-  return Math.min(model.limit.output, outputTokenMax) || outputTokenMax
 }
 
 export * as ProviderTransform from "./transform"

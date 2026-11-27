@@ -29,6 +29,18 @@ use std::time::{Duration, Instant, SystemTime};
 /// The header with the bytes of the system message that come before the working folder and the date.
 pub const STABLE_PROMPT: &str = "X-Mango-Stable-Prompt";
 
+/// The reply's header with the system prompt read for that request, `{"prompt_n": …, "prompt_ms": …}` as the engine
+/// timed it: the engine's own timings in the reply count only what the request read after it.
+pub const PREFIX_READ: &str = "X-Mango-Prefix-Read";
+
+/// What `prepare` did before the request goes to the engine.
+pub(crate) enum Prepared {
+    /// The client closed while the prompt was being read: nobody waits for the request any more.
+    Gone,
+    /// The request goes on; `read` is the system prompt read for it, when it was read now.
+    Go { read: Option<Value> },
+}
+
 /// A prefix shorter than this is not worth a file.
 const MIN_PREFIX_TOKENS: usize = 512;
 /// The calls that only ask the engine to compute something.
@@ -134,28 +146,32 @@ impl Chat {
 /// Before a conversation request goes to the engine: if it opens a conversation whose system prompt the slot does not
 /// start with, the prompt is restored from its file or, the first time, read and saved. Called with the slot's turn
 /// taken, which the caller keeps until the reply is over. `client` is the request's connection: if it closes while the
-/// prompt is being read (the «Stop» button), the engine is told at once and the answer is `false`: nobody is waiting for
-/// the request any more.
-pub(crate) fn prepare(turn: &mut Turn, m: &EngineManager, url: &str, stable: Option<&str>, body: &[u8], client: &TcpStream) -> bool {
+/// prompt is being read (the «Stop» button), the engine is told at once and the answer is `Gone`.
+pub(crate) fn prepare(turn: &mut Turn, m: &EngineManager, url: &str, stable: Option<&str>, body: &[u8], client: &TcpStream) -> Prepared {
     turn.state.dirty = true;
     let chat = stable.and_then(|s| s.trim().parse().ok()).and_then(|n| Chat::read(body, n, &turn.cache.signature));
     let Some(chat) = chat.filter(|c| c.first) else {
-        return true;
+        return Prepared::Go { read: None };
     };
     let t0 = Instant::now();
     let mut line = json!({ "event": "prefix", "model": turn.cache.model });
-    let outcome = keep(turn.cache, url, &chat, client, &mut line);
+    let mut read = None;
+    let outcome = keep(turn.cache, url, &chat, client, &mut line, &mut read);
     let gone = outcome.as_ref().is_err_and(|e| e.is::<ClientGone>());
     if let Err(e) = outcome {
         line["error"] = format!("{e:#}").into();
     }
     line["ms"] = (t0.elapsed().as_millis() as u64).into();
     m.log(line);
-    !gone
+    if gone {
+        return Prepared::Gone;
+    }
+    Prepared::Go { read }
 }
 
 /// The slot starts with the chat's prefix: restored from its file, or read and saved, unless it is too short to keep.
-fn keep(cache: &SlotCache, url: &str, chat: &Chat, client: &TcpStream, line: &mut Value) -> Result<()> {
+/// `read` gets the engine's timings of a prompt read now, also when saving it fails afterwards.
+fn keep(cache: &SlotCache, url: &str, chat: &Chat, client: &TcpStream, line: &mut Value, read: &mut Option<Value>) -> Result<()> {
     let file = memory::prefix_file(&cache.model, &chat.key[..16]);
     let path = cache.folder.join(&file);
     if path.is_file() {
@@ -184,7 +200,11 @@ fn keep(cache: &SlotCache, url: &str, chat: &Chat, client: &TcpStream, line: &mu
         return Ok(());
     }
     // The prompt is read now, as the conversation would read it a moment later, so that the slot can be saved at its end.
-    ask(url, "/completion", &json!({ "prompt": &with_all[..end], "n_predict": 0, "cache_prompt": true, "id_slot": 0 }), None, Some(client))?;
+    let done = ask(url, "/completion", &json!({ "prompt": &with_all[..end], "n_predict": 0, "cache_prompt": true, "id_slot": 0 }), None, Some(client))?;
+    let timings = &done["timings"];
+    if timings["prompt_n"].as_u64().is_some_and(|n| n > 0) {
+        *read = Some(json!({ "prompt_n": timings["prompt_n"], "prompt_ms": timings["prompt_ms"] }));
+    }
     let saved = ask(url, "/slots/0?action=save", &json!({ "filename": file }), Some(STATE), None);
     let n = saved.as_ref().ok().and_then(|v| v["n_saved"].as_u64()).unwrap_or(0) as usize;
     if saved.is_err() || n + 1 < end || n > end {

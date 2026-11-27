@@ -130,6 +130,8 @@ export function SessionComposerRegion(props: {
               }}
               style={{
                 "margin-top": `${-controller.lift()}px`,
+                // a line above the box starts under the list the box is pulled over, not on it
+                "--composer-clear": controller.lift() > 0 ? `${controller.lift() + 8}px` : "0px",
               }}
             >
               <Show when={controller.followup()?.items.length}>

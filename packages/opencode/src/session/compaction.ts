@@ -1,170 +1,148 @@
+// mango-code: the summary that keeps a long conversation within the context, the same for every harness. The request is
+// the conversation as the model reads it, with its system prompt and its tools, and one more message at the end with
+// the instruction: the engine reads only that. What the model reads afterwards is put together in `compacted.ts`; the
+// texts of the instruction and of the lines around the summary are the harness's (`compaction.md`).
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
-import { ConfigV1 } from "@opencode-ai/core/v1/config/config"
+import { Database } from "@opencode-ai/core/database/database"
 import { Session } from "./session"
 import { SessionID, MessageID, PartID } from "./schema"
 import { Provider } from "@/provider/provider"
 import { MessageV2 } from "./message-v2"
 import { Token } from "@/util/token"
-import { SessionProcessor } from "./processor"
-import { Agent } from "@/agent/agent"
-import { Plugin } from "@/plugin"
 import { Config } from "@/config/config"
 import { NotFoundError } from "@/storage/storage"
-import { isResume } from "./summary"
+import { compactionPart, files, isResume, isSummary, isUser, written } from "./compacted"
+import { PromptMeasurement } from "./prompt-measurement"
+import type { Result } from "./processor"
 
 import { Effect, Layer, Context } from "effect"
-import { InstanceState } from "@/effect/instance-state"
-import { isOverflow as overflow, usable } from "./overflow"
+import { isOverflow as overflow, reserved, SUMMARY_ROOM, SUMMARY_TOKENS } from "./overflow"
 import { serviceUse } from "@opencode-ai/core/effect/service-use"
-import { RuntimeFlags } from "@/effect/runtime-flags"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { ModelV2 } from "@opencode-ai/core/model"
-import { buildPrompt } from "@opencode-ai/core/session/compaction"
 import { SessionCompactionEvent } from "@opencode-ai/schema/session-compaction-event"
 
 export const Event = SessionCompactionEvent
 
 export const PRUNE_MINIMUM = 20_000
 export const PRUNE_PROTECT = 40_000
-const TOOL_OUTPUT_MAX_CHARS = 2_000
 const PRUNE_PROTECTED_TOOLS = ["skill"]
-const MIN_PRESERVE_RECENT_TOKENS = 2_000
-const MAX_PRESERVE_RECENT_TOKENS = 15_000
-type Turn = {
-  start: number
-  end: number
-  id: MessageID
+
+/** The last messages that stay as they are after a summary, in tokens, at most an eighth of the context; the last one
+ *  stays even if it is longer. */
+export const TAIL_TOKENS = 8_000
+/** The messages of the user that stay word for word after a summary, in tokens, at most a tenth of the context: the
+ *  first and as many of the latest as fit. */
+export const USERS_TOKENS = 6_000
+/** The longest result of a tool in the second try of a request for a summary that the engine found too large. */
+export const SHORT_RESULT_CHARS = 2_000
+/** A result cut to fit the context keeps at least this many tokens; the note that says so takes about as many. */
+const CUT_LEAST_TOKENS = 200
+const CUT_NOTE_TOKENS = 80
+/** What a picture weighs in the context of a model that sees: the tokenizer does not count it. */
+const PICTURE_TOKENS = 360
+/** What the messages of the user and the calls of a summary the agent writes without the model may take, in tokens: at
+ *  most a tenth of the context. */
+const tenth = (window: number) => (window ? Math.min(USERS_TOKENS, Math.floor(window / 10)) : USERS_TOKENS)
+/** How much of a call's input, and of what it gave back, a line of that summary keeps. */
+const STEP_INPUT_CHARS = 200
+const STEP_RESULT_CHARS = 300
+
+const oneLine = (text: string, chars: number) => {
+  const flat = text.replace(/\s+/g, " ").trim()
+  return flat.length > chars ? `${flat.slice(0, chars)}…` : flat
 }
 
-type Tail = {
-  start: number
-  id: MessageID
+/** A call as a line of the summary the agent writes: the tool, its input, and the start of its answer or its error. */
+const step = (part: SessionV1.ToolPart) => {
+  const call = `- ${part.tool} ${oneLine(JSON.stringify(part.state.input), STEP_INPUT_CHARS)}`
+  if (part.state.status === "completed") return `${call}\n  → ${oneLine(part.state.output, STEP_RESULT_CHARS)}`
+  if (part.state.status === "error") return `${call}\n  → error: ${oneLine(part.state.error, STEP_RESULT_CHARS)}`
+  return call
 }
 
-type CompletedCompaction = {
-  userIndex: number
-  assistantIndex: number
-  summary: string | undefined
-}
+/** The instruction at the end of the request: the first summary, or the update of the one the conversation holds. */
+export const instruction = (texts: Record<string, string>, prior: boolean) =>
+  [prior ? texts.update : texts.first, texts.template, texts.rule].join("\n\n")
 
-const truncate = (value: string) =>
-  value.length <= TOOL_OUTPUT_MAX_CHARS ? value : `${value.slice(0, TOOL_OUTPUT_MAX_CHARS)}\n[truncated]`
+type Message = SessionV1.WithParts
 
-const serialize = (message: SessionV1.WithParts) => {
-  if (message.info.role === "user") {
-    const text = message.parts
-      .filter((part): part is SessionV1.TextPart => part.type === "text" && !part.ignored)
-      .map((part) => part.text)
-      .filter(Boolean)
-      .join("\n")
-    const files = message.parts.flatMap((part) =>
-      part.type === "file" ? [`[Attached ${part.mime}: ${part.filename ?? "file"}]`] : [],
-    )
-    return [...(text ? [`[User]: ${text}`] : []), ...files].join("\n")
-  }
-  return message.parts
-    .flatMap((part) => {
-      if (part.type === "text") return part.text ? [`[Assistant]: ${part.text}`] : []
-      if (part.type === "reasoning") return part.text ? [`[Assistant reasoning]: ${part.text}`] : []
-      if (part.type !== "tool") return []
-      // A summary needs to know what was called, not the file that was written: a long argument is cut like a long result.
-      const input = JSON.stringify(part.state.input, (_, value) => (typeof value === "string" ? truncate(value) : value))
-      const call = `[Assistant tool call]: ${part.tool}(${input})`
-      if (part.state.status === "completed") {
-        const attachments = (part.state.attachments ?? []).map(
-          (item) => `[Attached ${item.mime}: ${item.filename ?? "file"}]`,
-        )
-        const output = part.state.time.compacted
-          ? "[Old tool result content cleared]"
-          : truncate([part.state.output, ...attachments].join("\n"))
-        return [call, `[Tool result]: ${output}`]
-      }
-      if (part.state.status === "error") return [call, `[Tool error]: ${part.state.error}`]
-      return [call]
-    })
-    .join("\n")
-}
+const picture = (mime: string) => mime.startsWith("image/")
 
-function summaryText(message: SessionV1.WithParts) {
-  const text = message.parts
-    .filter((part): part is SessionV1.TextPart => part.type === "text")
-    .map((part) => part.text.trim())
-    .filter(Boolean)
-    .join("\n\n")
-    .trim()
-  return text || undefined
-}
-
-function completedCompactions(messages: SessionV1.WithParts[]) {
-  const users = new Map<MessageID, number>()
-  for (let i = 0; i < messages.length; i++) {
-    const msg = messages[i]
-    if (msg.info.role !== "user") continue
-    if (!msg.parts.some((part) => part.type === "compaction")) continue
-    users.set(msg.info.id, i)
-  }
-
-  return messages.flatMap((msg, assistantIndex): CompletedCompaction[] => {
-    if (msg.info.role !== "assistant") return []
-    if (!msg.info.summary || !msg.info.finish || msg.info.error) return []
-    const userIndex = users.get(msg.info.parentID)
-    if (userIndex === undefined) return []
-    return [{ userIndex, assistantIndex, summary: summaryText(msg) }]
+/** What a message puts in the context: its words and what the tools were given and answered, and its pictures. */
+function material(message: Message) {
+  const texts = message.parts.flatMap((part): string[] => {
+    if ((part.type === "text" && !part.ignored) || part.type === "reasoning") return [part.text]
+    if (part.type !== "tool") return []
+    const input = JSON.stringify(part.state.input)
+    if (part.state.status === "completed") return [input, part.state.output]
+    if (part.state.status === "error") return [input, part.state.error]
+    return [input]
   })
-}
-
-function preserveRecentBudget(input: { cfg: ConfigV1.Info; model: Provider.Model }) {
-  return (
-    input.cfg.compaction?.preserve_recent_tokens ??
-    Math.min(MAX_PRESERVE_RECENT_TOKENS, Math.max(MIN_PRESERVE_RECENT_TOKENS, Math.floor(usable(input) * 0.25)))
+  const pictures = message.parts.reduce(
+    (sum, part) =>
+      sum +
+      (part.type === "file" && picture(part.mime) ? 1 : 0) +
+      (part.type === "tool" && part.state.status === "completed"
+        ? (part.state.attachments ?? []).filter((item) => picture(item.mime)).length
+        : 0),
+    0,
   )
+  return { text: texts.join("\n"), pictures }
 }
 
-function turns(messages: SessionV1.WithParts[]) {
-  const result: Turn[] = []
-  for (let i = 0; i < messages.length; i++) {
-    const msg = messages[i]
-    if (msg.info.role !== "user") continue
-    if (msg.parts.some((part) => part.type === "compaction")) continue
-    if (isResume(msg)) continue
-    result.push({
-      start: i,
-      end: messages.length,
-      id: msg.info.id,
-    })
-  }
-  for (let i = 0; i < result.length - 1; i++) {
-    result[i].end = result[i + 1].start
-  }
-  return result
-}
-
-function splitTurn(input: {
-  messages: SessionV1.WithParts[]
-  turn: Turn
-  model: Provider.Model
-  budget: number
-  estimate: (input: { messages: SessionV1.WithParts[]; model: Provider.Model }) => Effect.Effect<number>
-}) {
-  return Effect.gen(function* () {
-    if (input.budget <= 0) return undefined
-    if (input.turn.end - input.turn.start <= 1) return undefined
-    for (let start = input.turn.start + 1; start < input.turn.end; start++) {
-      const size = yield* input.estimate({
-        messages: input.messages.slice(start, input.turn.end),
-        model: input.model,
-      })
-      if (size > input.budget) continue
-      return {
-        start,
-        id: input.messages[start]!.info.id,
-      } satisfies Tail
+/** The latest of `items`, from the end, while their sizes fit in `tokens`; with `atLeastOne` the last one stays even if
+ *  it does not fit. */
+const fitting = <T>(items: T[], tokens: number, size: (item: T) => Effect.Effect<number>, atLeastOne: boolean) =>
+  Effect.gen(function* () {
+    const kept: T[] = []
+    let total = 0
+    for (const item of items.toReversed()) {
+      total += yield* size(item)
+      if (total > tokens && !(atLeastOne && kept.length === 0)) break
+      kept.unshift(item)
     }
-    return undefined
+    return kept
   })
+
+/** The tokens of a text: the engine's tokenizer for a model of Mango Code, four characters a token where the engine
+ *  cannot count (another PC's, an external server's) or does not answer. */
+const tokens = Effect.fnUntraced(function* (model: Provider.Model, text: string) {
+  if (!text) return 0
+  if (model.providerID !== "mango") return Token.estimate(text)
+  return yield* Effect.tryPromise({ try: () => PromptMeasurement.count(text), catch: (error) => error }).pipe(
+    Effect.catch((error) =>
+      Effect.logWarning("compaction: the engine did not count, four characters a token", { error: String(error) }).pipe(
+        Effect.as(Token.estimate(text)),
+      ),
+    ),
+  )
+})
+
+const weight = (model: Provider.Model) =>
+  Effect.fnUntraced(function* (message: Message) {
+    const found = material(message)
+    return (yield* tokens(model, found.text)) + found.pictures * PICTURE_TOKENS
+  })
+
+/** One cap for every size, the largest that keeps them all within `room`: the ones under it stay whole. Undefined when
+ *  they fit as they are. */
+const capOf = (sizes: number[], room: number) => {
+  const ascending = sizes.toSorted((a, b) => a - b)
+  let left = Math.max(0, room)
+  for (const [at, size] of ascending.entries()) {
+    const rest = ascending.length - at
+    if (size * rest > left) return Math.floor(left / rest)
+    left -= size
+  }
+  return undefined
 }
+
+/** A unit of the tail: a message the model reads, not the ones that ask for a summary or hold it. */
+const readable = (message: Message) =>
+  !compactionPart(message) && !(message.info.role === "assistant" && message.info.summary) && !written(message)
 
 export interface Interface {
   readonly isOverflow: (input: {
@@ -172,19 +150,52 @@ export interface Interface {
     model: Provider.Model
   }) => Effect.Effect<boolean>
   readonly prune: (input: { sessionID: SessionID }) => Effect.Effect<void>
-  readonly process: (input: {
-    parentID: MessageID
-    messages: SessionV1.WithParts[]
+  /** The conversation for the request that asks for a summary: the results of the calls of `last`, which no request has
+   *  read yet, shortened there (not in the database) as much as the room to reason and write the summary needs. */
+  readonly forSummary: (input: {
+    messages: Message[]
+    last: SessionV1.Assistant
+    model: Provider.Model
+    instruction: string
+  }) => Effect.Effect<Message[]>
+  /** The results of the calls of `last` that fit neither in what is left of the context nor in what a summary would
+   *  leave are cut short to the second, the longest first, each with the `cut` text of the harness. Whether it cut. */
+  readonly fitResults: (input: {
+    messages: Message[]
+    last: SessionV1.Assistant
+    model: Provider.Model
+    instruction: string
+    texts: Record<string, string>
+  }) => Effect.Effect<boolean>
+  /** Whether the next request, once the summary is asked for, would no longer leave the model room to write it: the
+   *  context of the last answer, plus what came after it (the results of its calls, the messages that followed), plus the
+   *  instruction, plus a summary of the longest size. `messages`: the conversation as the model reads it. */
+  readonly noRoom: (input: {
+    messages: Message[]
+    last: SessionV1.Assistant
+    model: Provider.Model
+    instruction: string
+  }) => Effect.Effect<boolean>
+  /** The model's answer to the request for a summary is in `message`: it is kept (the tail, the messages of the user, the
+   *  files) and the message the model reads after it is written. `stop`: the turn is over (the summary failed, or the
+   *  conversation was at its end); `continue`: the work was half way and goes on from the last answer of a tool. */
+  readonly complete: (input: {
     sessionID: SessionID
-    auto: boolean
-    overflow?: boolean
+    parentID: MessageID
+    message: SessionV1.Assistant
+    result: Result
+    model: Provider.Model
+    /** The texts of the harness (`COMPACTION_TEXTS`). */
+    texts: Record<string, string>
+    /** The project folder: the files are listed from it. */
+    project: string
   }) => Effect.Effect<"continue" | "stop">
+  /** Asks for a summary: a message of the user that carries the request, with the settings of the user's last one. */
   readonly create: (input: {
     sessionID: SessionID
     agent: string
-    model: { providerID: ProviderV2.ID; modelID: ModelV2.ID }
+    model: { providerID: ProviderV2.ID; modelID: ModelV2.ID; variant?: string }
     auto: boolean
-    overflow?: boolean
   }) => Effect.Effect<void>
 }
 
@@ -197,12 +208,8 @@ const layer = Layer.effect(
   Effect.gen(function* () {
     const config = yield* Config.Service
     const session = yield* Session.Service
-    const agents = yield* Agent.Service
-    const plugin = yield* Plugin.Service
-    const processors = yield* SessionProcessor.Service
-    const provider = yield* Provider.Service
     const events = yield* EventV2Bridge.Service
-    const flags = yield* RuntimeFlags.Service
+    const database = yield* Database.Service
 
     const isOverflow = Effect.fn("SessionCompaction.isOverflow")(function* (input: {
       tokens: SessionV1.Assistant["tokens"]
@@ -212,64 +219,127 @@ const layer = Layer.effect(
         cfg: yield* config.get(),
         tokens: input.tokens,
         model: input.model,
-        outputTokenMax: flags.outputTokenMax,
       })
     })
 
-    const estimate = Effect.fn("SessionCompaction.estimate")(function* (input: {
-      messages: SessionV1.WithParts[]
+    const noRoom = Effect.fn("SessionCompaction.noRoom")(function* (input: {
+      messages: Message[]
+      last: SessionV1.Assistant
       model: Provider.Model
+      instruction: string
     }) {
-      const msgs = yield* MessageV2.toModelMessagesEffect(input.messages, input.model)
-      return Token.estimate(JSON.stringify(msgs))
+      const cfg = yield* config.get()
+      if (cfg.compaction?.auto === false) return false
+      const window = input.model.limit.input || input.model.limit.context
+      if (!window) return false
+      const keep = reserved(cfg, window)
+      const used = input.last.tokens
+      const base = used.total || used.input + used.output + used.cache.read + used.cache.write
+      // what the measured request did not have: the results of the calls of the last answer, and what followed it
+      const added = input.messages
+        .filter((message) => readable(message) && message.info.time.created >= input.last.time.created)
+        .map((message) =>
+          message.info.id === input.last.id
+            ? {
+                text: message.parts.flatMap((part) => (part.type === "tool" && part.state.status === "completed" ? [part.state.output] : [])).join("\n"),
+                pictures: message.parts.reduce(
+                  (sum, part) =>
+                    sum + (part.type === "tool" && part.state.status === "completed" ? (part.state.attachments ?? []).filter((item) => picture(item.mime)).length : 0),
+                  0,
+                ),
+              }
+            : material(message),
+        )
+      const text = [...added.map((item) => item.text), input.instruction].join("\n")
+      const pictures = added.reduce((sum, item) => sum + item.pictures, 0) * PICTURE_TOKENS
+      // a token is never less than a character: with room for that many, the engine is not asked
+      if (base + text.length + pictures + keep <= window) return false
+      return base + (yield* tokens(input.model, text)) + pictures + keep > window
     })
 
-    const select = Effect.fn("SessionCompaction.select")(function* (input: {
-      messages: SessionV1.WithParts[]
-      cfg: ConfigV1.Info
+    const forSummary = Effect.fn("SessionCompaction.forSummary")(function* (input: {
+      messages: Message[]
+      last: SessionV1.Assistant
       model: Provider.Model
+      instruction: string
     }) {
-      const limit = input.cfg.compaction?.tail_turns
-      if (limit !== undefined && limit <= 0) return { head: input.messages, tail_start_id: undefined }
-      const budget = preserveRecentBudget({ cfg: input.cfg, model: input.model })
-      const all = turns(input.messages)
-      if (!all.length) return { head: input.messages, tail_start_id: undefined }
-      const recent = limit === undefined ? all : all.slice(-limit)
+      const window = input.model.limit.input || input.model.limit.context
+      const answer = input.messages.find((message) => message.info.id === input.last.id)
+      if (!window || !answer) return input.messages
+      const results = answer.parts.filter(
+        (part): part is SessionV1.ToolPart & { state: SessionV1.ToolStateCompleted } =>
+          part.type === "tool" && part.state.status === "completed",
+      )
+      if (results.length === 0) return input.messages
+      const used = input.last.tokens
+      const base = used.total || used.input + used.output + used.cache.read + used.cache.write
+      const room = window - SUMMARY_ROOM - base - (yield* tokens(input.model, input.instruction))
+      const sizes = yield* Effect.forEach(results, (part) => tokens(input.model, part.state.output))
+      const cap = capOf(sizes, room)
+      if (cap === undefined) return input.messages
+      const kept = Math.max(CUT_LEAST_TOKENS, cap - CUT_NOTE_TOKENS)
+      const shortened = new Map(
+        results.flatMap((part, at) => {
+          const whole = sizes[at]!
+          if (whole <= kept) return []
+          const chars = Math.floor((part.state.output.length * kept) / whole)
+          const output = `${part.state.output.slice(0, chars)}\n[Tool output truncated for compaction: omitted ${part.state.output.length - chars} chars]`
+          return [[part.id, { ...part, state: { ...part.state, output } }] as const]
+        }),
+      )
+      yield* Effect.logInfo("compaction: the newest results shortened in the request for a summary", { room, sizes, kept })
+      return input.messages.map((message) =>
+        message.info.id === answer.info.id ? { ...message, parts: message.parts.map((part) => shortened.get(part.id) ?? part) } : message,
+      )
+    })
 
-      let total = 0
-      let keep: Tail | undefined
-      for (let i = recent.length - 1; i >= 0; i--) {
-        const turn = recent[i]!
-        // estimate lazily so cost stays proportional to the retained tail, not the whole session
-        const size = yield* estimate({
-          messages: input.messages.slice(turn.start, turn.end),
-          model: input.model,
-        })
-        if (total + size <= budget) {
-          total += size
-          keep = { start: turn.start, id: turn.id }
-          continue
-        }
-        const remaining = budget - total
-        const split = yield* splitTurn({
-          messages: input.messages,
-          turn,
-          model: input.model,
-          budget: remaining,
-          estimate,
-        })
-        if (split) keep = split
-        else if (!keep) {
-          yield* Effect.logInfo("tail fallback", { budget, size, total })
-        }
-        break
-      }
-
-      if (!keep || keep.start === 0) return { head: input.messages, tail_start_id: undefined }
-      return {
-        head: input.messages.slice(0, keep.start),
-        tail_start_id: keep.id,
-      }
+    const fitResults = Effect.fn("SessionCompaction.fitResults")(function* (input: {
+      messages: Message[]
+      last: SessionV1.Assistant
+      model: Provider.Model
+      instruction: string
+      texts: Record<string, string>
+    }) {
+      const window = input.model.limit.input || input.model.limit.context
+      const answer = input.messages.find((message) => message.info.id === input.last.id)
+      if (!window || !answer) return false
+      const results = answer.parts.filter(
+        (part): part is SessionV1.ToolPart & { state: SessionV1.ToolStateCompleted } =>
+          part.type === "tool" && part.state.status === "completed" && !part.state.metadata?.cut,
+      )
+      if (results.length === 0) return false
+      const used = input.last.tokens
+      const base = used.total || used.input + used.output + used.cache.read + used.cache.write
+      const keep = reserved(yield* config.get(), window)
+      const room = window - keep - base - (yield* tokens(input.model, input.instruction))
+      const sizes = yield* Effect.forEach(results, (part) => tokens(input.model, part.state.output))
+      const total = sizes.reduce((sum, size) => sum + size, 0)
+      if (total <= room) return false
+      // What a summary leaves room for: the context less the system prompt and the tools (the smallest request of the
+      // whole conversation: after a summary the messages the model reads have only the latest), the longest summary and
+      // the messages of the user kept. Results that fit there are left whole: the summary makes the room for them.
+      const all = yield* session.messages({ sessionID: input.last.sessionID }).pipe(Effect.orDie)
+      const fixed = Math.min(
+        base,
+        ...all.flatMap((message) =>
+          message.info.role === "assistant" && !message.info.summary && message.info.tokens.input > 0
+            ? [message.info.tokens.input + message.info.tokens.cache.read + message.info.tokens.cache.write]
+            : [],
+        ),
+      )
+      const afterSummary = window - keep - fixed - SUMMARY_TOKENS - tenth(window)
+      if (total <= afterSummary) return false
+      const cap = capOf(sizes, afterSummary)
+      const kept = Math.max(CUT_LEAST_TOKENS, (cap ?? 0) - CUT_NOTE_TOKENS)
+      yield* Effect.forEach(results, (part, at) => {
+        const whole = sizes[at]!
+        if (whole <= kept) return Effect.void
+        const note = input.texts.cut.replace("{{whole}}", String(whole)).replace("{{kept}}", String(kept))
+        const output = `${part.state.output.slice(0, Math.floor((part.state.output.length * kept) / whole))}\n\n${note}`
+        return session.updatePart({ ...part, state: { ...part.state, output, metadata: { ...part.state.metadata, cut: { whole, kept } } } })
+      })
+      yield* Effect.logInfo("compaction: results cut to fit the context", { room, sizes, kept })
+      return true
     })
 
     // goes backwards through parts until there are PRUNE_PROTECT tokens worth of tool
@@ -320,259 +390,175 @@ const layer = Layer.effect(
       }
     })
 
-    const processCompaction = Effect.fn("SessionCompaction.process")(function* (input: {
-      parentID: MessageID
-      messages: SessionV1.WithParts[]
+    const complete = Effect.fn("SessionCompaction.complete")(function* (input: {
       sessionID: SessionID
-      auto: boolean
-      overflow?: boolean
+      parentID: MessageID
+      message: SessionV1.Assistant
+      result: Result
+      model: Provider.Model
+      texts: Record<string, string>
+      project: string
     }) {
-      const parent = input.messages.findLast((m) => m.info.id === input.parentID)
-      if (!parent || parent.info.role !== "user") {
-        throw new Error(`Compaction parent must be a user message: ${input.parentID}`)
-      }
-      const userMessage = parent.info
-      const compactionPart = parent.parts.find((part): part is SessionV1.CompactionPart => part.type === "compaction")
+      // the user stopped it: the next turn asks for the summary again
+      if (SessionV1.AbortedError.isInstance(input.message.error)) return "stop" as const
 
-      let messages = input.messages
-      let replay:
-        | {
-            info: SessionV1.User
-            parts: SessionV1.Part[]
-          }
-        | undefined
-      if (input.overflow) {
-        const idx = input.messages.findIndex((m) => m.info.id === input.parentID)
-        for (let i = idx - 1; i >= 0; i--) {
-          const msg = input.messages[i]
-          if (msg.info.role === "user" && !msg.parts.some((p) => p.type === "compaction") && !isResume(msg)) {
-            replay = { info: msg.info, parts: msg.parts }
-            messages = input.messages.slice(0, i)
-            break
-          }
-        }
-        const hasContent =
-          replay && messages.some((m) => m.info.role === "user" && !m.parts.some((p) => p.type === "compaction"))
-        if (!hasContent) {
-          replay = undefined
-          messages = input.messages
-        }
-      }
-
-      const agent = yield* agents.get("compaction")
-      const model = agent.model
-        ? yield* provider.getModel(agent.model.providerID, agent.model.modelID).pipe(Effect.orDie)
-        : yield* provider.getModel(userMessage.model.providerID, userMessage.model.modelID).pipe(Effect.orDie)
-      const cfg = yield* config.get()
-      const history = compactionPart && messages.at(-1)?.info.id === input.parentID ? messages.slice(0, -1) : messages
-      const prior = completedCompactions(history)
-      const hidden = new Set(prior.flatMap((item) => [item.userIndex, item.assistantIndex]))
-      const previousSummary = prior.at(-1)?.summary
-      const selected = yield* select({
-        messages: history.filter((_, index) => !hidden.has(index)),
-        cfg,
-        model,
-      })
-      // Allow plugins to inject context or replace compaction prompt.
-      const compacting = yield* plugin.trigger(
-        "experimental.session.compacting",
-        { sessionID: input.sessionID },
-        { context: [], prompt: undefined },
+      const reply = yield* MessageV2.parts(input.message.id).pipe(
+        Effect.provideService(Database.Service, database),
+        Effect.orDie,
       )
-      const msgs = structuredClone(selected.head)
-      yield* plugin.trigger("experimental.chat.messages.transform", {}, { messages: msgs })
-      const conversation = msgs.map(serialize).filter(Boolean).join("\n\n")
-      const nextPrompt =
-        compacting.prompt ??
-        [
-          buildPrompt({
-            previousSummary,
-            context: [conversation],
-          }),
-          ...compacting.context,
-        ]
-          .filter(Boolean)
-          .join("\n\n")
-      const ctx = yield* InstanceState.context
-      const msg: SessionV1.Assistant = {
-        id: MessageID.ascending(),
-        role: "assistant",
-        parentID: input.parentID,
-        sessionID: input.sessionID,
-        mode: "compaction",
-        agent: "compaction",
-        variant: userMessage.model.variant,
-        summary: true,
-        path: {
-          cwd: ctx.directory,
-          root: ctx.worktree,
-        },
-        cost: 0,
-        tokens: {
-          output: 0,
-          input: 0,
-          reasoning: 0,
-          cache: { read: 0, write: 0 },
-        },
-        modelID: model.id,
-        providerID: model.providerID,
-        time: {
-          created: Date.now(),
-        },
-      }
-      yield* session.updateMessage(msg)
-      const processor = yield* processors.create({
-        assistantMessage: msg,
-        sessionID: input.sessionID,
-        model,
-      })
-      const result = yield* processor.process({
-        user: userMessage,
-        agent,
-        sessionID: input.sessionID,
-        tools: {},
-        system: [],
-        messages: [
-          {
-            role: "user",
-            content: [
-              {
-                type: "text",
-                text: [
-                  nextPrompt,
-                  ...(compacting.prompt ? ["The following is the conversation history:", conversation] : []),
-                ]
-                  .filter(Boolean)
-                  .join("\n\n"),
-              },
-            ],
-          },
-        ],
-        model,
-      })
+      const answer = reply
+        .filter((part): part is SessionV1.TextPart => part.type === "text")
+        .map((part) => part.text)
+        .join("")
+        .trim()
+      // no summary came: the model called a tool, went on repeating itself, was cut short or wrote nothing, the request
+      // did not fit even with the results cut short, or the engine refused it (a template that does not take its shape)
+      const unwritten =
+        !!input.message.error ||
+        ["called", "repeat", "compact"].includes(input.result) ||
+        input.message.finish === "length" ||
+        !answer
 
-      if (result === "compact") {
-        processor.message.error = new SessionV1.ContextOverflowError({
-          message: replay
-            ? "Conversation history too large to compact - exceeds model context limit"
-            : "Session too large to compact - context exceeds model limit even after stripping media",
-        }).toObject()
-        processor.message.finish = "error"
-        yield* session.updateMessage(processor.message)
-        return "stop"
-      }
+      const all = (yield* session.messages({ sessionID: input.sessionID }).pipe(Effect.orDie)).filter(
+        (message) => message.info.id !== input.message.id,
+      )
+      const asked = all.findIndex((message) => message.info.id === input.parentID)
+      const request = all[asked]
+      const part = request && compactionPart(request)
+      if (!request || !part || request.info.role !== "user")
+        throw new Error(`Compaction parent must be a user message: ${input.parentID}`)
+      const before = all.slice(0, asked)
 
-      if (compactionPart && selected.tail_start_id && compactionPart.tail_start_id !== selected.tail_start_id) {
+      const weigh = weight(input.model)
+      // on a small context the fixed amounts would fill it again right after the summary: they shrink with it
+      const window = input.model.limit.input || input.model.limit.context
+      const tailTokens = window ? Math.min(TAIL_TOKENS, Math.floor(window / 8)) : TAIL_TOKENS
+      const usersTokens = tenth(window)
+
+      // The tail begins after the last summary: what came before it is in that summary.
+      const last = before.findLastIndex(isSummary)
+      const since = last < 0 ? 0 : Math.max(last, before.findIndex((message, at) => at > last && written(message))) + 1
+      const tail = yield* fitting(before.slice(since).filter(readable), tailTokens, weigh, true)
+      const start = tail[0] && before.findIndex((message) => message.info.id === tail[0]!.info.id)
+
+      // Without the model's summary the agent writes one from what it has: the summary before it, then the latest calls
+      // the work made since, each with the start of what it gave back, as many as fit.
+      const summary = unwritten
+        ? yield* Effect.gen(function* () {
+            // the summary before, without the sentence it opens with when the agent wrote it too: it is said once
+            const prior = last < 0 ? [] : before[last]!.parts.flatMap((item) => (item.type === "text" ? [item.text.trim().replace(input.texts.unwritten, "").trim()] : []))
+            const calls = before
+              .slice(since, start ?? before.length)
+              .filter(readable)
+              .flatMap((message) => (message.info.role === "assistant" ? message.parts : []))
+              .flatMap((item) => (item.type === "tool" ? [step(item)] : []))
+            const latest = yield* fitting(calls, tenth(window), (line) => Effect.succeed(Token.estimate(line)), false)
+            return [input.texts.unwritten, ...prior, latest.join("\n")].filter(Boolean).join("\n\n")
+          })
+        : answer
+      if (unwritten) {
+        yield* Effect.logWarning("compaction: the model wrote no summary, the agent writes it from the calls", {
+          result: input.result,
+          error: input.message.error?.name,
+        })
+        input.message.error = undefined
+        input.message.finish = "stop"
+        yield* session.updateMessage(input.message)
+        yield* Effect.forEach(
+          reply.filter((item) => item.type === "text"),
+          (item) => session.removePart({ sessionID: input.sessionID, messageID: input.message.id, partID: item.id }),
+        )
         yield* session.updatePart({
-          ...compactionPart,
-          tail_start_id: selected.tail_start_id,
+          id: PartID.ascending(),
+          messageID: input.message.id,
+          sessionID: input.sessionID,
+          type: "text",
+          text: summary,
+          time: { start: Date.now(), end: Date.now() },
         })
       }
-
-      if (result === "continue" && input.auto) {
-        if (replay) {
-          const original = replay.info
-          const replayMsg = yield* session.updateMessage({
-            id: MessageID.ascending(),
-            role: "user",
-            sessionID: input.sessionID,
-            time: { created: Date.now() },
-            agent: original.agent,
-            model: original.model,
-            format: original.format,
-            tools: original.tools,
-            system: original.system,
-          })
-          for (const part of replay.parts) {
-            if (part.type === "compaction") continue
-            const replayPart =
-              part.type === "file" && MessageV2.isMedia(part.mime)
-                ? { type: "text" as const, text: `[Attached ${part.mime}: ${part.filename ?? "file"}]` }
-                : part
-            yield* session.updatePart({
-              ...replayPart,
-              id: PartID.ascending(),
-              messageID: replayMsg.id,
-              sessionID: input.sessionID,
-            })
-          }
-        }
-
-        if (!replay) {
-          const info = yield* provider.getProvider(userMessage.model.providerID)
-          if (
-            (yield* plugin.trigger(
-              "experimental.compaction.autocontinue",
-              {
-                sessionID: input.sessionID,
-                agent: userMessage.agent,
-                model: yield* provider
-                  .getModel(userMessage.model.providerID, userMessage.model.modelID)
-                  .pipe(Effect.orDie),
-                provider: {
-                  source: info.source,
-                  info,
-                  options: info.options,
-                },
-                message: userMessage,
-                overflow: input.overflow === true,
-              },
-              { enabled: true },
-            )).enabled
-          ) {
-            const continueMsg = yield* session.updateMessage({
-              id: MessageID.ascending(),
-              role: "user",
-              sessionID: input.sessionID,
-              time: { created: Date.now() },
-              agent: userMessage.agent,
-              model: userMessage.model,
-            })
-            const text =
-              (input.overflow
-                ? "The previous request exceeded the provider's size limit due to large media attachments. The conversation was compacted and media files were removed from context. If the user was asking about attached images or files, explain that the attachments were too large to process and suggest they try again with smaller or fewer files.\n\n"
-                : "") +
-              "Continue if you have next steps, or stop and ask for clarification if you are unsure how to proceed."
-            yield* session.updatePart({
-              id: PartID.ascending(),
-              messageID: continueMsg.id,
-              sessionID: input.sessionID,
-              type: "text",
-              // Internal marker for auto-compaction followups so provider plugins
-              // can distinguish them from manual post-compaction user prompts.
-              // This is not a stable plugin contract and may change or disappear.
-              metadata: { compaction_continue: true },
-              synthetic: true,
-              text,
-              time: {
-                start: Date.now(),
-                end: Date.now(),
-              },
-            })
-          }
-        }
+      // cut for going on with blank lines: the summary was over, and the cut left the answer without its finish
+      if (!unwritten && input.result === "blank" && !input.message.finish) {
+        input.message.finish = "stop"
+        yield* session.updateMessage(input.message)
       }
+      const users = before.slice(0, start ?? before.length).filter(isUser)
+      const latest = yield* fitting(
+        users.slice(1),
+        usersTokens - (users[0] ? yield* weigh(users[0]) : 0),
+        weigh,
+        false,
+      )
+      const missing = users.length - Math.min(users.length, 1) - latest.length
+      const listed = files(before, input.project)
+      const lines = (heading: string, found: string[]) =>
+        found.length ? [[heading, ...found.map((file) => `- ${file}`)].join("\n")] : []
 
-      if (processor.message.error) return "stop"
-      if (result === "continue") {
-        yield* events.publish(Event.Compacted, { sessionID: input.sessionID })
+      const kept = {
+        ...part,
+        ...(tail[0] ? { tail_start_id: tail[0].info.id } : {}),
+        ...(latest[0] ? { users_from_id: latest[0].info.id } : {}),
       }
-      return result === "blank" ? "continue" : result
+      if (kept.tail_start_id !== part.tail_start_id || kept.users_from_id !== part.users_from_id)
+        yield* session.updatePart(kept)
+
+      const told = yield* session.updateMessage({
+        id: MessageID.ascending(),
+        role: "user",
+        sessionID: input.sessionID,
+        time: { created: Date.now() },
+        agent: request.info.agent,
+        model: request.info.model,
+        tools: request.info.tools,
+        system: request.info.system,
+        format: request.info.format,
+      })
+      const write = (text: string, what: "summary" | "missing") =>
+        session.updatePart({
+          id: PartID.ascending(),
+          messageID: told.id,
+          sessionID: input.sessionID,
+          type: "text",
+          synthetic: true,
+          metadata: { resume: "compaction", compaction: what },
+          text,
+          time: { start: Date.now(), end: Date.now() },
+        })
+      yield* write(
+        [
+          input.texts.continued,
+          summary,
+          ...lines(input.texts["files-read"], listed.read),
+          ...lines(input.texts["files-changed"], listed.changed),
+        ].join("\n\n"),
+        "summary",
+      )
+      if (missing > 0) yield* write(input.texts.missing.replace("{{missing}}", String(missing)), "missing")
+      yield* events.publish(Event.Compacted, { sessionID: input.sessionID })
+
+      // The work was half way when the last answer of the model asked for a tool: the model goes on from its result.
+      const end = before.findLast(readable)
+      const closed =
+        end?.info.role === "assistant" &&
+        !end.parts.some((item) => item.type === "tool") &&
+        (!!end.info.error || !["tool-calls", "unknown", "length", "context"].includes(end.info.finish ?? "unknown"))
+      return closed ? ("stop" as const) : ("continue" as const)
     })
 
     const create = Effect.fn("SessionCompaction.create")(function* (input: {
       sessionID: SessionID
       agent: string
-      model: { providerID: ProviderV2.ID; modelID: ModelV2.ID }
+      model: { providerID: ProviderV2.ID; modelID: ModelV2.ID; variant?: string }
       auto: boolean
-      overflow?: boolean
     }) {
+      const user = (yield* session.messages({ sessionID: input.sessionID }).pipe(Effect.orDie)).findLast(isUser)?.info
       const msg = yield* session.updateMessage({
         id: MessageID.ascending(),
         role: "user",
         model: input.model,
         sessionID: input.sessionID,
         agent: input.agent,
+        ...(user?.role === "user" ? { tools: user.tools, system: user.system, format: user.format } : {}),
         time: { created: Date.now() },
       })
       yield* session.updatePart({
@@ -581,14 +567,16 @@ const layer = Layer.effect(
         sessionID: msg.sessionID,
         type: "compaction",
         auto: input.auto,
-        overflow: input.overflow,
       })
     })
 
     return Service.of({
       isOverflow,
+      noRoom,
+      forSummary,
+      fitResults,
       prune,
-      process: processCompaction,
+      complete,
       create,
     })
   }),
@@ -597,16 +585,7 @@ const layer = Layer.effect(
 export const node = LayerNode.make({
   service: Service,
   layer: layer,
-  deps: [
-    Config.node,
-    Session.node,
-    Agent.node,
-    Plugin.node,
-    SessionProcessor.node,
-    Provider.node,
-    EventV2Bridge.node,
-    RuntimeFlags.node,
-  ],
+  deps: [Config.node, Session.node, EventV2Bridge.node, Database.node],
 })
 
 export * as SessionCompaction from "./compaction"

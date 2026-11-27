@@ -329,7 +329,7 @@ fn the_cards_come_from_the_manager_of_the_models_that_write_and_go_back_to_it() 
     .unwrap();
 
     let seen = seen.lock().unwrap();
-    assert!(!seen.is_empty() && seen.iter().all(|(who, released)| who == &["another program", "Mango Code: image"] && released == &[1, 2]), "{seen:?}");
+    assert!(!seen.is_empty() && seen.iter().all(|(who, released)| who == &["another program".to_string(), images::borrower()] && released == &[1, 2]), "{seen:?}");
     // the giving back runs on its own thread
     let deadline = Instant::now() + Duration::from_secs(5);
     while engine.state().loans.len() > 1 && Instant::now() < deadline {

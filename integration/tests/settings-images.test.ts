@@ -131,7 +131,7 @@ async function shoot(name: string) {
 }
 
 beforeAll(async () => {
-  env = await start([{ text: "Eccomi." }], {
+  env = await start([{ text: "Here I am." }], {
     window: true,
     context: 65536,
     otherModels: ["ling"],

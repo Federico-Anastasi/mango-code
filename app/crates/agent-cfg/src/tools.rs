@@ -1,11 +1,12 @@
-//! Development tools present on this PC, and the system prompt section that describes them.
+//! Development tools present on this PC, and the text that describes them (`programs`), which the agent receives as
+//! `MANGO_PC_PROGRAMS` and the harness's prompt puts in its `{{programs}}` line.
 //!
-//! The model is small and the user may have nothing installed: without this section it would write a Python script
+//! The model is small and the user may have nothing installed: without this text it would write a Python script
 //! that it cannot run. Here we detect what is there (Python, Node, Git, .NET, Java, Rust, Go, winget, Office) with
 //! short commands, in parallel, hidden and with a maximum time; the result is saved in `<data>/tools.json`; the text
 //! is generated.
 //!
-//! Two stability rules, because a different system prompt costs a reread of the base:
+//! Two stability rules, because a different prompt costs a reread of the base:
 //! - a check that times out is "uncertain" and keeps the saved value (the text doesn't change);
 //! - in the text the versions are short (Python 3.12, not 3.12.4): a minor update doesn't change it.
 //!
@@ -68,10 +69,14 @@ enum Outcome {
 // ---------------------------------------------------------------------------------------------
 // Running the commands
 
-/// Launches `program` without a window, with stdin closed, and waits `max` at most.
-pub fn run(program: &str, args: &[&str], max: Duration) -> Output {
+/// Launches `program` without a window, with stdin closed, and waits `max` at most. With `path`, the program is looked
+/// for there and runs with it.
+fn run(program: &str, args: &[&str], max: Duration, path: Option<&str>) -> Output {
     let mut cmd = Command::new(program);
     cmd.args(args).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    if let Some(path) = path {
+        cmd.env("PATH", path);
+    }
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -122,10 +127,6 @@ pub fn run(program: &str, args: &[&str], max: Duration) -> Output {
     pieces.sort_by_key(|p| p.0);
     let text = pieces.iter().map(|(_, b)| String::from_utf8_lossy(b).into_owned()).collect::<Vec<_>>().join("\n");
     Output::Finished { succeeded, text }
-}
-
-fn run_real(program: &str, args: &[&str]) -> Output {
-    run(program, args, MAX_TIME)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -311,9 +312,10 @@ pub fn update_with(run: Run, data: &Path) -> Detection {
     now
 }
 
-/// Like `update_with`, with the real commands. Meant for a thread parallel to the engine loading.
-pub fn update(data: &Path) -> Detection {
-    update_with(&run_real, data)
+/// Like `update_with`, with the real commands run with the agent's `PATH` (`agent_path`): what is found is what the
+/// model finds. Meant for a thread parallel to the engine loading.
+pub fn update(data: &Path, path: &str) -> Detection {
+    update_with(&|program: &str, args: &[&str]| run(program, args, MAX_TIME, Some(path)), data)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -330,9 +332,9 @@ const INSTALLABLE: &[(&str, &str, &str)] = &[
     ("Go", "GoLang.Go", "250 MB"),
 ];
 
-/// The system prompt section. It must stay the same until the PC changes (no dates, no long versions): a different
-/// text makes the engine reread the base.
-pub fn instructions(r: &Detection) -> String {
+/// The value of `MANGO_PC_PROGRAMS`: the text the harness's prompt puts in its `{{programs}}` line. It must stay the same
+/// until the PC changes (no dates, no long versions): a different text makes the engine reread the base.
+pub fn programs(r: &Detection) -> String {
     let java = r.java.as_ref().map(|v| {
         let p = java_major(v);
         if r.java_jdk {
@@ -400,16 +402,6 @@ Install only after their yes. For small scripts prefer what is already there (Po
     t
 }
 
-/// Writes the section to `<config>/MANGO-pc.md` only if the text changed; returns its path.
-pub fn write_instructions(config_dir: &Path, r: &Detection) -> Result<PathBuf> {
-    let path = config_dir.join("MANGO-pc.md");
-    let text = instructions(r);
-    if std::fs::read_to_string(&path).ok().as_deref() != Some(&text) {
-        std::fs::write(&path, text).with_context(|| format!("cannot write {}", path.display()))?;
-    }
-    Ok(path)
-}
-
 // ---------------------------------------------------------------------------------------------
 // The `bun` command
 
@@ -432,12 +424,13 @@ pub fn install_bun_shim(data: &Path) -> Result<PathBuf> {
     Ok(dir)
 }
 
-/// The agent's `PATH`: the shim folder at the head, then the inherited one.
-pub fn path_with_bun(bin: &Path, inherited: Option<&std::ffi::OsStr>) -> String {
-    match inherited {
-        Some(p) if !p.is_empty() => format!("{};{}", bin.display(), p.to_string_lossy()),
-        _ => bin.display().to_string(),
-    }
+/// The agent's `PATH`: the app's folders at the head (the shim of Bun in `<data>/bin`, Git for Windows of the resources
+/// when the app has it), then the inherited one.
+pub fn agent_path(data: &Path, dist: &Path, inherited: Option<&std::ffi::OsStr>) -> String {
+    let git = dist.join("git").join("cmd");
+    let heads = [data.join("bin")].into_iter().chain(git.is_dir().then_some(git)).map(|h| h.display().to_string());
+    let inherited = inherited.filter(|p| !p.is_empty()).map(|p| p.to_string_lossy().into_owned());
+    heads.chain(inherited).collect::<Vec<_>>().join(";")
 }
 
 #[cfg(test)]
@@ -553,11 +546,11 @@ mod tests {
     #[test]
     fn a_real_command_that_hangs_is_killed_in_time() {
         let t0 = Instant::now();
-        let u = run("powershell", &["-NoProfile", "-Command", "Start-Sleep -Seconds 20"], Duration::from_millis(700));
+        let u = run("powershell", &["-NoProfile", "-Command", "Start-Sleep -Seconds 20"], Duration::from_millis(700), None);
         assert_eq!(u, Output::TimedOut);
         assert!(t0.elapsed() < Duration::from_secs(5), "{:?}", t0.elapsed());
-        assert_eq!(run("this-program-does-not-exist-xyz", &[], Duration::from_secs(1)), Output::NotFound);
-        match run("powershell", &["-NoProfile", "-Command", "[Console]::Error.WriteLine('err'); 'out'"], Duration::from_secs(20)) {
+        assert_eq!(run("this-program-does-not-exist-xyz", &[], Duration::from_secs(1), None), Output::NotFound);
+        match run("powershell", &["-NoProfile", "-Command", "[Console]::Error.WriteLine('err'); 'out'"], Duration::from_secs(20), None) {
             Output::Finished { succeeded, text } => assert!(succeeded && text.contains("out") && text.contains("err"), "{text}"),
             other => panic!("{other:?}"),
         }
@@ -582,7 +575,7 @@ mod tests {
 
     #[test]
     fn text_with_everything_installed() {
-        let t = instructions(&everything());
+        let t = programs(&everything());
         assert!(t.contains(
             "On this PC you can write and run: PowerShell; JavaScript and TypeScript with `bun` (always available, already included: `bun file.ts`); Python 3.12; Node 24; Git 2.47; .NET 9; Java 21; Rust 1.82; Go 1.23."
         ), "{t}");
@@ -594,7 +587,7 @@ mod tests {
     #[test]
     fn text_with_almost_nothing_installed_and_without_winget() {
         let r = Detection { node: Some("20.11.0".into()), java: Some("1.8.0".into()), ..Default::default() };
-        let t = instructions(&r);
+        let t = programs(&r);
         assert!(t.contains("PowerShell; JavaScript and TypeScript with `bun`"));
         assert!(t.contains("Node 20; Java 8 (to run only: no compiler)."), "{t}");
         assert!(t.contains("Not installed: Python, Git, .NET, Rust, Go."), "{t}");
@@ -606,7 +599,7 @@ mod tests {
     #[test]
     fn text_with_winget_proposes_only_the_missing_ones() {
         let r = Detection { python: Some("3.12.4".into()), winget: Some("1.9".into()), ..Default::default() };
-        let t = instructions(&r);
+        let t = programs(&r);
         assert!(t.contains("Node: `winget install -e --id OpenJS.NodeJS.LTS` (about 80 MB)"), "{t}");
         assert!(!t.contains("Python.Python"), "Python is already there");
         assert!(t.contains("GetEnvironmentVariable('Path','Machine')"));
@@ -621,10 +614,10 @@ mod tests {
         b.git = Some("2.47.3".into());
         b.dotnet = Some("9.0.300".into());
         b.java = Some("21.0.99".into());
-        assert_eq!(instructions(&a), instructions(&b));
+        assert_eq!(programs(&a), programs(&b));
         // but a language that appears or disappears does
         b.go = None;
-        assert_ne!(instructions(&a), instructions(&b));
+        assert_ne!(programs(&a), programs(&b));
     }
 
     fn folder(name: &str) -> PathBuf {
@@ -661,9 +654,26 @@ mod tests {
         assert!(cmd.is_ascii(), "no paths or accented letters in the batch file");
         // second time: same content, no error
         install_bun_shim(&d).unwrap();
-        let p = path_with_bun(&bin, Some(std::ffi::OsStr::new(r"C:\Windows;C:\other")));
-        assert!(p.starts_with(&bin.display().to_string()) && p.ends_with(r"C:\Windows;C:\other"));
-        assert_eq!(path_with_bun(&bin, None), bin.display().to_string());
+        let dist = d.join("dist");
+        let git = dist.join("git").join("cmd");
+        assert_eq!(agent_path(&d, &dist, None), bin.display().to_string(), "no git in the resources: not in the PATH");
+        std::fs::create_dir_all(&git).unwrap();
+        let p = agent_path(&d, &dist, Some(std::ffi::OsStr::new(r"C:\Windows;C:\other")));
+        assert_eq!(p, format!(r"{};{};C:\Windows;C:\other", bin.display(), git.display()));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// The detection runs the commands with the agent's PATH: a program the app brings (Git of the resources) is
+    /// found as the model will find it.
+    #[test]
+    fn the_commands_are_looked_for_in_the_given_path() {
+        let d = folder("path");
+        let program = format!("only-here-{}", std::process::id());
+        std::fs::create_dir_all(d.join("bin")).unwrap();
+        std::fs::copy(std::env::current_exe().unwrap(), d.join("bin").join(format!("{program}.exe"))).unwrap();
+        let path = agent_path(&d, &d.join("none"), None);
+        assert!(matches!(run(&program, &["--list"], MAX_TIME, Some(&path)), Output::Finished { .. }));
+        assert!(matches!(run(&program, &["--list"], MAX_TIME, None), Output::NotFound));
         let _ = std::fs::remove_dir_all(&d);
     }
 }

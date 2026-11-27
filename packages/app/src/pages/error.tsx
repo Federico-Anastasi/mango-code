@@ -9,6 +9,7 @@ import { usePlatform } from "@/context/platform"
 import { createAttachments, ReportAttachments } from "@/components/report-attachments"
 import { reportTarget } from "@/utils/report"
 import { useLanguage } from "@/context/language"
+import { mangoVersion } from "@/utils/mango-version"
 import { errorDescriptionKey } from "./error-description"
 
 export type InitError = {
@@ -239,7 +240,7 @@ export const ErrorPage: Component<ErrorPageProps> = (props) => {
       platform.recordFatalRendererError?.({
         error: formattedError(),
         url: location.href,
-        version: platform.version,
+        version: mangoVersion,
         platform: platform.platform,
         os: platform.os,
       }) ?? Promise.resolve()
@@ -400,11 +401,7 @@ export const ErrorPage: Component<ErrorPageProps> = (props) => {
           {(message) => <p class="text-xs text-text-danger-base text-center max-w-2xl">{message()}</p>}
         </Show>
         <div class="flex flex-col items-center gap-2">
-          <Show when={platform.version}>
-            {(version) => (
-              <p class="text-xs text-text-weak">{language.t("error.page.version", { version: version() })}</p>
-            )}
-          </Show>
+          <p class="text-xs text-text-weak">{language.t("error.page.version", { version: mangoVersion })}</p>
         </div>
       </div>
     </div>

@@ -307,6 +307,41 @@
   }
 }
 
+[data-component="team-notice"] {
+  width: 100%;
+
+  [data-slot="compaction-part-line"] {
+    min-width: 24px;
+  }
+
+  [data-slot="compaction-part-label"] {
+    flex: 0 1 auto;
+    min-width: 0;
+    display: flex;
+    gap: 6px;
+  }
+
+  [data-slot="team-notice-label"] {
+    flex: 0 0 auto;
+  }
+
+  [data-slot="team-notice-excerpt"] {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  [data-slot="collapsible-trigger"][aria-expanded="true"] [data-slot="team-notice-excerpt"] {
+    display: none;
+  }
+
+  [data-slot="team-notice-body"] {
+    padding: 0 0 12px;
+    overflow-wrap: anywhere;
+    user-select: text;
+  }
+}
+
 [data-component="reasoning-part"] {
   width: 100%;
   color: var(--v2-text-text-muted);
@@ -1257,7 +1292,8 @@
   display: flex;
   flex-direction: column;
   gap: 12px;
-  padding: 8px 0;
+  /* the same inset as the title of the card */
+  padding: 8px 16px 12px;
 
   [data-slot="question-answer-item"] {
     display: flex;

@@ -77,12 +77,15 @@ import {
 import { ENGINE_SPEED_PATH, engineSpeedEffect } from "@/server/shared/engine-speed"
 import { SESSION_WORK_PATH, sessionWorkEffect } from "@/server/shared/session-work"
 import { FOLDERS_PATH, foldersEffect } from "@/server/shared/mango-folders"
+import { PROJECT_SERVERS_PATH, projectServersEffect } from "@/server/shared/mango-project-servers"
 import { SETTINGS_PATH, settingsEffect } from "@/server/shared/mango-settings"
+import { HARNESS_PATH, harnessEffect } from "@/server/shared/mango-harness"
 import { LANGUAGE_PATH, languageEffect } from "@/server/shared/mango-language"
 import { FOLDER_PATH, projectFolderEffect } from "@/server/shared/mango-project-folder"
 import { CONTROL_ROUTES, controlEffect } from "@/server/shared/mango-control"
 import { REWRITE_PATH, rewriteEffect } from "@/server/shared/mango-image-rewrite"
-import { RELOAD_PATH, makeReload } from "@/server/shared/mango-reload"
+import { QUIET_PATH, RELOAD_PATH, makeReload } from "@/server/shared/mango-reload"
+import { TEAM_STOP_PATH, teamStopEffect } from "@/server/shared/mango-team"
 import { PROCESSES_PATH, PROCESSES_STOP_PATH, processesEffect, processesStopEffect } from "@/server/shared/mango-processes"
 import { ServerAuth } from "@/server/auth"
 import { InstanceHttpApi, RootHttpApi } from "./api"
@@ -252,6 +255,24 @@ const settingsRoute = HttpRouter.use((router) =>
   }),
 ).pipe(Layer.provide(authOnlyRouterLayer))
 
+// mango-code: the MCP servers of a project, which start once the user allowed them (see shared/mango-project-servers.ts).
+const projectServersRoute = HttpRouter.use((router) =>
+  Effect.gen(function* () {
+    const store = yield* InstanceStore.Service
+    const { afterTheAnswers } = yield* makeReload
+    yield* router.add("GET", PROJECT_SERVERS_PATH, (request) => projectServersEffect(request, store, afterTheAnswers))
+    yield* router.add("POST", PROJECT_SERVERS_PATH, (request) => projectServersEffect(request, store, afterTheAnswers))
+  }),
+).pipe(Layer.provide(authOnlyRouterLayer))
+
+// mango-code: the harnesses of the settings page (see shared/mango-harness.ts).
+const harnessRoute = HttpRouter.use((router) =>
+  Effect.gen(function* () {
+    for (const method of ["GET", "POST", "PUT", "DELETE"] as const)
+      yield* router.add(method, HARNESS_PATH, (request) => harnessEffect(request))
+  }),
+).pipe(Layer.provide(authOnlyRouterLayer))
+
 // mango-code: the language shared with the app and the terminal (see shared/mango-language.ts).
 const languageRoute = HttpRouter.use((router) =>
   Effect.gen(function* () {
@@ -285,11 +306,20 @@ const imageRewriteRoute = HttpRouter.use((router) =>
   }),
 ).pipe(Layer.provide(authOnlyRouterLayer))
 
-// mango-code: the configuration read again when the app rewrote it (see shared/mango-reload.ts).
+// mango-code: the configuration read again when the app rewrote it, and the wait before a restart (see
+// shared/mango-reload.ts).
 const reloadRoute = HttpRouter.use((router) =>
   Effect.gen(function* () {
-    const reload = yield* makeReload
+    const { reload, quiet } = yield* makeReload
     yield* router.add("POST", RELOAD_PATH, () => reload)
+    yield* router.add("POST", QUIET_PATH, () => quiet)
+  }),
+).pipe(Layer.provide(authOnlyRouterLayer))
+
+// mango-code: the Team's stop (see shared/mango-team.ts).
+const teamRoute = HttpRouter.use((router) =>
+  Effect.gen(function* () {
+    yield* router.add("POST", TEAM_STOP_PATH, (request) => teamStopEffect(request))
   }),
 ).pipe(Layer.provide(authOnlyRouterLayer))
 
@@ -393,11 +423,14 @@ export function createRoutes(
     sessionWorkRoute,
     foldersRoute,
     settingsRoute,
+    projectServersRoute,
+    harnessRoute,
     languageRoute,
     projectFolderRoute,
     imageRewriteRoute,
     controlRoute,
     reloadRoute,
+    teamRoute,
     processesRoute,
     uiRoute,
   ).pipe(

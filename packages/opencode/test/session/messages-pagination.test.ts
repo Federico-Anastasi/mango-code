@@ -114,7 +114,7 @@ const addAssistant = Effect.fn("Test.addAssistant")(function* (
 const addCompactionPart = Effect.fn("Test.addCompactionPart")(function* (
   sessionID: SessionID,
   messageID: MessageID,
-  tailStartID?: MessageID,
+  kept?: { tail?: MessageID; users?: MessageID },
 ) {
   const session = yield* SessionNs.Service
   yield* session.updatePart({
@@ -123,8 +123,36 @@ const addCompactionPart = Effect.fn("Test.addCompactionPart")(function* (
     messageID,
     type: "compaction",
     auto: true,
-    tail_start_id: tailStartID,
-  } as any)
+    ...(kept?.tail ? { tail_start_id: kept.tail } : {}),
+    ...(kept?.users ? { users_from_id: kept.users } : {}),
+  })
+})
+
+/** An answer of the model with its text. */
+const addReply = Effect.fn("Test.addReply")(function* (sessionID: SessionID, parentID: MessageID, text: string) {
+  const session = yield* SessionNs.Service
+  const id = yield* addAssistant(sessionID, parentID, { finish: "end_turn" })
+  yield* session.updatePart({ id: PartID.ascending(), sessionID, messageID: id, type: "text", text })
+  return id
+})
+
+/** The message the agent writes after a summary: the summary, and the line about the messages left out when there is one. */
+const addTold = Effect.fn("Test.addTold")(function* (sessionID: SessionID, text: string, note?: string) {
+  const session = yield* SessionNs.Service
+  const id = yield* addUser(sessionID)
+  const write = (what: "summary" | "missing", value: string) =>
+    session.updatePart({
+      id: PartID.ascending(),
+      sessionID,
+      messageID: id,
+      type: "text",
+      text: value,
+      synthetic: true,
+      metadata: { resume: "compaction", compaction: what },
+    })
+  yield* write("summary", text)
+  if (note) yield* write("missing", note)
+  return id
 })
 
 describe("MessageV2.page", () => {
@@ -610,36 +638,21 @@ describe("MessageV2.filterCompacted", () => {
     ),
   )
 
-  it.instance("stops at compaction boundary and returns chronological order", () =>
+  it.instance("a session summarised before the agent wrote its own message shows the summary and the tail", () =>
     withSession(({ session, sessionID }) =>
       Effect.gen(function* () {
-        // Chronological: u1(+compaction part), a1(summary, parentID=u1), u2, a2
-        // Stream (newest first): a2, u2, a1(adds u1 to completed), u1(in completed + compaction) -> break
         const u1 = yield* addUser(sessionID, "first question")
-        const a1 = yield* addAssistant(sessionID, u1, { summary: true, finish: "end_turn" })
-        yield* session.updatePart({
-          id: PartID.ascending(),
-          sessionID,
-          messageID: a1,
-          type: "text",
-          text: "summary",
-        })
-        yield* addCompactionPart(sessionID, u1)
-
+        const c1 = yield* addUser(sessionID)
+        yield* addCompactionPart(sessionID, c1, { tail: u1 })
+        const s1 = yield* addAssistant(sessionID, c1, { summary: true, finish: "end_turn" })
+        yield* session.updatePart({ id: PartID.ascending(), sessionID, messageID: s1, type: "text", text: "summary" })
         const u2 = yield* addUser(sessionID, "new question")
         const a2 = yield* addAssistant(sessionID, u2)
-        yield* session.updatePart({
-          id: PartID.ascending(),
-          sessionID,
-          messageID: a2,
-          type: "text",
-          text: "new response",
-        })
 
         const result = MessageV2.filterCompacted(yield* MessageV2.stream(sessionID))
-        // Includes compaction boundary: u1, a1, u2, a2
-        expect(result[0].info.id).toBe(u1)
-        expect(result.length).toBe(4)
+        // the summary as a message of the user, the tail, then what came after
+        expect(result.map((item) => item.info.id)).toEqual([c1, u1, c1, s1, u2, a2])
+        expect(result[0].parts[0]).toMatchObject({ type: "text", text: "summary" })
       }),
     ),
   )
@@ -700,248 +713,130 @@ describe("MessageV2.filterCompacted", () => {
     ),
   )
 
-  it.instance("retains original tail when compaction stores tail_start_id", () =>
-    withSession(({ session, sessionID }) =>
+  it.instance("puts the messages of the user, the message the agent wrote and the tail where the summary was asked", () =>
+    withSession(({ sessionID }) =>
       Effect.gen(function* () {
         const u1 = yield* addUser(sessionID, "first")
-        const a1 = yield* addAssistant(sessionID, u1, { finish: "end_turn" })
-        yield* session.updatePart({
-          id: PartID.ascending(),
-          sessionID,
-          messageID: a1,
-          type: "text",
-          text: "first reply",
-        })
-
+        const a1 = yield* addReply(sessionID, u1, "first reply")
         const u2 = yield* addUser(sessionID, "second")
-        const a2 = yield* addAssistant(sessionID, u2, { finish: "end_turn" })
-        yield* session.updatePart({
-          id: PartID.ascending(),
-          sessionID,
-          messageID: a2,
-          type: "text",
-          text: "second reply",
-        })
-
+        const a2 = yield* addReply(sessionID, u2, "second reply")
         const c1 = yield* addUser(sessionID)
-        yield* addCompactionPart(sessionID, c1, u2)
+        yield* addCompactionPart(sessionID, c1, { tail: u2 })
         const s1 = yield* addAssistant(sessionID, c1, { summary: true, finish: "end_turn" })
-        yield* session.updatePart({
-          id: PartID.ascending(),
-          sessionID,
-          messageID: s1,
-          type: "text",
-          text: "summary",
-        })
-
+        const told = yield* addTold(sessionID, "summary")
         const u3 = yield* addUser(sessionID, "third")
-        const a3 = yield* addAssistant(sessionID, u3, { finish: "end_turn" })
-        yield* session.updatePart({
-          id: PartID.ascending(),
-          sessionID,
-          messageID: a3,
-          type: "text",
-          text: "third reply",
-        })
+        const a3 = yield* addReply(sessionID, u3, "third reply")
 
         const result = MessageV2.filterCompacted(yield* MessageV2.stream(sessionID))
 
-        expect(result.map((item) => item.info.id)).toEqual([c1, s1, u2, a2, u3, a3])
+        // the first answer is in the summary; the messages of the user stay, the summary comes before the tail
+        expect(result.map((item) => item.info.id)).toEqual([u1, told, u2, a2, c1, s1, u3, a3])
+        expect(a1).toBeDefined()
       }),
     ),
   )
 
-  it.instance("fork remaps compaction tail_start_id for filterCompacted", () =>
+  it.instance("a tail that starts inside a turn, and the user's messages that fit after the first", () =>
+    withSession(({ sessionID }) =>
+      Effect.gen(function* () {
+        const u1 = yield* addUser(sessionID, "first")
+        yield* addReply(sessionID, u1, "first reply")
+        const u2 = yield* addUser(sessionID, "second")
+        yield* addReply(sessionID, u2, "second reply")
+        const a3 = yield* addReply(sessionID, u2, "tail reply")
+        const c1 = yield* addUser(sessionID)
+        yield* addCompactionPart(sessionID, c1, { tail: a3, users: u2 })
+        const s1 = yield* addAssistant(sessionID, c1, { summary: true, finish: "end_turn" })
+        const told = yield* addTold(sessionID, "summary")
+        const u3 = yield* addUser(sessionID, "third")
+        const a4 = yield* addReply(sessionID, u3, "third reply")
+
+        const result = MessageV2.filterCompacted(yield* MessageV2.stream(sessionID))
+
+        expect(result.map((item) => item.info.id)).toEqual([u1, u2, told, a3, c1, s1, u3, a4])
+      }),
+    ),
+  )
+
+  it.instance("the line about the messages left out comes after the first one", () =>
+    withSession(({ sessionID }) =>
+      Effect.gen(function* () {
+        const u1 = yield* addUser(sessionID, "first")
+        yield* addReply(sessionID, u1, "r")
+        yield* addUser(sessionID, "second")
+        const u3 = yield* addUser(sessionID, "third")
+        const a3 = yield* addReply(sessionID, u3, "r")
+        const c1 = yield* addUser(sessionID)
+        yield* addCompactionPart(sessionID, c1, { tail: a3, users: u3 })
+        yield* addAssistant(sessionID, c1, { summary: true, finish: "end_turn" })
+        yield* addTold(sessionID, "summary", "1 left out")
+
+        const result = MessageV2.filterCompacted(yield* MessageV2.stream(sessionID))
+
+        const texts = result.map((item) => item.parts.map((part) => (part.type === "text" ? part.text : "")).join(""))
+        expect(texts.slice(0, 4)).toEqual(["first", "1 left out", "third", "summary"])
+      }),
+    ),
+  )
+
+  it.instance("fork remaps the ids the summary keeps", () =>
     Effect.gen(function* () {
       const session = yield* SessionNs.Service
       const created = yield* session.create({})
 
       const u1 = yield* addUser(created.id, "first")
-      const a1 = yield* addAssistant(created.id, u1, { finish: "end_turn" })
-      yield* session.updatePart({
-        id: PartID.ascending(),
-        sessionID: created.id,
-        messageID: a1,
-        type: "text",
-        text: "first reply",
-      })
-
+      yield* addReply(created.id, u1, "first reply")
       const u2 = yield* addUser(created.id, "second")
-      const a2 = yield* addAssistant(created.id, u2, { finish: "end_turn" })
-      yield* session.updatePart({
-        id: PartID.ascending(),
-        sessionID: created.id,
-        messageID: a2,
-        type: "text",
-        text: "second reply",
-      })
-
+      const a2 = yield* addReply(created.id, u2, "second reply")
       const c1 = yield* addUser(created.id)
-      yield* addCompactionPart(created.id, c1, u2)
+      yield* addCompactionPart(created.id, c1, { tail: a2, users: u2 })
       const s1 = yield* addAssistant(created.id, c1, { summary: true, finish: "end_turn" })
-      yield* session.updatePart({
-        id: PartID.ascending(),
-        sessionID: created.id,
-        messageID: s1,
-        type: "text",
-        text: "summary",
-      })
-
+      yield* addTold(created.id, "summary")
       const u3 = yield* addUser(created.id, "third")
-      const a3 = yield* addAssistant(created.id, u3, { finish: "end_turn" })
-      yield* session.updatePart({
-        id: PartID.ascending(),
-        sessionID: created.id,
-        messageID: a3,
-        type: "text",
-        text: "third reply",
-      })
+      yield* addReply(created.id, u3, "third reply")
 
       const parentFiltered = MessageV2.filterCompacted(yield* MessageV2.stream(created.id))
-      expect(parentFiltered.map((item) => item.info.id)).toEqual([c1, s1, u2, a2, u3, a3])
+      expect(parentFiltered.map((item) => item.info.id)).toContain(s1)
 
       const forked = yield* session.fork({ sessionID: created.id })
       const childFiltered = MessageV2.filterCompacted(yield* MessageV2.stream(forked.id))
-      expect(childFiltered).toHaveLength(parentFiltered.length)
+      const shape = (items: typeof parentFiltered) =>
+        items.map((item) => `${item.info.role}:${item.parts.map((part) => (part.type === "text" ? part.text : part.type)).join("|")}`)
+      expect(shape(childFiltered)).toEqual(shape(parentFiltered))
 
-      const tailPart = childFiltered.flatMap((m) => m.parts).find((p) => p.type === "compaction")
-      expect(tailPart?.type).toBe("compaction")
-      if (!tailPart || tailPart.type !== "compaction") throw new Error("Expected forked compaction part")
-      expect(tailPart.tail_start_id).toBeDefined()
-      expect(childFiltered.some((m) => m.info.id === tailPart.tail_start_id)).toBe(true)
+      const part = childFiltered.flatMap((item) => item.parts).find((item) => item.type === "compaction")
+      if (!part || part.type !== "compaction") throw new Error("Expected forked compaction part")
+      expect(childFiltered.some((item) => item.info.id === part.tail_start_id)).toBe(true)
+      expect(childFiltered.some((item) => item.info.id === part.users_from_id)).toBe(true)
 
       yield* session.remove(forked.id)
       yield* session.remove(created.id)
     }),
   )
 
-  it.instance("retains an assistant tail when compaction starts inside a turn", () =>
-    withSession(({ session, sessionID }) =>
+  it.instance("the latest summary decides, and what came before the earlier one is not in the tail", () =>
+    withSession(({ sessionID }) =>
       Effect.gen(function* () {
         const u1 = yield* addUser(sessionID, "first")
-        const a1 = yield* addAssistant(sessionID, u1, { finish: "end_turn" })
-        yield* session.updatePart({
-          id: PartID.ascending(),
-          sessionID,
-          messageID: a1,
-          type: "text",
-          text: "first reply",
-        })
-
+        yield* addReply(sessionID, u1, "first reply")
         const u2 = yield* addUser(sessionID, "second")
-        const a2 = yield* addAssistant(sessionID, u2, { finish: "end_turn" })
-        yield* session.updatePart({
-          id: PartID.ascending(),
-          sessionID,
-          messageID: a2,
-          type: "text",
-          text: "second reply",
-        })
-        const a3 = yield* addAssistant(sessionID, u2, { finish: "end_turn" })
-        yield* session.updatePart({
-          id: PartID.ascending(),
-          sessionID,
-          messageID: a3,
-          type: "text",
-          text: "tail reply",
-        })
-
+        yield* addReply(sessionID, u2, "second reply")
         const c1 = yield* addUser(sessionID)
-        yield* addCompactionPart(sessionID, c1, a3)
-        const s1 = yield* addAssistant(sessionID, c1, { summary: true, finish: "end_turn" })
-        yield* session.updatePart({
-          id: PartID.ascending(),
-          sessionID,
-          messageID: s1,
-          type: "text",
-          text: "summary",
-        })
-
+        yield* addCompactionPart(sessionID, c1, { tail: u2 })
+        yield* addAssistant(sessionID, c1, { summary: true, finish: "end_turn" })
+        yield* addTold(sessionID, "summary one")
         const u3 = yield* addUser(sessionID, "third")
-        const a4 = yield* addAssistant(sessionID, u3, { finish: "end_turn" })
-        yield* session.updatePart({
-          id: PartID.ascending(),
-          sessionID,
-          messageID: a4,
-          type: "text",
-          text: "third reply",
-        })
-
-        const result = MessageV2.filterCompacted(yield* MessageV2.stream(sessionID))
-
-        expect(result.map((item) => item.info.id)).toEqual([c1, s1, a3, u3, a4])
-      }),
-    ),
-  )
-
-  it.instance("prefers latest compaction boundary when repeated compactions exist", () =>
-    withSession(({ session, sessionID }) =>
-      Effect.gen(function* () {
-        const u1 = yield* addUser(sessionID, "first")
-        const a1 = yield* addAssistant(sessionID, u1, { finish: "end_turn" })
-        yield* session.updatePart({
-          id: PartID.ascending(),
-          sessionID,
-          messageID: a1,
-          type: "text",
-          text: "first reply",
-        })
-
-        const u2 = yield* addUser(sessionID, "second")
-        const a2 = yield* addAssistant(sessionID, u2, { finish: "end_turn" })
-        yield* session.updatePart({
-          id: PartID.ascending(),
-          sessionID,
-          messageID: a2,
-          type: "text",
-          text: "second reply",
-        })
-
-        const c1 = yield* addUser(sessionID)
-        yield* addCompactionPart(sessionID, c1, u2)
-        const s1 = yield* addAssistant(sessionID, c1, { summary: true, finish: "end_turn" })
-        yield* session.updatePart({
-          id: PartID.ascending(),
-          sessionID,
-          messageID: s1,
-          type: "text",
-          text: "summary one",
-        })
-
-        const u3 = yield* addUser(sessionID, "third")
-        const a3 = yield* addAssistant(sessionID, u3, { finish: "end_turn" })
-        yield* session.updatePart({
-          id: PartID.ascending(),
-          sessionID,
-          messageID: a3,
-          type: "text",
-          text: "third reply",
-        })
-
+        const a3 = yield* addReply(sessionID, u3, "third reply")
         const c2 = yield* addUser(sessionID)
-        yield* addCompactionPart(sessionID, c2, u3)
+        yield* addCompactionPart(sessionID, c2, { tail: u3, users: u2 })
         const s2 = yield* addAssistant(sessionID, c2, { summary: true, finish: "end_turn" })
-        yield* session.updatePart({
-          id: PartID.ascending(),
-          sessionID,
-          messageID: s2,
-          type: "text",
-          text: "summary two",
-        })
-
+        const told2 = yield* addTold(sessionID, "summary two")
         const u4 = yield* addUser(sessionID, "fourth")
-        const a4 = yield* addAssistant(sessionID, u4, { finish: "end_turn" })
-        yield* session.updatePart({
-          id: PartID.ascending(),
-          sessionID,
-          messageID: a4,
-          type: "text",
-          text: "fourth reply",
-        })
+        const a4 = yield* addReply(sessionID, u4, "fourth reply")
 
         const result = MessageV2.filterCompacted(yield* MessageV2.stream(sessionID))
 
-        expect(result.map((item) => item.info.id)).toEqual([c2, s2, u3, a3, u4, a4])
+        expect(result.map((item) => item.info.id)).toEqual([u1, u2, told2, u3, a3, c2, s2, u4, a4])
       }),
     ),
   )

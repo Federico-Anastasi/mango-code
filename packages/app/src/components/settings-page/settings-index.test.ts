@@ -122,7 +122,8 @@ describe("the search finds the settings of Agent, General and Help", () => {
     expect(ask("temperatura")).toEqual(["models: Stile delle risposte"])
     expect(ask("terminale")).toEqual(["general: Espandi le parti dello strumento Shell"])
     expect(ask("bug")).toEqual(["help: Segnala un problema"])
-    expect(ask("rete")).toEqual(["links: Presta il motore ai miei PC", "links: Usa il motore di un altro PC"])
+    expect(ask("rete")).toEqual(["links: Presta il motore ai miei PC", "links: Usa il motore di un altro PC", "links: Usa un server"])
+    expect(ask("openai")).toEqual(["links: Usa un server"])
   })
 
   test("the three alerts answer to «suono» and «notifica», and only they", () => {

@@ -29,7 +29,7 @@ pub fn planner(mode: &'static str, step_ms: u64) -> Box<images::Planner> {
                 startup_post: None,
             },
             url,
-            gpus: vec![Gpu { index: 1, name: "GPU 1".into(), vendor: Vendor::Nvidia, memory_mib: 8192, cuda_driver: Some((12, 6)), cc: Some((8, 6)) }],
+            gpus: vec![Gpu { index: 1, name: "GPU 1".into(), vendor: Vendor::Nvidia, memory_mib: 8192, shared_mib: 0, cuda_driver: Some((12, 6)), cc: Some((8, 6)) }],
             steps: 6,
             cfg_scale: 1.0,
         })

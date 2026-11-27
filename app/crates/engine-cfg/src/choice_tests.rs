@@ -3,9 +3,9 @@
 //! GTX 1080, GTX 1660 SUPER), Vulkan cards, and the PC of issue 2.
 
 use super::*;
-use crate::choices::{Choices, SmallModels, WhereChoice};
+use crate::choices::{Choices, SmallModels, Style, WhereChoice};
 use crate::hardware::fixture::*;
-use crate::view::models_view;
+use crate::view::{models_view, GpuView};
 use mango_common::catalog::Sampling;
 use mango_common::Build;
 use mango_common::i18n::{lang, Lang};
@@ -104,7 +104,7 @@ fn has(args: &[String], pair: [&str; 2]) -> bool {
 
 fn with_unused(w: &World, names: &[&str]) {
     for n in names {
-        choices::set_gpu_used(&w.paths, n, false).unwrap();
+        choices::set_gpu_used(&w.paths, &three_gpus(), n, false).unwrap();
     }
 }
 
@@ -210,6 +210,48 @@ fn each_choice_of_where_uses_exactly_the_cards_it_names() {
     assert!(!p.spec.args.iter().any(|a| a == "-ngl"), "{:?}", p.spec.args);
 }
 
+/// Two identical cards are chosen and left out one by one; a name alone, as an older file may hold it, names both.
+#[test]
+fn identical_cards_are_chosen_and_left_out_one_by_one() {
+    const TWIN_1: &str = "NVIDIA GeForce RTX 3060 #1";
+    const TWIN_2: &str = "NVIDIA GeForce RTX 3060 #2";
+    let w = world(false);
+    let hw = twin_gpus();
+    let names = |w: &World| computer_view(&w.paths, &hw).unwrap().gpus.into_iter().map(|g| (g.name, g.used)).collect::<Vec<_>>();
+    choices::set_gpu_used(&w.paths, &hw, TWIN_2, false).unwrap();
+    assert_eq!(names(&w), [(TWIN_1.to_string(), true), (GTX_1080.to_string(), true), (TWIN_2.to_string(), false)]);
+    choose(&w, "3.5-4b", WhereChoice::All);
+    assert_eq!(visible_cards(&plan(&w, "3.5-4b", &hw).unwrap()), "0,1", "the twin left out is not used");
+    choices::set_gpu_used(&w.paths, &hw, TWIN_2, true).unwrap();
+    choices::set_model(&w.paths, "3.5-4b", Choices { place: WhereChoice::Pick, gpus: vec![TWIN_2.into()], ..Choices::default() }).unwrap();
+    let p = plan(&w, "3.5-4b", &hw).unwrap();
+    assert_eq!(visible_cards(&p), "2", "the second twin alone");
+    assert_eq!(view_of(&w, "3.5-4b", &hw).verdict.place.unwrap().gpus, [TWIN_2]);
+
+    // the name alone leaves out both; turning one on keeps the other out
+    with_unused(&w, &["NVIDIA GeForce RTX 3060"]);
+    assert_eq!(names(&w), [(TWIN_1.to_string(), false), (GTX_1080.to_string(), true), (TWIN_2.to_string(), false)]);
+    choices::set_gpu_used(&w.paths, &hw, TWIN_1, true).unwrap();
+    assert_eq!(choices::read(&w.paths).unwrap().computer.unused_gpus, [TWIN_2]);
+}
+
+/// One of two identical cards taken out of the PC: the card left now has the plain name, and a twin left out by its
+/// number names nothing. If it was the one left, it is in use again: Computer says so, and the choice comes back with
+/// the card.
+#[test]
+fn a_twin_left_out_and_then_taken_out_of_the_pc_is_told() {
+    const TWIN_1: &str = "NVIDIA GeForce RTX 3060 #1";
+    let w = world(false);
+    choices::set_gpu_used(&w.paths, &twin_gpus(), TWIN_1, false).unwrap();
+    let one = pc(vec![nvidia(0, "NVIDIA GeForce RTX 3060", 12288, (8, 6), (12, 6)), nvidia(1, GTX_1080, 8192, (6, 1), (12, 6))], 65_536);
+    let view = computer_view(&w.paths, &one).unwrap();
+    assert_eq!(view.gone, [TWIN_1]);
+    assert!(view.gpus[0].used, "the card is in use, and Computer says why");
+    assert!(computer_view(&w.paths, &twin_gpus()).unwrap().gone.is_empty(), "with both cards back nothing is missing");
+    let no_twin = pc(vec![nvidia(0, GTX_1080, 8192, (6, 1), (12, 6))], 65_536);
+    assert!(computer_view(&w.paths, &no_twin).unwrap().gone.is_empty(), "no card of that name: nothing runs in its place");
+}
+
 /// `one` is the fastest card in use; `all` and `pick` don't count the cards left out.
 #[test]
 fn the_choices_count_only_the_cards_in_use() {
@@ -293,25 +335,34 @@ fn a_card_left_out_disappears_from_plan_verdict_and_context() {
     assert_eq!((place.placement, place.gpus.len(), place.context), (Placement::Cpu, 0, p.ctx));
 
     // And if the card is used again, as at the start.
-    choices::set_gpu_used(&w.paths, GTX_1080, true).unwrap();
-    choices::set_gpu_used(&w.paths, RTX_3060_TI, true).unwrap();
+    choices::set_gpu_used(&w.paths, &three_gpus(), GTX_1080, true).unwrap();
+    choices::set_gpu_used(&w.paths, &three_gpus(), RTX_3060_TI, true).unwrap();
     assert_eq!(visible_cards(&plan(&w, "bonsai2", &hw).unwrap()), "0,1");
     assert!(choices::read(&w.paths).unwrap().computer.unused_gpus.is_empty());
 }
 
-/// A card left out and a card lent to another job both stay out of the plan; when a setup tailored to the PC needs
-/// the card, the sentence says which of the two it is.
+/// A setup tailored to the PC that needs a card the user left out gives way: the model runs with the general plan on
+/// the cards left (here the processor, where Qwen3.6 does not fit two cards), Bonsai 2 opens its general engine's file,
+/// TOQ takes its profile for every PC with this build, and the verdict says why in its first sentence. The Computer page
+/// no longer counts those setups. A card lent to another job keeps its sentence.
 #[test]
-fn a_tailored_setup_that_needs_a_card_left_out_says_so() {
+fn a_tailored_setup_that_needs_a_card_left_out_gives_way_to_the_general_plan_and_says_why() {
     let w = world(true);
     let hw = three_gpus();
-    assert!(plan(&w, "3.6", &hw).is_ok());
+    assert!(plan(&w, "3.6", &hw).unwrap().spec.exe.starts_with(w.paths.engines.join("prism")));
+    let before = computer_view(&w.paths, &hw).unwrap().tailored.map(|t| t.models);
     with_unused(&w, &[GTX_1660_SUPER]);
-    let e = plan(&w, "3.6", &hw).unwrap_err().to_string();
-    assert!(e.contains(GTX_1660_SUPER) && e.contains(&tr!("che hai segnato come non usata", "which you marked as not used")), "{e}");
+    let p = plan(&w, "3.6", &hw).unwrap();
+    assert!(p.spec.exe.starts_with(w.paths.engines.join("llamacpp")) && !cards(&p).contains(&GTX_1660_SUPER), "{:?}", p.spec);
     let v = view_of(&w, "3.6", &hw);
-    assert!(!v.verdict.fits && v.verdict.reason.contains(&tr!("che hai segnato come non usata", "which you marked as not used")), "{:?}", v.verdict);
-    assert!(v.tailored, "the setup is still there for the card to come back");
+    let why = tr!("che hai segnato come non usata", "which you marked as not used");
+    assert!(v.verdict.fits && v.verdict.reason.contains(GTX_1660_SUPER) && v.verdict.reason.contains(&why), "{:?}", v.verdict);
+    assert!(!v.tailored, "the tailored setup does not apply while its card is left out");
+    assert!(plan(&w, "bonsai2", &hw).unwrap().gguf.ends_with("Ternary-Bonsai-2-27B-Q2_0.gguf"));
+    let toq = view_of(&w, "toq", &hw).verdict;
+    assert!(toq.fits && !toq.place.unwrap().gpus.iter().any(|g| g == GTX_1660_SUPER), "TOQ takes its profile for every PC with this build");
+    let after = computer_view(&w.paths, &hw).unwrap().tailored.map(|t| t.models);
+    assert!(after < before, "{before:?} -> {after:?}");
     // The card lent to another job keeps its sentence.
     let w = world(true);
     let e = plan_for(&w.paths, Some("3.6"), 8080, &hw, &[2]).unwrap_err().to_string();
@@ -422,6 +473,16 @@ fn a_saved_context_larger_than_the_new_hardware_holds_is_kept_and_the_effective_
 }
 
 // --- the PC of issue 2 ----------------------------------------------------------------------------------------
+
+/// One card alone, as a laptop's GeForce: «all the cards» would be that card, so a model chooses only between automatic
+/// and the processor.
+#[test]
+fn with_one_card_a_model_does_not_offer_all_the_cards() {
+    let hw = pc(vec![nvidia(0, "NVIDIA GeForce GTX 1650", 4096, (7, 5), (12, 4))], 16_384);
+    let w = world(false);
+    assert_eq!(view_of(&w, "ling", &hw).limits.places, [WhereChoice::Auto, WhereChoice::Cpu]);
+    assert_eq!(view_of(&w, "3.5-2b", &hw).limits.places, [WhereChoice::Auto, WhereChoice::Cpu]);
+}
 
 /// Issue #2: a GeForce GT 710 of 2 GB (read from DXGI, without CUDA), Core Ultra 5 245K with 14 cores and 16 GB of RAM:
 /// the models that fit go on the processor and the card doesn't count, also for the list of cards.
@@ -599,7 +660,7 @@ fn with_vulkan_one_and_pick_are_refused() {
     assert!(e.contains(&sentence) && !e.contains("Vulkan"), "{e}");
     let v = view_of(&w, "3.5-4b", &hw);
     assert!(!v.verdict.fits && v.verdict.reason.contains(&sentence), "{:?}", v.verdict);
-    assert_eq!(v.limits.places, [WhereChoice::Auto, WhereChoice::All, WhereChoice::Cpu]);
+    assert_eq!(v.limits.places, [WhereChoice::Auto, WhereChoice::All, WhereChoice::Cpu, WhereChoice::Pick], "the choice saved stays shown");
 }
 
 /// The context chosen with a tailored setup is in the real plan's arguments, not only in the choices offered.
@@ -654,7 +715,7 @@ fn commands_in_parallel_lose_no_change() {
             scope.spawn(move || {
                 for round in 0..20 {
                     choices::set_model(paths, key, Choices { context: Some(32_768 + 4096 * (round + 1)), ..Choices::default() }).unwrap();
-                    choices::set_gpu_used(paths, &format!("card {i}"), i % 2 == 1).unwrap();
+                    choices::set_gpu_used(paths, &three_gpus(), &format!("card {i}"), i % 2 == 1).unwrap();
                 }
             });
         }
@@ -691,11 +752,15 @@ fn with_vulkan_a_single_card_cannot_be_left_out() {
     assert!(e.contains(&sentence) && !e.contains("Vulkan"), "{e}");
     let v = view_of(&w, "3.5-4b", &hw);
     assert!(!v.verdict.fits && v.verdict.reason.contains(&sentence), "{:?}", v.verdict);
-    assert_eq!(v.limits.places, [WhereChoice::Cpu]);
+    assert_eq!(v.limits.places, [WhereChoice::Auto, WhereChoice::Cpu], "the processor, and Automatic, which was chosen");
+    // The sentence asks to use the card again or to leave all of them out: every switch does one or the other.
     let c = computer_view(&w.paths, &hw).unwrap();
-    let note = tr!("Con il motore di questo computer non si può escludere una scheda sola.", "With this computer's engine a single card can't be left out.");
-    assert!(c.gpus.iter().all(|g| g.note == note), "{:?}", c.gpus);
+    assert!(c.gpus.iter().all(|g| g.note.is_empty()), "{:?}", c.gpus);
     assert_eq!(c.gpus.iter().map(|g| g.used).collect::<Vec<_>>(), [true, false]);
+    choices::set_gpu_used(&w.paths, &hw, "AMD Radeon RX 6800", true).unwrap();
+    let note = tr!("Con il motore di questo computer non si può escludere una scheda sola.", "With this computer's engine a single card can't be left out.");
+    assert!(computer_view(&w.paths, &hw).unwrap().gpus.iter().all(|g| g.note == note && g.used));
+    with_unused(&w, &["AMD Radeon RX 6800"]);
 
     // The processor works: it hides all the cards.
     choose(&w, "3.5-4b", WhereChoice::Cpu);
@@ -768,7 +833,7 @@ fn an_unreadable_file_is_an_error_and_is_not_overwritten() {
         std::fs::write(&f, broken).unwrap();
         let e = choices::read(&paths).unwrap_err().to_string();
         assert!(e.contains(&tr!("non sono valide", "are not valid")) && e.contains(choices::FILE), "{broken}: {e}");
-        assert!(choices::set_gpu_used(&paths, "A", false).is_err() && choices::set_default(&paths, Some("ling")).is_err());
+        assert!(choices::set_gpu_used(&paths, &three_gpus(), "A", false).is_err() && choices::set_default(&paths, Some("ling")).is_err());
         assert_eq!(std::fs::read_to_string(&f).unwrap(), broken, "the file stays as it was");
     }
     // A plan or a verdict with such a file doesn't go on as if nothing was chosen.
@@ -782,18 +847,37 @@ fn an_unreadable_file_is_an_error_and_is_not_overwritten() {
     assert!(choices::read(&w.paths).unwrap_err().to_string().contains(&tr!("Non riesco a leggere", "I can't read")));
 }
 
+/// A model's harness is one built into the agent or one the user made: the choice is kept, a name that is neither is
+/// refused, and the default harness is not written.
+#[test]
+fn a_model_takes_a_harness_that_is_there() {
+    let w = world(false);
+    let mine = w.paths.data.join("harness").join("mine");
+    std::fs::create_dir_all(&mine).unwrap();
+    std::fs::write(mine.join("harness.json"), "{}").unwrap();
+    for chosen in ["mango-harness-2", "mine"] {
+        choices::set_model(&w.paths, "ling", Choices { harness: Some(chosen.into()), ..Choices::default() }).unwrap();
+        assert_eq!(choices::read(&w.paths).unwrap().models["ling"].harness.as_deref(), Some(chosen));
+    }
+    let err = choices::set_model(&w.paths, "ling", Choices { harness: Some("gone".into()), ..Choices::default() }).unwrap_err();
+    assert!(err.to_string().contains("gone"), "{err}");
+    assert_eq!(choices::read(&w.paths).unwrap().models["ling"].harness.as_deref(), Some("mine"), "a refused choice changes nothing");
+    choices::set_model(&w.paths, "ling", Choices::default()).unwrap();
+    assert!(!std::fs::read_to_string(w.paths.data.join(choices::FILE)).unwrap().contains("harness"));
+}
+
 /// What is written is read back, and only the models whose choices differ from the standard ones are in the file.
 #[test]
 fn what_is_written_is_read_back_and_only_the_differences_are_kept() {
     let w = world(false);
-    let mut mine = Choices { place: WhereChoice::Pick, gpus: vec![GTX_1080.into()], context: Some(65_536), style: choices::Style::Creative, reasoning: Some("off".into()), sampling: Sampling { temperature: Some(0.4), top_k: Some(10), ..Sampling::default() } };
+    let mut mine = Choices { place: WhereChoice::Pick, gpus: vec![GTX_1080.into()], context: Some(65_536), style: choices::Style::Creative, reasoning: Some("off".into()), sampling: Sampling { temperature: Some(0.4), top_k: Some(10), ..Sampling::default() }, harness: None };
     choices::set_model(&w.paths, "ling", mine.clone()).unwrap();
     choices::set_model(&w.paths, "3.5-4b", Choices { place: WhereChoice::Cpu, ..Choices::default() }).unwrap();
     choices::set_default(&w.paths, Some("ling")).unwrap();
-    choices::set_gpu_used(&w.paths, GTX_1660_SUPER, false).unwrap();
-    choices::set_gpu_used(&w.paths, GTX_1660_SUPER, false).unwrap();
-    choices::set_gpu_used(&w.paths, GTX_1080, false).unwrap();
-    choices::set_gpu_used(&w.paths, GTX_1080, true).unwrap();
+    choices::set_gpu_used(&w.paths, &three_gpus(), GTX_1660_SUPER, false).unwrap();
+    choices::set_gpu_used(&w.paths, &three_gpus(), GTX_1660_SUPER, false).unwrap();
+    choices::set_gpu_used(&w.paths, &three_gpus(), GTX_1080, false).unwrap();
+    choices::set_gpu_used(&w.paths, &three_gpus(), GTX_1080, true).unwrap();
     choices::set_small_models(&w.paths, SmallModels::All).unwrap();
     choices::set_update_automatic(&w.paths, false).unwrap();
     let c = choices::read(&w.paths).unwrap();
@@ -837,7 +921,7 @@ fn a_default_is_saved_only_when_there_is_none() {
     assert_eq!(choices::read(&w.paths).unwrap().default.as_deref(), Some("ling"), "the first one stays");
 }
 
-/// A model of the user's from a file on the computer names that file among its own: «Togli» leaves it. The files Mango
+/// A model of the user's from a file on the computer names that file among its own: «Remove» leaves it. The files Mango
 /// Code downloads are not among them.
 #[test]
 fn the_files_of_the_user_are_named_and_the_downloaded_ones_are_not() {
@@ -861,6 +945,34 @@ fn the_files_of_the_user_are_named_and_the_downloaded_ones_are_not() {
     let own = |key: &str| views.iter().find(|v| v.key == key).unwrap().own_files.clone();
     assert_eq!(own("local-mine"), [local]);
     assert!(own("hf-mine").is_empty() && own("ling").is_empty(), "Mango Code downloads them");
+}
+
+/// A file of the user's that became a Mango Code model's own (the catalog that came with the app has it): what was chosen
+/// for it is written under the model's key, so that the agent, which reads the file by the model's key, finds it too.
+#[test]
+fn the_choices_of_a_file_that_became_a_catalog_model_move_under_its_key() {
+    let w = world(false);
+    let file = load_models(&w.paths).unwrap();
+    let ling = &file.models["ling"];
+    let name = |path: &str| path.rsplit(['/', '\\']).next().unwrap().to_string();
+    let files: Vec<serde_json::Value> = ling["files"].as_array().unwrap().iter().filter(|f| f.get("engine").is_none()).map(|f| {
+        serde_json::json!({ "path": format!("C:\\mine\\{}",name(f["path"].as_str().unwrap())), "size": f["size"] })
+    }).collect();
+    let gguf = files[0]["path"].clone();
+    let list = serde_json::json!({ "models": { "local-ling": { "label": "mine", "gguf": gguf, "origin": "local", "files": files } } });
+    std::fs::create_dir_all(&w.paths.data).unwrap();
+    std::fs::write(w.paths.data.join(mango_common::catalog::USER_FILE), list.to_string()).unwrap();
+    let saved = serde_json::json!({ "default": "local-ling", "models": { "local-ling": { "harness": "mango-harness-2" } } });
+    std::fs::write(w.paths.data.join("choices.json"), saved.to_string()).unwrap();
+
+    choices::settle_keys(&w.paths).unwrap();
+    let raw: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(w.paths.data.join("choices.json")).unwrap()).unwrap();
+    assert_eq!(raw["models"]["ling"]["harness"], "mango-harness-2", "{raw}");
+    assert!(raw["models"].get("local-ling").is_none() && raw["default"] == "ling", "{raw}");
+
+    let before = std::fs::metadata(w.paths.data.join("choices.json")).unwrap().modified().unwrap();
+    choices::settle_keys(&w.paths).unwrap();
+    assert_eq!(std::fs::metadata(w.paths.data.join("choices.json")).unwrap().modified().unwrap(), before, "nothing to move: not written");
 }
 
 /// A model whose downloaded files the user put in another folder says which one; the others say nothing.
@@ -907,6 +1019,9 @@ fn the_computer_lists_the_cards_the_disk_and_the_tailored_models() {
     assert_eq!(c.small_models, SmallModels::All);
     assert_eq!((c.disk.path.as_path(), c.disk.used_bytes), (w.paths.models.as_path(), 1234));
     assert!(c.disk.free_bytes > 0, "free space of the disk read from Windows");
+    assert_eq!(c.tailored, None, "no setup tailored to these cards applies while one of them is left out");
+    choices::set_gpu_used(&w.paths, &hw, GTX_1660_SUPER, true).unwrap();
+    let c = computer_view(&w.paths, &hw).unwrap();
     assert_eq!(c.tailored.map(|t| t.models), Some(5), "3.6, 3.8, Bonsai 2, LFM and TOQ have a profile for these cards");
     // A folder that isn't there yet holds nothing and the disk is the one it will be on.
     let (_d, paths) = data_only();
@@ -922,6 +1037,21 @@ fn the_computer_lists_the_cards_the_disk_and_the_tailored_models() {
     hw.gpus.push(other(4, "AMD Radeon(TM) Graphics", Vendor::Amd, 4096));
     let c = computer_view(&paths, &hw).unwrap();
     assert!(!c.gpus[4].used && c.gpus[4].note.contains(&tr!("grafica integrata", "integrated graphics")), "{:?}", c.gpus[4]);
+    // Integrated graphics that would borrow the RAM, beside dedicated cards: off, with why, and its switch changes nothing.
+    hw.gpus.push(integrated(5, "Intel(R) UHD Graphics 630", 128, 32_000));
+    let c = computer_view(&paths, &hw).unwrap();
+    assert!(!c.gpus[5].used && c.gpus[5].shared && c.gpus[5].note.contains(&tr!("dedicata", "dedicated")), "{:?}", c.gpus[5]);
+    assert_eq!(c.gpus[5].memory_mib, 0, "no memory the models can use is shown");
+    // Alone, it shows the memory it may borrow, and its switch is the choice on the integrated graphics, off at first.
+    let w = world(false);
+    let mut hw = pc(vec![integrated(0, "AMD Radeon(TM) Graphics", 512, 7_700)], 15_700);
+    let row = |hw: &Hardware| computer_view(&w.paths, hw).unwrap().gpus.remove(0);
+    assert_eq!(row(&hw), GpuView { name: "AMD Radeon(TM) Graphics".into(), memory_mib: 7_700 - 1024, shared: true, used: false, note: String::new() });
+    choices::set_gpu_used(&w.paths, &hw, "AMD Radeon(TM) Graphics", true).unwrap();
+    let saved = choices::read(&w.paths).unwrap().computer;
+    assert!(saved.integrated && saved.unused_gpus.is_empty(), "{saved:?}");
+    hw.integrated = saved.integrated;
+    assert!(row(&hw).used);
     // Integrated graphics with the memory of a card is listed as the card it is, and can be left out like one.
     let hw = pc(vec![other(0, "AMD Radeon(TM) 8060S Graphics", Vendor::Amd, 65_536)], 63_000);
     let c = computer_view(&paths, &hw).unwrap();
@@ -1222,7 +1352,7 @@ fn listed(key: &str, placement: Option<Placement>, present: bool) -> view::Model
         verdict: Verdict { fits: placement.is_some(), place: placement.map(|placement| Where { placement, gpus: vec![], context: 4096 }), reason: String::new(), speed: None, fastest: false, estimated: false },
         recommended: false,
         on_request: false,
-        limits: Limits { places: vec![], context: vec![], reasoning: vec![] },
+        limits: Limits { places: vec![], context: vec![], reasoning: vec![], reasoning_default: None },
         tailored: false,
         choices: Choices::default(),
     }
@@ -1337,7 +1467,7 @@ fn gb(text: &str) -> String {
 fn a_measured_setup_does_not_start_where_another_program_holds_one_of_its_cards() {
     let w = world(true);
     let hw = three_gpus();
-    let taken = |used: &[(u32, u64, u64)], lent: &[u32]| taken_before_start(&w.paths, &hw, used, "3.6", lent).unwrap();
+    let taken = |used: &[(u32, u64, u64)], lent: &[u32]| taken_before_start(&w.paths, &hw, used, FREE_RAM_MIB, "3.6", lent).unwrap();
 
     let r26 = taken(&with_used(1, 4915), &[]).expect("the GTX 1080 is taken");
     assert_eq!(r26.cards, [1]);
@@ -1359,6 +1489,27 @@ fn a_measured_setup_does_not_start_where_another_program_holds_one_of_its_cards(
     assert_eq!(taken(&with_used(1, 4915), &[1]), None, "a card lent to another job is held by that job");
 }
 
+/// What the tests leave free of the RAM when it is not what they look at.
+const FREE_RAM_MIB: u64 = 48_000;
+
+/// On the integrated graphics that borrows the PC's memory, what counts before the start is the RAM left free by the other
+/// programs: with enough it starts, with too little for the same plan it does not, and the sentence says why. A model on
+/// the processor is not looked at.
+#[test]
+fn a_model_on_the_integrated_graphics_starts_while_the_free_ram_gives_the_same_plan() {
+    let w = world(false);
+    let mut hw = pc(vec![integrated(0, "AMD Radeon(TM) Graphics", 512, 7_700)], 15_700);
+    hw.integrated = true;
+    assert_eq!(cards(&plan(&w, "3.5-4b", &hw).unwrap()), ["AMD Radeon(TM) Graphics"]);
+    let taken = |hw: &Hardware, free: u64| taken_before_start(&w.paths, hw, &[(0, 300, 512)], free, "3.5-4b", &[]).unwrap();
+    assert_eq!(taken(&hw, 10_000), None, "Windows and a browser beside it");
+    let short = taken(&hw, 3_000).expect("too little RAM left");
+    assert_eq!(short.cards, [0]);
+    assert!(short.sentence.contains(&gb("2.9 GB")), "{}", short.sentence);
+    hw.integrated = false;
+    assert_eq!(taken(&hw, 3_000), None, "on the processor nothing is looked at");
+}
+
 /// The memory of a Radeon counts like that of an NVIDIA card: 15 GB of the RX 7800 XT's 16 held by another program leave no
 /// room for a model that fits with the card free, and the sentence names the card; with the card free it starts, and the
 /// desktop's share and a large desktop do not keep it from starting.
@@ -1367,7 +1518,7 @@ fn a_radeon_held_by_another_program_does_not_start_a_model_that_fits_with_it_fre
     let w = world(false);
     let hw = pc(vec![other(0, "AMD Radeon RX 7800 XT", Vendor::Amd, 16_368)], 32_768);
     assert_eq!(cards(&plan(&w, "3.5-4b", &hw).unwrap()), ["AMD Radeon RX 7800 XT"], "with the card free the model is on it");
-    let taken = |mib: u64| taken_before_start(&w.paths, &hw, &[(0, mib, 16_368)], "3.5-4b", &[]).unwrap();
+    let taken = |mib: u64| taken_before_start(&w.paths, &hw, &[(0, mib, 16_368)], FREE_RAM_MIB, "3.5-4b", &[]).unwrap();
 
     let held = taken(15_360).expect("the Radeon is taken");
     assert_eq!(held.cards, [0]);
@@ -1396,7 +1547,7 @@ fn a_radeon_held_by_another_program_does_not_start_a_model_that_fits_with_it_fre
 fn a_computed_plan_starts_while_the_memory_left_gives_the_same_plan() {
     let w = world(false);
     let hw = three_gpus();
-    let taken = |key: &str, used: &[(u32, u64, u64)]| taken_before_start(&w.paths, &hw, used, key, &[]).unwrap();
+    let taken = |key: &str, used: &[(u32, u64, u64)]| taken_before_start(&w.paths, &hw, used, FREE_RAM_MIB, key, &[]).unwrap();
     for key in ["3.5-2b", "3.5-4b"] {
         assert_eq!(cards(&plan(&w, key, &hw).unwrap()), [RTX_3060_TI], "{key}");
         assert_eq!(taken(key, &with_used(1, 7000)), None, "{key}: another card");
@@ -1419,7 +1570,7 @@ fn after_a_failed_start_the_model_proposed_fits_beside_the_other_programs() {
     assert!(view_of(&w, &free, &hw).tailored, "with the cards free the first that fits is a measured setup: {free}");
     let beside = proposed(&with_used(1, 4915)).unwrap();
     assert_ne!(beside, free);
-    assert_eq!(taken_before_start(&w.paths, &hw, &with_used(1, 4915), &beside, &[]).unwrap(), None, "{beside} starts");
+    assert_eq!(taken_before_start(&w.paths, &hw, &with_used(1, 4915), FREE_RAM_MIB, &beside, &[]).unwrap(), None, "{beside} starts");
 }
 
 /// With the GTX 1080 lent to another job, the plan of Bonsai-2 (computed from the memory, on two cards) moves to the 3060 Ti
@@ -1432,8 +1583,8 @@ fn a_card_lent_to_another_job_is_out_of_the_plan_that_is_looked_at() {
     assert_eq!(cards(&plan_for(&w.paths, Some("bonsai2"), 8080, &hw, &[1]).unwrap()), [RTX_3060_TI, GTX_1660_SUPER]);
     assert_eq!(cards(&plan(&w, "bonsai2", &hw).unwrap()), [RTX_3060_TI, GTX_1080]);
     let used = with_used(2, 3500);
-    assert_eq!(taken_before_start(&w.paths, &hw, &used, "bonsai2", &[1]).unwrap().map(|t| t.cards), Some(vec![2]));
-    assert_eq!(taken_before_start(&w.paths, &hw, &used, "bonsai2", &[]).unwrap(), None, "with the 1080 back the 1660 SUPER is not used");
+    assert_eq!(taken_before_start(&w.paths, &hw, &used, FREE_RAM_MIB, "bonsai2", &[1]).unwrap().map(|t| t.cards), Some(vec![2]));
+    assert_eq!(taken_before_start(&w.paths, &hw, &used, FREE_RAM_MIB, "bonsai2", &[]).unwrap(), None, "with the 1080 back the 1660 SUPER is not used");
 }
 
 /// A model that runs on the processor of a PC with graphics cards is started with the processor-only build of official
@@ -1483,4 +1634,70 @@ fn the_processor_build_missing_arrives_by_itself_on_a_pc_that_has_the_cards_engi
     let v = view_of(&w, "3.5-4b", &hw);
     assert!(!v.present && !v.waits_engine, "a PC with no engine at all: the model's download brings it");
     assert!(engine_updates(&w.paths, &hw).unwrap().is_empty());
+}
+
+// --- a choice that a change in Computer makes impossible ------------------------------------------------------
+
+/// «I choose» on two cards, then one of them left out in Computer with the third: the choice stays as it was saved and is shown as
+/// chosen, the verdict names the card, and the choice without that card is saved.
+#[test]
+fn a_pick_with_a_card_left_out_afterwards_stays_shown_and_can_be_changed() {
+    let w = world(false);
+    let hw = three_gpus();
+    choices::set_model(&w.paths, "3.5-4b", Choices { place: WhereChoice::Pick, gpus: vec![RTX_3060_TI.into(), GTX_1080.into()], ..Choices::default() }).unwrap();
+    with_unused(&w, &[GTX_1080, GTX_1660_SUPER]);
+    let v = view_of(&w, "3.5-4b", &hw);
+    assert_eq!(v.choices.place, WhereChoice::Pick);
+    assert!(v.limits.places.contains(&WhereChoice::Pick), "{:?}", v.limits.places);
+    assert!(!v.verdict.fits && v.verdict.reason.contains(GTX_1080), "{:?}", v.verdict);
+    choices::set_model(&w.paths, "3.5-4b", Choices { place: WhereChoice::Pick, gpus: vec![RTX_3060_TI.into()], ..Choices::default() }).unwrap();
+    assert_eq!(cards(&plan(&w, "3.5-4b", &hw).unwrap()), [RTX_3060_TI]);
+}
+
+/// «All the cards» saved, then every card but one left out: the choice is still shown as chosen.
+#[test]
+fn a_saved_place_that_the_cards_left_no_longer_offer_is_still_shown() {
+    let w = world(false);
+    let hw = three_gpus();
+    choose(&w, "3.5-4b", WhereChoice::All);
+    with_unused(&w, &[GTX_1080, GTX_1660_SUPER]);
+    let v = view_of(&w, "3.5-4b", &hw);
+    assert!(v.limits.places.contains(&WhereChoice::All), "{:?}", v.limits.places);
+}
+
+/// The dedicated card left out: the row of the integrated graphics does not say that the models use it.
+#[test]
+fn the_integrated_graphics_beside_a_dedicated_card_left_out_tells_the_truth() {
+    let w = world(false);
+    let mut hw = pc(vec![nvidia(0, RTX_3060_TI, 8192, (8, 6), (12, 6)), integrated(1, "Intel(R) UHD Graphics 630", 128, 32_000)], 32_768);
+    hw.integrated = false;
+    choices::set_gpu_used(&w.paths, &hw, RTX_3060_TI, false).unwrap();
+    let c = computer_view(&w.paths, &hw).unwrap();
+    let uses = tr!("I modelli usano la scheda video dedicata", "The models use the dedicated graphics card");
+    assert!(!c.gpus[1].note.contains(&uses) && !c.gpus[1].note.is_empty(), "{:?}", c.gpus[1]);
+    assert!(is_on_cpu(&plan(&w, "3.5-4b", &hw).unwrap()));
+}
+
+/// A model that runs only with its own engine, every card left out: the sentence says so, not that the cards are old.
+#[test]
+fn a_model_with_its_own_engine_and_every_card_left_out_says_so() {
+    let w = world(true);
+    let hw = three_gpus();
+    with_unused(&w, &[RTX_3060_TI, GTX_1080, GTX_1660_SUPER]);
+    let v = view_of(&w, "toq", &hw);
+    assert!(!v.verdict.fits && !v.verdict.reason.contains("Found: .") && !v.verdict.reason.contains("Trovate: ."), "{:?}", v.verdict);
+    assert!(v.verdict.reason.contains(&tr!("segnate come non usate", "marked as not used")), "{:?}", v.verdict);
+}
+
+/// A field saved before that no longer holds (its harness folder deleted) does not keep the other choices of the model
+/// from being saved; a harness chosen now must be there.
+#[test]
+fn a_stale_field_does_not_block_the_other_choices_of_the_model() {
+    let w = world(false);
+    write_choices(&w, r#"{ "models": { "3.5-4b": { "harness": "gone" } } }"#);
+    let saved = choices::read(&w.paths).unwrap().models["3.5-4b"].clone();
+    choices::set_model(&w.paths, "3.5-4b", Choices { style: Style::Precise, ..saved.clone() }).unwrap();
+    assert_eq!(choices::read(&w.paths).unwrap().models["3.5-4b"].harness.as_deref(), Some("gone"), "kept, as the user chose it");
+    let e = choices::set_model(&w.paths, "3.5-4b", Choices { harness: Some("other-gone".into()), ..saved }).unwrap_err().to_string();
+    assert!(e.contains("other-gone"), "{e}");
 }

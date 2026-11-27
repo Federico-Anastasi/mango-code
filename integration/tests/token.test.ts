@@ -144,20 +144,23 @@ describe("the tokens of an answer", () => {
 });
 
 describe("the conversation summary", () => {
-  // The second step reads 12500 tokens: with 16384 of context and a 4096 answer cap the agent summarizes after
-  // 12288 (context minus cap). The summary is the engine's answer to requests without tools.
+  // The second step reads 12500 tokens: with 16384 of context the next request, with the instruction and a summary of
+  // at most 4096 tokens, no longer fits (12288 and more), so the agent summarizes. The summary is the engine's answer to the request that asks for it: the conversation as it
+  // is, with its tools, and the instruction as the last message.
   const SCRIPT = [
     { tool: "skill", arguments: { name: "greeting" }, token: { prompt: 1000, completion: 20 } },
     { tool: "echo_repeat", arguments: { text: "hello" }, token: { prompt: 12500, completion: 100 } },
     { text: "End of the turn.", token: { prompt: 1500, completion: 40 } },
-    { summary: "FAKE SUMMARY of the conversation.", token: { prompt: 4000, completion: 50 } },
+    { if: "Create a new anchored summary", text: "FAKE SUMMARY of the conversation.", token: { prompt: 4000, completion: 50 } },
     { if: "FAKE SUMMARY", text: "Resumed after the summary.", token: { prompt: 900, completion: 30 } },
   ];
   let env: Environment;
   let mc: MangoCode;
 
+  // Not strict: the strictest templates refuse a message of the user right after a result, the request for a summary in
+  // the middle of the work, and the agent then writes the summary without the engine.
   beforeAll(async () => {
-    env = await start(SCRIPT, { context: CONTEXT, strict: true });
+    env = await start(SCRIPT, { context: CONTEXT });
     mc = new MangoCode((await find(env.data))!);
   }, 200_000);
 
@@ -170,11 +173,11 @@ describe("the conversation summary", () => {
   });
 
   test("session.compacted says it happened; the summary message carries the tokens of its request, not the new context", async () => {
-    // The measure a connected app reads: the model's context and answer cap.
+    // The measure a connected app reads: the model's context; an answer may take all of it.
     const providers = await fetch(`${mc.service.agent}/config/providers?directory=${encodeURIComponent(env.project)}`).then((r) => r.json());
     const limit = providers.providers.find((p: any) => p.id === "mango").models.fake.limit;
-    expect(limit).toEqual({ context: CONTEXT, output: 4096 });
-    const threshold = limit.context - limit.output;
+    expect(limit).toEqual({ context: CONTEXT, output: CONTEXT });
+    const threshold = limit.context - 4096;
 
     const id = await mc.createSession(env.project);
     const { events, stop } = record(mc, env.project, id);

@@ -629,8 +629,8 @@ export type CompactionPart = {
   messageID: string
   type: "compaction"
   auto: boolean
-  overflow?: boolean
   tail_start_id?: string
+  users_from_id?: string
 }
 
 export type Part =

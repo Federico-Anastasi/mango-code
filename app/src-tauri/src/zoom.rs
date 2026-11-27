@@ -3,7 +3,7 @@
 //! The keys are the browser's own: both webviews are built with `zoom_hotkeys_enabled`, and each zooms by itself, the
 //! one the pointer or the keyboard is in. WebView2 says when the user changes a zoom (`watch`). The window's is kept in
 //! `<data>\zoom.txt` and applied at the next start (`install`); the panel's lasts until the app closes (`preview.rs`).
-//! The settings' «Grandezza» reads and sets the window's (`zoom_get`, `zoom_set`) and follows the keys through the
+//! The settings' «Size» reads and sets the window's (`zoom_get`, `zoom_set`) and follows the keys through the
 //! event `mango-zoom` on window.
 //!
 //! The zoom is the one WebView2 reports, never one worked out from the page: `devicePixelRatio` is the zoom times the
@@ -72,7 +72,7 @@ pub fn install(window: &WebviewWindow, file: PathBuf) {
     }
 }
 
-/// The window's zoom changed: kept for `zoom_get`, saved for the next start, and told to «Grandezza» in the settings.
+/// The window's zoom changed: kept for `zoom_get`, saved for the next start, and told to «Size» in the settings.
 fn window_changed(page: &WebviewWindow, file: &Path, zoom: f64) {
     WINDOW.store(zoom.to_bits(), Ordering::Relaxed);
     if let Err(e) = write(file, zoom) {

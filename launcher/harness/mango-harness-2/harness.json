@@ -1,0 +1,50 @@
+{
+  "name": "Mango Harness 2",
+  "kind": "commands",
+  "command": "skill",
+  "terminal": "bash",
+  "core": [
+    "terminal",
+    "powershell",
+    "read",
+    "write",
+    "edit",
+    "search",
+    "web_search",
+    "web_open",
+    "page_view",
+    "page_look",
+    "page_act",
+    "ask",
+    "plan"
+  ],
+  "commands": {
+    "spaces": true,
+    "commandPaths": true,
+    "told": true
+  },
+  "hooks": {
+    "after-failed-call": {},
+    "same-call-again": {},
+    "outside-project": {},
+    "path-taken-from-project": {},
+    "after-page-written": {},
+    "every-calls": {
+      "every": 8
+    },
+    "plan-open-every-calls": {
+      "every": 8
+    },
+    "cd-in-terminal": {},
+    "file-named-otherwise": {},
+    "answer-without-opening": {},
+    "would-lose": {},
+    "web-in-terminal": {},
+    "web-before-own-tools": {},
+    "page-not-found": {},
+    "rules-in-messages": {},
+    "unreadable-call": {
+      "times": 2
+    }
+  }
+}

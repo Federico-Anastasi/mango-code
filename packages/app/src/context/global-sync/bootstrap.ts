@@ -287,7 +287,8 @@ export const loadCommands = (
   retry(async () => {
     if ((await protocol) === "v1" && legacy) {
       return ((await legacy.command.list()).data ?? []).map((command) => {
-        const [providerID, id] = command.model?.split("/") ?? []
+        const at = command.model?.indexOf("/") ?? -1
+        const [providerID, id] = command.model && at > 0 ? [command.model.slice(0, at), command.model.slice(at + 1)] : []
         return {
           name: command.name,
           template: command.template,
@@ -380,17 +381,24 @@ export async function bootstrapDirectory(input: {
   const rev = (providerRev.get(revKey) ?? 0) + 1
   providerRev.set(revKey, rev)
   ;(async () => {
+    // the model of a new conversation is read from the agents list and the settings: it is known once each has arrived or failed
+    const arrived = { agent: false, config: false }
+    const settle = (part: keyof typeof arrived) => () => {
+      arrived[part] = true
+      if (arrived.agent && arrived.config) input.setStore("model_ready", true)
+    }
     const slow = [
       () => Promise.resolve(input.loadSessions(input.directory)),
       () =>
         input.queryClient
           .ensureQueryData(loadAgentsQuery(input.scope, input.directory, input.api.agent, input.sdk, input.protocol))
-          .then((data) => input.setStore("agent", data)),
+          .then((data) => input.setStore("agent", data))
+          .finally(settle("agent")),
       () =>
         retry(async () => {
           if ((await input.protocol) !== "v1") return
           return input.sdk.config.get().then((x) => input.setStore("config", reconcile(x.data!, { merge: false })))
-        }),
+        }).finally(settle("config")),
       () =>
         retry(() =>
           (async () => {

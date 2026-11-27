@@ -249,7 +249,7 @@ beforeAll(async () => {
 
   mock.module("@/context/sync", () => ({
     useSync: () => () => ({
-      data: { command: commands },
+      data: { command: commands, model_ready: true },
       session: {
         optimistic: {
           add: (value: {

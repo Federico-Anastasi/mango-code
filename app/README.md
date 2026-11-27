@@ -4,7 +4,8 @@ Rust/Tauri 2. Double click → the logo → the control server (the engine manag
 agent server hidden, in a Job Object (they die with the app) → window on the home of the agent's web UI (opencode, in
 `packages/` at the repo root), never on the last conversation → the default model loads in the background, and the engine
 manager tells how it goes (`GET /engine`). Nothing at startup concerns the last conversation; `logs\startup.log` has one
-line per phase with the time since the start.
+line per phase with the time since the start. When the app starts again by itself (a server, another PC's engine or the
+Team changed in the settings, an update) the window goes back to the page it showed, on the new agent.
 What PowerShell 7 from the Microsoft Store starts (a web server left in the background) is created outside every job: the agent gets
 `MANGO_APP_RUN`, a value of this run, every process it starts inherits it, and at Quit `mango_common::stragglers` stops the ones that carry it; the start of the next run stops the ones left by an app
 that was closed by force (its value names the process that owned it, which no longer runs), except those with a visible window and the ones those started: the user may be working in them. A guardian does the same without waiting for the next start: the app starts `mango-code.exe --reap <pid> <run>` (`helper.rs`) outside its job and without a window, which starts a second copy of itself and ends, so that ending the app with its processes (`taskkill /T`) does not reach it; the copy waits for the app to end, however it ends, and stops the processes of the run that have no visible window. Measured with `off-screen`: every
@@ -30,12 +31,12 @@ the download and the service with a pretence of the same duration (tests and pic
 
 | where | what |
 |---|---|
-| `src-tauri/` | window, startup (`lib.rs`), process supervisor, native bridge for the web UI (`bridge.rs`), Preview panel (`preview.rs`), the folders served to it as sites (`sites.rs`), "Also in my Chrome" (`chrome.rs`), dictation (`dictation.rs`), the control server's routes (`control.rs`), the downloads in the background (`downloads.rs`), the user's choices about the models and the computer and taking a model off it (`model_choices.rs`), the models the agent knows, told again when they change (`agent_models.rs`), the engine of another PC (`engine_remote.rs`), "Other models" (`other_models.rs`), the Team (`team.rs`), automatic updates (`updater.rs`), zoom of the window (`zoom.rs`), problem reports (`report.rs`), tray (`tray.rs`: "Open", "Settings…", "Quit") |
+| `src-tauri/` | window, startup (`lib.rs`), process supervisor, native bridge for the web UI (`bridge.rs`), Preview panel (`preview.rs`), the folders served to it as sites (`sites.rs`), "Also in my Chrome" (`chrome.rs`), dictation (`dictation.rs`), the control server's routes (`control.rs`), the downloads in the background (`downloads.rs`), the user's choices about the models and the computer and taking a model off it (`model_choices.rs`), the models the agent knows, told again when they change (`agent_models.rs`), the engine of another PC (`engine_remote.rs`), the external servers ("Use a server", `servers.rs`), "Other models" (`other_models.rs`), the Team (`team.rs`), automatic updates (`updater.rs`), zoom of the window (`zoom.rs`), problem reports (`report.rs`), tray (`tray.rs`: "Open Mango Code", "Settings…", "Quit") |
 | `crates/engine` | the engine manager on 47080: starts the model the request asks for, adds to the chat requests that do not say them the style and the reasoning the user chose (and `preserve_thinking`, always), loads the running model again when the user's choices change its plan, remembers the model the conversations stay on while a request marked as a side one has the engine on another, keeps the official engine's slot files (the system prompt of a new conversation, read once; the last conversation, saved before stopping: `prefix.rs`), releases and resumes the GPUs (`/engine/*`), rejects web pages; `share.rs` shares it with the user's other PCs (below, "The engine for your other PCs") and `remote.rs` is the other side, the code of another PC checked and kept ("Using the engine of another PC"). Also `fake-engine` (the tests), `mango-bench` (the speeds of the catalog models), `mango-tune` (tuning: measures a tune, keeps the log, writes the profile; the `optimize/` skill uses it), `mango-launch` (`-p "request"`: one request from a script to the running app, `docs/INTEGRATION.md`) and `off-screen` (a command on a Windows desktop nobody sees: the integration tests without their windows on the screen) |
 | `crates/images` | the image manager: one picture at a time, drawn by a server of the image engine (`sd-server`, stable-diffusion.cpp) that stays on between the pictures of a conversation about images and is started and stopped for a single picture; it takes the card from the engine manager while it draws (a model that writes there is put aside and comes back), tells how far the picture is step by step with a small preview, and stops a picture on request. `jobs.rs` gives each picture a number to follow it by; `routes.rs` is the routes under `/control/image` on the engine manager's port (`docs/INTEGRATION.md`, "Pictures") |
 | `crates/mango-common` | paths (`Paths::discover`), data folder, service file, `Build` (the build of an engine: `cpu`, `vulkan`, `cuda-12`, `cuda-13`, and `cuda-12-gtx16` of our forks for the GTX 16 family), the app's language (`i18n`); `network` (the addresses of the home network and of Tailscale, for the phone and for the shared engine) and the key helpers (`random_hex`, `equal_ct`); `download`: download of engines (`mango-engines.json`: llama.cpp, our forks, and `sd` for the models that make images) and models (`mango-models.json`) with resume and sha256, plus Hugging Face (`download/hugging_face.rs`: search, links, GGUF files with hash); `credentials`: the keys in the Windows Credential Manager |
 | `crates/engine-cfg` | the PC's hardware (`hardware.rs`: GPUs of any vendor, CPU, RAM, build to use), the optimized profile if it applies (`profiles.rs`, `launcher/profiles/`) or the general plan with the official llama.cpp (`general.rs`), the recommended models (`recommended`), the split of layers across GPUs (`split.rs`), the plan of a model that makes images (`image.rs`: the image engine, the model's files, the card it draws on) |
-| `crates/agent-cfg` | the agent's config, generated from `launcher/opencode-home/opencode.template.json` (the test checks the generated config against a fixed file); `team.rs`: the Team |
+| `crates/agent-cfg` | the agent's config, generated from `launcher/opencode-home/opencode.template.json` (the test checks the generated config against a fixed file); `tools.rs`: the programs installed on this PC, which the agent receives as `MANGO_PC_PROGRAMS` and puts in its prompt; `team.rs`: the Team; `servers.rs`: the external servers (`servers.json`, the probe of a server) |
 | `crates/voice` | dictation: whisper in Rust, on the CPU |
 | `crates/phone` | the web UI on the phone: the network port, the key, the sessions, the forwarding to the agent, the links with the QR (below, "From your phone") |
 | `ui/` | the app's own page: while the app starts, the wordmark with the mango moving slightly, a line saying what happens and a bar that advances one piece at each stage of the start (the app sends `step` and `steps` with the state); and the error that stops a start, with Retry, Open the logs and, when the engine in use is another PC's, the way back to this one; "Report a problem" is at the bottom in every state; its texts are in `startup.js` (Italian and English); colours and typefaces come from `suite/` at the repo root, which `src-tauri/build.rs` copies into `ui/suite/` (not committed) before Tauri packs the page |
@@ -120,11 +121,11 @@ installer (`bundle.windows.nsis.languages` in `tauri.conf.json`, `windows/hooks.
   layers to RAM. A loaned GPU (`/engine/release`) does not send a GPU model to the CPU. **How fast a model on the CPU
   writes** (`speed.rs`) is told in a band, not in a number: tokens per second ≈ bandwidth ÷ bytes read for each token
   (`ModelCfg::read_per_token`), with one bandwidth (17 GiB/s) because the app does not know the PC's memory; the two PCs
-  measured in `optimize/knowledge/general.md` (G90-G92) sit at 13.5 and about 24 GiB/s, so a figure would be wrong by more
+  measured in `optimize/knowledge/general.md` sit at 13.5 and about 24 GiB/s, so a figure would be wrong by more
   than half for many PCs. The interface says the band (`ModelView.verdict.speed` and, for the models found online,
   `Proposal.speed`, which takes them as dense). Builds:
   NVIDIA with CUDA 13.4 driver and Turing or later GPUs `cuda-13`; CUDA 12.4 driver `cuda-12`; AMD, Intel or NVIDIA
-  with an older driver `vulkan`; no GPU with more than 2 GiB of its own `cpu` (the processor's integrated graphics counts as a GPU only when it was given 8 GB or more, as on a Ryzen AI Max: `Gpu::is_integrated`, read from the adapter's name, and `MIN_INTEGRATED_GPU_MEMORY_MIB`; a name that does not say it for certain is a card). Models with `requires_engine` do not run without a
+  with an older driver `vulkan`; no GPU with more than 2 GiB of its own `cpu`. The processor's integrated graphics (`Gpu::is_integrated`, read from the adapter's name; a name that does not say it for certain is a card) never counts beside a dedicated GPU that does; where it counts, pictures are made there too. Alone, it counts when it was given 8 GB or more, as on a Ryzen AI Max (`MIN_INTEGRATED_GPU_MEMORY_MIB`), or when the user turns it on in Settings › Computer (`choices.json`, `computer.integrated`): then a model counts on the PC's memory Windows lets it borrow, never more than the RAM less 4 GiB, less 1 GiB for the engine (`Hardware::borrows_ram`). Such a plan carries the same model on the processor with the same program (`-dev none`, `EnginePlan::fallback`): when the RAM the other programs leave free does not give the same plan, or the start does not hold, the model starts once on the processor and the state says so in one line. On a PC that has another build of the engine, turning it on queues the Vulkan one (`Setup::for_integrated`), and the models run on the processor until it arrives. Models with `requires_engine` do not run without a
   profile of their own (for the GPUs or the build). Our forks (`prism`, `toq`) are compiled for AVX2 and cannot start on a
   processor without it (`avx2` in `mango-engines.json`); the official llama.cpp picks its code for the processor at run time and
   starts on any x64 one (checked in the zips of the catalog: `ggml-cpu-x64` up to `ggml-cpu-sapphirerapids`, also in the Vulkan and CUDA ones).
@@ -185,7 +186,7 @@ follows the settings: off, the words go as they are; on, the model chosen there 
 offers it, otherwise the agent chooses. The choice is the conversation's, kept in its prompt (`PicturePick`); without one a
 conversation whose last turn was a picture opens on «Picture». The row of the tool `image_generate` is the same for the
 picture the user asked for and for the one the model makes by itself: it says what is going on («Writing the description»,
-«Waiting for my turn», «Getting the card ready», «Step 5 of 8», «Finishing»), shows the picture as it forms in a frame of its
+«Queued», «Getting the card ready», «Step 5 of 8», «Finishing»), shows the picture as it forms in a frame of its
 final proportions, then the picture (a click opens its file in the panel that shows PDFs and pages), how long it took and how
 big it is, the file with «Open» and «Show in folder» among the files of the turn, and a collapsed «Description»
 with the description in English to correct: «Make it again with this description» draws it again with the corrected text and
@@ -410,7 +411,7 @@ address in `100.64.0.0/10`). The phone does not see the bridge: no phone setting
   `/phone`; `Origin` different from `http://<requested address>` `403`; without a valid session `401` (a sentence for the
   browser, JSON for the rest), except the manifest and the icons of the app (`PUBLIC_FILES`), which the system reads without the cookie;
   methods other than `GET`, `HEAD`, `POST`, `PUT`, `PATCH`, `DELETE` `405`; the routes only the
-  app on the PC uses (`/mango/reload`, `/mango/extra-folders`) `403`; chunked body `400`; a line break or NUL outside `\r\n`
+  app on the PC uses (`/mango/reload`, `/mango/quiet`, `/mango/extra-folders`) `403`; chunked body `400`; a line break or NUL outside `\r\n`
   in the head `400`; agent off `502`. The head must arrive within 10 s and at most 64 connections are open at once (more are
   closed unanswered).
 - **Problem reports** (`/phone/report`): the one route the port answers itself. `GET` says what a report may carry,
@@ -582,7 +583,9 @@ reports no end of loading for it and `Webview::url` cannot read its address.
 
 ## What goes in the prompt
 
-Every item of the fixed prompt (base tool, MCP server, skill, instructions file, plugin) is on or off. The agent
+Every item of the fixed prompt (base tool, MCP server, skill, instructions file, plugin, hook of the harness) is on or
+off, for each harness: the items of the default harness are under `prompt` in the files, those of another one under
+`harnesses.<name>.prompt`, and the settings routes take `harness=<name>`. The agent
 rereads at every request `<data>\settings.json` (`agent-cfg` sets `MANGO_SETTINGS`, so it follows `MANGO_DATA`) and
 `.mango/settings.json` of the working folder; the settings' Agent section ("What the model reads") writes them. The weight in tokens of
 each item is counted by the engine (`POST /tokenize`, which goes through the manager; the fake engine counts one word per token) with the
@@ -590,7 +593,7 @@ first request of a conversation and writes it in `opencode.log`. The format and 
 
 ## The Team
 
-Roles in `launcher/opencode-home/MANGO-{manager,dev,agent}.md`, plugin
+Roles in `launcher/harness/shared/team-{manager,dev,agent}.md`, plugin
 `launcher/opencode-home/plugin/mango-team.js`. The **manager** (a cloud model, DeepSeek V4.1 Flash by
 default) is the opencode agent `team` in the app's server; the **dev** (the local model) and the **agents** (up to 4, cloud)
 are hidden `opencode serve` processes that the plugin starts at the first `ask_dev` and at every `launch_agent`, in the
@@ -600,7 +603,7 @@ the distribution. One Team at a time: the ports are fixed (dev 4090, agents 4092
 - **In the chat**: the "Team" switch next to the model (`packages/app/src/components/team-switch.tsx`) passes the
   conversation to the manager (agent `team`, with its model) and back to the local model. It is there only once the
   key is saved (`utils/team-switch.ts`); before that the Team is set up from the settings.
-- **Settings, Connections, "Cloud, paid"** (`settings-v2/team.tsx`): the OpenRouter key, how many agents (0-4), the models of manager and
+- **Settings, Connections, "Cloud, paid"** (`settings-v2/team.tsx`): the OpenRouter key, how many agents (0-4), the models of the manager and
   agents (the cloud entries of `mango-models.json`). Saving restarts the agent. The choices are in `<data>\team.json`.
 - **The key** lives only in the Windows Credential Manager (service `MangoCode`, credential `OPENROUTER_API_KEY`, that is
   target `OPENROUTER_API_KEY.MangoCode`, `mango-common::credentials`). At startup the app reads it and puts it in the environment
@@ -615,14 +618,15 @@ the distribution. One Team at a time: the ports are fixed (dev 4090, agents 4092
 ## The agent
 
 The agent is opencode, in `packages/` at the repo root with the rest of the upstream tree (base `v1.19.5`). One
-binary, `launcher/opencode/web/mango-code.exe` (folder ignored by git).
+binary, `launcher/opencode/web/mango-code.exe` (folder ignored by git). An agent that ends by itself after the start is
+started again (`watch_the_agent` in `lib.rs`, with its last lines in `startup.log`; once, and the error screen if it ends again within two minutes); its log of the start before stays
+as `agent.1.log`, as the engine's does as `engine.1.log`.
 
 ```powershell
 app\scripts\build-agent.ps1   # bun install + bun run script/build.ts --single (5-15 min)
 ```
 
-It needs **Bun 1.4.4 or later**: the Bun runtime is inside the binary, so the one it is built with counts (1.4.0 had
-a segfault on Windows). Which runtime is in a binary:
+It needs **Bun 1.4.4 or later**: the Bun runtime is inside the binary, so the one it is built with counts. Which runtime is in a binary:
 `findstr /M /C:"38afee6c8" mango-code.exe` (38afee6c8 = Bun 1.4.4). After a build: `mango-code.exe --version` prints
 `1.19.5-mango` and the integration tests (below) pass with that binary. `MANGO_OPENCODE` (the tests) and `--opencode`
 (the staging) use a separate build, in a folder with `web\mango-code.exe`. The tests of the agent sources
@@ -634,9 +638,16 @@ a running exe: rename the old one, copy the new one, and what is already open st
 
 What it brings compared to opencode:
 
-- **Two model providers only**: the agent carries the local engine (`mango`) and OpenRouter, both through the
-  OpenAI-compatible client, with no subscription logins and no provider-specific plugin or loader. The app enables the local engine,
-  and OpenRouter when the Team has a key (`enabled_providers` in the configuration it writes).
+- **Model providers**: the local engine (`mango`), OpenRouter for the Team, and one provider per external server the user
+  adds in Settings › Connections ("Use a server", `server-<n>`), all through the OpenAI-compatible client, with no
+  subscription logins and no provider-specific plugin or loader. The app enables the local engine, OpenRouter when the
+  Team has a key, and each server (`enabled_providers` in the configuration it writes). A server's models sit in the
+  menu under the chat, one group per server; the agent talks to the server directly, so the engine manager's queue,
+  sampling and memory on disk do not apply there. The contract is in `docs/INTEGRATION.md`, "External servers".
+- **Harnesses**: what a model reads and what it can do (prompt, tools, hooks, compaction texts, skills) is a harness, one
+  folder in `launcher/harness/` built into the agent, chosen for each model: the request is built from it
+  (`packages/opencode/src/session/harness.ts`), and Mango Harness 2 runs its own terminal and tools
+  (`packages/opencode/src/mango-harness/`).
 - **Embedded, offline web UI**: the server never forwards it from `app.opencode.ai`; Mango Code brand, light or dark as Windows is until the user picks one,
   the colours of `suite/tokens.css`; `?project=<folder>` opens that folder as a project.
 - **Server without a password but closed to web pages** (`middleware/origin-guard.ts`): a request with `Origin` passes
@@ -650,6 +661,14 @@ What it brings compared to opencode:
 - **The model waits for the GPUs**: `/mango/engine/speed` asks the engine manager (`GET /engine`) why a
   request has no answer yet, and the page writes it in the conversation.
 - **The same wrong call repeated is not executed** (`session/repeat-guard.ts`), for every tool.
+- **An answer may use all that is left of the context**: the request carries no `max_tokens`, so `llama-server` (context
+  shift off) and the external servers each apply their own limit. An answer cut because the context is full ends the step
+  with `finish: "context"` and the conversation is summarized (`session/overflow.ts`, `session/processor.ts`); one cut at a
+  limit of the server far from the end of the context is taken up once.
+- **A model stuck repeating itself is cut** (`session/repetition.ts`, `session/processor.ts`): when the end of an answer or of
+  a reasoning is the same exact text at least 10 times over at least 8,000 characters, or the end of the arguments of a call
+  is the same text at least 30 times over at least 24,000 characters, the stream is cut, the text keeps one copy, and the
+  model is told and asked to go on (twice per turn at most). Blank runs go the same way (`blank`).
 - **What goes in the prompt** (`session/settings.ts`, `session/prompt-measurement.ts`, `shared/mango-settings.ts`):
   `GET`/`PUT /mango/settings` and the settings' Agent section (`settings-page/agent.tsx`); the `PUT` passes only from the page.
 - **Rules per path**: the `tool.execute.after` hook also receives `messageID` and the turn's history; the plugin
@@ -662,7 +681,9 @@ What it brings compared to opencode:
   `POST /mango/reload` makes the agent read it again as soon as no conversation is answering (`200` done now, `202` it
   waits); until then the configuration before holds. The app does both (`src-tauri/src/agent_models.rs`) when what the agent
   knows of this PC's models changes: a context or the cards chosen, a model of the user added or removed, a model that
-  arrives or goes, the default; never with another PC's engine.
+  arrives or goes, the default; never with another PC's engine. What only a restart applies (a server added or removed,
+  the Team's key and choices, another PC's engine) waits for `POST /mango/quiet`, which answers when no conversation is
+  answering, for up to an hour (then it restarts anyway).
 
 ## Building and testing
 
@@ -681,7 +702,7 @@ bun test --cwd integration tests/zoom.test.ts            # the one test that nee
 powershell -File app\scripts\build.ps1   # staging + cargo tauri build -> app\target\release\bundle\nsis\*.exe
 ```
 
-`launcher/opencode-home/package.json` (tracked: `{"dependencies": {"@opencode-ai/plugin": "1.19.5"}}`) is what the
+`launcher/opencode-home/package.json` (tracked: the dependency on `@opencode-ai/plugin` 1.19.5 and the `overrides` that pin its zod, effect and toml) is what the
 staging installs the plugin packages from; without it `npm install` there goes up to the launcher's `package.json` and modifies it.
 
 `bun test integration` from the root does not start: opencode's `bunfig.toml` points the tests to a folder that does not exist,
@@ -694,8 +715,8 @@ The screenshots some integration tests take are kept in the folder of the enviro
 
 Whether a model accepts what the agent sends depends on its chat template, so the tests use the real request and real templates:
 
-- `integration/tests/capture-requests.test.ts` runs six scenarios (first turn, a tool's result, a long run with the
-  reminders, after a summary, an image, earlier reasoning) and compares the body each sends to `/v1/chat/completions` with
+- `integration/tests/capture-requests.test.ts` runs eight scenarios (first turn, a tool's result, a long run with the
+  reminders, after a summary, the request that asks for the summary, an image, earlier reasoning, a server's model) and compares the body each sends to `/v1/chat/completions` with
   the fixture in `app/crates/engine-cfg/tests/requests/`. `UPDATE_FIXTURES=1` writes them again, after a change of the
   request that is meant.
 - `cargo test -p engine-cfg --test templates_render` renders every fixture with the original chat templates of many model
@@ -759,8 +780,8 @@ Not in it: the engines' own tests (they need the models), the end-to-end tests o
 - Logs: `%LOCALAPPDATA%\MangoCode\logs\{startup,agent,engine,manager,ui}.log` (`manager.log`: who called `release`,
   `resume` or `model`, when and with what outcome; `ui.log`: the web UI's uncaught errors and `console.error`, and the
   calls to the app slower than a second or with no answer, at most 100 lines a minute and 2 MB (then `ui.1.log`); the TOQ engine's `llama.log` is in the same folder); the
-  agent's real one is `%LOCALAPPDATA%\MangoCode\agent\data\opencode\log\opencode.log` (`init count=N` = skills read
-  from disk, each time the list is read again: a new conversation, a turn, the «/» menu, the settings page). With the app open, Windows can show these files at 0 bytes: they are being written, not empty.
+  agent's real one is `%LOCALAPPDATA%\MangoCode\agent\data\opencode\log\opencode.log` (`init count=N` = skills known,
+  the built-in ones and those found on disk, each time the list is read again: a new conversation, a turn, the «/» menu, the settings page). With the app open, Windows can show these files at 0 bytes: they are being written, not empty.
 
 ## The app's connections to the internet
 
@@ -787,7 +808,7 @@ signed by a root no computer knows; the root's key was thrown away and the root 
 `https://github.com/Federico-Anastasi/mango-code/releases/latest/download/latest.json` (the latest release that is not
 a pre-release), downloads the newer installer in the background and checks its signature against the public key in
 `tauri.conf.json`. Then the web UI offers "Install and restart": the button in the title bar, a notice, and Settings >
-Help, which also has "Check for updates". The click stops agent and engine as "Quit" does, starts the installer in
+Help, which also has "Check now". The click stops agent and engine as "Quit" does, starts the installer in
 passive mode (`/P /UPDATE /R`: only its progress bar, then it reopens the app) and closes the app. The installer is
 started by the app with `CREATE_BREAKAWAY_FROM_JOB`: inside the app's job Windows would kill it together with the app.
 It waits in `%TEMP%\mango-code-update-<version>`; a minute after the next start (the installer has ended by then) the app deletes

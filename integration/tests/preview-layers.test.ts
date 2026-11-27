@@ -36,7 +36,7 @@ beforeAll(async () => {
   mc = new MangoCode((await find(env.data))!);
   p = await page(DEBUG, (t) => t.url.startsWith(env.agent));
   id = await mc.createSession(env.project, { title: "livelli" });
-  for await (const _ of mc.turn(id, env.project, "Ciao", { model: "fake" }));
+  for await (const _ of mc.turn(id, env.project, "Hello", { model: "fake" }));
   const file = path.join(env.project, "layers.html");
   fs.writeFileSync(file, PAGE);
   await p.send("Page.navigate", { url: `${env.agent}/${b64(env.project)}/session/${id}` });

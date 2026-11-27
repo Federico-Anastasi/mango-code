@@ -28,6 +28,14 @@ type Kind =
   | "document"
   | "documentRead"
   | "documentEdit"
+  | "askDev"
+  | "launchAgent"
+  | "askAgent"
+  | "listAgents"
+  | "progress"
+  | "closeAgent"
+  | "askManager"
+  | "invalid"
   | "generic"
 
 const KINDS: Record<string, Kind> = {
@@ -56,6 +64,27 @@ const KINDS: Record<string, Kind> = {
   documents_convert: "document",
   documents_read: "documentRead",
   documents_edit: "documentEdit",
+  // The Team's tools (launcher/opencode-home/plugin/mango-team.js)
+  ask_dev: "askDev",
+  launch_agent: "launchAgent",
+  ask_agent: "askAgent",
+  list_agents: "listAgents",
+  read_todos: "progress",
+  close_agent: "closeAgent",
+  ask_manager: "askManager",
+  // a call the model wrote wrongly
+  invalid: "invalid",
+  // Mango Harness 2
+  terminal: "shell",
+  powershell: "shell",
+  search: "search",
+  web_search: "websearch",
+  web_open: "webfetch",
+  page_view: "browser",
+  page_look: "browser",
+  page_act: "browser",
+  ask: "question",
+  plan: "todo",
 }
 
 const BROWSER_PREFIX = "chrome-devtools_"
@@ -100,7 +129,8 @@ export const TOOL_LABEL_KEYS = (() => {
     .filter((value, index, all) => all.indexOf(value) === index)
   const labels = kinds.flatMap((kind) => [`ui.tool.label.${kind}.active`, `ui.tool.label.${kind}.done`])
   const actions = [...new Set(Object.values(BROWSER_ACTIONS)), "reload", "back", "forward", "clickBare", "pressKeyBare"]
-  return [...labels, ...actions.map((action) => `ui.tool.browser.${action}`)] as UiI18nKey[]
+  const team = ["agent", "agentTask"].map((name) => `ui.tool.team.${name}`)
+  return [...labels, ...actions.map((action) => `ui.tool.browser.${action}`), ...team] as UiI18nKey[]
 })()
 
 function str(value: unknown) {
@@ -108,6 +138,17 @@ function str(value: unknown) {
 }
 
 const COMMAND_LIMIT = 60
+
+const shortened = (text: string) => (text.length > COMMAND_LIMIT ? `${text.slice(0, COMMAND_LIMIT - 1).trimEnd()}…` : text)
+
+/** The first line of what the model wrote to someone, shortened: what was asked, for the closed row. */
+function firstLine(value: unknown) {
+  const line = str(value)
+    ?.split(/\r?\n/)
+    .map((row) => row.trim())
+    .find(Boolean)
+  return line && shortened(line.replace(/\s+/g, " "))
+}
 
 /**
  * What a shell command does, for the closed row: the description the model gave it; if missing, the
@@ -121,8 +162,7 @@ export function shellSummary(input: Record<string, unknown>) {
     .map((row) => row.trim())
     .find((row) => row && !row.startsWith("#"))
   const command = line?.replace(/^cd\s+("[^"]*"|'[^']*'|\S+)\s*(&&|;)\s*/, "").replace(/\s+/g, " ")
-  if (!command) return
-  return command.length > COMMAND_LIMIT ? `${command.slice(0, COMMAND_LIMIT - 1).trimEnd()}…` : command
+  return command && shortened(command)
 }
 
 /** "file:///C:/Projects/index.html" -> "index.html"; "https://www.example.com/a/b" -> "example.com/a/b". */
@@ -223,13 +263,13 @@ export function toolLabel(
     case "read":
     case "write":
     case "edit":
-      return { title, subtitle: fileName(input.filePath) }
+      return { title, subtitle: fileName(input.filePath ?? input.path) }
     case "document":
     case "documentRead":
     case "documentEdit":
       return { title, subtitle: fileName(input.file) }
     case "shell":
-      return { title, subtitle: shellSummary(input) }
+      return { title, subtitle: shellSummary({ ...input, command: input.command ?? input.script }) }
     case "websearch":
     case "images":
       return { title, subtitle: str(input.query) }
@@ -237,9 +277,25 @@ export function toolLabel(
       return { title, subtitle: friendlyUrl(input.url) }
     case "task":
       return { title, subtitle: str(input.description) }
+    case "askDev":
+      return { title, subtitle: firstLine(input.instruction) }
+    case "askManager":
+      return { title, subtitle: firstLine(input.message) }
+    case "launchAgent":
+    case "closeAgent": {
+      const agent = str(input.agent)
+      return { title, subtitle: agent && t("ui.tool.team.agent", { agent }) }
+    }
+    case "askAgent": {
+      const agent = str(input.agent)
+      const text = firstLine(input.instruction)
+      if (!agent) return { title, subtitle: text }
+      return { title, subtitle: text ? t("ui.tool.team.agentTask", { agent, text }) : t("ui.tool.team.agent", { agent }) }
+    }
     case "skill":
       return { title, subtitle: skillName(input.name) }
     case "browser": {
+      if (!browserTool) return { title, subtitle: friendlyUrl(input.page) }
       const action = BROWSER_ACTIONS[args.tool.slice(BROWSER_PREFIX.length)]
       return { title, subtitle: action ? browserSubtitle(action, input, args.snapshot, t) : undefined }
     }

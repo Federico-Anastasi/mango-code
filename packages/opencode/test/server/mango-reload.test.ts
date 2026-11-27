@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import path from "node:path"
 import { Server } from "../../src/server/server"
-import { RELOAD_PATH } from "../../src/server/shared/mango-reload"
+import { QUIET_PATH, RELOAD_PATH } from "../../src/server/shared/mango-reload"
 import { GlobalBus, type GlobalEvent } from "../../src/bus/global"
 import { resetDatabase } from "../fixture/db"
 import { disposeAllInstances, tmpdir } from "../fixture/fixture"
@@ -148,6 +148,35 @@ describe("reading the configuration again", () => {
       expect(last.info.role).toBe("assistant")
       expect(last.info.error).toBeUndefined()
       expect(last.parts.some((p: { type: string; text?: string }) => p.type === "text" && p.text === "Hello")).toBe(true)
+    } finally {
+      fake.server.stop(true)
+    }
+  }, 30_000)
+
+  test("/mango/quiet answers at once with no conversation answering, and only when the answer ends otherwise", async () => {
+    const fake = engine()
+    try {
+      const baseURL = `http://127.0.0.1:${fake.server.port}/v1`
+      await using tmp = await tmpdir({ git: true, config: config(baseURL, ["local"]) })
+      expect((await call(tmp.path, QUIET_PATH, { method: "POST" })).status).toBe(200)
+
+      const session = await (await call(tmp.path, "/session", { method: "POST", body: "{}" })).json()
+      await call(tmp.path, `/session/${session.id}/prompt_async`, {
+        method: "POST",
+        body: JSON.stringify({ parts: [{ type: "text", text: "hi" }] }),
+      })
+      await fake.asked
+      let quiet = false
+      const waiting = Promise.resolve(call(tmp.path, QUIET_PATH, { method: "POST" })).then((r) => {
+        quiet = true
+        return r
+      })
+      await Bun.sleep(300)
+      expect(quiet).toBe(false)
+      fake.release()
+      expect((await waiting).status).toBe(200)
+      const messages = await (await call(tmp.path, `/session/${session.id}/message`)).json()
+      expect(messages.at(-1).info.error).toBeUndefined()
     } finally {
       fake.server.stop(true)
     }

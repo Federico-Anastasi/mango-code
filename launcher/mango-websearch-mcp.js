@@ -1,8 +1,7 @@
 #!/usr/bin/env node
-// mango-websearch-mcp.js — HOME-MADE web search MCP for mango-code. Zero cloud, zero
-// API keys, zero third-party services, zero Docker: direct multi-engine scrapers + text
-// extraction with Mozilla's Readability + markdown conversion. It is the same recipe as the
-// commercial tools (Tavily/Jina/Firecrawl), cut to the bone and tuned for a local 35B:
+// mango-websearch-mcp.js — web search MCP for mango-code. No cloud, no API keys, no third-party
+// services: direct multi-engine scrapers + text extraction with Mozilla's Readability + markdown
+// conversion, tuned for a small local model:
 //
 //   search        -> DDG lite + Bing + Startpage in parallel, merged and deduped (an engine
 //                    that breaks or gets blocked = we go on with the others).
@@ -13,8 +12,8 @@
 //   search_images -> image search (DDG Images internal JSON API, no key): direct URLs,
 //                    ready for curl.
 //
-// The engines were chosen by PROBING (2026-07-18): Brave=429, Ecosia=403, Mojeek=empty;
-// DDG/Bing/Startpage serve real HTML. When one changes its markup, fix its parser.
+// DDG, Bing and Startpage serve real HTML to a script (Brave, Ecosia and Mojeek refuse it or
+// answer empty). When one changes its markup, fix its parser.
 // MCP protocol spoken by hand (line-delimited JSON-RPC over stdio): no SDK, no churn.
 
 const { JSDOM, VirtualConsole } = require("jsdom");
@@ -34,18 +33,33 @@ td.addRule("img-compact", { filter: "img", replacement: (_, node) => {
   return `[img: ${(node.getAttribute("alt") || "no-alt").slice(0, 60)}](${src})`;
 } });
 
-async function get(url, accept, ua) {
+// Past this a page is cut: a link to a large file must not fill the memory of the server.
+const MAX_BYTES = 5_000_000;
+// What is read as text; any other file is for curl.
+const TEXT = /^(text\/|application\/(json|xml|xhtml\+xml|rss\+xml|atom\+xml|ld\+json|javascript|x-javascript)\b)/i;
+
+async function get(url, accept) {
   const ctl = new AbortController();
   const t = setTimeout(() => ctl.abort(), 20000);
   try {
-    const r = await fetch(url, { headers: { "user-agent": ua || UA, accept: accept || "text/html,*/*" }, signal: ctl.signal, redirect: "follow" });
-    if (!r.ok) {
-      // some sites (Medium & co.) block "anonymous" browsers but serve Googlebot: one retry
-      if (!ua && (r.status === 403 || r.status === 429))
-        return get(url, accept, "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)");
-      throw new Error(`HTTP ${r.status}`);
+    const r = await fetch(url, { headers: { "user-agent": UA, accept: accept || "text/html,*/*" }, signal: ctl.signal, redirect: "follow" });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const type = r.headers.get("content-type") || "";
+    if (type && !TEXT.test(type)) {
+      ctl.abort();
+      throw new Error(`not a web page but a file (${type.split(";")[0]}): download it with curl.exe -L --output <dest> "${url}"`);
     }
-    return await r.text();
+    if (!r.body) return "";
+    const reader = r.body.getReader(), parts = [];
+    let size = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      parts.push(value);
+      size += value.length;
+      if (size >= MAX_BYTES) { ctl.abort(); break; }
+    }
+    return new TextDecoder().decode(Buffer.concat(parts));
   } finally { clearTimeout(t); }
 }
 
@@ -61,9 +75,11 @@ function sdom(html, url) {
   doc.querySelectorAll("style,script,svg").forEach(n => n.remove());
   return doc;
 }
+// `since`: only the results of the last day, week, month or year ("d", "w", "m", "y"). Bing's page gives the same
+// dated results with any of its date filters, so a search for recent results leaves it out.
 const ENGINES = {
-  duckduckgo: async q => {
-    const doc = sdom(await get(`https://html.duckduckgo.com/html/?q=${enc(q)}`));
+  duckduckgo: async (q, since) => {
+    const doc = sdom(await get(`https://html.duckduckgo.com/html/?q=${enc(q)}${since ? `&df=${since}` : ""}`));
     return [...doc.querySelectorAll(".result")].map(el => {
       const a = el.querySelector("a.result__a");
       let url = a ? a.href : "";
@@ -83,8 +99,8 @@ const ENGINES = {
                snippet: el.querySelector(".b_caption p, .b_caption")?.textContent.trim() || "" };
     });
   },
-  startpage: async q => {
-    const doc = sdom(await get(`https://www.startpage.com/sp/search?query=${enc(q)}`), "https://www.startpage.com/");
+  startpage: async (q, since) => {
+    const doc = sdom(await get(`https://www.startpage.com/sp/search?query=${enc(q)}${since ? `&with_date=${since}` : ""}`), "https://www.startpage.com/");
     return [...doc.querySelectorAll("div.result")].map(el => {
       const anchors = [...el.querySelectorAll('a[href^="http"]')].filter(a => !/startpage\.com/.test(a.href));
       const a = anchors.find(x => x.textContent.replace(/\s+/g, " ").trim().length > 5 && !/anonymous view/i.test(x.textContent)) || anchors[0];
@@ -94,9 +110,13 @@ const ENGINES = {
   },
 };
 const canon = u => { try { const x = new URL(u); return (x.host + x.pathname).toLowerCase().replace(/\/$/, ""); } catch (_) { return u; } };
-async function search({ query, max_results = 8 }) {
-  const names = Object.keys(ENGINES);
-  const settled = await Promise.allSettled(names.map(n => ENGINES[n](query)));
+// `days`: the results of the last days, by the shortest period that holds them; beyond a year, any date. It is left out
+// of the tool's schema on purpose: that schema is part of what Mango Harness 1 sends the model, and only Mango Harness
+// 2's web passes it.
+async function search({ query, max_results = 8, days }) {
+  const since = !(Number.isInteger(days) && days > 0) ? "" : days <= 1 ? "d" : days <= 7 ? "w" : days <= 31 ? "m" : days <= 366 ? "y" : "";
+  const names = Object.keys(ENGINES).filter(n => !since || n !== "bing");
+  const settled = await Promise.allSettled(names.map(n => ENGINES[n](query, since)));
   const status = [], byUrl = new Map();
   settled.forEach((s, i) => {
     if (s.status === "rejected") { status.push(`${names[i]}: FAILED (${s.reason.message})`); return; }
@@ -157,16 +177,21 @@ async function research({ query, fetch_top = 3, max_chars_per_page = 8000 }) {
     const host = (() => { try { return new URL(r.url).host; } catch (_) { return r.url; } })();
     if (!seen.has(host)) { seen.add(host); candidates.push(r); }
   }
-  // walks the candidates until it has fetch_top READABLE pages (403/anti-bot: skipped, the
-  // next candidate takes its place) — never waste the model's turn on "[unreadable]"
+  // The candidates are read 4 at a time (one page's 20 s at most per group, within the MCP call's time) until
+  // fetch_top READABLE ones are there, in rank order (403/anti-bot: the next candidate takes its place) — never waste
+  // the model's turn on "[unreadable]".
   const pages = [], used = new Set();
-  for (const r of candidates) {
-    if (pages.length >= fetch_top) break;
-    try {
+  for (let at = 0; at < candidates.length && pages.length < fetch_top; at += 4) {
+    const group = candidates.slice(at, at + 4);
+    const read = await Promise.allSettled(group.map(async (r) => {
       const text = await readUrl({ url: r.url, max_chars: max_chars_per_page });
       if (text.replace(/\s+/g, " ").length < 300) throw new Error("empty page/anti-bot");
-      pages.push({ title: r.title, url: r.url, content: text }); used.add(r);
-    } catch (_) { /* next candidate */ }
+      return text;
+    }));
+    read.forEach((one, i) => {
+      if (one.status !== "fulfilled" || pages.length >= fetch_top) return;
+      pages.push({ title: group[i].title, url: group[i].url, content: one.value }); used.add(group[i]);
+    });
   }
   return { query, source, pages,
     other_results: candidates.filter(r => !used.has(r)).slice(0, 6).map(r => ({ title: r.title, url: r.url, snippet: r.snippet })) };
@@ -196,6 +221,7 @@ const HANDLERS = { search, search_images: searchImages, read_url: readUrl, resea
 
 const out = o => process.stdout.write(JSON.stringify(o) + "\n");
 let buf = "";
+process.stdin.setEncoding("utf8");
 process.stdin.on("data", async d => {
   buf += d;
   let i;

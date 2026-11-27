@@ -6,6 +6,7 @@ import { Snapshot } from "@/snapshot"
 import { Session } from "./session"
 import { SessionID, MessageID } from "./schema"
 import { Config } from "@/config/config"
+import { isResume } from "./compacted"
 
 function unquoteGitPath(input: string) {
   if (!input.startsWith('"')) return input
@@ -142,10 +143,6 @@ const layer = Layer.effect(
     return Service.of({ summarize, diff, computeDiff })
   }),
 )
-
-/** A message the loop writes to take up a cut answer (a synthetic text marked `resume`): not a turn of the user. */
-export const isResume = (message: SessionV1.WithParts) =>
-  message.info.role === "user" && message.parts.some((part) => part.type === "text" && part.synthetic && part.metadata?.resume)
 
 /**
  * The user's message a turn belongs to and the messages of that turn. The resume messages are not turns: they and their
